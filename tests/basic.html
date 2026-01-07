@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Test: Basic Editor</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    #editor { border: 1px solid #ccc; height: 400px; }
+  </style>
+</head>
+<body>
+  <h1>Basic Editor Test</h1>
+  <p>Minimal editor with default options.</p>
+
+  <div id="editor"></div>
+
+  <script src="../dist/mrmd.iife.js"></script>
+  <script>
+    const editor = mrmd.create('#editor');
+    window.editor = editor;
+  </script>
+</body>
+</html>

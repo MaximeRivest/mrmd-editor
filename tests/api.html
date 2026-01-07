@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Test: Editor API</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    #editor { border: 1px solid #ccc; height: 300px; margin-bottom: 20px; }
+    .controls { margin-bottom: 10px; }
+    button { padding: 8px 16px; margin-right: 8px; margin-bottom: 8px; }
+    #output { background: #f5f5f5; padding: 10px; font-family: monospace; white-space: pre; }
+  </style>
+</head>
+<body>
+  <h1>Editor API Test</h1>
+
+  <div id="editor"></div>
+
+  <div class="controls">
+    <button onclick="testGetContent()">getContent()</button>
+    <button onclick="testSetContent()">setContent()</button>
+    <button onclick="testInsert()">insert(0, 'PREFIX ')</button>
+    <button onclick="testInsertAtCursor()">insertAtCursor(' [CURSOR] ')</button>
+    <button onclick="testStats()">stats()</button>
+    <button onclick="testFocus()">focus()</button>
+  </div>
+
+  <h3>Output:</h3>
+  <div id="output">Click a button to test</div>
+
+  <script src="../dist/mrmd.iife.js"></script>
+  <script>
+    const editor = mrmd.create('#editor', {
+      doc: '# API Test\n\nClick the buttons below to test each API method.'
+    });
+
+    const output = document.getElementById('output');
+
+    function testGetContent() {
+      output.textContent = editor.getContent();
+    }
+
+    function testSetContent() {
+      editor.setContent('# New Content\n\nSet by setContent()');
+      output.textContent = 'Content replaced!';
+    }
+
+    function testInsert() {
+      editor.insert(0, 'PREFIX ');
+      output.textContent = 'Inserted "PREFIX " at position 0';
+    }
+
+    function testInsertAtCursor() {
+      editor.insertAtCursor(' [CURSOR] ');
+      output.textContent = 'Inserted " [CURSOR] " at cursor position';
+    }
+
+    function testStats() {
+      const s = editor.stats();
+      output.textContent = JSON.stringify(s, null, 2);
+    }
+
+    function testFocus() {
+      editor.focus();
+      output.textContent = 'Editor focused!';
+    }
+
+    window.editor = editor;
+  </script>
+</body>
+</html>

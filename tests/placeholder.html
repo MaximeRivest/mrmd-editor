@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Test: Placeholder</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    .editor-container { border: 1px solid #ccc; height: 200px; margin-bottom: 20px; }
+    h2 { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>Placeholder Test</h1>
+
+  <h2>Default placeholder</h2>
+  <div class="editor-container" id="editor1"></div>
+
+  <h2>Custom placeholder</h2>
+  <div class="editor-container" id="editor2"></div>
+
+  <h2>No placeholder (empty string)</h2>
+  <div class="editor-container" id="editor3"></div>
+
+  <script src="../dist/mrmd.iife.js"></script>
+  <script>
+    // Default placeholder: "Start typing..."
+    const editor1 = mrmd.create('#editor1');
+
+    // Custom placeholder
+    const editor2 = mrmd.create('#editor2', {
+      placeholder: 'Write your thoughts here...'
+    });
+
+    // No placeholder
+    const editor3 = mrmd.create('#editor3', {
+      placeholder: ''
+    });
+
+    window.editor1 = editor1;
+    window.editor2 = editor2;
+    window.editor3 = editor3;
+  </script>
+</body>
+</html>

@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Test: Code Blocks</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    #editor { border: 1px solid #ccc; height: 800px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>Code Block Languages Test</h1>
+  <p>Tests syntax highlighting for all 17 supported languages.</p>
+
+  <div id="editor"></div>
+
+  <script src="../dist/mrmd.iife.js"></script>
+  <script>
+    // Test doc: option - should work reliably now
+    const editor = mrmd.create('#editor', {
+      doc: `# Code Block Languages Test
+
+## JavaScript
+\`\`\`javascript
+const greet = (name) => \`Hello, \${name}!\`;
+console.log(greet("World"));
+\`\`\`
+
+## TypeScript
+\`\`\`typescript
+function add(a: number, b: number): number {
+  return a + b;
+}
+\`\`\`
+
+## Python
+\`\`\`python
+def fibonacci(n: int) -> list[int]:
+    fib = [0, 1]
+    for i in range(2, n):
+        fib.append(fib[i-1] + fib[i-2])
+    return fib
+\`\`\`
+
+## HTML
+\`\`\`html
+<!DOCTYPE html>
+<html>
+  <head><title>Test</title></head>
+  <body><h1>Hello</h1></body>
+</html>
+\`\`\`
+
+## CSS
+\`\`\`css
+.container {
+  display: flex;
+  justify-content: center;
+  background: #f0f0f0;
+}
+\`\`\`
+
+## JSON
+\`\`\`json
+{
+  "name": "mrmd",
+  "version": "0.1.0"
+}
+\`\`\`
+
+## SQL
+\`\`\`sql
+SELECT users.name, COUNT(orders.id)
+FROM users
+LEFT JOIN orders ON users.id = orders.user_id
+GROUP BY users.id;
+\`\`\`
+
+## Rust
+\`\`\`rust
+fn main() {
+    let numbers: Vec<i32> = (1..=10).collect();
+    println!("Sum: {}", numbers.iter().sum::<i32>());
+}
+\`\`\`
+
+## Go
+\`\`\`go
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("Hello, Go!")
+}
+\`\`\`
+
+## Java
+\`\`\`java
+public class Hello {
+    public static void main(String[] args) {
+        System.out.println("Hello, Java!");
+    }
+}
+\`\`\`
+
+## C++
+\`\`\`cpp
+#include <iostream>
+#include <vector>
+
+int main() {
+    std::vector<int> nums = {1, 2, 3};
+    for (int n : nums) std::cout << n << std::endl;
+    return 0;
+}
+\`\`\`
+
+## YAML
+\`\`\`yaml
+name: mrmd
+version: 0.1.0
+dependencies:
+  - codemirror
+  - yjs
+\`\`\`
+
+## XML
+\`\`\`xml
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+  <item id="1">First</item>
+  <item id="2">Second</item>
+</root>
+\`\`\`
+
+## R
+\`\`\`r
+data <- c(1, 2, 3, 4, 5)
+mean_val <- mean(data)
+print(paste("Mean:", mean_val))
+\`\`\`
+
+## Julia
+\`\`\`julia
+function factorial(n::Int)
+    n <= 1 ? 1 : n * factorial(n - 1)
+end
+println(factorial(5))
+\`\`\`
+
+## Bash
+\`\`\`bash
+#!/bin/bash
+for i in {1..5}; do
+    echo "Number: $i"
+done
+\`\`\`
+
+## PowerShell
+\`\`\`powershell
+$items = @("apple", "banana", "cherry")
+foreach ($item in $items) {
+    Write-Host "Item: $item"
+}
+\`\`\`
+`
+    });
+
+    window.editor = editor;
+  </script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Test: Yjs Collaboration</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    .editors { display: flex; gap: 20px; }
+    .editor-panel { flex: 1; }
+    .editor-panel h2 { margin-bottom: 10px; }
+    .editor-container { border: 1px solid #ccc; height: 300px; }
+    #output { background: #f5f5f5; padding: 10px; margin-top: 20px; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>Yjs Collaboration Test</h1>
+  <p>Two editors sharing the same Yjs document. Type in one, see it in the other!</p>
+
+  <div class="editors">
+    <div class="editor-panel">
+      <h2>Editor A</h2>
+      <div class="editor-container" id="editorA"></div>
+    </div>
+    <div class="editor-panel">
+      <h2>Editor B</h2>
+      <div class="editor-container" id="editorB"></div>
+    </div>
+  </div>
+
+  <div id="output">Edit either editor - changes sync instantly via Yjs CRDT</div>
+
+  <script src="../dist/mrmd.iife.js"></script>
+  <script>
+    // Create a shared Yjs document
+    const sharedDoc = new mrmd.yjs.Doc();
+
+    // Create two editors sharing the same ydoc
+    const editorA = mrmd.create('#editorA', {
+      doc: '# Shared Document\n\nType here...',
+      ydoc: sharedDoc,
+      ytext: 'content'
+    });
+
+    const editorB = mrmd.create('#editorB', {
+      ydoc: sharedDoc,
+      ytext: 'content'
+    });
+
+    window.editorA = editorA;
+    window.editorB = editorB;
+    window.sharedDoc = sharedDoc;
+  </script>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>mrmd Tests</title>
+  <style>
+    body { font-family: sans-serif; padding: 40px; max-width: 600px; margin: 0 auto; }
+    h1 { margin-bottom: 20px; }
+    #tests { list-style: none; padding: 0; }
+    #tests li { margin-bottom: 10px; }
+    #tests a {
+      display: block;
+      padding: 15px 20px;
+      background: #f5f5f5;
+      text-decoration: none;
+      color: #333;
+      border-radius: 8px;
+      transition: background 0.2s;
+    }
+    #tests a:hover { background: #e0e0e0; }
+  </style>
+</head>
+<body>
+  <h1>mrmd Test Suite</h1>
+  <p>Auto-discovered HTML tests.</p>
+
+  <ul id="tests"></ul>
+
+  <hr style="margin: 30px 0;">
+  <p><a href="../test.html">&larr; Back to main demo</a></p>
+
+  <script>
+    // Common test file naming patterns to probe
+    const candidates = [
+      'api', 'basic', 'code-blocks', 'collaboration', 'collab',
+      'dark-mode', 'editor', 'events', 'focus', 'initial-content',
+      'keyboard', 'markdown', 'options', 'persistence', 'placeholder',
+      'readonly', 'selection', 'theme', 'theme-toggle', 'undo-redo',
+      'yjs', 'yjs-collab'
+    ];
+
+    const ul = document.getElementById('tests');
+
+    // Probe each candidate with HEAD request
+    Promise.all(
+      candidates.map(name =>
+        fetch(`${name}.html`, { method: 'HEAD' })
+          .then(r => r.ok ? name : null)
+          .catch(() => null)
+      )
+    ).then(results => {
+      const found = results.filter(Boolean).sort();
+
+      if (found.length === 0) {
+        ul.innerHTML = '<li>No test files found</li>';
+        return;
+      }
+
+      found.forEach(name => {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = `${name}.html`;
+        a.textContent = name.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        li.appendChild(a);
+        ul.appendChild(li);
+      });
+    });
+  </script>
+</body>
+</html>

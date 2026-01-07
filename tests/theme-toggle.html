@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Test: Theme Toggle</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    #editor { border: 1px solid #ccc; height: 400px; }
+    .controls { margin-bottom: 10px; }
+    button { padding: 8px 16px; margin-right: 8px; }
+    button.active { background: #3b82f6; color: white; }
+  </style>
+</head>
+<body>
+  <h1>Theme Toggle Test</h1>
+  <p>Tests dark/light theme switching.</p>
+
+  <div class="controls">
+    <button id="btn-system" class="active">System</button>
+    <button id="btn-light">Light</button>
+    <button id="btn-dark">Dark</button>
+  </div>
+
+  <div id="editor"></div>
+
+  <script src="../dist/mrmd.iife.js"></script>
+  <script>
+    const editor = mrmd.create('#editor', {
+      doc: '# Theme Test\n\nTry the buttons above.'
+    });
+
+    const buttons = document.querySelectorAll('button');
+
+    document.getElementById('btn-system').onclick = () => {
+      const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      editor.setDark(isDark);
+      buttons.forEach(b => b.classList.remove('active'));
+      document.getElementById('btn-system').classList.add('active');
+    };
+
+    document.getElementById('btn-light').onclick = () => {
+      editor.setDark(false);
+      buttons.forEach(b => b.classList.remove('active'));
+      document.getElementById('btn-light').classList.add('active');
+    };
+
+    document.getElementById('btn-dark').onclick = () => {
+      editor.setDark(true);
+      buttons.forEach(b => b.classList.remove('active'));
+      document.getElementById('btn-dark').classList.add('active');
+    };
+
+    window.editor = editor;
+  </script>
+</body>
+</html>

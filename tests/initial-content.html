@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Test: Initial Content</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; max-width: 900px; margin: 0 auto; }
+    .test { margin-bottom: 30px; padding: 15px; border: 1px solid #ddd; border-radius: 4px; }
+    .test h3 { margin: 0 0 10px 0; }
+    .test p { margin: 0 0 10px 0; color: #666; font-size: 14px; }
+    .editor { border: 1px solid #ccc; height: 150px; }
+    .status { margin-top: 8px; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 13px; }
+    .pass { background: #d4edda; color: #155724; }
+    .fail { background: #f8d7da; color: #721c24; }
+  </style>
+</head>
+<body>
+  <h1>Initial Content Tests</h1>
+  <p>Tests the <code>doc:</code> option for setting initial editor content.</p>
+
+  <div class="test">
+    <h3>1. Simple string</h3>
+    <p>Pass a plain string as initial content</p>
+    <div id="editor1" class="editor"></div>
+    <div id="status1" class="status"></div>
+  </div>
+
+  <div class="test">
+    <h3>2. Markdown with code block</h3>
+    <p>Pass markdown content with a fenced code block</p>
+    <div id="editor2" class="editor"></div>
+    <div id="status2" class="status"></div>
+  </div>
+
+  <div class="test">
+    <h3>3. Empty string (should show placeholder)</h3>
+    <p>Pass empty string - placeholder should appear</p>
+    <div id="editor3" class="editor"></div>
+    <div id="status3" class="status"></div>
+  </div>
+
+  <div class="test">
+    <h3>4. No doc option (should show placeholder)</h3>
+    <p>Don't pass doc option at all - placeholder should appear</p>
+    <div id="editor4" class="editor"></div>
+    <div id="status4" class="status"></div>
+  </div>
+
+  <div class="test">
+    <h3>5. Multi-line content</h3>
+    <p>Pass content with multiple lines and special characters</p>
+    <div id="editor5" class="editor"></div>
+    <div id="status5" class="status"></div>
+  </div>
+
+  <script src="../dist/mrmd.iife.js"></script>
+  <script>
+    function runTest(id, options, expected) {
+      const editor = mrmd.create(`#editor${id}`, options);
+      const content = editor.getContent();
+      const pass = content === expected;
+
+      document.getElementById(`status${id}`).className = `status ${pass ? 'pass' : 'fail'}`;
+      document.getElementById(`status${id}`).textContent = pass
+        ? `PASS: Content matches (${content.length} chars)`
+        : `FAIL: Expected ${expected.length} chars, got ${content.length} chars`;
+
+      return editor;
+    }
+
+    // Test 1: Simple string
+    runTest(1, { doc: 'Hello, World!' }, 'Hello, World!');
+
+    // Test 2: Markdown with code block
+    const markdown = `# Welcome
+
+\`\`\`javascript
+const x = 42;
+\`\`\`
+`;
+    runTest(2, { doc: markdown }, markdown);
+
+    // Test 3: Empty string
+    runTest(3, { doc: '' }, '');
+
+    // Test 4: No doc option
+    runTest(4, {}, '');
+
+    // Test 5: Multi-line with special chars
+    const multiline = `Line 1
+Line 2 with "quotes" and 'apostrophes'
+Line 3 with <html> & entities
+Line 4 with emoji: n/a
+Line 5 with backticks: \`code\``;
+    runTest(5, { doc: multiline }, multiline);
+  </script>
+</body>
+</html>

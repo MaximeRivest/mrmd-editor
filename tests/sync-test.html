@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Test: Sync Integration</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; max-width: 1200px; margin: 0 auto; }
+    h1 { margin-bottom: 10px; }
+    .status { padding: 8px 12px; border-radius: 4px; margin-bottom: 20px; font-family: monospace; }
+    .status.connected { background: #d4edda; color: #155724; }
+    .status.connecting { background: #fff3cd; color: #856404; }
+    .status.disconnected { background: #f8d7da; color: #721c24; }
+    .editors { display: flex; gap: 20px; }
+    .editor-container { flex: 1; }
+    .editor-container h3 { margin: 0 0 10px 0; }
+    .editor { border: 1px solid #ccc; height: 400px; }
+    .controls { margin: 20px 0; }
+    button { padding: 8px 16px; margin-right: 10px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Sync Integration Test</h1>
+  <p>Testing mrmd-editor with mrmd-sync server (file sync to disk).</p>
+
+  <div id="status" class="status disconnected">Disconnected</div>
+
+  <div class="controls">
+    <button onclick="streamText()">Stream Text (simulate AI)</button>
+    <button onclick="addCodeBlock()">Add Code Block</button>
+  </div>
+
+  <div class="editors">
+    <div class="editor-container">
+      <h3>Editor 1</h3>
+      <div id="editor1" class="editor"></div>
+    </div>
+    <div class="editor-container">
+      <h3>Editor 2 (same room - collab test)</h3>
+      <div id="editor2" class="editor"></div>
+    </div>
+  </div>
+
+  <script src="../dist/mrmd.iife.js"></script>
+  <script>
+    // Connect to mrmd-sync server
+    const docs = mrmd.drive('ws://localhost:4444');
+
+    // Track status
+    docs.onStatus(status => {
+      const el = document.getElementById('status');
+      el.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+      el.className = 'status ' + status;
+    });
+
+    // Open test.md file (exists on disk at test-docs/test.md)
+    const editor1 = docs.open('test', '#editor1');
+    const editor2 = docs.open('test', '#editor2');
+
+    // Expose for console
+    window.editor1 = editor1;
+    window.editor2 = editor2;
+    window.docs = docs;
+
+    // Stream text like AI would
+    function streamText() {
+      const writer = editor1.writer();
+      const text = '\n\n## AI Response\n\nThis text is streaming in character by character.\n';
+      let i = 0;
+
+      const interval = setInterval(() => {
+        if (i < text.length) {
+          writer.write(text[i]);
+          i++;
+        } else {
+          writer.end();
+          clearInterval(interval);
+        }
+      }, 30);
+    }
+
+    // Add a code block
+    function addCodeBlock() {
+      const code = '\n\n```python\nprint("Hello from Python!")\n```\n';
+      editor1.insert(editor1.view.state.doc.length, code);
+    }
+  </script>
+</body>
+</html>
