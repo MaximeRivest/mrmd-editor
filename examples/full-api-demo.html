@@ -1,0 +1,1320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mrmd - Full API Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      font-size: 14px;
+    }
+
+    /* Layout */
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 400px;
+      height: 100vh;
+    }
+
+    .main-panel {
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid #333;
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Header */
+    .header {
+      padding: 12px 16px;
+      border-bottom: 1px solid #333;
+      background: #252525;
+    }
+    .header h1 { font-size: 16px; margin-bottom: 4px; }
+    .header p { font-size: 12px; color: #888; }
+
+    /* Editor */
+    #editor {
+      flex: 1;
+      overflow: auto;
+    }
+
+    /* Sidebar panels */
+    .panel {
+      border-bottom: 1px solid #333;
+      max-height: 200px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .panel.expanded { max-height: none; flex: 1; }
+    .panel-header {
+      padding: 8px 12px;
+      background: #252525;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-weight: 500;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .panel-header:hover { background: #2a2a2a; }
+    .panel-content {
+      padding: 12px;
+      overflow: auto;
+      flex: 1;
+      font-size: 13px;
+    }
+
+    /* Buttons */
+    .btn {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      margin: 2px;
+    }
+    .btn:hover { background: #2563eb; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-sm { padding: 4px 8px; font-size: 11px; }
+    .btn-green { background: #10b981; }
+    .btn-green:hover { background: #059669; }
+    .btn-red { background: #ef4444; }
+    .btn-red:hover { background: #dc2626; }
+    .btn-yellow { background: #f59e0b; }
+    .btn-yellow:hover { background: #d97706; }
+    .btn-purple { background: #8b5cf6; }
+    .btn-purple:hover { background: #7c3aed; }
+
+    .btn-row { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+
+    /* Info displays */
+    .info-box {
+      background: #1e1e1e;
+      border-radius: 4px;
+      padding: 8px;
+      margin: 8px 0;
+      font-family: monospace;
+      font-size: 11px;
+      max-height: 150px;
+      overflow: auto;
+    }
+    .info-box pre { white-space: pre-wrap; word-break: break-all; }
+
+    /* Log */
+    #log {
+      font-family: monospace;
+      font-size: 11px;
+    }
+    #log .entry { margin: 2px 0; border-bottom: 1px solid #2a2a2a; padding: 4px 0; }
+    #log .time { color: #666; }
+    #log .type { font-weight: bold; margin: 0 8px; }
+    #log .run { color: #10b981; }
+    #log .output { color: #3b82f6; }
+    #log .complete { color: #8b5cf6; }
+    #log .error { color: #ef4444; }
+    #log .change { color: #f59e0b; }
+    #log .save { color: #06b6d4; }
+    #log .collab { color: #ec4899; }
+
+    /* Variables list */
+    .var-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      border-bottom: 1px solid #2a2a2a;
+    }
+    .var-name { color: #58a6ff; }
+    .var-type { color: #888; font-size: 11px; }
+    .var-value { color: #8b949e; font-family: monospace; font-size: 11px; }
+
+    /* Completions */
+    .completion-item {
+      padding: 4px;
+      border-bottom: 1px solid #2a2a2a;
+    }
+    .completion-label { color: #58a6ff; }
+    .completion-type { color: #888; font-size: 11px; margin-left: 8px; }
+
+    /* Artifact container */
+    #artifact-container {
+      min-height: 100px;
+      border: 1px dashed #444;
+      border-radius: 4px;
+      margin: 8px 0;
+      position: relative;
+    }
+    #artifact-container:empty::after {
+      content: 'Artifact will render here';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #666;
+      font-size: 12px;
+    }
+
+    /* Stats display */
+    .stats { display: flex; gap: 16px; }
+    .stat { text-align: center; }
+    .stat-value { font-size: 18px; font-weight: bold; color: #58a6ff; }
+    .stat-label { font-size: 11px; color: #888; }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid #333;
+    }
+    .tab {
+      padding: 8px 16px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      font-size: 12px;
+    }
+    .tab:hover { background: #2a2a2a; }
+    .tab.active {
+      border-bottom-color: #3b82f6;
+      color: #3b82f6;
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Scope list */
+    .scope-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid #2a2a2a;
+    }
+    .scope-name { color: #58a6ff; }
+
+    /* Collaborators */
+    .collab-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 0;
+      border-bottom: 1px solid #2a2a2a;
+    }
+    .collab-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .collab-name { flex: 1; }
+    .collab-type { color: #888; font-size: 11px; }
+
+    /* Labels */
+    label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0;
+      font-size: 13px;
+    }
+    input[type="text"], textarea {
+      background: #1e1e1e;
+      border: 1px solid #333;
+      color: #e0e0e0;
+      padding: 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    input[type="text"] { width: 100%; }
+    textarea { width: 100%; min-height: 60px; resize: vertical; }
+  </style>
+</head>
+<body>
+
+<div class="layout">
+  <!-- Main Editor Panel -->
+  <div class="main-panel">
+    <div class="header">
+      <h1>mrmd + mrmd-js Full API Demo</h1>
+      <p>Comprehensive demonstration of all editor and runtime features</p>
+    </div>
+    <div id="editor"></div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <!-- Controls Panel -->
+    <div class="panel expanded" id="panel-controls">
+      <div class="panel-header">
+        <span>Controls</span>
+      </div>
+      <div class="panel-content">
+        <div class="tabs">
+          <div class="tab active" data-tab="execution">Execution</div>
+          <div class="tab" data-tab="content">Content</div>
+          <div class="tab" data-tab="state">State</div>
+        </div>
+
+        <div class="tab-content active" id="tab-execution">
+          <strong>Cell Execution</strong>
+          <div class="btn-row">
+            <button class="btn btn-green" onclick="runCurrentCell()">Run Current</button>
+            <button class="btn btn-green" onclick="runAll()">Run All</button>
+            <button class="btn" onclick="runAllAbove()">Run Above</button>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-red" onclick="clearOutputs()">Clear All Outputs</button>
+            <button class="btn btn-red btn-sm" onclick="cancelAll()">Cancel All</button>
+          </div>
+          <div class="info-box">
+            <div id="cell-info">Click in a cell to see info</div>
+          </div>
+        </div>
+
+        <div class="tab-content" id="tab-content">
+          <strong>Content Manipulation</strong>
+          <div class="btn-row">
+            <button class="btn" onclick="showContent()">Get Content</button>
+            <button class="btn" onclick="insertAtCursor()">Insert at Cursor</button>
+            <button class="btn btn-purple" onclick="startWriter()">Start Writer</button>
+          </div>
+          <label>
+            Text to insert:
+            <input type="text" id="insert-text" value="Hello from API!">
+          </label>
+          <label>
+            Replace content:
+            <textarea id="replace-text">New document content</textarea>
+          </label>
+          <button class="btn btn-yellow" onclick="setContent()">Set Content</button>
+          <div class="stats" id="stats">
+            <div class="stat"><div class="stat-value" id="stat-lines">0</div><div class="stat-label">Lines</div></div>
+            <div class="stat"><div class="stat-value" id="stat-words">0</div><div class="stat-label">Words</div></div>
+            <div class="stat"><div class="stat-value" id="stat-chars">0</div><div class="stat-label">Chars</div></div>
+          </div>
+        </div>
+
+        <div class="tab-content" id="tab-state">
+          <strong>Editor State</strong>
+          <div class="btn-row">
+            <button class="btn" onclick="toggleDark()">Toggle Dark</button>
+            <button class="btn" onclick="toggleReadonly()">Toggle Readonly</button>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-sm" onclick="editorFocus()">Focus</button>
+            <button class="btn btn-sm" onclick="editorBlur()">Blur</button>
+          </div>
+          <strong style="margin-top: 12px; display: block;">Collaboration</strong>
+          <div class="btn-row">
+            <button class="btn btn-sm btn-purple" onclick="announceHuman()">Human</button>
+            <button class="btn btn-sm btn-purple" onclick="announceAI()">AI</button>
+            <button class="btn btn-sm btn-purple" onclick="announceRuntime()">Runtime</button>
+          </div>
+          <div id="collaborators"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LSP Panel -->
+    <div class="panel" id="panel-lsp">
+      <div class="panel-header" onclick="togglePanel('panel-lsp')">
+        <span>LSP Features (mrmd-js)</span>
+        <span>+</span>
+      </div>
+      <div class="panel-content">
+        <label>
+          Code for completion/hover:
+          <input type="text" id="lsp-code" value="data." placeholder="Type code...">
+        </label>
+        <label>
+          Cursor position:
+          <input type="text" id="lsp-pos" value="5" style="width: 60px;">
+        </label>
+        <div class="btn-row">
+          <button class="btn" onclick="getCompletions()">Get Completions</button>
+          <button class="btn" onclick="getHover()">Get Hover</button>
+        </div>
+        <div class="info-box" id="lsp-result">Results will appear here</div>
+      </div>
+    </div>
+
+    <!-- Variables Panel -->
+    <div class="panel" id="panel-variables">
+      <div class="panel-header" onclick="togglePanel('panel-variables')">
+        <span>Variables (mrmd-js)</span>
+        <span>+</span>
+      </div>
+      <div class="panel-content">
+        <button class="btn btn-sm" onclick="refreshVariables()">Refresh</button>
+        <div id="variables-list"></div>
+      </div>
+    </div>
+
+    <!-- Scopes Panel -->
+    <div class="panel" id="panel-scopes">
+      <div class="panel-header" onclick="togglePanel('panel-scopes')">
+        <span>Multi-Scope Runtime</span>
+        <span>+</span>
+      </div>
+      <div class="panel-content">
+        <strong>Named Scopes</strong>
+        <div class="btn-row">
+          <button class="btn btn-sm" onclick="createScope()">Create Scope</button>
+          <button class="btn btn-sm" onclick="listScopes()">List Scopes</button>
+        </div>
+        <label>
+          <input type="text" id="scope-name" value="my-scope" placeholder="Scope name">
+        </label>
+        <div id="scopes-list"></div>
+
+        <strong style="margin-top: 12px; display: block;">Execute in Scope</strong>
+        <label>
+          <textarea id="scope-code">const scopeVar = Math.random();</textarea>
+        </label>
+        <button class="btn" onclick="executeInScope()">Execute in Named Scope</button>
+        <button class="btn btn-yellow" onclick="executeInMain()">Execute in Main Context</button>
+      </div>
+    </div>
+
+    <!-- Artifacts Panel -->
+    <div class="panel" id="panel-artifacts">
+      <div class="panel-header" onclick="togglePanel('panel-artifacts')">
+        <span>Artifacts (Visible Iframes)</span>
+        <span>+</span>
+      </div>
+      <div class="panel-content">
+        <button class="btn" onclick="createArtifact()">Create Artifact</button>
+        <button class="btn btn-red btn-sm" onclick="destroyArtifact()">Destroy</button>
+        <div id="artifact-container"></div>
+        <label>
+          <textarea id="artifact-code">document.body.innerHTML = '<h2 style="color: #58a6ff; font-family: sans-serif;">Artifact!</h2><p>Rendered in isolated iframe</p>';</textarea>
+        </label>
+        <button class="btn btn-green" onclick="executeInArtifact()">Execute in Artifact</button>
+      </div>
+    </div>
+
+    <!-- HTML Rendering Panel -->
+    <div class="panel" id="panel-html">
+      <div class="panel-header" onclick="togglePanel('panel-html')">
+        <span>HTML Rendering (mrmd-js)</span>
+        <span>+</span>
+      </div>
+      <div class="panel-content">
+        <strong>Render Mode</strong>
+        <div class="btn-row">
+          <button class="btn btn-sm" onclick="setRenderMode('direct')">Direct</button>
+          <button class="btn btn-sm" onclick="setRenderMode('shadow')">Shadow DOM</button>
+          <button class="btn btn-sm" onclick="setRenderMode('scoped')">Scoped CSS</button>
+        </div>
+        <div class="info-box" style="font-size: 11px;">
+          Mode: <strong id="render-mode">direct</strong><br>
+          <em id="render-mode-desc">No isolation - styles affect the page</em>
+        </div>
+        <label>
+          <textarea id="html-code" style="min-height: 80px;"><div class="card">
+  <h3>Hello!</h3>
+  <p>Styled content</p>
+</div>
+<style>
+.card { background: #2a2a2a; padding: 12px; border-radius: 8px; }
+.card h3 { color: #58a6ff; margin: 0 0 8px 0; }
+.card p { color: #888; margin: 0; }
+</style></textarea>
+        </label>
+        <button class="btn btn-green" onclick="renderHtmlContent()">Render HTML</button>
+        <button class="btn btn-red btn-sm" onclick="clearHtmlRender()">Clear</button>
+        <div id="html-render-container" style="margin-top: 8px; min-height: 60px; border: 1px dashed #444; border-radius: 4px; padding: 8px;"></div>
+      </div>
+    </div>
+
+    <!-- Events Log Panel -->
+    <div class="panel" id="panel-events">
+      <div class="panel-header" onclick="togglePanel('panel-events')">
+        <span>Events Log</span>
+        <span>+</span>
+      </div>
+      <div class="panel-content">
+        <button class="btn btn-sm btn-red" onclick="clearLog()">Clear Log</button>
+        <div id="log" class="info-box"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Load mrmd-editor bundle -->
+<script src="../dist/mrmd.iife.js"></script>
+
+<!-- Load mrmd-js bundle (IIFE for browser use) -->
+<script src="../../mrmd-js/dist/mrmd-js.iife.js"></script>
+
+<script>
+  // ============================================================================
+  // Sample Document
+  // ============================================================================
+
+  const sampleDoc = `# mrmd + mrmd-js API Demo
+
+This document demonstrates all features of **mrmd-editor** and **mrmd-js** working together.
+
+## Basic Execution
+
+Variables persist across cells:
+
+\`\`\`javascript
+const data = [1, 2, 3, 4, 5];
+const sum = data.reduce((a, b) => a + b, 0);
+console.log("Sum:", sum);
+sum
+\`\`\`
+
+\`\`\`javascript
+// Variables from previous cell are available
+console.log("Data from above:", data);
+const doubled = data.map(n => n * 2);
+console.log("Doubled:", doubled);
+doubled
+\`\`\`
+
+## Object Inspection
+
+\`\`\`javascript
+const user = {
+  name: "Alice",
+  profile: {
+    email: "alice@example.com",
+    settings: { theme: "dark", notifications: true }
+  },
+  scores: [95, 87, 92]
+};
+console.log("User created:", user.name);
+user
+\`\`\`
+
+## Async/Await Support
+
+\`\`\`javascript
+// Top-level await is supported
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
+console.log("Starting...");
+await delay(500);
+console.log("After 500ms");
+await delay(500);
+console.log("Done!");
+
+"Async execution complete"
+\`\`\`
+
+## Error Handling
+
+\`\`\`javascript
+try {
+  throw new Error("Example error");
+} catch (e) {
+  console.error("Caught:", e.message);
+}
+"Error was handled"
+\`\`\`
+
+## HTML Cell (Rendered Output)
+
+HTML cells render visually instead of text output:
+
+\`\`\`html
+<div class="widget">
+  <h4>Interactive Widget</h4>
+  <p>This HTML renders in a floating panel!</p>
+  <button onclick="this.textContent = 'Clicked!'">Click Me</button>
+</div>
+<style>
+.widget {
+  background: linear-gradient(135deg, #1a1a2e, #16213e);
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid #0f3460;
+}
+.widget h4 { color: #e94560; margin: 0 0 8px 0; }
+.widget p { color: #aaa; margin: 0 0 12px 0; }
+.widget button {
+  background: #e94560;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.widget button:hover { background: #ff6b6b; }
+</style>
+\`\`\`
+
+---
+
+Use the sidebar to explore all API features!
+`;
+
+  // ============================================================================
+  // Initialization
+  // ============================================================================
+
+  let editor;
+  let jsRuntime;
+  let jsExecutor;
+  let htmlExecutor;
+  let cssExecutor;
+  let isDark = true;
+  let isReadonly = false;
+  let artifact = null;
+
+  // ============================================================================
+  // Unified Output Panel (shared container for HTML/CSS cells)
+  // ============================================================================
+
+  // Session-level scope class for isolation
+  const sessionScopeClass = mrmdJs.generateScopeClass(`session-${Date.now()}`);
+  let unifiedOutputPanel = null;
+
+  function getUnifiedOutputPanel() {
+    if (unifiedOutputPanel) return unifiedOutputPanel;
+
+    // Create the unified output panel
+    const panel = document.createElement('div');
+    panel.id = 'unified-output-panel';
+    panel.className = sessionScopeClass;  // Add session scope for CSS isolation
+    panel.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      width: 350px;
+      max-height: 300px;
+      overflow: auto;
+      background: #1e1e1e;
+      border: 1px solid #444;
+      border-radius: 8px;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    `;
+
+    // Header with tabs
+    const header = document.createElement('div');
+    header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid #333; background: #252525;';
+    header.innerHTML = `
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <span style="font-size: 12px; font-weight: 500; color: #58a6ff;">Output Panel</span>
+        <span style="font-size: 10px; color: #666;" id="panel-scope-info">.${sessionScopeClass}</span>
+      </div>
+      <div style="display: flex; gap: 4px;">
+        <button onclick="clearUnifiedOutput()" style="background: #333; border: none; color: #888; padding: 2px 6px; border-radius: 3px; cursor: pointer; font-size: 10px;">Clear</button>
+        <button onclick="toggleUnifiedPanel()" style="background: none; border: none; color: #888; cursor: pointer; font-size: 14px;">&times;</button>
+      </div>
+    `;
+    panel.appendChild(header);
+
+    // Style container (for CSS cells)
+    const styleContainer = document.createElement('div');
+    styleContainer.id = 'unified-styles';
+    styleContainer.style.display = 'none';  // Styles are invisible
+    panel.appendChild(styleContainer);
+
+    // Content area (for HTML cells)
+    const content = document.createElement('div');
+    content.id = 'unified-content';
+    content.style.cssText = 'padding: 12px;';
+    panel.appendChild(content);
+
+    document.body.appendChild(panel);
+    unifiedOutputPanel = panel;
+
+    return panel;
+  }
+
+  function toggleUnifiedPanel() {
+    if (unifiedOutputPanel) {
+      unifiedOutputPanel.style.display = unifiedOutputPanel.style.display === 'none' ? 'block' : 'none';
+    }
+  }
+
+  function clearUnifiedOutput() {
+    const styleContainer = document.getElementById('unified-styles');
+    const content = document.getElementById('unified-content');
+    if (styleContainer) styleContainer.innerHTML = '';
+    if (content) content.innerHTML = '';
+    log('complete', 'Output panel cleared');
+  }
+
+  // ============================================================================
+  // CSS Executor (applies CSS to shared scope)
+  // ============================================================================
+
+  function createCssExecutor() {
+    let styleCount = 0;
+
+    return {
+      supports(lang) {
+        return ['css', 'stylesheet', 'style'].includes(lang.toLowerCase());
+      },
+
+      async execute(code, language) {
+        const panel = getUnifiedOutputPanel();
+        const styleContainer = document.getElementById('unified-styles');
+        styleCount++;
+
+        try {
+          // Scope the CSS to our session scope class
+          const scopedCss = mrmdJs.scopeStyles(code, `.${sessionScopeClass}`);
+
+          // Create and add style element
+          const styleEl = document.createElement('style');
+          styleEl.setAttribute('data-css-cell', `css-${styleCount}`);
+          styleEl.textContent = scopedCss;
+          styleContainer.appendChild(styleEl);
+
+          // Show panel if hidden
+          panel.style.display = 'block';
+
+          return {
+            success: true,
+            stdout: `CSS applied (scoped to .${sessionScopeClass})`,
+            stderr: '',
+          };
+        } catch (err) {
+          return {
+            success: false,
+            stdout: '',
+            stderr: err.message,
+            error: { name: err.name, message: err.message }
+          };
+        }
+      },
+
+      async executeStreaming(code, language, onChunk) {
+        const result = await this.execute(code, language);
+        const output = result.stdout + (result.stderr ? '\n' + result.stderr : '');
+        onChunk(output, output, true);
+        return result;
+      }
+    };
+  }
+
+  // ============================================================================
+  // HTML Executor (renders to shared scope container)
+  // ============================================================================
+
+  function createHtmlExecutor() {
+    const renderer = mrmdJs.createHtmlRenderer();
+    let renderCount = 0;
+
+    return {
+      supports(lang) {
+        return ['html', 'htm', 'html-rendered'].includes(lang.toLowerCase());
+      },
+
+      async execute(code, language) {
+        const panel = getUnifiedOutputPanel();
+        const contentArea = document.getElementById('unified-content');
+        renderCount++;
+
+        try {
+          // Use 'direct' mode since CSS is already scoped at session level
+          // The panel container already has the scope class
+          const result = renderer.render(code, contentArea, {
+            mode: 'direct',  // Direct mode - CSS from CSS cells applies via shared scope
+            execId: `html-cell-${renderCount}`,
+            executeScripts: true
+          });
+
+          // Show panel if hidden
+          panel.style.display = 'block';
+
+          return {
+            success: true,
+            stdout: `Rendered HTML (${result.scriptsExecuted} scripts)`,
+            stderr: result.scriptErrors.length > 0 ? result.scriptErrors.map(e => e.message).join(', ') : '',
+          };
+        } catch (err) {
+          return {
+            success: false,
+            stdout: '',
+            stderr: err.message,
+            error: { name: err.name, message: err.message }
+          };
+        }
+      },
+
+      async executeStreaming(code, language, onChunk) {
+        const result = await this.execute(code, language);
+        const output = result.stdout + (result.stderr ? '\n' + result.stderr : '');
+        onChunk(output, output, true);
+        return result;
+      }
+    };
+  }
+
+  // Initialize when DOM is ready
+  document.addEventListener('DOMContentLoaded', init);
+
+  function init() {
+    // Create JavaScript Runtime (mrmd-js)
+    jsRuntime = new mrmdJs.JavaScriptRuntime();
+
+    // Create JavaScript Executor (mrmd-js adapter for mrmd-editor)
+    jsExecutor = new mrmdJs.JavaScriptExecutor();
+
+    // Create HTML Executor (wraps HtmlRenderer for HTML cells)
+    htmlExecutor = createHtmlExecutor();
+
+    // Create CSS Executor (applies scoped styles to shared panel)
+    cssExecutor = createCssExecutor();
+
+    // Create mrmd editor with all three runtimes
+    editor = mrmd.create('#editor', {
+      doc: sampleDoc,
+      dark: true,
+      placeholder: 'Start writing markdown...',
+      runtimes: {
+        javascript: jsExecutor,
+        html: htmlExecutor,
+        css: cssExecutor
+      }
+    });
+
+    // Set up event handlers
+    setupEventHandlers();
+
+    // Initial UI updates
+    updateStats();
+    updateCellInfo();
+    refreshVariables();
+    updateCollaborators();
+
+    log('complete', 'Editor and runtime initialized');
+
+    // Expose to console for debugging
+    window.editor = editor;
+    window.mrmd = mrmd;
+    window.jsRuntime = jsRuntime;
+    window.jsExecutor = jsExecutor;
+    window.mrmdJs = mrmdJs;
+  }
+
+  // ============================================================================
+  // Event Handlers
+  // ============================================================================
+
+  function setupEventHandlers() {
+    // Content change
+    editor.onChange((content) => {
+      updateStats();
+      updateCellInfo();
+      // Don't log every change - too noisy
+    });
+
+    // Save (Cmd/Ctrl+S)
+    editor.onSave((content) => {
+      log('save', `Document saved (${content.length} chars)`);
+    });
+
+    // Cell execution events
+    editor.onCellRun((index, cell) => {
+      log('run', `Cell ${index} started (${cell.language})`);
+    });
+
+    editor.onCellOutput((index, chunk, accumulated) => {
+      // Only log occasionally to avoid spam
+      if (accumulated.length < 100 || accumulated.length % 100 === 0) {
+        log('output', `Cell ${index}: ${chunk.slice(0, 40)}...`);
+      }
+    });
+
+    editor.onCellComplete((index, result) => {
+      log('complete', `Cell ${index} ${result.success ? 'succeeded' : 'failed'}`);
+      refreshVariables();
+    });
+
+    editor.onCellError((index, err) => {
+      log('error', `Cell ${index}: ${err.message || err}`);
+    });
+
+    // Collaborator changes
+    editor.onCollaboratorsChange(() => {
+      updateCollaborators();
+      log('collab', 'Collaborators changed');
+    });
+
+    // Update cell info on selection change
+    editor.view.dom.addEventListener('click', () => {
+      setTimeout(updateCellInfo, 10);
+    });
+    editor.view.dom.addEventListener('keyup', () => {
+      setTimeout(updateCellInfo, 10);
+    });
+  }
+
+  // ============================================================================
+  // Execution Controls
+  // ============================================================================
+
+  function runCurrentCell() {
+    editor.runCurrentCell();
+  }
+
+  function runAll() {
+    editor.runAll();
+  }
+
+  function runAllAbove() {
+    editor.runAllAbove();
+  }
+
+  function clearOutputs() {
+    editor.clearOutputs();
+    log('complete', 'All outputs cleared');
+  }
+
+  function cancelAll() {
+    editor.cancelExecution();
+    log('error', 'Execution cancelled');
+  }
+
+  // ============================================================================
+  // Content Manipulation
+  // ============================================================================
+
+  function showContent() {
+    const content = editor.getContent();
+    alert(`Document content (${content.length} chars):\n\n${content.slice(0, 500)}...`);
+  }
+
+  function setContent() {
+    const text = document.getElementById('replace-text').value;
+    editor.setContent(text);
+    log('change', 'Content replaced');
+  }
+
+  function insertAtCursor() {
+    const text = document.getElementById('insert-text').value;
+    editor.insertAtCursor(text);
+    log('change', `Inserted: "${text}"`);
+  }
+
+  let writerInstance = null;
+
+  function startWriter() {
+    if (writerInstance && writerInstance.active) {
+      writerInstance.write(' [more text]');
+      return;
+    }
+
+    // Create a writer at current position
+    const pos = editor.view.state.selection.main.head;
+    writerInstance = editor.writer(pos);
+
+    // Simulate streaming
+    const text = '\n\n**Streaming content:**\n';
+    let i = 0;
+
+    const interval = setInterval(() => {
+      if (i < text.length) {
+        writerInstance.write(text[i]);
+        i++;
+      } else {
+        writerInstance.end();
+        clearInterval(interval);
+        log('complete', 'Writer finished');
+      }
+    }, 50);
+
+    log('run', 'Writer started (streaming)');
+  }
+
+  // ============================================================================
+  // Editor State
+  // ============================================================================
+
+  function toggleDark() {
+    isDark = !isDark;
+    editor.setDark(isDark);
+    log('change', `Dark mode: ${isDark}`);
+  }
+
+  function toggleReadonly() {
+    isReadonly = !isReadonly;
+    editor.setReadonly(isReadonly);
+    log('change', `Readonly: ${isReadonly}`);
+  }
+
+  function editorFocus() {
+    editor.focus();
+    log('change', 'Editor focused');
+  }
+
+  function editorBlur() {
+    editor.blur();
+    log('change', 'Editor blurred');
+  }
+
+  function updateStats() {
+    const stats = editor.stats();
+    document.getElementById('stat-lines').textContent = stats.lines;
+    document.getElementById('stat-words').textContent = stats.words;
+    document.getElementById('stat-chars').textContent = stats.chars;
+  }
+
+  function updateCellInfo() {
+    const cells = editor.getCells();
+    const current = editor.getCurrentCell();
+
+    let html = `<strong>Total cells:</strong> ${cells.length}<br>`;
+
+    if (current) {
+      const index = cells.findIndex(c => c.start === current.start);
+      html += `<strong>Current cell:</strong> #${index} (${current.language})<br>`;
+      html += `<strong>Code:</strong> ${current.code.slice(0, 50)}...`;
+    } else {
+      html += `<em>Cursor not in a code cell</em>`;
+    }
+
+    document.getElementById('cell-info').innerHTML = html;
+  }
+
+  // ============================================================================
+  // Collaboration
+  // ============================================================================
+
+  function announceHuman() {
+    editor.announceCollaborator('human', 'Demo User', '#3b82f6');
+    log('collab', 'Announced as Human');
+  }
+
+  function announceAI() {
+    editor.announceCollaborator('ai', 'Claude AI', '#8b5cf6');
+    log('collab', 'Announced as AI');
+  }
+
+  function announceRuntime() {
+    editor.announceCollaborator('runtime', 'JS Runtime', '#10b981');
+    log('collab', 'Announced as Runtime');
+  }
+
+  function updateCollaborators() {
+    const collabs = editor.getCollaborators();
+    const html = collabs.map(c => `
+      <div class="collab-item">
+        <div class="collab-dot" style="background: ${c.user.color || '#666'}"></div>
+        <span class="collab-name">${c.user.name || 'Unknown'}</span>
+        <span class="collab-type">${c.user.type || 'unknown'}</span>
+      </div>
+    `).join('');
+
+    document.getElementById('collaborators').innerHTML = html || '<em>No collaborators</em>';
+  }
+
+  // ============================================================================
+  // LSP Features
+  // ============================================================================
+
+  function getCompletions() {
+    const code = document.getElementById('lsp-code').value;
+    const pos = parseInt(document.getElementById('lsp-pos').value) || code.length;
+
+    // Use the executor's client for LSP features
+    const client = jsExecutor.getClient();
+    const result = client.complete(code, pos);
+
+    let html = `<strong>Completions (${result.items.length}):</strong><br>`;
+    html += `Range: ${result.from}-${result.to}<br><br>`;
+
+    result.items.slice(0, 10).forEach(item => {
+      html += `<div class="completion-item">
+        <span class="completion-label">${item.label}</span>
+        <span class="completion-type">${item.type || ''}</span>
+      </div>`;
+    });
+
+    if (result.items.length > 10) {
+      html += `<em>...and ${result.items.length - 10} more</em>`;
+    }
+
+    document.getElementById('lsp-result').innerHTML = html;
+    log('complete', `Got ${result.items.length} completions`);
+  }
+
+  function getHover() {
+    const code = document.getElementById('lsp-code').value;
+    const pos = parseInt(document.getElementById('lsp-pos').value) || 0;
+
+    const client = jsExecutor.getClient();
+    const result = client.hover(code, pos);
+
+    let html;
+    if (result.found) {
+      html = `
+        <strong>Hover Info:</strong><br>
+        Name: <span class="var-name">${result.name}</span><br>
+        Type: <span class="var-type">${result.type}</span><br>
+        Value: <span class="var-value">${result.value || 'N/A'}</span>
+        ${result.signature ? `<br>Signature: <code>${result.signature}</code>` : ''}
+      `;
+    } else {
+      html = '<em>No hover info at this position</em>';
+    }
+
+    document.getElementById('lsp-result').innerHTML = html;
+    log('complete', result.found ? `Hover: ${result.name}` : 'No hover info');
+  }
+
+  // ============================================================================
+  // Variables
+  // ============================================================================
+
+  function refreshVariables() {
+    const client = jsExecutor.getClient();
+    const vars = client.variables();
+
+    if (vars.length === 0) {
+      document.getElementById('variables-list').innerHTML = '<em>No variables yet. Run a cell first.</em>';
+      return;
+    }
+
+    const html = vars.map(v => `
+      <div class="var-item">
+        <div>
+          <span class="var-name">${v.name}</span>
+          <span class="var-type">${v.type}</span>
+        </div>
+        <span class="var-value">${v.value}</span>
+      </div>
+    `).join('');
+
+    document.getElementById('variables-list').innerHTML = html;
+  }
+
+  // ============================================================================
+  // Scopes
+  // ============================================================================
+
+  function createScope() {
+    const name = document.getElementById('scope-name').value || 'new-scope';
+    jsRuntime.scope(name);
+    listScopes();
+    log('complete', `Scope "${name}" created`);
+  }
+
+  function listScopes() {
+    const scopes = jsRuntime.listScopes();
+    const html = scopes.map(name => `
+      <div class="scope-item">
+        <span class="scope-name">${name}</span>
+        <button class="btn btn-sm btn-red" onclick="destroyScope('${name}')">Destroy</button>
+      </div>
+    `).join('');
+
+    document.getElementById('scopes-list').innerHTML = html || '<em>No named scopes</em>';
+  }
+
+  function destroyScope(name) {
+    jsRuntime.destroyScope(name);
+    listScopes();
+    log('complete', `Scope "${name}" destroyed`);
+  }
+
+  async function executeInScope() {
+    const name = document.getElementById('scope-name').value || 'default';
+    const code = document.getElementById('scope-code').value;
+
+    const scope = jsRuntime.scope(name);
+    const result = await scope.execute(code);
+
+    log(result.success ? 'complete' : 'error',
+      `Scope "${name}": ${result.stdout || result.stderr || 'OK'}`);
+
+    listScopes();
+  }
+
+  async function executeInMain() {
+    const code = document.getElementById('scope-code').value;
+
+    try {
+      const result = await jsRuntime.executeInMain(code);
+      log(result.success ? 'complete' : 'error',
+        `Main context: ${result.stdout || result.resultString || 'OK'}`);
+    } catch (e) {
+      log('error', `Main context error: ${e.message}`);
+    }
+  }
+
+  // ============================================================================
+  // Artifacts
+  // ============================================================================
+
+  function createArtifact() {
+    const container = document.getElementById('artifact-container');
+    artifact = jsRuntime.createArtifact('demo-artifact', container, {
+      styles: { width: '100%', height: '100px', border: 'none' }
+    });
+    log('complete', 'Artifact created');
+  }
+
+  function destroyArtifact() {
+    if (artifact) {
+      jsRuntime.destroyScope('demo-artifact');
+      document.getElementById('artifact-container').innerHTML = '';
+      artifact = null;
+      log('complete', 'Artifact destroyed');
+    }
+  }
+
+  async function executeInArtifact() {
+    if (!artifact) {
+      createArtifact();
+    }
+
+    const code = document.getElementById('artifact-code').value;
+    const result = await artifact.execute(code);
+
+    log(result.success ? 'complete' : 'error',
+      `Artifact: ${result.success ? 'Rendered' : result.stderr}`);
+  }
+
+  // ============================================================================
+  // HTML Rendering
+  // ============================================================================
+
+  let currentRenderMode = 'direct';
+  let htmlRenderer = null;
+
+  const modeDescriptions = {
+    direct: 'No isolation - styles affect the page',
+    shadow: 'Shadow DOM - full encapsulation',
+    scoped: 'Scoped CSS - class-based isolation'
+  };
+
+  function setRenderMode(mode) {
+    currentRenderMode = mode;
+    document.getElementById('render-mode').textContent = mode;
+    document.getElementById('render-mode-desc').textContent = modeDescriptions[mode];
+    log('change', `HTML render mode: ${mode}`);
+  }
+
+  function renderHtmlContent() {
+    const html = document.getElementById('html-code').value;
+    const container = document.getElementById('html-render-container');
+
+    // Create renderer if not exists
+    if (!htmlRenderer) {
+      htmlRenderer = mrmdJs.createHtmlRenderer();
+    }
+
+    try {
+      const result = htmlRenderer.render(html, container, {
+        mode: currentRenderMode,
+        execId: 'demo-render',
+        executeScripts: true,
+        onScriptError: (err, script) => {
+          log('error', `Script error: ${err.message}`);
+        }
+      });
+
+      log('complete', `HTML rendered (${currentRenderMode}): ${result.scriptsExecuted} scripts executed`);
+
+      if (result.scriptErrors.length > 0) {
+        log('error', `${result.scriptErrors.length} script error(s)`);
+      }
+    } catch (e) {
+      log('error', `Render error: ${e.message}`);
+    }
+  }
+
+  function clearHtmlRender() {
+    const container = document.getElementById('html-render-container');
+    container.innerHTML = '';
+
+    // Clear any shadow root
+    if (container.shadowRoot) {
+      container.shadowRoot.innerHTML = '';
+    }
+
+    // Remove scope classes
+    container.className = '';
+
+    log('complete', 'HTML render cleared');
+  }
+
+  // ============================================================================
+  // UI Helpers
+  // ============================================================================
+
+  function togglePanel(panelId) {
+    const panel = document.getElementById(panelId);
+    const wasExpanded = panel.classList.contains('expanded');
+
+    // Collapse all panels
+    document.querySelectorAll('.panel').forEach(p => {
+      p.classList.remove('expanded');
+      p.querySelector('.panel-header span:last-child').textContent = '+';
+    });
+
+    // Expand clicked panel if it wasn't already expanded
+    if (!wasExpanded) {
+      panel.classList.add('expanded');
+      panel.querySelector('.panel-header span:last-child').textContent = '-';
+    }
+  }
+
+  // Tab switching
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const tabId = tab.dataset.tab;
+
+      // Update tab buttons
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+
+      // Update tab content
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      document.getElementById('tab-' + tabId).classList.add('active');
+    });
+  });
+
+  // ============================================================================
+  // Logging
+  // ============================================================================
+
+  function log(type, message) {
+    const logEl = document.getElementById('log');
+    const time = new Date().toLocaleTimeString();
+
+    const entry = document.createElement('div');
+    entry.className = 'entry';
+    entry.innerHTML = `
+      <span class="time">${time}</span>
+      <span class="type ${type}">${type}</span>
+      <span>${message}</span>
+    `;
+
+    logEl.insertBefore(entry, logEl.firstChild);
+
+    // Keep only last 50 entries
+    while (logEl.children.length > 50) {
+      logEl.removeChild(logEl.lastChild);
+    }
+  }
+
+  function clearLog() {
+    document.getElementById('log').innerHTML = '';
+  }
+</script>
+
+</body>
+</html>

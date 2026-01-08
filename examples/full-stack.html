@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mrmd - Full Stack Demo</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+    }
+
+    /* Layout */
+    .app {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      grid-template-columns: 1fr 280px;
+      height: 100vh;
+    }
+
+    /* Header */
+    .header {
+      grid-column: 1 / -1;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 600;
+      color: #f0f6fc;
+    }
+    .status-badges {
+      display: flex;
+      gap: 12px;
+    }
+    .badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      background: #21262d;
+    }
+    .badge .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #484f58;
+    }
+    .badge.connected .dot { background: #3fb950; }
+    .badge.connecting .dot { background: #d29922; }
+    .badge.error .dot { background: #f85149; }
+
+    /* Editor */
+    #editor {
+      overflow: auto;
+      padding: 20px;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      background: #161b22;
+      border-left: 1px solid #30363d;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .section {
+      padding: 16px;
+      border-bottom: 1px solid #30363d;
+    }
+    .section h3 {
+      margin: 0 0 12px 0;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: #8b949e;
+    }
+
+    /* Collaborators */
+    .collaborators {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .collaborator {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      background: #21262d;
+      border-radius: 6px;
+    }
+    .collaborator-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+      color: white;
+    }
+    .collaborator-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .collaborator-name {
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .collaborator-status {
+      font-size: 11px;
+      color: #8b949e;
+    }
+    .collaborator-type {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #30363d;
+      color: #8b949e;
+    }
+    .collaborator-type.human { background: #238636; color: white; }
+    .collaborator-type.runtime { background: #1f6feb; color: white; }
+    .collaborator-type.ai { background: #8b5cf6; color: white; }
+
+    /* Buttons */
+    .btn {
+      padding: 8px 14px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.15s;
+    }
+    .btn-primary {
+      background: #238636;
+      color: white;
+    }
+    .btn-primary:hover { background: #2ea043; }
+    .btn-secondary {
+      background: #21262d;
+      color: #c9d1d9;
+      border: 1px solid #30363d;
+    }
+    .btn-secondary:hover { background: #30363d; }
+    .btn-danger {
+      background: #da3633;
+      color: white;
+    }
+    .btn-danger:hover { background: #f85149; }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    /* Variables */
+    .variables {
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+      font-size: 12px;
+    }
+    .variable {
+      padding: 6px 8px;
+      background: #21262d;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .var-name { color: #79c0ff; }
+    .var-type { color: #8b949e; }
+    .var-value { color: #a5d6ff; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+
+    /* Log */
+    #log {
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 11px;
+      max-height: 200px;
+      overflow: auto;
+      background: #0d1117;
+      border-radius: 4px;
+      padding: 8px;
+    }
+    .log-entry {
+      padding: 2px 0;
+      border-bottom: 1px solid #21262d;
+    }
+    .log-entry:last-child { border-bottom: none; }
+    .log-time { color: #484f58; }
+    .log-run { color: #3fb950; }
+    .log-output { color: #58a6ff; }
+    .log-error { color: #f85149; }
+    .log-info { color: #8b949e; }
+
+    /* Instructions */
+    .instructions {
+      font-size: 13px;
+      line-height: 1.7;
+      color: #8b949e;
+    }
+    .instructions code {
+      background: #21262d;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 12px;
+    }
+    .instructions kbd {
+      background: #30363d;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 11px;
+      border: 1px solid #484f58;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <h1>mrmd Full Stack Demo</h1>
+      <div class="status-badges">
+        <div class="badge" id="sync-status">
+          <span class="dot"></span>
+          <span>Sync: <span id="sync-text">Disconnected</span></span>
+        </div>
+        <div class="badge" id="python-status">
+          <span class="dot"></span>
+          <span>Python: <span id="python-text">Disconnected</span></span>
+        </div>
+        <div class="badge" id="js-status">
+          <span class="dot"></span>
+          <span>JS: <span id="js-text">Ready</span></span>
+        </div>
+      </div>
+    </header>
+
+    <div id="editor"></div>
+
+    <div class="sidebar">
+      <div class="section">
+        <h3>Collaborators</h3>
+        <div id="collaborators" class="collaborators">
+          <div class="collaborator">
+            <div class="collaborator-avatar" style="background: #3b82f6">Y</div>
+            <div class="collaborator-info">
+              <div class="collaborator-name">You</div>
+              <div class="collaborator-status">Editing</div>
+            </div>
+            <span class="collaborator-type human">human</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Execution</h3>
+        <div class="button-row">
+          <button class="btn btn-primary" onclick="runCurrentCell()">
+            Run Cell
+          </button>
+          <button class="btn btn-secondary" onclick="runAll()">
+            Run All
+          </button>
+          <button class="btn btn-danger" onclick="clearOutputs()">
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Variables</h3>
+        <div id="variables" class="variables">
+          <div style="color: #8b949e; font-style: italic;">No variables yet</div>
+        </div>
+        <button class="btn btn-secondary" style="margin-top: 8px; width: 100%;" onclick="refreshVariables()">
+          Refresh
+        </button>
+      </div>
+
+      <div class="section">
+        <h3>Event Log</h3>
+        <div id="log"></div>
+      </div>
+
+      <div class="section">
+        <h3>Instructions</h3>
+        <div class="instructions">
+          <p><kbd>Shift</kbd> + <kbd>Enter</kbd> - Run current cell</p>
+          <p>Languages: <code>python</code>, <code>javascript</code>, <code>html</code>, <code>css</code></p>
+          <p>Output appears as <code>```output</code> blocks in the document.</p>
+          <p>Open this page in multiple tabs to see collaboration!</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Load mrmd-editor -->
+  <script src="../dist/mrmd.iife.js"></script>
+
+  <!-- Load mrmd-js for JavaScript/HTML/CSS execution -->
+  <script src="../../mrmd-js/dist/mrmd-js.iife.js"></script>
+
+  <script type="module">
+    // =========================================================================
+    // Sample Document
+    // =========================================================================
+
+    const sampleDoc = `# Full Stack Demo
+
+Welcome to the **mrmd** full stack demo! This demonstrates:
+
+- **mrmd-editor**: Collaborative markdown editor with Yjs
+- **mrmd-sync**: Document synchronization server
+- **mrmd-python**: Python runtime (MRP protocol)
+- **mrmd-js**: JavaScript/HTML/CSS runtime
+
+## Python Cell
+
+\`\`\`python
+import math
+
+# Variables persist across cells
+x = 42
+y = math.pi
+name = "mrmd"
+
+print(f"Hello from {name}!")
+print(f"x = {x}, y = {y:.4f}")
+
+# Return value is displayed
+x * y
+\`\`\`
+
+## JavaScript Cell
+
+\`\`\`javascript
+// Variables persist in JavaScript too
+const greeting = "Hello from JavaScript!";
+console.log(greeting);
+
+// Do some computation
+const numbers = [1, 2, 3, 4, 5];
+const sum = numbers.reduce((a, b) => a + b, 0);
+console.log("Sum:", sum);
+
+// Return value
+{ greeting, sum }
+\`\`\`
+
+## HTML Preview
+
+\`\`\`html
+<div style="padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px; color: white;">
+  <h2 style="margin: 0 0 10px 0;">Live HTML Preview</h2>
+  <p style="margin: 0;">This HTML is rendered in an iframe!</p>
+  <button onclick="alert('Clicked!')" style="margin-top: 10px; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">
+    Click me
+  </button>
+</div>
+\`\`\`
+
+## CSS Styling
+
+\`\`\`css
+/* CSS cells apply styles to the page */
+.demo-box {
+  padding: 16px;
+  background: #238636;
+  color: white;
+  border-radius: 8px;
+  margin: 10px 0;
+}
+\`\`\`
+
+## More Python
+
+\`\`\`python
+# Access previously defined variables
+print(f"x is still {x}")
+
+# Create a list
+items = ["apple", "banana", "cherry"]
+for i, item in enumerate(items, 1):
+    print(f"{i}. {item}")
+
+len(items)
+\`\`\`
+
+## Notes
+
+- All edits sync in real-time via Yjs
+- Output blocks are part of the document
+- Open multiple browser tabs to test collaboration
+- Cursors and selections are shared via Awareness
+`;
+
+    // =========================================================================
+    // Logging
+    // =========================================================================
+
+    const logEl = document.getElementById('log');
+    function log(type, msg) {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      const time = new Date().toLocaleTimeString();
+      entry.innerHTML = `<span class="log-time">${time}</span> <span class="log-${type}">${msg}</span>`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+
+      // Keep only last 50 entries
+      while (logEl.children.length > 50) {
+        logEl.removeChild(logEl.firstChild);
+      }
+    }
+
+    // =========================================================================
+    // Status Updates
+    // =========================================================================
+
+    function setStatus(id, status, text) {
+      const badge = document.getElementById(id);
+      const textEl = document.getElementById(id.replace('-status', '-text'));
+      badge.className = 'badge ' + status;
+      textEl.textContent = text;
+    }
+
+    // =========================================================================
+    // MRP Client for Python
+    // =========================================================================
+
+    class MRPPythonRuntime {
+      constructor(endpoint) {
+        this.endpoint = endpoint;
+        this.connected = false;
+        this.capabilities = null;
+      }
+
+      async connect() {
+        try {
+          const res = await fetch(`${this.endpoint}/capabilities`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          this.capabilities = await res.json();
+          this.connected = true;
+          setStatus('python-status', 'connected', 'Connected');
+          log('info', `Python runtime connected: ${this.capabilities.runtime}`);
+          return true;
+        } catch (err) {
+          this.connected = false;
+          setStatus('python-status', 'error', 'Error');
+          log('error', `Python connection failed: ${err.message}`);
+          return false;
+        }
+      }
+
+      supports(lang) {
+        const l = lang.toLowerCase();
+        return ['python', 'py', 'python3'].includes(l);
+      }
+
+      async execute(code, language) {
+        const res = await fetch(`${this.endpoint}/execute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, session: 'default' }),
+        });
+        return res.json();
+      }
+
+      async executeStreaming(code, language, onChunk) {
+        const res = await fetch(`${this.endpoint}/execute/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, session: 'default' }),
+        });
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = '';
+        let currentEvent = '';
+        let result = null;
+        let buffer = ''; // Buffer for incomplete lines
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const text = decoder.decode(value, { stream: true });
+          buffer += text;
+
+          // Process complete lines only
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              currentEvent = line.slice(7).trim();
+            } else if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+
+                if (currentEvent === 'stdout' || currentEvent === 'stderr') {
+                  const content = data.content || '';
+                  accumulated = data.accumulated || (accumulated + content);
+                  if (content) {
+                    onChunk(content, accumulated, false);
+                  }
+                } else if (currentEvent === 'result') {
+                  result = data;
+                  // Only send result value if we didn't get streaming output
+                  if (!accumulated && data.stdout) {
+                    onChunk(data.stdout, data.stdout, false);
+                    accumulated = data.stdout;
+                  }
+                } else if (currentEvent === 'error') {
+                  result = { success: false, error: data };
+                }
+              } catch (e) {
+                console.warn('SSE parse error:', e, line);
+              }
+            }
+          }
+        }
+
+        // Process any remaining buffer
+        if (buffer.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(buffer.slice(6));
+            if (currentEvent === 'result') result = data;
+          } catch (e) {}
+        }
+
+        // Final callback - append result value if present
+        let finalOutput = accumulated;
+        if (result?.result !== undefined && result?.result !== null) {
+          const resultStr = String(result.result);
+          if (!finalOutput.includes(resultStr)) {
+            finalOutput = finalOutput + (finalOutput ? '\n' : '') + resultStr;
+          }
+        }
+        onChunk('', finalOutput, true);
+
+        return result || { success: true, stdout: accumulated };
+      }
+
+      async getVariables() {
+        const res = await fetch(`${this.endpoint}/variables`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session: 'default' }),
+        });
+        return res.json();
+      }
+    }
+
+    // =========================================================================
+    // JavaScript Runtime Wrapper
+    // =========================================================================
+
+    class JSRuntime {
+      constructor() {
+        // Use mrmd-js if available, otherwise fall back to simple eval
+        if (typeof mrmdJs !== 'undefined' && mrmdJs.createRuntime) {
+          this.runtime = mrmdJs.createRuntime();
+          this.session = this.runtime.createSession({ language: 'javascript' });
+          log('info', 'mrmd-js runtime initialized');
+        } else {
+          this.session = null;
+          log('info', 'Using fallback JS executor');
+        }
+        setStatus('js-status', 'connected', 'Ready');
+      }
+
+      supports(lang) {
+        const l = lang.toLowerCase();
+        return ['javascript', 'js', 'node', 'html', 'css'].includes(l);
+      }
+
+      async execute(code, language) {
+        const lang = language.toLowerCase();
+
+        if (lang === 'html') {
+          return this.executeHtml(code);
+        }
+        if (lang === 'css') {
+          return this.executeCss(code);
+        }
+
+        // JavaScript
+        if (this.session) {
+          return this.session.execute(code);
+        }
+        return this.fallbackExecute(code);
+      }
+
+      async executeStreaming(code, language, onChunk) {
+        const result = await this.execute(code, language);
+        const output = this.formatResult(result, language);
+        onChunk(output, output, true);
+        return result;
+      }
+
+      formatResult(result, language) {
+        if (language === 'html') {
+          return '[HTML rendered in iframe]';
+        }
+        if (language === 'css') {
+          return '[CSS applied to page]';
+        }
+
+        let output = '';
+        if (result.stdout) output += result.stdout;
+        if (result.stderr) output += (output ? '\n' : '') + result.stderr;
+        if (result.result !== undefined && result.result !== null) {
+          const resultStr = typeof result.result === 'object'
+            ? JSON.stringify(result.result, null, 2)
+            : String(result.result);
+          output += (output ? '\n' : '') + resultStr;
+        }
+        return output || '(no output)';
+      }
+
+      executeHtml(code) {
+        // Create/update preview iframe in sidebar
+        let container = document.getElementById('html-preview-container');
+        if (!container) {
+          // Create preview section in sidebar
+          const sidebar = document.querySelector('.sidebar');
+          const section = document.createElement('div');
+          section.className = 'section';
+          section.innerHTML = '<h3>HTML PREVIEW</h3>';
+          container = document.createElement('div');
+          container.id = 'html-preview-container';
+          container.style.cssText = 'background: white; border-radius: 4px; overflow: hidden;';
+          section.appendChild(container);
+          sidebar.insertBefore(section, sidebar.firstChild);
+        }
+
+        // Create iframe
+        let iframe = document.getElementById('html-preview-iframe');
+        if (!iframe) {
+          iframe = document.createElement('iframe');
+          iframe.id = 'html-preview-iframe';
+          iframe.style.cssText = 'width: 100%; height: 200px; border: none;';
+          container.appendChild(iframe);
+        }
+
+        // Write HTML to iframe (must be in DOM first)
+        const doc = iframe.contentDocument || iframe.contentWindow.document;
+        doc.open();
+        doc.write(`
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <style>body { font-family: sans-serif; margin: 0; padding: 10px; }</style>
+          </head>
+          <body>${code}</body>
+          </html>
+        `);
+        doc.close();
+
+        return {
+          success: true,
+          stdout: '[HTML rendered - see preview in sidebar]',
+          displayData: [{ type: 'html', content: code }],
+        };
+      }
+
+      executeCss(code) {
+        // Apply CSS to page
+        let styleEl = document.getElementById('mrmd-css-output');
+        if (!styleEl) {
+          styleEl = document.createElement('style');
+          styleEl.id = 'mrmd-css-output';
+          document.head.appendChild(styleEl);
+        }
+        styleEl.textContent = code;
+
+        return {
+          success: true,
+          stdout: '[CSS applied to page]',
+        };
+      }
+
+      fallbackExecute(code) {
+        const logs = [];
+        const originalLog = console.log;
+        console.log = (...args) => {
+          logs.push(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '));
+        };
+
+        try {
+          const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+          const fn = new AsyncFunction(code);
+          const resultPromise = fn();
+
+          return resultPromise.then(result => {
+            console.log = originalLog;
+            return {
+              success: true,
+              stdout: logs.join('\n'),
+              result: result,
+            };
+          });
+        } catch (err) {
+          console.log = originalLog;
+          return {
+            success: false,
+            stdout: logs.join('\n'),
+            stderr: err.message,
+            error: { type: err.name, message: err.message },
+          };
+        }
+      }
+    }
+
+    // =========================================================================
+    // Initialize
+    // =========================================================================
+
+    // Create runtimes
+    const pythonRuntime = new MRPPythonRuntime('http://localhost:8000/mrp/v1');
+    const jsRuntime = new JSRuntime();
+
+    // Try to connect to Python
+    pythonRuntime.connect();
+
+    // Connect to mrmd-sync or use local-only mode
+    let editor;
+    const syncUrl = 'ws://localhost:4444';
+
+    async function initEditor() {
+      try {
+        // Try to connect to sync server
+        const docs = mrmd.drive(syncUrl);
+
+        docs.onStatus(status => {
+          if (status === 'connected') {
+            setStatus('sync-status', 'connected', 'Connected');
+            log('info', 'Connected to sync server');
+          } else if (status === 'connecting') {
+            setStatus('sync-status', 'connecting', 'Connecting...');
+          } else {
+            setStatus('sync-status', 'error', 'Disconnected');
+          }
+        });
+
+        // Open demo document
+        editor = docs.open('demo', '#editor', {
+          dark: true,
+          userName: 'User ' + Math.floor(Math.random() * 1000),
+        });
+
+        // If document is empty, seed it
+        setTimeout(() => {
+          if (editor.getContent().length < 10) {
+            editor.setContent(sampleDoc);
+          }
+        }, 500);
+
+        log('info', 'Connecting to sync server...');
+
+      } catch (err) {
+        // Fall back to local-only mode
+        log('info', 'Sync server not available, using local mode');
+        setStatus('sync-status', 'error', 'Local Only');
+
+        editor = mrmd.create('#editor', {
+          doc: sampleDoc,
+          dark: true,
+          userName: 'Local User',
+        });
+      }
+
+      // Register runtimes
+      editor.registerRuntime('python', pythonRuntime);
+      editor.registerRuntime('javascript', jsRuntime);
+      editor.registerRuntime('html', jsRuntime);
+      editor.registerRuntime('css', jsRuntime);
+
+      // Event handlers
+      editor.onCellRun((index, cell) => {
+        log('run', `Running ${cell.language} cell ${index}`);
+      });
+
+      editor.onCellOutput((index, chunk, acc) => {
+        // Just log, output goes to document
+      });
+
+      editor.onCellComplete((index, result) => {
+        const status = result.success ? 'complete' : 'error';
+        log(status === 'complete' ? 'info' : 'error',
+          `Cell ${index} ${result.success ? 'completed' : 'failed'}`);
+      });
+
+      editor.onCellError((index, err) => {
+        log('error', `Cell ${index}: ${err.message || err}`);
+      });
+
+      // Update collaborators display
+      function updateCollaborators() {
+        const collabs = editor.getCollaborators();
+        const container = document.getElementById('collaborators');
+        container.innerHTML = '';
+
+        collabs.forEach(({ clientId, user }) => {
+          const div = document.createElement('div');
+          div.className = 'collaborator';
+
+          const initial = (user.name || 'U')[0].toUpperCase();
+          const typeClass = user.type || 'human';
+
+          div.innerHTML = `
+            <div class="collaborator-avatar" style="background: ${user.color || '#3b82f6'}">${initial}</div>
+            <div class="collaborator-info">
+              <div class="collaborator-name">${user.name || 'Anonymous'}</div>
+              <div class="collaborator-status">${user.status || 'Connected'}</div>
+            </div>
+            <span class="collaborator-type ${typeClass}">${user.type || 'human'}</span>
+          `;
+
+          container.appendChild(div);
+        });
+      }
+
+      editor.onCollaboratorsChange(updateCollaborators);
+      updateCollaborators();
+
+      // Keyboard shortcuts
+      document.addEventListener('keydown', (e) => {
+        if (e.shiftKey && e.key === 'Enter') {
+          e.preventDefault();
+          editor.runCurrentCell();
+        }
+      });
+
+      // Expose globally
+      window.editor = editor;
+      window.pythonRuntime = pythonRuntime;
+      window.jsRuntime = jsRuntime;
+
+      log('info', 'Editor initialized');
+    }
+
+    // Global functions for buttons
+    window.runCurrentCell = () => editor?.runCurrentCell();
+    window.runAll = () => editor?.runAll();
+    window.clearOutputs = () => editor?.clearOutputs();
+
+    window.refreshVariables = async () => {
+      const container = document.getElementById('variables');
+
+      if (pythonRuntime.connected) {
+        try {
+          const result = await pythonRuntime.getVariables();
+          if (result.variables && result.variables.length > 0) {
+            container.innerHTML = result.variables.map(v => `
+              <div class="variable">
+                <span><span class="var-name">${v.name}</span>: <span class="var-type">${v.type}</span></span>
+                <span class="var-value">${v.value}</span>
+              </div>
+            `).join('');
+          } else {
+            container.innerHTML = '<div style="color: #8b949e; font-style: italic;">No variables</div>';
+          }
+        } catch (err) {
+          container.innerHTML = `<div style="color: #f85149;">Error: ${err.message}</div>`;
+        }
+      } else {
+        container.innerHTML = '<div style="color: #8b949e; font-style: italic;">Python not connected</div>';
+      }
+    };
+
+    // Start
+    initEditor();
+  </script>
+</body>
+</html>

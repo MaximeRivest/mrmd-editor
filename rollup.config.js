@@ -5,20 +5,20 @@ import terser from '@rollup/plugin-terser';
 export default {
   input: 'src/index.js',
   output: [
-    // IIFE for browsers - cleanest, just window.mrmd
+    // IIFE for browsers - includes all named exports under window.mrmd
     {
       file: 'dist/mrmd.iife.js',
       format: 'iife',
       name: 'mrmd',
       sourcemap: true,
-      exports: 'default'
+      exports: 'named'
     },
     {
       file: 'dist/mrmd.iife.min.js',
       format: 'iife',
       name: 'mrmd',
       sourcemap: true,
-      exports: 'default',
+      exports: 'named',
       plugins: [terser()]
     },
     // CommonJS for Node
@@ -26,7 +26,7 @@ export default {
       file: 'dist/mrmd.cjs',
       format: 'cjs',
       sourcemap: true,
-      exports: 'default'
+      exports: 'named'
     },
     // ESM for bundlers
     {

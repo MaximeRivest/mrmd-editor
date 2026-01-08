@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>MRP Client Test</title>
+  <style>
+    body {
+      font-family: system-ui;
+      max-width: 1000px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    h1 { margin-bottom: 5px; }
+    .subtitle { color: #666; margin-bottom: 20px; }
+
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    h2 { margin-top: 0; color: #333; }
+
+    .status {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .status.connected { background: #dcfce7; color: #166534; }
+    .status.disconnected { background: #fee2e2; color: #991b1b; }
+
+    button {
+      padding: 8px 16px;
+      font-size: 14px;
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      background: #3b82f6;
+      color: white;
+      margin-right: 8px;
+      margin-bottom: 8px;
+    }
+    button:hover { background: #2563eb; }
+    button.secondary { background: #6b7280; }
+    button.secondary:hover { background: #4b5563; }
+    button.danger { background: #ef4444; }
+    button.danger:hover { background: #dc2626; }
+
+    textarea {
+      width: 100%;
+      height: 100px;
+      font-family: monospace;
+      font-size: 14px;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      resize: vertical;
+    }
+
+    .output {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 15px;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 13px;
+      white-space: pre-wrap;
+      min-height: 100px;
+      max-height: 400px;
+      overflow: auto;
+    }
+
+    .output.html-output {
+      background: white;
+      border: 1px solid #ddd;
+      color: #333;
+    }
+
+    .label {
+      font-size: 12px;
+      font-weight: 500;
+      color: #666;
+      margin-bottom: 6px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .variables {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 10px;
+    }
+    .variable {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .variable:last-child { border-bottom: none; }
+    .var-name { font-weight: 500; }
+    .var-type { color: #6b7280; font-size: 12px; }
+    .var-value { font-family: monospace; color: #059669; }
+
+    .completions {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      max-height: 200px;
+      overflow: auto;
+    }
+    .completion {
+      padding: 8px 12px;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      gap: 10px;
+    }
+    .completion:last-child { border-bottom: none; }
+    .completion-label { font-weight: 500; }
+    .completion-kind { color: #9ca3af; font-size: 12px; }
+    .completion-detail { color: #6b7280; font-size: 12px; }
+
+    .input-prompt {
+      background: #fef3c7;
+      border: 1px solid #f59e0b;
+      border-radius: 6px;
+      padding: 15px;
+      margin-top: 10px;
+      display: none;
+    }
+    .input-prompt.active { display: block; }
+    .input-prompt input {
+      width: 100%;
+      padding: 8px;
+      font-size: 14px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-top: 10px;
+    }
+
+    /* ANSI color classes */
+    .ansi-bold { font-weight: bold; }
+    .ansi-dim { opacity: 0.7; }
+    .ansi-italic { font-style: italic; }
+    .ansi-underline { text-decoration: underline; }
+    .ansi-fg-black { color: #000; }
+    .ansi-fg-red { color: #cc0000; }
+    .ansi-fg-green { color: #00cc00; }
+    .ansi-fg-yellow { color: #cccc00; }
+    .ansi-fg-blue { color: #0000cc; }
+    .ansi-fg-magenta { color: #cc00cc; }
+    .ansi-fg-cyan { color: #00cccc; }
+    .ansi-fg-white { color: #ccc; }
+    .ansi-fg-bright-red { color: #ff0000; }
+    .ansi-fg-bright-green { color: #00ff00; }
+    .ansi-fg-bright-yellow { color: #ffff00; }
+    .ansi-fg-bright-blue { color: #0000ff; }
+  </style>
+</head>
+<body>
+  <h1>MRP Client Test</h1>
+  <p class="subtitle">Test the MRMD Runtime Protocol client against the mock server</p>
+
+  <!-- Connection -->
+  <div class="card">
+    <h2>Connection</h2>
+    <p>
+      Server: <code>http://localhost:8000/mrp/v1</code>
+      <span id="status" class="status disconnected">Disconnected</span>
+    </p>
+    <button onclick="connect()">Connect</button>
+    <button onclick="getCapabilities()" class="secondary">Get Capabilities</button>
+    <div id="capabilities" style="margin-top: 15px; display: none;">
+      <div class="label">Capabilities</div>
+      <pre id="caps-json" style="background: #f5f5f5; padding: 10px; border-radius: 4px; overflow: auto;"></pre>
+    </div>
+  </div>
+
+  <!-- Execution -->
+  <div class="card">
+    <h2>Execute Code</h2>
+    <div class="label">Code (try: "progress", "color", "error", "slow", "download", or Python expressions)</div>
+    <textarea id="code">print("progress")</textarea>
+    <div style="margin-top: 10px;">
+      <button onclick="executeStream()">Execute (Stream)</button>
+      <button onclick="execute()" class="secondary">Execute (Sync)</button>
+      <button onclick="interrupt()" class="danger">Interrupt</button>
+    </div>
+
+    <div class="input-prompt" id="input-prompt">
+      <strong>⌨️ Input requested</strong>
+      <input type="text" id="input-text" placeholder="Type your input and press Enter" onkeypress="handleInputKey(event)">
+    </div>
+
+    <div class="grid" style="margin-top: 15px;">
+      <div>
+        <div class="label">Plain Output (for document)</div>
+        <div id="output-plain" class="output"></div>
+      </div>
+      <div>
+        <div class="label">Rich Output (with colors)</div>
+        <div id="output-rich" class="output html-output"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Completions -->
+  <div class="card">
+    <h2>Completions</h2>
+    <div class="label">Type code and position cursor (try: "df.", "data.", "print")</div>
+    <input type="text" id="complete-code" style="width: 100%; padding: 8px; font-family: monospace;" value="df." oninput="getCompletions()">
+    <div id="completions" class="completions" style="margin-top: 10px;"></div>
+  </div>
+
+  <!-- Variables -->
+  <div class="card">
+    <h2>Variables</h2>
+    <button onclick="getVariables()">Refresh Variables</button>
+    <div id="variables" class="variables" style="margin-top: 10px;"></div>
+  </div>
+
+  <!-- Inspect / Hover -->
+  <div class="card">
+    <h2>Inspect / Hover</h2>
+    <div class="label">Symbol to inspect (try: "x", "df", "print")</div>
+    <input type="text" id="inspect-symbol" style="width: 200px; padding: 8px; font-family: monospace;" value="df">
+    <button onclick="inspectSymbol()">Inspect</button>
+    <button onclick="hoverSymbol()" class="secondary">Hover</button>
+    <pre id="inspect-result" style="background: #f5f5f5; padding: 10px; border-radius: 4px; margin-top: 10px;"></pre>
+  </div>
+
+  <script type="module">
+    import { createMRPClient } from '../src/mrp-client.js';
+    import { TerminalBuffer } from '../src/terminal.js';
+
+    let client = null;
+    let currentExecId = null;
+    let buffer = null;
+
+    window.connect = async function() {
+      try {
+        client = createMRPClient('http://localhost:8000/mrp/v1');
+        await client.getCapabilities();
+        document.getElementById('status').textContent = 'Connected';
+        document.getElementById('status').className = 'status connected';
+        console.log('Connected to MRP server');
+      } catch (e) {
+        document.getElementById('status').textContent = 'Connection Failed';
+        document.getElementById('status').className = 'status disconnected';
+        alert('Failed to connect. Make sure the mock server is running:\n\nnode test/mock-mrp-server.js');
+      }
+    };
+
+    window.getCapabilities = async function() {
+      if (!client) { alert('Connect first'); return; }
+      const caps = await client.getCapabilities();
+      document.getElementById('capabilities').style.display = 'block';
+      document.getElementById('caps-json').textContent = JSON.stringify(caps, null, 2);
+    };
+
+    window.execute = async function() {
+      if (!client) { alert('Connect first'); return; }
+      const code = document.getElementById('code').value;
+
+      document.getElementById('output-plain').textContent = 'Executing...';
+      document.getElementById('output-rich').innerHTML = 'Executing...';
+
+      try {
+        const result = await client.execute(code);
+        document.getElementById('output-plain').textContent = result.stdout || result.stderr || '(no output)';
+        document.getElementById('output-rich').textContent = result.stdout || result.stderr || '(no output)';
+      } catch (e) {
+        document.getElementById('output-plain').textContent = 'Error: ' + e.message;
+      }
+    };
+
+    window.executeStream = async function() {
+      if (!client) { alert('Connect first'); return; }
+      const code = document.getElementById('code').value;
+
+      document.getElementById('output-plain').textContent = '';
+      document.getElementById('output-rich').innerHTML = '';
+      document.getElementById('input-prompt').classList.remove('active');
+
+      buffer = new TerminalBuffer();
+      currentExecId = `exec-${Date.now()}`;
+
+      try {
+        const result = await client.executeStreaming(code, 'python',
+          (chunk, accumulated, done) => {
+            if (chunk) {
+              buffer.write(chunk);
+              document.getElementById('output-plain').textContent = buffer.toString();
+              document.getElementById('output-rich').innerHTML = buffer.toHtml();
+            }
+          },
+          {
+            execId: currentExecId,
+            onStdinRequest: (request) => {
+              console.log('Input requested:', request);
+              currentExecId = request.execId;
+              document.getElementById('input-prompt').classList.add('active');
+              document.getElementById('input-text').focus();
+            }
+          }
+        );
+
+        console.log('Execution result:', result);
+        document.getElementById('input-prompt').classList.remove('active');
+      } catch (e) {
+        document.getElementById('output-plain').textContent += '\n\nError: ' + e.message;
+      }
+    };
+
+    window.handleInputKey = async function(event) {
+      if (event.key === 'Enter') {
+        const text = document.getElementById('input-text').value + '\n';
+        document.getElementById('input-text').value = '';
+        document.getElementById('input-prompt').classList.remove('active');
+
+        try {
+          await client.sendInput(currentExecId, text);
+        } catch (e) {
+          console.error('Failed to send input:', e);
+        }
+      }
+    };
+
+    window.interrupt = async function() {
+      if (!client) { alert('Connect first'); return; }
+      try {
+        await client.interrupt();
+        document.getElementById('output-plain').textContent += '\n[Interrupted]';
+      } catch (e) {
+        console.error('Interrupt failed:', e);
+      }
+    };
+
+    window.getCompletions = async function() {
+      if (!client) return;
+      const code = document.getElementById('complete-code').value;
+      const cursor = code.length;
+
+      try {
+        const result = await client.complete({ code, cursor });
+
+        if (result.matches.length === 0) {
+          document.getElementById('completions').innerHTML = '<div style="padding: 10px; color: #999;">No completions</div>';
+          return;
+        }
+
+        document.getElementById('completions').innerHTML = result.matches.map(m => `
+          <div class="completion">
+            <span class="completion-label">${m.label}</span>
+            <span class="completion-kind">${m.kind}</span>
+            <span class="completion-detail">${m.detail || ''}</span>
+          </div>
+        `).join('');
+      } catch (e) {
+        document.getElementById('completions').innerHTML = '<div style="padding: 10px; color: #ef4444;">Error: ' + e.message + '</div>';
+      }
+    };
+
+    window.getVariables = async function() {
+      if (!client) { alert('Connect first'); return; }
+
+      try {
+        const result = await client.getVariables();
+
+        if (result.variables.length === 0) {
+          document.getElementById('variables').innerHTML = '<em>No variables</em>';
+          return;
+        }
+
+        document.getElementById('variables').innerHTML = result.variables.map(v => `
+          <div class="variable">
+            <div>
+              <span class="var-name">${v.name}</span>
+              <span class="var-type">${v.type}</span>
+            </div>
+            <span class="var-value">${v.value}</span>
+          </div>
+        `).join('');
+      } catch (e) {
+        document.getElementById('variables').innerHTML = '<em>Error: ' + e.message + '</em>';
+      }
+    };
+
+    window.inspectSymbol = async function() {
+      if (!client) { alert('Connect first'); return; }
+      const symbol = document.getElementById('inspect-symbol').value;
+
+      try {
+        const result = await client.inspect({ code: symbol, cursor: symbol.length, detail: 1 });
+        document.getElementById('inspect-result').textContent = JSON.stringify(result, null, 2);
+      } catch (e) {
+        document.getElementById('inspect-result').textContent = 'Error: ' + e.message;
+      }
+    };
+
+    window.hoverSymbol = async function() {
+      if (!client) { alert('Connect first'); return; }
+      const symbol = document.getElementById('inspect-symbol').value;
+
+      try {
+        const result = await client.hover({ code: symbol, cursor: symbol.length });
+        document.getElementById('inspect-result').textContent = JSON.stringify(result, null, 2);
+      } catch (e) {
+        document.getElementById('inspect-result').textContent = 'Error: ' + e.message;
+      }
+    };
+
+    // Auto-connect on load
+    connect();
+  </script>
+</body>
+</html>

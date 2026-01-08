@@ -1,26 +1,41 @@
 /**
  * mrmd - Markdown editor with realtime collaboration
  *
- * A drop-in collaborative markdown editor with CodeMirror 6 and Yjs.
- * Code blocks automatically get syntax highlighting for their language.
+ * A markdown editor where humans, code, and AI all collaborate through
+ * the same interface. The document is just text - everything writes to
+ * it like a human would:
+ *
+ * - Human → keyboard → insert/replace text
+ * - Code cells → runtime → stream output as text
+ * - AI/LLM → API → stream response as text
+ * - Other browsers → network → Yjs sync
  *
  * Usage:
- *   // Standalone
+ *   import mrmd from 'mrmd-editor';
+ *
+ *   // Standalone editor
  *   const editor = mrmd.create('#editor', { doc: '# Hello' });
+ *
+ *   // With code execution
+ *   import { JavaScriptExecutor } from 'mrmd-js';
+ *   const editor = mrmd.create('#editor', {
+ *     runtimes: { javascript: new JavaScriptExecutor() }
+ *   });
+ *   editor.runCurrentCell();
  *
  *   // With sync server
  *   const docs = mrmd.drive('wss://server');
  *   const editor = docs.open('readme.md', '#editor');
  */
 
-// #region IMPORTS - External dependencies
+// #region IMPORTS
 import { EditorView, basicSetup } from 'codemirror';
-import { EditorState, Compartment, Text, Transaction } from '@codemirror/state';
+import { EditorState, StateEffect, Compartment, Text, Transaction } from '@codemirror/state';
 import { keymap, Decoration, ViewPlugin, WidgetType, placeholder } from '@codemirror/view';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { StreamLanguage, syntaxTree, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language';
 
-// CM6 Native language support
+// Language support
 import { javascript } from '@codemirror/lang-javascript';
 import { python } from '@codemirror/lang-python';
 import { markdown } from '@codemirror/lang-markdown';
@@ -34,25 +49,42 @@ import { java } from '@codemirror/lang-java';
 import { go } from '@codemirror/lang-go';
 import { xml } from '@codemirror/lang-xml';
 import { yaml } from '@codemirror/lang-yaml';
-
-// Community CM6 languages
 import { r } from 'codemirror-lang-r';
 import { julia } from '@plutojl/lang-julia';
-
-// CM5 Legacy modes (for languages without CM6 support)
 import { shell } from '@codemirror/legacy-modes/mode/shell';
 import { powerShell } from '@codemirror/legacy-modes/mode/powershell';
 
+// Collaboration
 import * as Y from 'yjs';
+import { Awareness } from 'y-protocols/awareness';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import { WebsocketProvider } from 'y-websocket';
+
+// Internal modules
+import { findCells, getCellAtCursor, countCells } from './cells.js';
+import { RuntimeRegistry, createRuntimeRegistry } from './runtime.js';
+import { ExecutionManager, createExecutionManager } from './execution.js';
+import {
+  TerminalBuffer,
+  processTerminalOutput,
+  terminalToHtml,
+  stripAnsi,
+  hasAnsi,
+  ansiStyles,
+} from './terminal.js';
+import {
+  outputWidget,
+  outputWidgetPlugin,
+  injectOutputWidgetStyles,
+  outputWidgetStyles,
+} from './output-widget.js';
 // #endregion IMPORTS
 
-// #region VERSION - Package version constant
+// #region VERSION
 const VERSION = '0.1.0';
 // #endregion VERSION
 
-// #region CODE_BLOCK_LANGUAGES - Language support for fenced code blocks
+// #region CODE_BLOCK_LANGUAGES
 const pythonSupport = python();
 const jsSupport = javascript();
 const jsxSupport = javascript({ jsx: true });
@@ -128,10 +160,10 @@ const languageSupportExtensions = [
 ];
 // #endregion CODE_BLOCK_LANGUAGES
 
-// #region STREAMING_WRITER - Writer class for streaming content
+// #region WRITER
 /**
  * Writer for streaming content into the editor.
- * Used by AI, code output, etc.
+ * Used by AI, code output, etc. Appears as if a collaborator is typing.
  */
 class Writer {
   constructor(editor, startPos) {
@@ -144,7 +176,9 @@ class Writer {
     if (!this._active) {
       throw new Error('Writer has ended');
     }
-    this._editor.insert(this._pos, text);
+    this._editor.view.dispatch({
+      changes: { from: this._pos, insert: text },
+    });
     this._pos += text.length;
     return this;
   }
@@ -156,12 +190,20 @@ class Writer {
   get position() {
     return this._pos;
   }
-}
-// #endregion STREAMING_WRITER
 
-// #region EDITOR_FACTORY - Main create() function
+  get active() {
+    return this._active;
+  }
+}
+// #endregion WRITER
+
+// #region CREATE
 /**
  * Create a standalone markdown editor
+ *
+ * @param {string|HTMLElement} target - CSS selector or element
+ * @param {Object} options - Editor options
+ * @returns {Editor}
  */
 function create(target, options = {}) {
   const element = typeof target === 'string'
@@ -179,19 +221,52 @@ function create(target, options = {}) {
     readonly = false,
     ydoc = new Y.Doc(),
     ytext = 'content',
+    awareness: providedAwareness = null,
+    runtimes = {},
+    // Collaborator info for awareness
+    userName = 'Anonymous',
+    userColor = null,
   } = options;
 
+  // System dark mode detection
   const getSystemDarkMode = () =>
     typeof window !== 'undefined' &&
     window.matchMedia?.('(prefers-color-scheme: dark)').matches;
 
   const isDark = dark !== null ? dark : getSystemDarkMode();
+
+  // Create or use provided awareness
+  // Awareness tracks all collaborators: humans, AI, code executors
+  const awareness = providedAwareness || new Awareness(ydoc);
+
+  // Generate a random color if not provided
+  const generateColor = () => {
+    const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+    return colors[Math.floor(Math.random() * colors.length)];
+  };
+
+  // Set local awareness state for this editor instance
+  awareness.setLocalStateField('user', {
+    type: 'human',
+    name: userName,
+    color: userColor || generateColor(),
+  });
+
   const yText = ydoc.getText(ytext);
 
-  if (yText.length === 0 && doc) {
-    yText.insert(0, doc);
+  // Yjs-first initialization:
+  // Only seed content if Yjs is empty (we're creating a new document)
+  // If Yjs already has content (we're joining), use that as source of truth
+  const yjsHasContent = yText.length > 0;
+
+  if (!yjsHasContent && doc) {
+    // We're the first editor - seed Yjs with initial content
+    ydoc.transact(() => {
+      yText.insert(0, doc);
+    });
   }
 
+  // Always read initial content from Yjs (source of truth)
   const initialContent = yText.toString();
   const themeCompartment = new Compartment();
   const readonlyCompartment = new Compartment();
@@ -213,6 +288,9 @@ function create(target, options = {}) {
     '&.cm-focused': { outline: 'none' },
   });
 
+  // Inject output widget CSS styles
+  injectOutputWidgetStyles();
+
   const extensions = [
     basicSetup,
     markdownWithCodeBlocks,
@@ -221,8 +299,9 @@ function create(target, options = {}) {
     themeCompartment.of(isDark ? oneDark : []),
     readonlyCompartment.of(readonly ? EditorState.readOnly.of(true) : []),
     placeholderText ? placeholder(placeholderText) : [],
-    yCollab(yText),
+    yCollab(yText, awareness),
     keymap.of(yUndoManagerKeymap),
+    outputWidgetPlugin, // ANSI output rendering
   ];
 
   const view = new EditorView({
@@ -233,19 +312,10 @@ function create(target, options = {}) {
   // Event handlers
   const changeHandlers = [];
   const saveHandlers = [];
-
-  // Listen for changes
-  const updateListener = EditorView.updateListener.of((update) => {
-    if (update.docChanged) {
-      const content = update.state.doc.toString();
-      changeHandlers.forEach(fn => fn(content));
-    }
-  });
-
-  // Add update listener
-  view.dispatch({
-    effects: view.state.update({}).effects
-  });
+  const cellRunHandlers = [];
+  const cellOutputHandlers = [];
+  const cellCompleteHandlers = [];
+  const cellErrorHandlers = [];
 
   // Keyboard handler for save
   element.addEventListener('keydown', (e) => {
@@ -256,14 +326,30 @@ function create(target, options = {}) {
     }
   });
 
-  // #region EDITOR_API
+  // Create runtime registry
+  const registry = createRuntimeRegistry();
+
+  // Register provided runtimes
+  for (const [name, runtime] of Object.entries(runtimes)) {
+    registry.register(name, runtime);
+  }
+
+  // Create editor API object first (needed by ExecutionManager)
   const api = {
     // Core references
     view,
     ydoc,
     yText,
+    awareness,
 
+    // Runtime
+    registry,
+    execution: null, // Set below
+
+    // ===========================================================================
     // Content
+    // ===========================================================================
+
     getContent() {
       return view.state.doc.toString();
     },
@@ -293,12 +379,18 @@ function create(target, options = {}) {
       });
     },
 
-    // Streaming writer
+    // ===========================================================================
+    // Streaming Writer
+    // ===========================================================================
+
     writer(pos) {
       return new Writer(this, pos);
     },
 
+    // ===========================================================================
     // State
+    // ===========================================================================
+
     setReadonly(value) {
       view.dispatch({
         effects: readonlyCompartment.reconfigure(
@@ -331,7 +423,154 @@ function create(target, options = {}) {
       };
     },
 
+    // ===========================================================================
+    // Awareness / Collaboration
+    // ===========================================================================
+
+    /**
+     * Announce a collaborator (for runtimes, LLMs, etc.)
+     * @param {'human'|'ai'|'runtime'|'sync'} type - Collaborator type
+     * @param {string} name - Display name
+     * @param {string} [color] - Optional color
+     */
+    announceCollaborator(type, name, color) {
+      awareness.setLocalStateField('user', {
+        type,
+        name,
+        color: color || generateColor(),
+      });
+    },
+
+    /**
+     * Update collaborator status
+     * @param {'idle'|'typing'|'streaming'|'executing'} status
+     */
+    setCollaboratorStatus(status) {
+      const current = awareness.getLocalState()?.user || {};
+      awareness.setLocalStateField('user', { ...current, status });
+    },
+
+    /**
+     * Get all connected collaborators
+     * @returns {Array<{clientId: number, user: object}>}
+     */
+    getCollaborators() {
+      const states = [];
+      awareness.getStates().forEach((state, clientId) => {
+        if (state.user) {
+          states.push({ clientId, user: state.user });
+        }
+      });
+      return states;
+    },
+
+    /**
+     * Listen for collaborator changes
+     * @param {function} callback
+     * @returns {function} Unsubscribe function
+     */
+    onCollaboratorsChange(callback) {
+      const handler = () => callback(this.getCollaborators());
+      awareness.on('change', handler);
+      return () => awareness.off('change', handler);
+    },
+
+    // ===========================================================================
+    // Code Cells
+    // ===========================================================================
+
+    /**
+     * Get cells in the document
+     */
+    getCells() {
+      return findCells(this.getContent());
+    },
+
+    /**
+     * Get cell at cursor
+     */
+    getCurrentCell() {
+      const pos = view.state.selection.main.head;
+      return getCellAtCursor(this.getContent(), pos);
+    },
+
+    /**
+     * Count cells
+     */
+    cellCount() {
+      return countCells(this.getContent());
+    },
+
+    /**
+     * Run a cell by index
+     */
+    runCell(index) {
+      return this.execution.runCell(index);
+    },
+
+    /**
+     * Run the cell at cursor
+     */
+    runCurrentCell() {
+      return this.execution.runCurrentCell();
+    },
+
+    /**
+     * Run all cells in order
+     */
+    runAll() {
+      return this.execution.runAll();
+    },
+
+    /**
+     * Run all cells up to and including current
+     */
+    runAllAbove() {
+      return this.execution.runAllAbove();
+    },
+
+    /**
+     * Clear output for a cell
+     */
+    clearOutput(index) {
+      return this.execution.clearOutput(index);
+    },
+
+    /**
+     * Clear all outputs
+     */
+    clearOutputs() {
+      return this.execution.clearOutputs();
+    },
+
+    /**
+     * Cancel running execution
+     */
+    cancelExecution(index) {
+      if (index !== undefined) {
+        return this.execution.cancel(index);
+      }
+      return this.execution.cancelAll();
+    },
+
+    /**
+     * Register a runtime
+     */
+    registerRuntime(name, runtime) {
+      registry.register(name, runtime);
+    },
+
+    /**
+     * Check if a language is supported
+     */
+    supportsLanguage(language) {
+      return registry.supports(language);
+    },
+
+    // ===========================================================================
     // Events
+    // ===========================================================================
+
     onChange(callback) {
       changeHandlers.push(callback);
       return () => {
@@ -348,58 +587,69 @@ function create(target, options = {}) {
       };
     },
 
-    // Code cells (placeholders for runtime packages)
-    runCell(index) {
-      console.warn('mrmd: No runtime configured. Use mrmd-python, mrmd-node, etc.');
+    onCellRun(callback) {
+      return this.execution.on('cellRun', callback);
     },
 
-    runCurrentCell() {
-      console.warn('mrmd: No runtime configured.');
+    onCellOutput(callback) {
+      return this.execution.on('cellOutput', callback);
     },
 
-    runAll() {
-      console.warn('mrmd: No runtime configured.');
+    onCellComplete(callback) {
+      return this.execution.on('cellComplete', callback);
     },
 
-    clearOutput(index) {
-      // TODO: implement
+    onCellError(callback) {
+      return this.execution.on('cellError', callback);
     },
 
-    clearOutputs() {
-      // TODO: implement
-    },
+    // ===========================================================================
+    // Cleanup
+    // ===========================================================================
 
-    // Destroy
     destroy() {
+      this.execution.cancelAll();
       view.destroy();
     }
   };
-  // #endregion EDITOR_API
+
+  // Create execution manager
+  api.execution = createExecutionManager(api, registry);
+
+  // Wire up change handlers
+  const updateListener = EditorView.updateListener.of((update) => {
+    if (update.docChanged) {
+      const content = update.state.doc.toString();
+      changeHandlers.forEach(fn => fn(content));
+    }
+  });
+
+  // Add update listener extension
+  view.dispatch({
+    effects: StateEffect.appendConfig.of(updateListener)
+  });
 
   return api;
 }
-// #endregion EDITOR_FACTORY
+// #endregion CREATE
 
-// #region DRIVE - Connection to sync server
+// #region DRIVE
 /**
  * Connect to a sync server
- *
- * @param {string|Object} urlOrOptions - WebSocket URL or options object
- * @param {Object} options - Options if first arg is URL
- * @returns {Drive} Drive instance
  */
 function drive(urlOrOptions, options = {}) {
-  let url, auth;
+  let url, auth, runtimes;
 
   if (typeof urlOrOptions === 'string') {
     url = urlOrOptions;
     auth = options.auth;
+    runtimes = options.runtimes || {};
   } else {
     url = urlOrOptions.url;
     auth = urlOrOptions.auth;
+    runtimes = urlOrOptions.runtimes || {};
   }
 
-  // Normalize URL
   if (url && !url.includes('://')) {
     url = 'wss://' + url;
   }
@@ -415,15 +665,8 @@ function drive(urlOrOptions, options = {}) {
   return {
     url,
 
-    /**
-     * Open a file in an editor
-     */
     open(path, target, editorOptions = {}) {
       const ydoc = new Y.Doc();
-
-      // Connect to sync server
-      // WebsocketProvider takes (serverUrl, roomName, ydoc)
-      // The room name becomes the URL path on the server
       const serverUrl = auth ? `${url}?token=${auth}` : url;
       const provider = new WebsocketProvider(serverUrl, path, ydoc);
 
@@ -431,55 +674,34 @@ function drive(urlOrOptions, options = {}) {
         setStatus(s);
       });
 
-      // Create editor with this ydoc
       const editor = create(target, {
         ...editorOptions,
         ydoc,
         ytext: 'content',
+        runtimes: { ...runtimes, ...editorOptions.runtimes },
       });
 
-      // Extend editor with sync-specific methods
       editor.provider = provider;
       editor.path = path;
 
-      editor.disconnect = () => {
-        provider.disconnect();
-      };
-
-      editor.reconnect = () => {
-        provider.connect();
-      };
+      editor.disconnect = () => provider.disconnect();
+      editor.reconnect = () => provider.connect();
 
       return editor;
     },
 
-    /**
-     * Read file content without mounting editor
-     */
     async read(path) {
-      // TODO: implement via REST or sync protocol
       throw new Error('drive.read() not yet implemented');
     },
 
-    /**
-     * Write file content directly
-     */
     async write(path, content) {
-      // TODO: implement via REST or sync protocol
       throw new Error('drive.write() not yet implemented');
     },
 
-    /**
-     * List files in directory
-     */
     async list(path) {
-      // TODO: implement via REST or sync protocol
       throw new Error('drive.list() not yet implemented');
     },
 
-    /**
-     * Connection status handler
-     */
     onStatus(callback) {
       statusHandlers.push(callback);
       return () => {
@@ -488,9 +710,6 @@ function drive(urlOrOptions, options = {}) {
       };
     },
 
-    /**
-     * Current status
-     */
     get status() {
       return status;
     }
@@ -498,13 +717,14 @@ function drive(urlOrOptions, options = {}) {
 }
 // #endregion DRIVE
 
-// #region EXPOSED_LIBS - Libraries exposed for power users
+// #region EXPOSED_LIBS
 const yjs = {
   Y,
   Doc: Y.Doc,
   Text: Y.Text,
   Array: Y.Array,
   Map: Y.Map,
+  Awareness,
   encodeStateAsUpdate: Y.encodeStateAsUpdate,
   applyUpdate: Y.applyUpdate,
   encodeStateVector: Y.encodeStateVector,
@@ -513,6 +733,7 @@ const yjs = {
 const codemirror = {
   EditorView,
   EditorState,
+  StateEffect,
   Compartment,
   Text,
   Transaction,
@@ -532,14 +753,52 @@ const codemirror = {
 };
 // #endregion EXPOSED_LIBS
 
-// #region EXPORTS - Module exports
+// #region TERMINAL_EXPORTS
+const terminal = {
+  TerminalBuffer,
+  processTerminalOutput,
+  terminalToHtml,
+  stripAnsi,
+  hasAnsi,
+  ansiStyles,
+  // Output widget
+  outputWidget,
+  outputWidgetPlugin,
+  injectOutputWidgetStyles,
+  outputWidgetStyles,
+};
+// #endregion TERMINAL_EXPORTS
+
+// #region EXPORTS
 const mrmd = {
   version: VERSION,
   create,
   drive,
   yjs,
   codemirror,
+  terminal,
+  // Utilities for runtime authors
+  RuntimeRegistry,
+  createRuntimeRegistry,
+  // Direct terminal exports for convenience
+  TerminalBuffer,
+  processTerminalOutput,
 };
 
 export default mrmd;
+export {
+  create,
+  drive,
+  yjs,
+  codemirror,
+  terminal,
+  RuntimeRegistry,
+  createRuntimeRegistry,
+  TerminalBuffer,
+  processTerminalOutput,
+  terminalToHtml,
+  stripAnsi,
+  hasAnsi,
+  ansiStyles,
+};
 // #endregion EXPORTS

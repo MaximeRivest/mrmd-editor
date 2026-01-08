@@ -25,6 +25,16 @@ const editor = mrmd.create('#editor', {
   dark: null,               // true | false | null (system)
   placeholder: 'Start...',  // empty state text
   readonly: false,          // view-only mode
+
+  // Collaboration
+  ydoc: new Y.Doc(),        // Yjs document (shared for collab)
+  ytext: 'content',         // Yjs Text key name
+  awareness: null,          // Awareness instance (auto-created if null)
+  userName: 'Anonymous',    // collaborator display name
+  userColor: '#3b82f6',     // collaborator cursor color
+
+  // Code execution
+  runtimes: {},             // { javascript: executor, python: executor }
 });
 ```
 
@@ -148,14 +158,39 @@ editor.blur()                          // blur editor
 editor.stats()                         // → { lines, chars, words }
 ```
 
+### Awareness / Collaboration
+
+All collaborators (humans, AI, code executors) are tracked via Yjs Awareness.
+
+```javascript
+// Identify as a collaborator (useful for AI/runtimes)
+editor.announceCollaborator('ai', 'Claude', '#8b5cf6');
+// types: 'human' | 'ai' | 'runtime' | 'sync'
+
+// Update your status
+editor.setCollaboratorStatus('streaming');
+// statuses: 'idle' | 'typing' | 'streaming' | 'executing'
+
+// Get all connected collaborators
+editor.getCollaborators();
+// → [{ clientId: 123, user: { type: 'human', name: 'Alice', color: '#3b82f6' } }, ...]
+
+// Listen for changes
+editor.onCollaboratorsChange(collaborators => {
+  console.log('Collaborators:', collaborators);
+});
+```
+
 ### Events
 
 ```javascript
 editor.onChange(callback)              // content changed
 editor.onSave(callback)                // user triggered save (Cmd+S)
 editor.onCellRun(callback)             // cell execution started
-editor.onCellOutput(callback)          // cell output received
-editor.onCollaborator(callback)        // user joined/left
+editor.onCellOutput(callback)          // cell output chunk received
+editor.onCellComplete(callback)        // cell execution finished
+editor.onCellError(callback)           // cell execution error
+editor.onCollaboratorsChange(callback) // collaborators changed
 ```
 
 ### Destroy
@@ -167,9 +202,12 @@ editor.destroy()                       // cleanup
 ### Internals (power users)
 
 ```javascript
-editor.view      // CodeMirror EditorView
-editor.ydoc      // Yjs Y.Doc
-editor.ytext     // Yjs Y.Text
+editor.view       // CodeMirror EditorView
+editor.ydoc       // Yjs Y.Doc
+editor.yText      // Yjs Y.Text
+editor.awareness  // Yjs Awareness
+editor.registry   // Runtime registry
+editor.execution  // Execution manager
 ```
 
 ---
@@ -250,15 +288,24 @@ const docs = mrmd.drive('wss://mrmd.io', {
 });
 
 // Open notebook
-const editor = docs.open('projects/analysis.md', '#editor');
+const editor = docs.open('projects/analysis.md', '#editor', {
+  userName: 'Alice',
+  userColor: '#3b82f6'
+});
 
-// Listen for events
+// Listen for content changes
 editor.onChange(content => {
   console.log('Content changed:', content.length, 'chars');
 });
 
-editor.onCollaborator(({ user, action }) => {
-  console.log(user.name, action); // "Sarah joined"
+// Listen for collaborators
+editor.onCollaboratorsChange(collaborators => {
+  console.log('Collaborators:', collaborators.map(c => c.user.name).join(', '));
+});
+
+// Listen for cell execution
+editor.onCellComplete((index, result) => {
+  console.log(`Cell ${index}:`, result.success ? 'success' : 'error');
 });
 
 // Keyboard shortcuts (editor has defaults, override if needed)
@@ -268,6 +315,47 @@ document.addEventListener('keydown', e => {
     editor.runCurrentCell();
   }
 });
+```
+
+### AI/LLM Integration Example
+
+```javascript
+// Create shared document
+const ydoc = new mrmd.yjs.Doc();
+const awareness = new mrmd.yjs.Awareness(ydoc);
+
+// Human editor
+const humanEditor = mrmd.create('#human-editor', {
+  ydoc,
+  awareness,
+  userName: 'Alice',
+  userColor: '#3b82f6'
+});
+
+// AI assistant (same document, different identity)
+const aiEditor = mrmd.create('#ai-preview', {
+  ydoc,
+  awareness,
+  readonly: true  // AI writes via streaming, humans see live
+});
+
+// AI announces itself
+aiEditor.announceCollaborator('ai', 'Claude', '#8b5cf6');
+
+// AI streams a response
+async function aiRespond(prompt) {
+  aiEditor.setCollaboratorStatus('streaming');
+
+  const writer = humanEditor.writer();  // Write to shared doc
+  writer.write('\n\n**Claude:** ');
+
+  for await (const chunk of streamFromLLM(prompt)) {
+    writer.write(chunk);
+  }
+
+  writer.end();
+  aiEditor.setCollaboratorStatus('idle');
+}
 ```
 
 ```css
@@ -290,6 +378,63 @@ document.addEventListener('keydown', e => {
 
 ---
 
+## Terminal Output
+
+Cell execution automatically processes terminal output through `TerminalBuffer`:
+- Progress bars (tqdm, rich) update correctly during streaming
+- ANSI colors are stripped for document storage (plain text)
+- Cursor movement (`\r`, `\x1b[A`) is processed correctly
+
+### Automatic Handling
+
+When you run a cell, output is automatically processed:
+
+```javascript
+editor.runCell(0);  // Output is processed through TerminalBuffer
+                    // Document gets clean plain text
+```
+
+### Rich Display (Optional)
+
+For colored output during streaming, access the buffer:
+
+```javascript
+// Listen for output and render with colors
+editor.onCellOutput((index, chunk, processed) => {
+  const buffer = editor.execution.getBuffer(index);
+  if (buffer) {
+    outputElement.innerHTML = buffer.toHtml();  // Colored HTML
+  }
+});
+```
+
+### Manual Processing
+
+For custom use cases:
+
+```javascript
+import { TerminalBuffer, processTerminalOutput, terminalToHtml } from 'mrmd-editor';
+
+// One-shot processing
+const plainText = processTerminalOutput(rawOutput);
+
+// Manual streaming
+const buffer = new TerminalBuffer();
+buffer.write(chunk1);
+buffer.write(chunk2);
+
+buffer.toString();  // Plain text (for storage)
+buffer.toHtml();    // HTML with colors (for display)
+buffer.toAnsi();    // With ANSI codes (for terminal passthrough)
+```
+
+**Why plain text for storage?**
+Per VISION.md: "The .md file is truth. Regular markdown. Version controlled. Grep-able. Opens in any editor."
+
+Progress bars work correctly because cursor movement is processed - you get the final state, not intermediate junk.
+
+---
+
 ## What's Built-in
 
 | Feature | Included |
@@ -297,12 +442,16 @@ document.addEventListener('keydown', e => {
 | Markdown editing | yes |
 | Syntax highlighting (17 langs) | yes |
 | Code cell detection | yes |
-| Run/Clear buttons (as widgets) | yes |
+| Cell execution API | yes |
 | Dark/light theme | yes |
 | Placeholder | yes |
 | Yjs sync | yes |
-| Collaborator cursors | yes |
+| Yjs Awareness (presence) | yes |
+| Collaborator tracking | yes |
 | Streaming writer | yes |
+| Terminal output processing | yes |
+| ANSI color support | yes |
+| Progress bar handling | yes |
 | Keyboard shortcuts | yes (defaults) |
 
 ## What's Separate Packages

@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mrmd - Executable Markdown Demo</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a1a;
+      color: #e0e0e0;
+    }
+    .container {
+      display: grid;
+      grid-template-columns: 1fr 300px;
+      height: 100vh;
+    }
+    #editor {
+      height: 100%;
+      overflow: auto;
+      padding: 20px;
+    }
+    .sidebar {
+      background: #252525;
+      border-left: 1px solid #333;
+      padding: 20px;
+      overflow: auto;
+    }
+    h2 { margin-top: 0; font-size: 16px; color: #888; }
+    .btn {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin: 4px;
+      font-size: 14px;
+    }
+    .btn:hover { background: #2563eb; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-green { background: #10b981; }
+    .btn-green:hover { background: #059669; }
+    .btn-red { background: #ef4444; }
+    .btn-red:hover { background: #dc2626; }
+    .section {
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #333;
+    }
+    .status {
+      font-family: monospace;
+      font-size: 12px;
+      color: #888;
+      margin-top: 10px;
+    }
+    #log {
+      font-family: monospace;
+      font-size: 11px;
+      background: #1a1a1a;
+      border-radius: 4px;
+      padding: 10px;
+      max-height: 200px;
+      overflow: auto;
+    }
+    #log .entry { margin: 2px 0; }
+    #log .run { color: #10b981; }
+    #log .output { color: #3b82f6; }
+    #log .complete { color: #8b5cf6; }
+    #log .error { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="editor"></div>
+    <div class="sidebar">
+      <h2>mrmd Demo</h2>
+
+      <div class="section">
+        <strong>Execution</strong><br>
+        <button class="btn btn-green" onclick="runCurrent()">Run Current Cell</button>
+        <button class="btn" onclick="runAll()">Run All</button>
+        <button class="btn btn-red" onclick="clearOutputs()">Clear Outputs</button>
+      </div>
+
+      <div class="section">
+        <strong>Info</strong>
+        <div class="status" id="status">Loading...</div>
+      </div>
+
+      <div class="section">
+        <strong>Event Log</strong>
+        <div id="log"></div>
+      </div>
+
+      <div class="section">
+        <strong>Instructions</strong>
+        <p style="font-size: 13px; line-height: 1.6;">
+          1. Click inside a code cell<br>
+          2. Click "Run Current Cell" or press Shift+Enter<br>
+          3. Output appears as ```output blocks<br>
+          4. These are Yjs-synced like regular text!
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Load mrmd-editor bundle -->
+  <script src="../dist/mrmd.iife.js"></script>
+
+  <!-- Load mrmd-js for JavaScript execution -->
+  <script src="../../mrmd-js/dist/index.js"></script>
+
+  <script type="module">
+    // Sample document with executable cells
+    const sampleDoc = `# mrmd Demo
+
+This is a **collaborative markdown editor** with executable code cells.
+
+## JavaScript Example
+
+\`\`\`javascript
+const greeting = "Hello from mrmd!";
+console.log(greeting);
+
+// Math works too
+const result = 2 + 2;
+console.log("2 + 2 =", result);
+
+// Return a value
+greeting + " The answer is " + result;
+\`\`\`
+
+## Another Cell
+
+\`\`\`javascript
+// Variables persist across cells!
+console.log("Previous greeting:", greeting);
+
+// Let's do something more interesting
+const items = ["apple", "banana", "cherry"];
+items.forEach((item, i) => {
+  console.log(\`\${i + 1}. \${item}\`);
+});
+
+"Done processing " + items.length + " items";
+\`\`\`
+
+## Non-executable Code
+
+\`\`\`json
+{
+  "this": "is just syntax highlighted",
+  "not": "executable"
+}
+\`\`\`
+
+## Notes
+
+- All changes sync via Yjs (like Google Docs)
+- Output blocks are regular text in the document
+- The .md file is the source of truth
+`;
+
+    // Log function
+    const logEl = document.getElementById('log');
+    function log(type, msg) {
+      const entry = document.createElement('div');
+      entry.className = 'entry ' + type;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // Create editor
+    const editor = mrmd.create('#editor', {
+      doc: sampleDoc,
+      dark: true,
+      placeholder: 'Write some markdown...',
+    });
+
+    // Create JavaScript executor from mrmd-js
+    // Note: In a real app, you'd import this properly
+    // For this demo, we'll create a simple mock executor
+    const jsExecutor = {
+      supports(lang) {
+        return ['javascript', 'js', 'node'].includes(lang.toLowerCase());
+      },
+      async execute(code, language) {
+        // Simple JavaScript executor using eval
+        const logs = [];
+        const originalLog = console.log;
+
+        // Capture console.log
+        console.log = (...args) => {
+          logs.push(args.map(a =>
+            typeof a === 'object' ? JSON.stringify(a) : String(a)
+          ).join(' '));
+        };
+
+        try {
+          // Wrap in async function to support top-level await
+          const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+          const fn = new AsyncFunction(code);
+          const result = await fn();
+
+          console.log = originalLog;
+
+          let stdout = logs.join('\n');
+          if (result !== undefined) {
+            stdout += (stdout ? '\n' : '') + String(result);
+          }
+
+          return {
+            stdout,
+            stderr: '',
+            success: true,
+          };
+        } catch (err) {
+          console.log = originalLog;
+          return {
+            stdout: logs.join('\n'),
+            stderr: err.message,
+            success: false,
+            error: { type: err.name, message: err.message },
+          };
+        }
+      },
+      async executeStreaming(code, language, onChunk) {
+        const result = await this.execute(code, language);
+        const output = result.stdout + (result.stderr ? '\n[Error] ' + result.stderr : '');
+        onChunk(output, output, true);
+        return result;
+      }
+    };
+
+    // Register JavaScript runtime
+    editor.registerRuntime('javascript', jsExecutor);
+
+    // Update status
+    function updateStatus() {
+      const cells = editor.getCells();
+      const current = editor.getCurrentCell();
+      document.getElementById('status').innerHTML = `
+        Cells: ${cells.length}<br>
+        Current: ${current ? current.language : 'none'}<br>
+        Supported: ${editor.supportsLanguage('javascript') ? 'JS' : 'JS'}
+      `;
+    }
+
+    // Event listeners
+    editor.onChange(() => updateStatus());
+    editor.onCellRun((index, cell) => log('run', `Running cell ${index} (${cell.language})`));
+    editor.onCellOutput((index, chunk, acc) => log('output', `Cell ${index}: ${chunk.slice(0, 50)}...`));
+    editor.onCellComplete((index, result) => log('complete', `Cell ${index} complete: ${result.success ? 'success' : 'error'}`));
+    editor.onCellError((index, err) => log('error', `Cell ${index} error: ${err.message || err}`));
+
+    // Keyboard shortcut
+    document.addEventListener('keydown', (e) => {
+      if (e.shiftKey && e.key === 'Enter') {
+        e.preventDefault();
+        runCurrent();
+      }
+    });
+
+    // Global functions for buttons
+    window.runCurrent = () => editor.runCurrentCell();
+    window.runAll = () => editor.runAll();
+    window.clearOutputs = () => editor.clearOutputs();
+
+    // Initial status
+    updateStatus();
+    log('complete', 'Editor initialized');
+
+    // Expose for console debugging
+    window.editor = editor;
+    window.mrmd = mrmd;
+  </script>
+</body>
+</html>

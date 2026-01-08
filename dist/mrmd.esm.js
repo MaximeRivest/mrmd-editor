@@ -39055,7 +39055,7 @@ const keys = Object.keys;
  * @param {{[k:string]:V}} obj
  * @param {function(V,string):any} f
  */
-const forEach = (obj, f) => {
+const forEach$1 = (obj, f) => {
   for (const key in obj) {
     f(obj[key], key);
   }
@@ -39505,6 +39505,13 @@ class Pair {
  * @return {Pair<L,R>}
  */
 const create$2 = (left, right) => new Pair(left, right);
+
+/**
+ * @template L,R
+ * @param {Array<Pair<L,R>>} arr
+ * @param {function(L, R):any} f
+ */
+const forEach = (arr, f) => arr.forEach(p => f(p.left, p.right));
 
 /**
  * Fast Pseudo Random Number Generators.
@@ -40699,16 +40706,89 @@ const random = (gen, schema) => /** @type {any} */ (_random($(schema), gen));
 const doc = /** @type {Document} */ (typeof document !== 'undefined' ? document : {});
 
 /**
+ * @param {string} name
+ * @return {HTMLElement}
+ */
+const createElement = name => doc.createElement(name);
+
+/**
+ * @return {DocumentFragment}
+ */
+const createDocumentFragment = () => doc.createDocumentFragment();
+
+/**
  * @type {$.Schema<DocumentFragment>}
  */
 $custom(el => el.nodeType === DOCUMENT_FRAGMENT_NODE);
 
+/**
+ * @param {string} text
+ * @return {Text}
+ */
+const createTextNode = text => doc.createTextNode(text);
+
 /** @type {DOMParser} */ (typeof DOMParser !== 'undefined' ? new DOMParser() : null);
+
+/**
+ * @param {Element} el
+ * @param {Array<pair.Pair<string,string|boolean>>} attrs Array of key-value pairs
+ * @return {Element}
+ */
+const setAttributes = (el, attrs) => {
+  forEach(attrs, (key, value) => {
+    if (value === false) {
+      el.removeAttribute(key);
+    } else if (value === true) {
+      el.setAttribute(key, '');
+    } else {
+      // @ts-ignore
+      el.setAttribute(key, value);
+    }
+  });
+  return el
+};
+
+/**
+ * @param {Array<Node>|HTMLCollection} children
+ * @return {DocumentFragment}
+ */
+const fragment = children => {
+  const fragment = createDocumentFragment();
+  for (let i = 0; i < children.length; i++) {
+    appendChild(fragment, children[i]);
+  }
+  return fragment
+};
+
+/**
+ * @param {Element} parent
+ * @param {Array<Node>} nodes
+ * @return {Element}
+ */
+const append = (parent, nodes) => {
+  appendChild(parent, fragment(nodes));
+  return parent
+};
+
+/**
+ * @param {string} name
+ * @param {Array<pair.Pair<string,string>|pair.Pair<string,boolean>>} attrs Array of key-value pairs
+ * @param {Array<Node>} children
+ * @return {Element}
+ */
+const element = (name, attrs = [], children = []) =>
+  append(setAttributes(createElement(name), attrs), children);
 
 /**
  * @type {$.Schema<Element>}
  */
 $custom(el => el.nodeType === ELEMENT_NODE);
+
+/**
+ * @param {string} t
+ * @return {Text}
+ */
+const text = createTextNode;
 
 /**
  * @type {$.Schema<Text>}
@@ -40721,9 +40801,19 @@ $custom(el => el.nodeType === TEXT_NODE);
  */
 const mapToStyleString = m => map$1(m, (value, key) => `${key}:${value};`).join('');
 
+/**
+ * @param {Node} parent
+ * @param {Node} child
+ * @return {Node}
+ */
+const appendChild = (parent, child) => parent.appendChild(child);
+
 const ELEMENT_NODE = doc.ELEMENT_NODE;
 const TEXT_NODE = doc.TEXT_NODE;
+doc.CDATA_SECTION_NODE;
+doc.COMMENT_NODE;
 const DOCUMENT_NODE = doc.DOCUMENT_NODE;
+doc.DOCUMENT_TYPE_NODE;
 const DOCUMENT_FRAGMENT_NODE = doc.DOCUMENT_FRAGMENT_NODE;
 
 /**
@@ -48927,7 +49017,7 @@ class YXmlElement extends YXmlFragment {
      */
     const el = new YXmlElement(this.nodeName);
     const attrs = this.getAttributes();
-    forEach(attrs, (value, key) => {
+    forEach$1(attrs, (value, key) => {
       el.setAttribute(key, /** @type {any} */ (value));
     });
     // @ts-ignore
@@ -51323,6 +51413,268 @@ var Y = /*#__PURE__*/Object.freeze({
 });
 
 /**
+ * @module awareness-protocol
+ */
+
+
+const outdatedTimeout = 30000;
+
+/**
+ * @typedef {Object} MetaClientState
+ * @property {number} MetaClientState.clock
+ * @property {number} MetaClientState.lastUpdated unix timestamp
+ */
+
+/**
+ * The Awareness class implements a simple shared state protocol that can be used for non-persistent data like awareness information
+ * (cursor, username, status, ..). Each client can update its own local state and listen to state changes of
+ * remote clients. Every client may set a state of a remote peer to `null` to mark the client as offline.
+ *
+ * Each client is identified by a unique client id (something we borrow from `doc.clientID`). A client can override
+ * its own state by propagating a message with an increasing timestamp (`clock`). If such a message is received, it is
+ * applied if the known state of that client is older than the new state (`clock < newClock`). If a client thinks that
+ * a remote client is offline, it may propagate a message with
+ * `{ clock: currentClientClock, state: null, client: remoteClient }`. If such a
+ * message is received, and the known clock of that client equals the received clock, it will override the state with `null`.
+ *
+ * Before a client disconnects, it should propagate a `null` state with an updated clock.
+ *
+ * Awareness states must be updated every 30 seconds. Otherwise the Awareness instance will delete the client state.
+ *
+ * @extends {Observable<string>}
+ */
+class Awareness extends Observable {
+  /**
+   * @param {Y.Doc} doc
+   */
+  constructor (doc) {
+    super();
+    this.doc = doc;
+    /**
+     * @type {number}
+     */
+    this.clientID = doc.clientID;
+    /**
+     * Maps from client id to client state
+     * @type {Map<number, Object<string, any>>}
+     */
+    this.states = new Map();
+    /**
+     * @type {Map<number, MetaClientState>}
+     */
+    this.meta = new Map();
+    this._checkInterval = /** @type {any} */ (setInterval(() => {
+      const now = getUnixTime();
+      if (this.getLocalState() !== null && (outdatedTimeout / 2 <= now - /** @type {{lastUpdated:number}} */ (this.meta.get(this.clientID)).lastUpdated)) {
+        // renew local clock
+        this.setLocalState(this.getLocalState());
+      }
+      /**
+       * @type {Array<number>}
+       */
+      const remove = [];
+      this.meta.forEach((meta, clientid) => {
+        if (clientid !== this.clientID && outdatedTimeout <= now - meta.lastUpdated && this.states.has(clientid)) {
+          remove.push(clientid);
+        }
+      });
+      if (remove.length > 0) {
+        removeAwarenessStates(this, remove, 'timeout');
+      }
+    }, floor(outdatedTimeout / 10)));
+    doc.on('destroy', () => {
+      this.destroy();
+    });
+    this.setLocalState({});
+  }
+
+  destroy () {
+    this.emit('destroy', [this]);
+    this.setLocalState(null);
+    super.destroy();
+    clearInterval(this._checkInterval);
+  }
+
+  /**
+   * @return {Object<string,any>|null}
+   */
+  getLocalState () {
+    return this.states.get(this.clientID) || null
+  }
+
+  /**
+   * @param {Object<string,any>|null} state
+   */
+  setLocalState (state) {
+    const clientID = this.clientID;
+    const currLocalMeta = this.meta.get(clientID);
+    const clock = currLocalMeta === undefined ? 0 : currLocalMeta.clock + 1;
+    const prevState = this.states.get(clientID);
+    if (state === null) {
+      this.states.delete(clientID);
+    } else {
+      this.states.set(clientID, state);
+    }
+    this.meta.set(clientID, {
+      clock,
+      lastUpdated: getUnixTime()
+    });
+    const added = [];
+    const updated = [];
+    const filteredUpdated = [];
+    const removed = [];
+    if (state === null) {
+      removed.push(clientID);
+    } else if (prevState == null) {
+      if (state != null) {
+        added.push(clientID);
+      }
+    } else {
+      updated.push(clientID);
+      if (!equalityDeep(prevState, state)) {
+        filteredUpdated.push(clientID);
+      }
+    }
+    if (added.length > 0 || filteredUpdated.length > 0 || removed.length > 0) {
+      this.emit('change', [{ added, updated: filteredUpdated, removed }, 'local']);
+    }
+    this.emit('update', [{ added, updated, removed }, 'local']);
+  }
+
+  /**
+   * @param {string} field
+   * @param {any} value
+   */
+  setLocalStateField (field, value) {
+    const state = this.getLocalState();
+    if (state !== null) {
+      this.setLocalState({
+        ...state,
+        [field]: value
+      });
+    }
+  }
+
+  /**
+   * @return {Map<number,Object<string,any>>}
+   */
+  getStates () {
+    return this.states
+  }
+}
+
+/**
+ * Mark (remote) clients as inactive and remove them from the list of active peers.
+ * This change will be propagated to remote clients.
+ *
+ * @param {Awareness} awareness
+ * @param {Array<number>} clients
+ * @param {any} origin
+ */
+const removeAwarenessStates = (awareness, clients, origin) => {
+  const removed = [];
+  for (let i = 0; i < clients.length; i++) {
+    const clientID = clients[i];
+    if (awareness.states.has(clientID)) {
+      awareness.states.delete(clientID);
+      if (clientID === awareness.clientID) {
+        const curMeta = /** @type {MetaClientState} */ (awareness.meta.get(clientID));
+        awareness.meta.set(clientID, {
+          clock: curMeta.clock + 1,
+          lastUpdated: getUnixTime()
+        });
+      }
+      removed.push(clientID);
+    }
+  }
+  if (removed.length > 0) {
+    awareness.emit('change', [{ added: [], updated: [], removed }, origin]);
+    awareness.emit('update', [{ added: [], updated: [], removed }, origin]);
+  }
+};
+
+/**
+ * @param {Awareness} awareness
+ * @param {Array<number>} clients
+ * @return {Uint8Array}
+ */
+const encodeAwarenessUpdate = (awareness, clients, states = awareness.states) => {
+  const len = clients.length;
+  const encoder = createEncoder();
+  writeVarUint(encoder, len);
+  for (let i = 0; i < len; i++) {
+    const clientID = clients[i];
+    const state = states.get(clientID) || null;
+    const clock = /** @type {MetaClientState} */ (awareness.meta.get(clientID)).clock;
+    writeVarUint(encoder, clientID);
+    writeVarUint(encoder, clock);
+    writeVarString(encoder, JSON.stringify(state));
+  }
+  return toUint8Array(encoder)
+};
+
+/**
+ * @param {Awareness} awareness
+ * @param {Uint8Array} update
+ * @param {any} origin This will be added to the emitted change event
+ */
+const applyAwarenessUpdate = (awareness, update, origin) => {
+  const decoder = createDecoder(update);
+  const timestamp = getUnixTime();
+  const added = [];
+  const updated = [];
+  const filteredUpdated = [];
+  const removed = [];
+  const len = readVarUint(decoder);
+  for (let i = 0; i < len; i++) {
+    const clientID = readVarUint(decoder);
+    let clock = readVarUint(decoder);
+    const state = JSON.parse(readVarString(decoder));
+    const clientMeta = awareness.meta.get(clientID);
+    const prevState = awareness.states.get(clientID);
+    const currClock = clientMeta === undefined ? 0 : clientMeta.clock;
+    if (currClock < clock || (currClock === clock && state === null && awareness.states.has(clientID))) {
+      if (state === null) {
+        // never let a remote client remove this local state
+        if (clientID === awareness.clientID && awareness.getLocalState() != null) {
+          // remote client removed the local state. Do not remote state. Broadcast a message indicating
+          // that this client still exists by increasing the clock
+          clock++;
+        } else {
+          awareness.states.delete(clientID);
+        }
+      } else {
+        awareness.states.set(clientID, state);
+      }
+      awareness.meta.set(clientID, {
+        clock,
+        lastUpdated: timestamp
+      });
+      if (clientMeta === undefined && state !== null) {
+        added.push(clientID);
+      } else if (clientMeta !== undefined && state === null) {
+        removed.push(clientID);
+      } else if (state !== null) {
+        if (!equalityDeep(state, prevState)) {
+          filteredUpdated.push(clientID);
+        }
+        updated.push(clientID);
+      }
+    }
+  }
+  if (added.length > 0 || filteredUpdated.length > 0 || removed.length > 0) {
+    awareness.emit('change', [{
+      added, updated: filteredUpdated, removed
+    }, origin]);
+  }
+  if (added.length > 0 || updated.length > 0 || removed.length > 0) {
+    awareness.emit('update', [{
+      added, updated, removed
+    }, origin]);
+  }
+};
+
+/**
  * Defines a range on text using relative positions that can be transformed back to
  * absolute positions. (https://docs.yjs.dev/api/relative-positions)
  */
@@ -51510,6 +51862,253 @@ class YSyncPluginValue {
 }
 
 const ySync = ViewPlugin.fromClass(YSyncPluginValue);
+
+const yRemoteSelectionsTheme = EditorView.baseTheme({
+  '.cm-ySelection': {
+  },
+  '.cm-yLineSelection': {
+    padding: 0,
+    margin: '0px 2px 0px 4px'
+  },
+  '.cm-ySelectionCaret': {
+    position: 'relative',
+    borderLeft: '1px solid black',
+    borderRight: '1px solid black',
+    marginLeft: '-1px',
+    marginRight: '-1px',
+    boxSizing: 'border-box',
+    display: 'inline'
+  },
+  '.cm-ySelectionCaretDot': {
+    borderRadius: '50%',
+    position: 'absolute',
+    width: '.4em',
+    height: '.4em',
+    top: '-.2em',
+    left: '-.2em',
+    backgroundColor: 'inherit',
+    transition: 'transform .3s ease-in-out',
+    boxSizing: 'border-box'
+  },
+  '.cm-ySelectionCaret:hover > .cm-ySelectionCaretDot': {
+    transformOrigin: 'bottom center',
+    transform: 'scale(0)'
+  },
+  '.cm-ySelectionInfo': {
+    position: 'absolute',
+    top: '-1.05em',
+    left: '-1px',
+    fontSize: '.75em',
+    fontFamily: 'serif',
+    fontStyle: 'normal',
+    fontWeight: 'normal',
+    lineHeight: 'normal',
+    userSelect: 'none',
+    color: 'white',
+    paddingLeft: '2px',
+    paddingRight: '2px',
+    zIndex: 101,
+    transition: 'opacity .3s ease-in-out',
+    backgroundColor: 'inherit',
+    // these should be separate
+    opacity: 0,
+    transitionDelay: '0s',
+    whiteSpace: 'nowrap'
+  },
+  '.cm-ySelectionCaret:hover > .cm-ySelectionInfo': {
+    opacity: 1,
+    transitionDelay: '0s'
+  }
+});
+
+/**
+ * @todo specify the users that actually changed. Currently, we recalculate positions for every user.
+ * @type {cmState.AnnotationType<Array<number>>}
+ */
+const yRemoteSelectionsAnnotation = Annotation.define();
+
+class YRemoteCaretWidget extends WidgetType {
+  /**
+   * @param {string} color
+   * @param {string} name
+   */
+  constructor (color, name) {
+    super();
+    this.color = color;
+    this.name = name;
+  }
+
+  toDOM () {
+    return /** @type {HTMLElement} */ (element('span', [create$2('class', 'cm-ySelectionCaret'), create$2('style', `background-color: ${this.color}; border-color: ${this.color}`)], [
+      text('\u2060'),
+      element('div', [
+        create$2('class', 'cm-ySelectionCaretDot')
+      ]),
+      text('\u2060'),
+      element('div', [
+        create$2('class', 'cm-ySelectionInfo')
+      ], [
+        text(this.name)
+      ]),
+      text('\u2060')
+    ]))
+  }
+
+  eq (widget) {
+    return widget.color === this.color
+  }
+
+  compare (widget) {
+    return widget.color === this.color
+  }
+
+  updateDOM () {
+    return false
+  }
+
+  get estimatedHeight () { return -1 }
+
+  ignoreEvent () {
+    return true
+  }
+}
+
+class YRemoteSelectionsPluginValue {
+  /**
+   * @param {cmView.EditorView} view
+   */
+  constructor (view) {
+    this.conf = view.state.facet(ySyncFacet);
+    this._listener = ({ added, updated, removed }, s, t) => {
+      const clients = added.concat(updated).concat(removed);
+      if (clients.findIndex(id => id !== this.conf.awareness.doc.clientID) >= 0) {
+        view.dispatch({ annotations: [yRemoteSelectionsAnnotation.of([])] });
+      }
+    };
+    this._awareness = this.conf.awareness;
+    this._awareness.on('change', this._listener);
+    /**
+     * @type {cmView.DecorationSet}
+     */
+    this.decorations = RangeSet.of([]);
+  }
+
+  destroy () {
+    this._awareness.off('change', this._listener);
+  }
+
+  /**
+   * @param {cmView.ViewUpdate} update
+   */
+  update (update) {
+    const ytext = this.conf.ytext;
+    const ydoc = /** @type {Y.Doc} */ (ytext.doc);
+    const awareness = this.conf.awareness;
+    /**
+     * @type {Array<cmState.Range<cmView.Decoration>>}
+     */
+    const decorations = [];
+    const localAwarenessState = this.conf.awareness.getLocalState();
+
+    // set local awareness state (update cursors)
+    if (localAwarenessState != null) {
+      const hasFocus = update.view.hasFocus && update.view.dom.ownerDocument.hasFocus();
+      const sel = hasFocus ? update.state.selection.main : null;
+      const currentAnchor = localAwarenessState.cursor == null ? null : createRelativePositionFromJSON(localAwarenessState.cursor.anchor);
+      const currentHead = localAwarenessState.cursor == null ? null : createRelativePositionFromJSON(localAwarenessState.cursor.head);
+
+      if (sel != null) {
+        const anchor = createRelativePositionFromTypeIndex(ytext, sel.anchor);
+        const head = createRelativePositionFromTypeIndex(ytext, sel.head);
+        if (localAwarenessState.cursor == null || !compareRelativePositions(currentAnchor, anchor) || !compareRelativePositions(currentHead, head)) {
+          awareness.setLocalStateField('cursor', {
+            anchor,
+            head
+          });
+        }
+      } else if (localAwarenessState.cursor != null && hasFocus) {
+        awareness.setLocalStateField('cursor', null);
+      }
+    }
+
+    // update decorations (remote selections)
+    awareness.getStates().forEach((state, clientid) => {
+      if (clientid === awareness.doc.clientID) {
+        return
+      }
+      const cursor = state.cursor;
+      if (cursor == null || cursor.anchor == null || cursor.head == null) {
+        return
+      }
+      const anchor = createAbsolutePositionFromRelativePosition(cursor.anchor, ydoc);
+      const head = createAbsolutePositionFromRelativePosition(cursor.head, ydoc);
+      if (anchor == null || head == null || anchor.type !== ytext || head.type !== ytext) {
+        return
+      }
+      const { color = '#30bced', name = 'Anonymous' } = state.user || {};
+      const colorLight = (state.user && state.user.colorLight) || color + '33';
+      const start = min(anchor.index, head.index);
+      const end = max(anchor.index, head.index);
+      const startLine = update.view.state.doc.lineAt(start);
+      const endLine = update.view.state.doc.lineAt(end);
+      if (startLine.number === endLine.number) {
+        // selected content in a single line.
+        decorations.push({
+          from: start,
+          to: end,
+          value: Decoration.mark({
+            attributes: { style: `background-color: ${colorLight}` },
+            class: 'cm-ySelection'
+          })
+        });
+      } else {
+        // selected content in multiple lines
+        // first, render text-selection in the first line
+        decorations.push({
+          from: start,
+          to: startLine.from + startLine.length,
+          value: Decoration.mark({
+            attributes: { style: `background-color: ${colorLight}` },
+            class: 'cm-ySelection'
+          })
+        });
+        // render text-selection in the last line
+        decorations.push({
+          from: endLine.from,
+          to: end,
+          value: Decoration.mark({
+            attributes: { style: `background-color: ${colorLight}` },
+            class: 'cm-ySelection'
+          })
+        });
+        for (let i = startLine.number + 1; i < endLine.number; i++) {
+          const linePos = update.view.state.doc.line(i).from;
+          decorations.push({
+            from: linePos,
+            to: linePos,
+            value: Decoration.line({
+              attributes: { style: `background-color: ${colorLight}`, class: 'cm-yLineSelection' }
+            })
+          });
+        }
+      }
+      decorations.push({
+        from: head.index,
+        to: head.index,
+        value: Decoration.widget({
+          side: head.index - anchor.index > 0 ? -1 : 1, // the local cursor should be rendered outside the remote selection
+          block: false,
+          widget: new YRemoteCaretWidget(color, name)
+        })
+      });
+    });
+    this.decorations = Decoration.set(decorations, true);
+  }
+}
+
+const yRemoteSelections = ViewPlugin.fromClass(YRemoteSelectionsPluginValue, {
+  decorations: v => v.decorations
+});
 
 /**
  * Mutual exclude for JavaScript.
@@ -51701,6 +52300,12 @@ const yCollab = (ytext, awareness, { undoManager = new UndoManager(ytext) } = {}
     ySyncFacet.of(ySyncConfig),
     ySync
   ];
+  if (awareness) {
+    plugins.push(
+      yRemoteSelectionsTheme,
+      yRemoteSelections
+    );
+  }
   if (undoManager !== false) {
     // By default, only track changes that are produced by the sync plugin (local edits)
     plugins.push(
@@ -51977,268 +52582,6 @@ const messagePermissionDenied = 0;
 const readAuthMessage = (decoder, y, permissionDeniedHandler) => {
   switch (readVarUint(decoder)) {
     case messagePermissionDenied: permissionDeniedHandler(y, readVarString(decoder));
-  }
-};
-
-/**
- * @module awareness-protocol
- */
-
-
-const outdatedTimeout = 30000;
-
-/**
- * @typedef {Object} MetaClientState
- * @property {number} MetaClientState.clock
- * @property {number} MetaClientState.lastUpdated unix timestamp
- */
-
-/**
- * The Awareness class implements a simple shared state protocol that can be used for non-persistent data like awareness information
- * (cursor, username, status, ..). Each client can update its own local state and listen to state changes of
- * remote clients. Every client may set a state of a remote peer to `null` to mark the client as offline.
- *
- * Each client is identified by a unique client id (something we borrow from `doc.clientID`). A client can override
- * its own state by propagating a message with an increasing timestamp (`clock`). If such a message is received, it is
- * applied if the known state of that client is older than the new state (`clock < newClock`). If a client thinks that
- * a remote client is offline, it may propagate a message with
- * `{ clock: currentClientClock, state: null, client: remoteClient }`. If such a
- * message is received, and the known clock of that client equals the received clock, it will override the state with `null`.
- *
- * Before a client disconnects, it should propagate a `null` state with an updated clock.
- *
- * Awareness states must be updated every 30 seconds. Otherwise the Awareness instance will delete the client state.
- *
- * @extends {Observable<string>}
- */
-class Awareness extends Observable {
-  /**
-   * @param {Y.Doc} doc
-   */
-  constructor (doc) {
-    super();
-    this.doc = doc;
-    /**
-     * @type {number}
-     */
-    this.clientID = doc.clientID;
-    /**
-     * Maps from client id to client state
-     * @type {Map<number, Object<string, any>>}
-     */
-    this.states = new Map();
-    /**
-     * @type {Map<number, MetaClientState>}
-     */
-    this.meta = new Map();
-    this._checkInterval = /** @type {any} */ (setInterval(() => {
-      const now = getUnixTime();
-      if (this.getLocalState() !== null && (outdatedTimeout / 2 <= now - /** @type {{lastUpdated:number}} */ (this.meta.get(this.clientID)).lastUpdated)) {
-        // renew local clock
-        this.setLocalState(this.getLocalState());
-      }
-      /**
-       * @type {Array<number>}
-       */
-      const remove = [];
-      this.meta.forEach((meta, clientid) => {
-        if (clientid !== this.clientID && outdatedTimeout <= now - meta.lastUpdated && this.states.has(clientid)) {
-          remove.push(clientid);
-        }
-      });
-      if (remove.length > 0) {
-        removeAwarenessStates(this, remove, 'timeout');
-      }
-    }, floor(outdatedTimeout / 10)));
-    doc.on('destroy', () => {
-      this.destroy();
-    });
-    this.setLocalState({});
-  }
-
-  destroy () {
-    this.emit('destroy', [this]);
-    this.setLocalState(null);
-    super.destroy();
-    clearInterval(this._checkInterval);
-  }
-
-  /**
-   * @return {Object<string,any>|null}
-   */
-  getLocalState () {
-    return this.states.get(this.clientID) || null
-  }
-
-  /**
-   * @param {Object<string,any>|null} state
-   */
-  setLocalState (state) {
-    const clientID = this.clientID;
-    const currLocalMeta = this.meta.get(clientID);
-    const clock = currLocalMeta === undefined ? 0 : currLocalMeta.clock + 1;
-    const prevState = this.states.get(clientID);
-    if (state === null) {
-      this.states.delete(clientID);
-    } else {
-      this.states.set(clientID, state);
-    }
-    this.meta.set(clientID, {
-      clock,
-      lastUpdated: getUnixTime()
-    });
-    const added = [];
-    const updated = [];
-    const filteredUpdated = [];
-    const removed = [];
-    if (state === null) {
-      removed.push(clientID);
-    } else if (prevState == null) {
-      if (state != null) {
-        added.push(clientID);
-      }
-    } else {
-      updated.push(clientID);
-      if (!equalityDeep(prevState, state)) {
-        filteredUpdated.push(clientID);
-      }
-    }
-    if (added.length > 0 || filteredUpdated.length > 0 || removed.length > 0) {
-      this.emit('change', [{ added, updated: filteredUpdated, removed }, 'local']);
-    }
-    this.emit('update', [{ added, updated, removed }, 'local']);
-  }
-
-  /**
-   * @param {string} field
-   * @param {any} value
-   */
-  setLocalStateField (field, value) {
-    const state = this.getLocalState();
-    if (state !== null) {
-      this.setLocalState({
-        ...state,
-        [field]: value
-      });
-    }
-  }
-
-  /**
-   * @return {Map<number,Object<string,any>>}
-   */
-  getStates () {
-    return this.states
-  }
-}
-
-/**
- * Mark (remote) clients as inactive and remove them from the list of active peers.
- * This change will be propagated to remote clients.
- *
- * @param {Awareness} awareness
- * @param {Array<number>} clients
- * @param {any} origin
- */
-const removeAwarenessStates = (awareness, clients, origin) => {
-  const removed = [];
-  for (let i = 0; i < clients.length; i++) {
-    const clientID = clients[i];
-    if (awareness.states.has(clientID)) {
-      awareness.states.delete(clientID);
-      if (clientID === awareness.clientID) {
-        const curMeta = /** @type {MetaClientState} */ (awareness.meta.get(clientID));
-        awareness.meta.set(clientID, {
-          clock: curMeta.clock + 1,
-          lastUpdated: getUnixTime()
-        });
-      }
-      removed.push(clientID);
-    }
-  }
-  if (removed.length > 0) {
-    awareness.emit('change', [{ added: [], updated: [], removed }, origin]);
-    awareness.emit('update', [{ added: [], updated: [], removed }, origin]);
-  }
-};
-
-/**
- * @param {Awareness} awareness
- * @param {Array<number>} clients
- * @return {Uint8Array}
- */
-const encodeAwarenessUpdate = (awareness, clients, states = awareness.states) => {
-  const len = clients.length;
-  const encoder = createEncoder();
-  writeVarUint(encoder, len);
-  for (let i = 0; i < len; i++) {
-    const clientID = clients[i];
-    const state = states.get(clientID) || null;
-    const clock = /** @type {MetaClientState} */ (awareness.meta.get(clientID)).clock;
-    writeVarUint(encoder, clientID);
-    writeVarUint(encoder, clock);
-    writeVarString(encoder, JSON.stringify(state));
-  }
-  return toUint8Array(encoder)
-};
-
-/**
- * @param {Awareness} awareness
- * @param {Uint8Array} update
- * @param {any} origin This will be added to the emitted change event
- */
-const applyAwarenessUpdate = (awareness, update, origin) => {
-  const decoder = createDecoder(update);
-  const timestamp = getUnixTime();
-  const added = [];
-  const updated = [];
-  const filteredUpdated = [];
-  const removed = [];
-  const len = readVarUint(decoder);
-  for (let i = 0; i < len; i++) {
-    const clientID = readVarUint(decoder);
-    let clock = readVarUint(decoder);
-    const state = JSON.parse(readVarString(decoder));
-    const clientMeta = awareness.meta.get(clientID);
-    const prevState = awareness.states.get(clientID);
-    const currClock = clientMeta === undefined ? 0 : clientMeta.clock;
-    if (currClock < clock || (currClock === clock && state === null && awareness.states.has(clientID))) {
-      if (state === null) {
-        // never let a remote client remove this local state
-        if (clientID === awareness.clientID && awareness.getLocalState() != null) {
-          // remote client removed the local state. Do not remote state. Broadcast a message indicating
-          // that this client still exists by increasing the clock
-          clock++;
-        } else {
-          awareness.states.delete(clientID);
-        }
-      } else {
-        awareness.states.set(clientID, state);
-      }
-      awareness.meta.set(clientID, {
-        clock,
-        lastUpdated: timestamp
-      });
-      if (clientMeta === undefined && state !== null) {
-        added.push(clientID);
-      } else if (clientMeta !== undefined && state === null) {
-        removed.push(clientID);
-      } else if (state !== null) {
-        if (!equalityDeep(state, prevState)) {
-          filteredUpdated.push(clientID);
-        }
-        updated.push(clientID);
-      }
-    }
-  }
-  if (added.length > 0 || filteredUpdated.length > 0 || removed.length > 0) {
-    awareness.emit('change', [{
-      added, updated: filteredUpdated, removed
-    }, origin]);
-  }
-  if (added.length > 0 || updated.length > 0 || removed.length > 0) {
-    awareness.emit('update', [{
-      added, updated, removed
-    }, origin]);
   }
 };
 
@@ -52758,14 +53101,1937 @@ class WebsocketProvider extends ObservableV2 {
 }
 
 /**
+ * Code Cell Detection and Management
+ *
+ * Finds code blocks in markdown and manages their output blocks.
+ * A code block becomes a "cell" that can be executed.
+ */
+
+/**
+ * Languages that are executable (have potential runtimes)
+ */
+const EXECUTABLE_LANGUAGES = new Set([
+  // Python
+  'python', 'py', 'python3',
+  // JavaScript
+  'javascript', 'js', 'node',
+  // TypeScript (transpiled to JS)
+  'typescript', 'ts',
+  // Shell
+  'bash', 'sh', 'shell', 'zsh',
+  // Other common ones
+  'julia', 'jl',
+  'r', 'rlang',
+  // HTML (rendered, not "executed")
+  'html',
+]);
+
+/**
+ * Languages that are rendered rather than executed
+ */
+const RENDERED_LANGUAGES = new Set(['html', 'html-rendered']);
+
+/**
+ * Find all code blocks in the document
+ *
+ * @param {string} content - Document content
+ * @returns {Array<{
+ *   language: string,
+ *   code: string,
+ *   start: number,      // start of opening fence
+ *   end: number,        // end of closing fence
+ *   codeStart: number,  // start of code content
+ *   codeEnd: number,    // end of code content
+ *   line: number,       // 0-indexed line number
+ *   executable: boolean,
+ *   rendered: boolean,
+ * }>}
+ */
+function findCodeBlocks(content) {
+  const blocks = [];
+  const lines = content.split('\n');
+
+  let inBlock = false;
+  let blockStart = 0;
+  let blockLanguage = '';
+  let codeStart = 0;
+  let blockLine = 0;
+  let charOffset = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineStart = charOffset;
+
+    if (!inBlock) {
+      // Look for opening fence
+      const match = line.match(/^(`{3,})(\w*)/);
+      if (match) {
+        inBlock = true;
+        blockStart = lineStart;
+        blockLanguage = match[2].toLowerCase();
+        codeStart = lineStart + line.length + 1; // +1 for newline
+        blockLine = i;
+      }
+    } else {
+      // Look for closing fence
+      if (line.match(/^`{3,}\s*$/)) {
+        const codeEnd = lineStart;
+        const blockEnd = lineStart + line.length;
+
+        blocks.push({
+          language: blockLanguage,
+          code: content.slice(codeStart, codeEnd),
+          start: blockStart,
+          end: blockEnd,
+          codeStart,
+          codeEnd,
+          line: blockLine,
+          executable: EXECUTABLE_LANGUAGES.has(blockLanguage),
+          rendered: RENDERED_LANGUAGES.has(blockLanguage),
+        });
+
+        inBlock = false;
+      }
+    }
+
+    charOffset += line.length + 1; // +1 for newline
+  }
+
+  return blocks;
+}
+
+/**
+ * Find the code block at a given position
+ *
+ * @param {string} content - Document content
+ * @param {number} pos - Cursor position
+ * @returns {object|null} - Code block info or null
+ */
+function findCodeBlockAtPosition(content, pos) {
+  const blocks = findCodeBlocks(content);
+  return blocks.find(b => pos >= b.start && pos <= b.end) || null;
+}
+
+/**
+ * Find the output block following a code block
+ *
+ * @param {string} content - Document content
+ * @param {number} codeBlockEnd - End position of the code block
+ * @returns {{start: number, end: number, content: string}|null}
+ */
+function findOutputBlock(content, codeBlockEnd) {
+  // Look for ```output immediately after the code block
+  const after = content.slice(codeBlockEnd);
+
+  // Allow for whitespace/newlines between blocks
+  const match = after.match(/^(\s*\n)(```output\n)([\s\S]*?)(```)/);
+  if (!match) return null;
+
+  const gapLength = match[1].length;
+  const fenceLength = match[2].length;
+  const outputContent = match[3];
+  const closingLength = match[4].length;
+
+  return {
+    start: codeBlockEnd + gapLength,
+    end: codeBlockEnd + gapLength + fenceLength + outputContent.length + closingLength,
+    contentStart: codeBlockEnd + gapLength + fenceLength,
+    contentEnd: codeBlockEnd + gapLength + fenceLength + outputContent.length,
+    content: outputContent,
+  };
+}
+
+/**
+ * Find executable code blocks (cells)
+ *
+ * @param {string} content - Document content
+ * @returns {Array} - Executable code blocks
+ */
+function findCells(content) {
+  return findCodeBlocks(content).filter(b => b.executable);
+}
+
+/**
+ * Get cell at index
+ *
+ * @param {string} content - Document content
+ * @param {number} index - Cell index (0-based)
+ * @returns {object|null}
+ */
+function getCellAtIndex(content, index) {
+  const cells = findCells(content);
+  return cells[index] || null;
+}
+
+/**
+ * Get cell at cursor position
+ *
+ * @param {string} content - Document content
+ * @param {number} pos - Cursor position
+ * @returns {object|null}
+ */
+function getCellAtCursor(content, pos) {
+  const block = findCodeBlockAtPosition(content, pos);
+  if (block && block.executable) {
+    return block;
+  }
+  return null;
+}
+
+/**
+ * Count cells in document
+ *
+ * @param {string} content - Document content
+ * @returns {number}
+ */
+function countCells(content) {
+  return findCells(content).length;
+}
+
+/**
+ * Runtime Registry
+ *
+ * Manages execution runtimes for different languages.
+ * Runtimes are provided by separate packages (mrmd-python, mrmd-js, etc.)
+ *
+ * A runtime must implement:
+ * - supports(language: string): boolean
+ * - execute(code: string, language: string): Promise<{stdout, stderr, error?}>
+ * - OR executeStreaming(code, language, onChunk): Promise<result>
+ */
+
+/**
+ * Runtime interface (for documentation)
+ *
+ * @typedef {Object} Runtime
+ * @property {function(string): boolean} supports - Check if runtime handles language
+ * @property {function(string, string): Promise<ExecutionResult>} execute - Execute code
+ * @property {function(string, string, function): Promise<ExecutionResult>} [executeStreaming] - Streaming execution
+ */
+
+/**
+ * @typedef {Object} ExecutionResult
+ * @property {string} stdout - Standard output
+ * @property {string} stderr - Standard error
+ * @property {string} [result] - Return value (if any)
+ * @property {Object} [error] - Error info if failed
+ * @property {boolean} success - Whether execution succeeded
+ */
+
+/**
+ * Runtime Registry
+ *
+ * Holds registered runtimes and routes execution to the correct one.
+ */
+class RuntimeRegistry {
+  constructor() {
+    /** @type {Map<string, Runtime>} */
+    this.runtimes = new Map();
+
+    /** @type {Map<string, string>} Language -> runtime name mapping */
+    this.languageMap = new Map();
+  }
+
+  /**
+   * Register a runtime
+   *
+   * @param {string} name - Runtime name (e.g., 'python', 'javascript')
+   * @param {Runtime} runtime - Runtime instance
+   */
+  register(name, runtime) {
+    if (!runtime || typeof runtime.supports !== 'function') {
+      throw new Error(`Runtime '${name}' must implement supports(language)`);
+    }
+    if (typeof runtime.execute !== 'function' && typeof runtime.executeStreaming !== 'function') {
+      throw new Error(`Runtime '${name}' must implement execute() or executeStreaming()`);
+    }
+
+    this.runtimes.set(name, runtime);
+
+    // Auto-discover supported languages
+    const testLanguages = [
+      'python', 'py', 'python3',
+      'javascript', 'js', 'node', 'typescript', 'ts',
+      'julia', 'jl',
+      'r', 'rlang',
+      'bash', 'sh', 'shell',
+      'html',
+    ];
+
+    for (const lang of testLanguages) {
+      if (runtime.supports(lang)) {
+        this.languageMap.set(lang, name);
+      }
+    }
+  }
+
+  /**
+   * Unregister a runtime
+   *
+   * @param {string} name - Runtime name
+   */
+  unregister(name) {
+    this.runtimes.delete(name);
+
+    // Clean up language mappings
+    for (const [lang, runtimeName] of this.languageMap) {
+      if (runtimeName === name) {
+        this.languageMap.delete(lang);
+      }
+    }
+  }
+
+  /**
+   * Get runtime for a language
+   *
+   * @param {string} language - Language identifier
+   * @returns {Runtime|null}
+   */
+  getRuntime(language) {
+    const normalizedLang = language.toLowerCase();
+
+    // Check explicit mapping first
+    const runtimeName = this.languageMap.get(normalizedLang);
+    if (runtimeName) {
+      return this.runtimes.get(runtimeName) || null;
+    }
+
+    // Fallback: check all runtimes
+    for (const runtime of this.runtimes.values()) {
+      if (runtime.supports(normalizedLang)) {
+        return runtime;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Check if any runtime supports a language
+   *
+   * @param {string} language - Language identifier
+   * @returns {boolean}
+   */
+  supports(language) {
+    return this.getRuntime(language) !== null;
+  }
+
+  /**
+   * Execute code using the appropriate runtime
+   *
+   * @param {string} code - Code to execute
+   * @param {string} language - Language identifier
+   * @returns {Promise<ExecutionResult>}
+   */
+  async execute(code, language) {
+    const runtime = this.getRuntime(language);
+    if (!runtime) {
+      return {
+        stdout: '',
+        stderr: `No runtime registered for language: ${language}`,
+        success: false,
+        error: { type: 'NoRuntime', message: `No runtime for ${language}` },
+      };
+    }
+
+    return runtime.execute(code, language);
+  }
+
+  /**
+   * Execute code with streaming output
+   *
+   * @param {string} code - Code to execute
+   * @param {string} language - Language identifier
+   * @param {function(string, string, boolean): void} onChunk - Callback (chunk, accumulated, done)
+   * @returns {Promise<ExecutionResult>}
+   */
+  async executeStreaming(code, language, onChunk) {
+    const runtime = this.getRuntime(language);
+    if (!runtime) {
+      const error = `No runtime registered for language: ${language}`;
+      onChunk(error, error, true);
+      return {
+        stdout: '',
+        stderr: error,
+        success: false,
+        error: { type: 'NoRuntime', message: error },
+      };
+    }
+
+    // Use streaming if available, otherwise wrap execute
+    if (typeof runtime.executeStreaming === 'function') {
+      return runtime.executeStreaming(code, language, onChunk);
+    } else {
+      // Fallback: run execute and send all output at once
+      const result = await runtime.execute(code, language);
+      const output = result.stdout + (result.stderr ? '\n' + result.stderr : '');
+      onChunk(output, output, true);
+      return result;
+    }
+  }
+
+  /**
+   * List registered runtimes
+   *
+   * @returns {string[]}
+   */
+  list() {
+    return Array.from(this.runtimes.keys());
+  }
+
+  /**
+   * Get all supported languages
+   *
+   * @returns {string[]}
+   */
+  supportedLanguages() {
+    return Array.from(this.languageMap.keys());
+  }
+}
+
+/**
+ * Create a new runtime registry
+ *
+ * @returns {RuntimeRegistry}
+ */
+function createRuntimeRegistry() {
+  return new RuntimeRegistry();
+}
+
+/**
+ * Terminal Buffer
+ *
+ * Processes streaming terminal output with proper cursor movement and ANSI handling.
+ * Enables progress bars (tqdm, rich) to display correctly during execution.
+ *
+ * Philosophy (from VISION.md):
+ * - "The .md file is truth" - stored output should be plain text
+ * - "Opens in any editor. Grep-able." - no raw escape codes in storage
+ * - Rich display is optional enhancement, not requirement
+ *
+ * Output modes:
+ * - toString()  → Plain text (for document storage)
+ * - toAnsi()    → With ANSI codes (for terminal display)
+ * - toHtml()    → HTML with styled spans (for rich editor display)
+ *
+ * @module terminal
+ */
+
+// #region TYPES
+
+/**
+ * Style state for a character cell
+ * @typedef {Object} CellStyle
+ * @property {string|null} fg - Foreground color
+ * @property {string|null} bg - Background color
+ * @property {boolean} bold
+ * @property {boolean} dim
+ * @property {boolean} italic
+ * @property {boolean} underline
+ * @property {boolean} strikethrough
+ * @property {boolean} inverse
+ */
+
+/**
+ * A single character cell
+ * @typedef {Object} Cell
+ * @property {string} char - The character
+ * @property {CellStyle} style - Applied style
+ */
+
+// #endregion TYPES
+
+// #region STYLE_HELPERS
+
+/** @returns {CellStyle} */
+function createDefaultStyle() {
+  return {
+    fg: null,
+    bg: null,
+    bold: false,
+    dim: false,
+    italic: false,
+    underline: false,
+    strikethrough: false,
+    inverse: false,
+  };
+}
+
+/** @param {CellStyle} style @returns {CellStyle} */
+function cloneStyle(style) {
+  return { ...style };
+}
+
+/** @param {CellStyle} a @param {CellStyle} b @returns {boolean} */
+function stylesEqual(a, b) {
+  return (
+    a.fg === b.fg &&
+    a.bg === b.bg &&
+    a.bold === b.bold &&
+    a.dim === b.dim &&
+    a.italic === b.italic &&
+    a.underline === b.underline &&
+    a.strikethrough === b.strikethrough &&
+    a.inverse === b.inverse
+  );
+}
+
+/** @param {CellStyle} style @returns {boolean} */
+function hasStyle(style) {
+  return (
+    style.fg !== null ||
+    style.bg !== null ||
+    style.bold ||
+    style.dim ||
+    style.italic ||
+    style.underline ||
+    style.strikethrough ||
+    style.inverse
+  );
+}
+
+// #endregion STYLE_HELPERS
+
+// #region COLOR_MAPS
+
+/** ANSI foreground color codes → names */
+const FG_COLORS = {
+  30: 'black', 31: 'red', 32: 'green', 33: 'yellow',
+  34: 'blue', 35: 'magenta', 36: 'cyan', 37: 'white',
+  90: 'bright-black', 91: 'bright-red', 92: 'bright-green', 93: 'bright-yellow',
+  94: 'bright-blue', 95: 'bright-magenta', 96: 'bright-cyan', 97: 'bright-white',
+};
+
+/** ANSI background color codes → names */
+const BG_COLORS = {
+  40: 'black', 41: 'red', 42: 'green', 43: 'yellow',
+  44: 'blue', 45: 'magenta', 46: 'cyan', 47: 'white',
+  100: 'bright-black', 101: 'bright-red', 102: 'bright-green', 103: 'bright-yellow',
+  104: 'bright-blue', 105: 'bright-magenta', 106: 'bright-cyan', 107: 'bright-white',
+};
+
+/** Color names → CSS colors */
+const CSS_COLORS = {
+  'black': '#000000', 'red': '#cc0000', 'green': '#00cc00', 'yellow': '#cccc00',
+  'blue': '#0000cc', 'magenta': '#cc00cc', 'cyan': '#00cccc', 'white': '#cccccc',
+  'bright-black': '#666666', 'bright-red': '#ff0000', 'bright-green': '#00ff00',
+  'bright-yellow': '#ffff00', 'bright-blue': '#0000ff', 'bright-magenta': '#ff00ff',
+  'bright-cyan': '#00ffff', 'bright-white': '#ffffff',
+};
+
+// #endregion COLOR_MAPS
+
+// #region TERMINAL_BUFFER
+
+/**
+ * Terminal buffer that processes cursor movement and ANSI codes
+ */
+class TerminalBuffer {
+  /** @type {Cell[][]} */
+  #lines = [[]];
+
+  /** @type {number} */
+  #row = 0;
+
+  /** @type {number} */
+  #col = 0;
+
+  /** @type {CellStyle} */
+  #currentStyle = createDefaultStyle();
+
+  /** @type {{row: number, col: number}|null} */
+  #savedCursor = null;
+
+  /**
+   * Process terminal output and write to buffer
+   * @param {string} text - Raw terminal output with escape sequences
+   */
+  write(text) {
+    let i = 0;
+
+    while (i < text.length) {
+      // Check for escape sequence
+      if (text[i] === '\x1b' && text[i + 1] === '[') {
+        i = this.#parseEscapeSequence(text, i);
+        continue;
+      }
+
+      // Handle special characters
+      const char = text[i];
+
+      if (char === '\r') {
+        // Carriage return - back to start of line
+        this.#col = 0;
+      } else if (char === '\n') {
+        // Newline - next line, column 0
+        this.#row++;
+        this.#col = 0;
+        this.#ensureRow(this.#row);
+      } else if (char === '\b') {
+        // Backspace
+        this.#col = Math.max(0, this.#col - 1);
+      } else if (char === '\t') {
+        // Tab - move to next 8-column boundary
+        this.#col = Math.floor(this.#col / 8) * 8 + 8;
+      } else if (char.charCodeAt(0) >= 32) {
+        // Printable character
+        this.#writeChar(char);
+      }
+      // Ignore other control characters
+
+      i++;
+    }
+  }
+
+  /**
+   * Parse an escape sequence starting at position i
+   * @param {string} text
+   * @param {number} i
+   * @returns {number} Next index
+   */
+  #parseEscapeSequence(text, i) {
+    // Skip \x1b[
+    let j = i + 2;
+
+    // Check for DEC private mode prefix '?'
+    const isPrivateMode = text[j] === '?';
+    if (isPrivateMode) j++;
+
+    // Collect parameter bytes (digits and semicolons)
+    let params = '';
+    while (j < text.length && /[0-9;]/.test(text[j])) {
+      params += text[j];
+      j++;
+    }
+
+    // Get command byte
+    const cmd = text[j] || '';
+    j++;
+
+    // Ignore DEC private modes (cursor visibility, alternate screen, etc.)
+    if (isPrivateMode) {
+      return j;
+    }
+
+    // Parse parameter numbers
+    const nums = params ? params.split(';').map(n => parseInt(n) || 0) : [];
+    const n = nums[0] || 1;
+
+    switch (cmd) {
+      case 'm': // SGR - Select Graphic Rendition (colors/styles)
+        this.#applySgr(nums.length > 0 ? nums : [0]);
+        break;
+
+      case 'A': // Cursor Up
+        this.#row = Math.max(0, this.#row - n);
+        break;
+
+      case 'B': // Cursor Down
+        this.#row += n;
+        this.#ensureRow(this.#row);
+        break;
+
+      case 'C': // Cursor Forward (Right)
+        this.#col += n;
+        break;
+
+      case 'D': // Cursor Back (Left)
+        this.#col = Math.max(0, this.#col - n);
+        break;
+
+      case 'E': // Cursor Next Line
+        this.#row += n;
+        this.#col = 0;
+        this.#ensureRow(this.#row);
+        break;
+
+      case 'F': // Cursor Previous Line
+        this.#row = Math.max(0, this.#row - n);
+        this.#col = 0;
+        break;
+
+      case 'G': // Cursor Horizontal Absolute
+        this.#col = Math.max(0, n - 1);
+        break;
+
+      case 'H': // Cursor Position (row;col)
+      case 'f':
+        this.#row = Math.max(0, (nums[0] || 1) - 1);
+        this.#col = Math.max(0, (nums[1] || 1) - 1);
+        this.#ensureRow(this.#row);
+        break;
+
+      case 'J': // Erase in Display
+        if (n === 0 || params === '') {
+          this.#clearToEndOfScreen();
+        } else if (n === 1) {
+          this.#clearFromStartOfScreen();
+        } else if (n === 2 || n === 3) {
+          this.#clearScreen();
+        }
+        break;
+
+      case 'K': // Erase in Line
+        if (n === 0 || params === '') {
+          this.#clearToEndOfLine();
+        } else if (n === 1) {
+          this.#clearFromStartOfLine();
+        } else if (n === 2) {
+          this.#clearLine();
+        }
+        break;
+
+      case 's': // Save Cursor Position
+        this.#savedCursor = { row: this.#row, col: this.#col };
+        break;
+
+      case 'u': // Restore Cursor Position
+        if (this.#savedCursor) {
+          this.#row = this.#savedCursor.row;
+          this.#col = this.#savedCursor.col;
+        }
+        break;
+    }
+
+    return j;
+  }
+
+  /**
+   * Apply SGR (Select Graphic Rendition) codes
+   * @param {number[]} codes
+   */
+  #applySgr(codes) {
+    let i = 0;
+    while (i < codes.length) {
+      const code = codes[i];
+
+      switch (code) {
+        case 0: this.#currentStyle = createDefaultStyle(); break;
+        case 1: this.#currentStyle.bold = true; break;
+        case 2: this.#currentStyle.dim = true; break;
+        case 3: this.#currentStyle.italic = true; break;
+        case 4: this.#currentStyle.underline = true; break;
+        case 7: this.#currentStyle.inverse = true; break;
+        case 9: this.#currentStyle.strikethrough = true; break;
+        case 22: this.#currentStyle.bold = false; this.#currentStyle.dim = false; break;
+        case 23: this.#currentStyle.italic = false; break;
+        case 24: this.#currentStyle.underline = false; break;
+        case 27: this.#currentStyle.inverse = false; break;
+        case 29: this.#currentStyle.strikethrough = false; break;
+        case 39: this.#currentStyle.fg = null; break;
+        case 49: this.#currentStyle.bg = null; break;
+        default:
+          // Foreground colors
+          if (FG_COLORS[code]) {
+            this.#currentStyle.fg = FG_COLORS[code];
+          }
+          // Background colors
+          else if (BG_COLORS[code]) {
+            this.#currentStyle.bg = BG_COLORS[code];
+          }
+          // 256-color: 38;5;n or 48;5;n
+          else if (code === 38 && codes[i + 1] === 5 && codes[i + 2] !== undefined) {
+            this.#currentStyle.fg = `256-${codes[i + 2]}`;
+            i += 2;
+          } else if (code === 48 && codes[i + 1] === 5 && codes[i + 2] !== undefined) {
+            this.#currentStyle.bg = `256-${codes[i + 2]}`;
+            i += 2;
+          }
+          // 24-bit RGB: 38;2;r;g;b or 48;2;r;g;b
+          else if (code === 38 && codes[i + 1] === 2 && codes[i + 4] !== undefined) {
+            this.#currentStyle.fg = `rgb(${codes[i + 2]},${codes[i + 3]},${codes[i + 4]})`;
+            i += 4;
+          } else if (code === 48 && codes[i + 1] === 2 && codes[i + 4] !== undefined) {
+            this.#currentStyle.bg = `rgb(${codes[i + 2]},${codes[i + 3]},${codes[i + 4]})`;
+            i += 4;
+          }
+      }
+      i++;
+    }
+  }
+
+  /**
+   * Write a character at current cursor position
+   * @param {string} char
+   */
+  #writeChar(char) {
+    this.#ensureRow(this.#row);
+    const line = this.#lines[this.#row];
+
+    // Extend line if needed
+    while (line.length <= this.#col) {
+      line.push({ char: ' ', style: createDefaultStyle() });
+    }
+
+    // Write character with current style
+    line[this.#col] = {
+      char,
+      style: cloneStyle(this.#currentStyle),
+    };
+
+    this.#col++;
+  }
+
+  /** @param {number} row */
+  #ensureRow(row) {
+    while (this.#lines.length <= row) {
+      this.#lines.push([]);
+    }
+  }
+
+  #clearToEndOfLine() {
+    if (this.#lines[this.#row]) {
+      this.#lines[this.#row] = this.#lines[this.#row].slice(0, this.#col);
+    }
+  }
+
+  #clearFromStartOfLine() {
+    if (this.#lines[this.#row]) {
+      const line = this.#lines[this.#row];
+      for (let i = 0; i <= this.#col && i < line.length; i++) {
+        line[i] = { char: ' ', style: createDefaultStyle() };
+      }
+    }
+  }
+
+  #clearLine() {
+    this.#lines[this.#row] = [];
+  }
+
+  #clearToEndOfScreen() {
+    this.#clearToEndOfLine();
+    for (let r = this.#row + 1; r < this.#lines.length; r++) {
+      this.#lines[r] = [];
+    }
+  }
+
+  #clearFromStartOfScreen() {
+    for (let r = 0; r < this.#row; r++) {
+      this.#lines[r] = [];
+    }
+    this.#clearFromStartOfLine();
+  }
+
+  #clearScreen() {
+    this.#lines = [[]];
+    this.#row = 0;
+    this.#col = 0;
+  }
+
+  // ===========================================================================
+  // Output Methods
+  // ===========================================================================
+
+  /**
+   * Convert buffer to plain text (for document storage)
+   *
+   * This is the primary output method for mrmd.
+   * Per VISION.md: "The .md file is truth. Opens in any editor. Grep-able."
+   *
+   * @returns {string}
+   */
+  toString() {
+    const output = [];
+
+    for (const line of this.#lines) {
+      let lineText = '';
+      for (const cell of line) {
+        lineText += cell.char;
+      }
+      // Trim trailing spaces
+      output.push(lineText.trimEnd());
+    }
+
+    // Trim trailing empty lines
+    while (output.length > 0 && output[output.length - 1] === '') {
+      output.pop();
+    }
+
+    return output.join('\n');
+  }
+
+  /**
+   * Convert buffer to string with ANSI escape codes
+   *
+   * Use this for terminal-like display or when passing to another
+   * terminal-aware renderer.
+   *
+   * @returns {string}
+   */
+  toAnsi() {
+    const output = [];
+    let currentStyle = createDefaultStyle();
+
+    for (let r = 0; r < this.#lines.length; r++) {
+      const line = this.#lines[r];
+      let lineOutput = '';
+
+      for (const cell of line) {
+        if (!stylesEqual(currentStyle, cell.style)) {
+          lineOutput += styleToAnsi(cell.style, currentStyle);
+          currentStyle = cloneStyle(cell.style);
+        }
+        lineOutput += cell.char;
+      }
+
+      // Reset at end of line if there's active styling
+      if (hasStyle(currentStyle)) {
+        lineOutput += '\x1b[0m';
+        currentStyle = createDefaultStyle();
+      }
+
+      output.push(lineOutput);
+    }
+
+    // Trim trailing empty lines
+    while (output.length > 0 && output[output.length - 1] === '') {
+      output.pop();
+    }
+
+    return output.join('\n');
+  }
+
+  /**
+   * Convert buffer to HTML with styled spans
+   *
+   * Use this for rich display in the editor.
+   * Styles are applied via CSS classes and inline styles.
+   *
+   * @param {Object} [options]
+   * @param {boolean} [options.useClasses=true] - Use CSS classes (ansi-red, etc.)
+   * @param {boolean} [options.escapeHtml=true] - Escape HTML entities
+   * @returns {string}
+   */
+  toHtml(options = {}) {
+    const { useClasses = true, escapeHtml = true } = options;
+    const output = [];
+
+    for (const line of this.#lines) {
+      let lineHtml = '';
+      let currentStyle = createDefaultStyle();
+      let spanOpen = false;
+
+      for (const cell of line) {
+        const styleChanged = !stylesEqual(currentStyle, cell.style);
+
+        if (styleChanged && spanOpen) {
+          lineHtml += '</span>';
+          spanOpen = false;
+        }
+
+        if (styleChanged && hasStyle(cell.style)) {
+          lineHtml += styleToHtmlSpan(cell.style, useClasses);
+          spanOpen = true;
+        }
+
+        currentStyle = cell.style;
+
+        // Escape HTML entities
+        let char = cell.char;
+        if (escapeHtml) {
+          if (char === '<') char = '&lt;';
+          else if (char === '>') char = '&gt;';
+          else if (char === '&') char = '&amp;';
+          else if (char === '"') char = '&quot;';
+        }
+
+        lineHtml += char;
+      }
+
+      if (spanOpen) {
+        lineHtml += '</span>';
+      }
+
+      output.push(lineHtml);
+    }
+
+    // Trim trailing empty lines
+    while (output.length > 0 && output[output.length - 1] === '') {
+      output.pop();
+    }
+
+    return output.join('\n');
+  }
+
+  /**
+   * Clear the buffer and reset cursor
+   */
+  clear() {
+    this.#lines = [[]];
+    this.#row = 0;
+    this.#col = 0;
+    this.#currentStyle = createDefaultStyle();
+    this.#savedCursor = null;
+  }
+
+  /**
+   * Get current line count
+   * @returns {number}
+   */
+  get lineCount() {
+    return this.#lines.length;
+  }
+
+  /**
+   * Get current cursor position
+   * @returns {{row: number, col: number}}
+   */
+  get cursor() {
+    return { row: this.#row, col: this.#col };
+  }
+}
+
+// #endregion TERMINAL_BUFFER
+
+// #region STYLE_OUTPUT_HELPERS
+
+/**
+ * Convert style to ANSI escape codes
+ * @param {CellStyle} newStyle
+ * @param {CellStyle} oldStyle
+ * @returns {string}
+ */
+function styleToAnsi(newStyle, oldStyle) {
+  const codes = [];
+
+  // Check if we need a reset
+  const needsReset = (
+    (oldStyle.bold && !newStyle.bold) ||
+    (oldStyle.dim && !newStyle.dim) ||
+    (oldStyle.italic && !newStyle.italic) ||
+    (oldStyle.underline && !newStyle.underline) ||
+    (oldStyle.strikethrough && !newStyle.strikethrough) ||
+    (oldStyle.inverse && !newStyle.inverse) ||
+    (oldStyle.fg !== null && newStyle.fg === null) ||
+    (oldStyle.bg !== null && newStyle.bg === null)
+  );
+
+  if (needsReset) {
+    codes.push(0);
+    // After reset, re-apply all active styles
+    if (newStyle.bold) codes.push(1);
+    if (newStyle.dim) codes.push(2);
+    if (newStyle.italic) codes.push(3);
+    if (newStyle.underline) codes.push(4);
+    if (newStyle.inverse) codes.push(7);
+    if (newStyle.strikethrough) codes.push(9);
+    if (newStyle.fg) codes.push(...colorToAnsiCode(newStyle.fg, false));
+    if (newStyle.bg) codes.push(...colorToAnsiCode(newStyle.bg, true));
+  } else {
+    // Just emit the changes
+    if (newStyle.bold && !oldStyle.bold) codes.push(1);
+    if (newStyle.dim && !oldStyle.dim) codes.push(2);
+    if (newStyle.italic && !oldStyle.italic) codes.push(3);
+    if (newStyle.underline && !oldStyle.underline) codes.push(4);
+    if (newStyle.inverse && !oldStyle.inverse) codes.push(7);
+    if (newStyle.strikethrough && !oldStyle.strikethrough) codes.push(9);
+    if (newStyle.fg !== oldStyle.fg && newStyle.fg) {
+      codes.push(...colorToAnsiCode(newStyle.fg, false));
+    }
+    if (newStyle.bg !== oldStyle.bg && newStyle.bg) {
+      codes.push(...colorToAnsiCode(newStyle.bg, true));
+    }
+  }
+
+  if (codes.length === 0) return '';
+  return `\x1b[${codes.join(';')}m`;
+}
+
+/**
+ * Convert color name to ANSI code(s)
+ * @param {string} color
+ * @param {boolean} isBg
+ * @returns {number[]}
+ */
+function colorToAnsiCode(color, isBg) {
+  const offset = isBg ? 10 : 0;
+
+  const standardColors = {
+    'black': 30, 'red': 31, 'green': 32, 'yellow': 33,
+    'blue': 34, 'magenta': 35, 'cyan': 36, 'white': 37,
+    'bright-black': 90, 'bright-red': 91, 'bright-green': 92, 'bright-yellow': 93,
+    'bright-blue': 94, 'bright-magenta': 95, 'bright-cyan': 96, 'bright-white': 97,
+  };
+
+  if (standardColors[color]) {
+    return [standardColors[color] + offset];
+  }
+
+  // 256-color
+  if (color.startsWith('256-')) {
+    const n = parseInt(color.slice(4));
+    return isBg ? [48, 5, n] : [38, 5, n];
+  }
+
+  // RGB
+  if (color.startsWith('rgb(')) {
+    const match = color.match(/rgb\((\d+),(\d+),(\d+)\)/);
+    if (match) {
+      const [, r, g, b] = match.map(Number);
+      return isBg ? [48, 2, r, g, b] : [38, 2, r, g, b];
+    }
+  }
+
+  return [];
+}
+
+/**
+ * Convert style to HTML span opening tag
+ * @param {CellStyle} style
+ * @param {boolean} useClasses
+ * @returns {string}
+ */
+function styleToHtmlSpan(style, useClasses) {
+  const classes = [];
+  const inlineStyles = [];
+
+  if (style.bold) classes.push('ansi-bold');
+  if (style.dim) classes.push('ansi-dim');
+  if (style.italic) classes.push('ansi-italic');
+  if (style.underline) classes.push('ansi-underline');
+  if (style.strikethrough) classes.push('ansi-strikethrough');
+  if (style.inverse) classes.push('ansi-inverse');
+
+  if (style.fg) {
+    if (useClasses && CSS_COLORS[style.fg]) {
+      classes.push(`ansi-fg-${style.fg}`);
+    } else {
+      inlineStyles.push(`color:${colorToCss(style.fg)}`);
+    }
+  }
+
+  if (style.bg) {
+    if (useClasses && CSS_COLORS[style.bg]) {
+      classes.push(`ansi-bg-${style.bg}`);
+    } else {
+      inlineStyles.push(`background-color:${colorToCss(style.bg)}`);
+    }
+  }
+
+  let attrs = '';
+  if (classes.length > 0) {
+    attrs += ` class="${classes.join(' ')}"`;
+  }
+  if (inlineStyles.length > 0) {
+    attrs += ` style="${inlineStyles.join(';')}"`;
+  }
+
+  return `<span${attrs}>`;
+}
+
+/**
+ * Convert color name to CSS color
+ * @param {string} color
+ * @returns {string}
+ */
+function colorToCss(color) {
+  if (CSS_COLORS[color]) {
+    return CSS_COLORS[color];
+  }
+
+  // 256-color - convert to RGB approximation
+  if (color.startsWith('256-')) {
+    const n = parseInt(color.slice(4));
+    return ansi256ToCss(n);
+  }
+
+  // RGB - already in CSS format
+  if (color.startsWith('rgb(')) {
+    return color;
+  }
+
+  return 'inherit';
+}
+
+/**
+ * Convert 256-color index to CSS color
+ * @param {number} n
+ * @returns {string}
+ */
+function ansi256ToCss(n) {
+  // Standard colors (0-15)
+  if (n < 16) {
+    const standard = [
+      '#000000', '#cc0000', '#00cc00', '#cccc00', '#0000cc', '#cc00cc', '#00cccc', '#cccccc',
+      '#666666', '#ff0000', '#00ff00', '#ffff00', '#0000ff', '#ff00ff', '#00ffff', '#ffffff',
+    ];
+    return standard[n];
+  }
+
+  // Color cube (16-231): 6x6x6 RGB
+  if (n < 232) {
+    const idx = n - 16;
+    const r = Math.floor(idx / 36);
+    const g = Math.floor((idx % 36) / 6);
+    const b = idx % 6;
+    const toHex = v => (v === 0 ? 0 : 55 + v * 40).toString(16).padStart(2, '0');
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+
+  // Grayscale (232-255): 24 shades
+  const gray = 8 + (n - 232) * 10;
+  const hex = gray.toString(16).padStart(2, '0');
+  return `#${hex}${hex}${hex}`;
+}
+
+// #endregion STYLE_OUTPUT_HELPERS
+
+// #region EXPORTS
+
+/**
+ * Process terminal output through a buffer
+ *
+ * Convenience function for one-shot processing.
+ *
+ * @param {string} text - Raw terminal output
+ * @returns {string} - Processed plain text
+ */
+function processTerminalOutput(text) {
+  const buffer = new TerminalBuffer();
+  buffer.write(text);
+  return buffer.toString();
+}
+
+/**
+ * Process terminal output and return HTML
+ *
+ * @param {string} text - Raw terminal output
+ * @param {Object} [options] - Options for toHtml()
+ * @returns {string} - HTML with styled spans
+ */
+function terminalToHtml(text, options) {
+  const buffer = new TerminalBuffer();
+  buffer.write(text);
+  return buffer.toHtml(options);
+}
+
+/**
+ * Strip ANSI codes from text (without cursor processing)
+ *
+ * Use this when you just want to remove escape codes without
+ * terminal emulation. For proper progress bar handling, use
+ * processTerminalOutput() instead.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function stripAnsi(text) {
+  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+}
+
+/**
+ * Check if text contains ANSI codes
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasAnsi(text) {
+  return /\x1b\[/.test(text);
+}
+
+/**
+ * CSS styles for ANSI HTML output
+ *
+ * Include in your stylesheet or inject via JS.
+ */
+const ansiStyles = `
+/* ANSI text styles */
+.ansi-bold { font-weight: bold; }
+.ansi-dim { opacity: 0.7; }
+.ansi-italic { font-style: italic; }
+.ansi-underline { text-decoration: underline; }
+.ansi-strikethrough { text-decoration: line-through; }
+.ansi-inverse { filter: invert(1); }
+
+/* ANSI foreground colors */
+.ansi-fg-black { color: #000000; }
+.ansi-fg-red { color: #cc0000; }
+.ansi-fg-green { color: #00cc00; }
+.ansi-fg-yellow { color: #cccc00; }
+.ansi-fg-blue { color: #0000cc; }
+.ansi-fg-magenta { color: #cc00cc; }
+.ansi-fg-cyan { color: #00cccc; }
+.ansi-fg-white { color: #cccccc; }
+.ansi-fg-bright-black { color: #666666; }
+.ansi-fg-bright-red { color: #ff0000; }
+.ansi-fg-bright-green { color: #00ff00; }
+.ansi-fg-bright-yellow { color: #ffff00; }
+.ansi-fg-bright-blue { color: #0000ff; }
+.ansi-fg-bright-magenta { color: #ff00ff; }
+.ansi-fg-bright-cyan { color: #00ffff; }
+.ansi-fg-bright-white { color: #ffffff; }
+
+/* ANSI background colors */
+.ansi-bg-black { background-color: #000000; }
+.ansi-bg-red { background-color: #cc0000; }
+.ansi-bg-green { background-color: #00cc00; }
+.ansi-bg-yellow { background-color: #cccc00; }
+.ansi-bg-blue { background-color: #0000cc; }
+.ansi-bg-magenta { background-color: #cc00cc; }
+.ansi-bg-cyan { background-color: #00cccc; }
+.ansi-bg-white { background-color: #cccccc; }
+.ansi-bg-bright-black { background-color: #666666; }
+.ansi-bg-bright-red { background-color: #ff0000; }
+.ansi-bg-bright-green { background-color: #00ff00; }
+.ansi-bg-bright-yellow { background-color: #ffff00; }
+.ansi-bg-bright-blue { background-color: #0000ff; }
+.ansi-bg-bright-magenta { background-color: #ff00ff; }
+.ansi-bg-bright-cyan { background-color: #00ffff; }
+.ansi-bg-bright-white { background-color: #ffffff; }
+`;
+
+// #endregion EXPORTS
+
+/**
+ * Execution Manager
+ *
+ * Handles running code cells and streaming output into the document.
+ * Output appears as if typed by a collaborator (via Yjs).
+ *
+ * Key insight from the vision:
+ * "The document is just text. Everything writes to it like a human would."
+ *
+ * Terminal output (progress bars, colors, cursor movement) is processed
+ * through TerminalBuffer to produce clean, readable text for storage.
+ */
+
+
+/**
+ * Execution Manager
+ *
+ * Coordinates cell execution between the editor and runtimes.
+ */
+class ExecutionManager {
+  /**
+   * @param {Object} editor - Editor instance with view, dispatch, writer methods
+   * @param {import('./runtime.js').RuntimeRegistry} registry - Runtime registry
+   */
+  constructor(editor, registry) {
+    this.editor = editor;
+    this.registry = registry;
+
+    /** @type {Map<number, AbortController>} Running executions by cell index */
+    this.running = new Map();
+
+    /** @type {Map<number, TerminalBuffer>} Terminal buffers for processing output */
+    this.buffers = new Map();
+
+    /** @type {Object<string, function[]>} Event handlers */
+    this.handlers = {
+      cellRun: [],
+      cellOutput: [],
+      cellComplete: [],
+      cellError: [],
+    };
+  }
+
+  /**
+   * Run a cell by index
+   *
+   * @param {number} index - Cell index (0-based)
+   * @returns {Promise<void>}
+   */
+  async runCell(index) {
+    const content = this.editor.getContent();
+    const cell = getCellAtIndex(content, index);
+
+    if (!cell) {
+      console.warn(`No cell at index ${index}`);
+      return;
+    }
+
+    await this._executeCell(cell, index);
+  }
+
+  /**
+   * Run the cell at cursor position
+   *
+   * @returns {Promise<void>}
+   */
+  async runCurrentCell() {
+    const content = this.editor.getContent();
+    const pos = this.editor.view.state.selection.main.head;
+    const cell = getCellAtCursor(content, pos);
+
+    if (!cell) {
+      console.warn('No executable cell at cursor');
+      return;
+    }
+
+    // Find cell index
+    const cells = findCells(content);
+    const index = cells.findIndex(c => c.start === cell.start);
+
+    await this._executeCell(cell, index);
+  }
+
+  /**
+   * Run all cells in order
+   *
+   * @returns {Promise<void>}
+   */
+  async runAll() {
+    const content = this.editor.getContent();
+    const cells = findCells(content);
+
+    for (let i = 0; i < cells.length; i++) {
+      await this._executeCell(cells[i], i);
+    }
+  }
+
+  /**
+   * Run all cells above (and including) the current one
+   *
+   * @returns {Promise<void>}
+   */
+  async runAllAbove() {
+    const content = this.editor.getContent();
+    const pos = this.editor.view.state.selection.main.head;
+    const cells = findCells(content);
+
+    // Find current cell index
+    let currentIndex = cells.findIndex(c => pos >= c.start && pos <= c.end);
+    if (currentIndex === -1) {
+      // Cursor not in a cell, find the nearest cell above
+      currentIndex = cells.findIndex(c => c.end > pos) - 1;
+      if (currentIndex < 0) currentIndex = cells.length - 1;
+    }
+
+    for (let i = 0; i <= currentIndex; i++) {
+      await this._executeCell(cells[i], i);
+    }
+  }
+
+  /**
+   * Clear output for a cell
+   *
+   * @param {number} index - Cell index
+   */
+  clearOutput(index) {
+    const content = this.editor.getContent();
+    const cell = getCellAtIndex(content, index);
+
+    if (!cell) return;
+
+    const output = findOutputBlock(content, cell.end);
+    if (output) {
+      // Remove the entire output block (including preceding newline)
+      const deleteStart = cell.end;
+      const deleteEnd = output.end;
+
+      this.editor.view.dispatch({
+        changes: { from: deleteStart, to: deleteEnd, insert: '' },
+      });
+    }
+  }
+
+  /**
+   * Clear all output blocks
+   */
+  clearOutputs() {
+    const content = this.editor.getContent();
+    const cells = findCells(content);
+
+    // Clear from last to first to preserve positions
+    for (let i = cells.length - 1; i >= 0; i--) {
+      this.clearOutput(i);
+    }
+  }
+
+  /**
+   * Cancel a running execution
+   *
+   * @param {number} index - Cell index
+   */
+  cancel(index) {
+    const controller = this.running.get(index);
+    if (controller) {
+      controller.abort();
+      this.running.delete(index);
+    }
+  }
+
+  /**
+   * Cancel all running executions
+   */
+  cancelAll() {
+    for (const controller of this.running.values()) {
+      controller.abort();
+    }
+    this.running.clear();
+  }
+
+  /**
+   * Check if a cell is running
+   *
+   * @param {number} index - Cell index
+   * @returns {boolean}
+   */
+  isRunning(index) {
+    return this.running.has(index);
+  }
+
+  // ===========================================================================
+  // Events
+  // ===========================================================================
+
+  on(event, handler) {
+    if (this.handlers[event]) {
+      this.handlers[event].push(handler);
+    }
+    return () => {
+      const idx = this.handlers[event]?.indexOf(handler);
+      if (idx >= 0) this.handlers[event].splice(idx, 1);
+    };
+  }
+
+  _emit(event, ...args) {
+    this.handlers[event]?.forEach(h => h(...args));
+  }
+
+  // ===========================================================================
+  // Internal
+  // ===========================================================================
+
+  /**
+   * Execute a cell and stream output
+   *
+   * Uses TerminalBuffer to process ANSI codes and cursor movement,
+   * producing clean readable output for the document.
+   *
+   * @param {Object} cell - Cell info
+   * @param {number} index - Cell index
+   */
+  async _executeCell(cell, index) {
+    const { language, code } = cell;
+
+    // Check runtime support
+    if (!this.registry.supports(language)) {
+      console.warn(`No runtime for language: ${language}`);
+      this._emit('cellError', index, `No runtime registered for ${language}`);
+      return;
+    }
+
+    // Cancel any existing execution for this cell
+    this.cancel(index);
+
+    // Create abort controller and terminal buffer
+    const controller = new AbortController();
+    this.running.set(index, controller);
+
+    const buffer = new TerminalBuffer();
+    this.buffers.set(index, buffer);
+
+    // Emit start event
+    this._emit('cellRun', index, cell);
+
+    try {
+      // Prepare output position
+      // Re-read content as it may have changed
+      let content = this.editor.getContent();
+      let currentCell = getCellAtIndex(content, index);
+
+      if (!currentCell) {
+        throw new Error('Cell no longer exists');
+      }
+
+      // Clear existing output and create new output block
+      const existingOutput = findOutputBlock(content, currentCell.end);
+
+      let outputContentStart;
+      let outputContentEnd;
+
+      if (existingOutput) {
+        // Use existing output block
+        outputContentStart = existingOutput.contentStart;
+        outputContentEnd = existingOutput.contentEnd;
+
+        // Clear existing content
+        if (outputContentEnd > outputContentStart) {
+          this.editor.view.dispatch({
+            changes: { from: outputContentStart, to: outputContentEnd, insert: '' },
+          });
+          outputContentEnd = outputContentStart;
+        }
+      } else {
+        // Create new output block after the code block
+        const insertPos = currentCell.end;
+        this.editor.view.dispatch({
+          changes: { from: insertPos, insert: '\n\n```output\n```' },
+        });
+
+        // Re-read to get updated positions
+        content = this.editor.getContent();
+        const newOutput = findOutputBlock(content, currentCell.end);
+        if (newOutput) {
+          outputContentStart = newOutput.contentStart;
+          outputContentEnd = newOutput.contentStart;
+        } else {
+          // Fallback: calculate position
+          outputContentStart = currentCell.end + '\n\n```output\n'.length;
+          outputContentEnd = outputContentStart;
+        }
+      }
+
+      // Track current output length in document for replacement
+      let currentDocOutputLen = 0;
+
+      const onChunk = (chunk, accumulatedRaw, done) => {
+        if (controller.signal.aborted) return;
+
+        // Process through terminal buffer (handles \r, cursor movement, ANSI)
+        buffer.write(chunk);
+
+        // Get processed output with ANSI codes preserved
+        const processedOutput = buffer.toAnsi();
+
+        // Replace current output with processed output
+        // This handles carriage returns and cursor movement correctly
+        const from = outputContentStart;
+        const to = outputContentStart + currentDocOutputLen;
+
+        this.editor.view.dispatch({
+          changes: { from, to, insert: processedOutput },
+        });
+
+        currentDocOutputLen = processedOutput.length;
+
+        this._emit('cellOutput', index, chunk, processedOutput);
+      };
+
+      // Execute with streaming
+      const result = await this.registry.executeStreaming(code, language, onChunk);
+
+      // Final update with ANSI codes preserved
+      const finalOutput = buffer.toAnsi();
+      const from = outputContentStart;
+      const to = outputContentStart + currentDocOutputLen;
+
+      // Handle errors
+      let outputWithError = finalOutput;
+      if (result.error) {
+        const errorText = `\n[Error: ${result.error.message || result.stderr}]`;
+        outputWithError = finalOutput + errorText;
+        this._emit('cellError', index, result.error);
+      }
+
+      // Ensure output ends with newline so closing ``` is on its own line
+      if (outputWithError && !outputWithError.endsWith('\n')) {
+        outputWithError += '\n';
+      }
+
+      // Final replace to ensure clean output
+      this.editor.view.dispatch({
+        changes: { from, to, insert: outputWithError },
+      });
+
+      this._emit('cellComplete', index, result);
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.error('Cell execution error:', err);
+        this._emit('cellError', index, err);
+      }
+    } finally {
+      this.running.delete(index);
+      this.buffers.delete(index);
+    }
+  }
+
+  /**
+   * Get the terminal buffer for a running cell (for rich display)
+   *
+   * @param {number} index - Cell index
+   * @returns {TerminalBuffer|null}
+   */
+  getBuffer(index) {
+    return this.buffers.get(index) || null;
+  }
+}
+
+/**
+ * Create an execution manager
+ *
+ * @param {Object} editor - Editor instance
+ * @param {import('./runtime.js').RuntimeRegistry} registry - Runtime registry
+ * @returns {ExecutionManager}
+ */
+function createExecutionManager(editor, registry) {
+  return new ExecutionManager(editor, registry);
+}
+
+/**
+ * Output Widget
+ *
+ * CodeMirror widget that renders output blocks with ANSI color support.
+ * Uses line decorations to hide raw text + positioned widget for colored display.
+ *
+ * Approach (from prototype):
+ * 1. Add line decorations to hide the raw output text via CSS
+ * 2. Add widget positioned after opening fence that shows colored HTML
+ * 3. Don't use Decoration.replace (causes parser issues)
+ *
+ * @module output-widget
+ */
+
+
+// #region WIDGET
+
+/**
+ * Widget for rendering output with ANSI colors
+ */
+class OutputWidget extends WidgetType {
+  /**
+   * @param {string} content - Output content with ANSI codes
+   * @param {boolean} hidden - Whether widget should be hidden (cursor in block)
+   */
+  constructor(content, hidden = false) {
+    super();
+    this.content = content;
+    this.hidden = hidden;
+  }
+
+  eq(other) {
+    return other.content === this.content && other.hidden === this.hidden;
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = 'cm-output-widget' + (this.hidden ? ' cm-output-widget-hidden' : '');
+
+    // Render with ANSI colors
+    const html = terminalToHtml(this.content);
+    container.innerHTML = `<pre class="cm-output-ansi">${html}</pre>`;
+
+    // Copy on click
+    container.title = 'Click to copy output';
+    container.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Copy plain text (without ANSI codes)
+      const plainText = stripAnsi(this.content);
+      navigator.clipboard.writeText(plainText).then(() => {
+        const feedback = document.createElement('div');
+        feedback.className = 'cm-output-copy-feedback';
+        feedback.textContent = 'Copied!';
+        container.appendChild(feedback);
+        setTimeout(() => feedback.remove(), 1500);
+      });
+    };
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+// #endregion WIDGET
+
+// #region DECORATION_PLUGIN
+
+/**
+ * Find output blocks and create decorations
+ * @param {import('@codemirror/view').EditorView} view
+ * @returns {import('@codemirror/view').DecorationSet}
+ */
+function buildDecorations(view) {
+  const decorations = [];
+  const doc = view.state.doc;
+  const cursorPos = view.state.selection.main.head;
+  const cursorLine = doc.lineAt(cursorPos).number;
+
+  // Find ```output blocks using regex
+  const text = doc.toString();
+  const outputBlockRegex = /```output\n([\s\S]*?)```/g;
+  let match;
+
+  while ((match = outputBlockRegex.exec(text)) !== null) {
+    const content = match[1];
+    const blockStart = match.index;
+    const blockEnd = blockStart + match[0].length;
+
+    // Only process blocks with ANSI codes
+    if (!hasAnsi(content)) {
+      continue;
+    }
+
+    // Get line range
+    const startLine = doc.lineAt(blockStart);
+    const endLine = doc.lineAt(blockEnd);
+
+    // Check if cursor is inside this block
+    const cursorInBlock = cursorLine >= startLine.number && cursorLine <= endLine.number;
+
+    // Add line decorations to hide/show raw text
+    for (let i = startLine.number; i <= endLine.number; i++) {
+      const line = doc.line(i);
+      decorations.push(
+        Decoration.line({
+          class: cursorInBlock ? 'cm-output-line-visible' : 'cm-output-line-hidden',
+        }).range(line.from)
+      );
+    }
+
+    // Add widget after opening fence line (positioned widget, not replace)
+    decorations.push(
+      Decoration.widget({
+        widget: new OutputWidget(content.trimEnd(), cursorInBlock),
+        side: 1,
+      }).range(startLine.to)
+    );
+  }
+
+  return Decoration.set(decorations, true);
+}
+
+/**
+ * ViewPlugin that manages output block decorations
+ */
+const outputWidgetPlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = buildDecorations(view);
+    }
+
+    update(update) {
+      if (update.docChanged || update.viewportChanged || update.selectionSet) {
+        this.decorations = buildDecorations(update.view);
+      }
+    }
+  },
+  {
+    decorations: (v) => v.decorations,
+  }
+);
+
+// #endregion DECORATION_PLUGIN
+
+// #region STYLES
+
+/**
+ * CSS styles for output widget
+ */
+const outputWidgetStyles = `
+/* Output widget container */
+.cm-output-widget {
+  font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', monospace);
+  font-size: 0.9em;
+  line-height: 1.4;
+  padding: 8px 12px;
+  background: var(--output-bg, rgba(0, 0, 0, 0.3));
+  border-radius: 6px;
+  margin: 4px 0;
+  position: relative;
+  overflow-x: auto;
+  border-left: 3px solid var(--output-border, rgba(100, 100, 100, 0.5));
+  cursor: pointer;
+}
+
+.cm-output-widget pre {
+  margin: 0;
+  padding: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cm-output-widget:hover {
+  background: var(--output-hover-bg, rgba(0, 0, 0, 0.35));
+}
+
+/* Hidden when cursor is in block (show raw source) */
+.cm-output-widget-hidden {
+  display: none;
+}
+
+/* Line visibility classes */
+.cm-output-line-hidden {
+  /* Hide text but maintain line height for stable layout */
+  color: transparent !important;
+}
+.cm-output-line-hidden * {
+  color: transparent !important;
+}
+
+.cm-output-line-visible {
+  /* Normal visibility when editing */
+}
+
+/* Copy feedback */
+.cm-output-copy-feedback {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 8px;
+  background: var(--feedback-bg, rgba(34, 197, 94, 0.9));
+  color: var(--feedback-color, white);
+  border-radius: 4px;
+  font-size: 0.8em;
+  animation: fadeOut 1.5s ease-out forwards;
+}
+
+@keyframes fadeOut {
+  0%, 70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ANSI text styles */
+${ansiStyles}
+`;
+
+// #endregion STYLES
+
+// #region EXPORTS
+
+/**
+ * Create the output widget extension for CodeMirror
+ * @returns {import('@codemirror/state').Extension}
+ */
+function outputWidget() {
+  return outputWidgetPlugin;
+}
+
+/**
+ * Inject output widget CSS styles into the document
+ */
+function injectOutputWidgetStyles() {
+  if (document.getElementById('mrmd-output-widget-styles')) {
+    return;
+  }
+
+  const style = document.createElement('style');
+  style.id = 'mrmd-output-widget-styles';
+  style.textContent = outputWidgetStyles;
+  document.head.appendChild(style);
+}
+
+// #endregion EXPORTS
+
+/**
  * mrmd - Markdown editor with realtime collaboration
  *
- * A drop-in collaborative markdown editor with CodeMirror 6 and Yjs.
- * Code blocks automatically get syntax highlighting for their language.
+ * A markdown editor where humans, code, and AI all collaborate through
+ * the same interface. The document is just text - everything writes to
+ * it like a human would:
+ *
+ * - Human → keyboard → insert/replace text
+ * - Code cells → runtime → stream output as text
+ * - AI/LLM → API → stream response as text
+ * - Other browsers → network → Yjs sync
  *
  * Usage:
- *   // Standalone
+ *   import mrmd from 'mrmd-editor';
+ *
+ *   // Standalone editor
  *   const editor = mrmd.create('#editor', { doc: '# Hello' });
+ *
+ *   // With code execution
+ *   import { JavaScriptExecutor } from 'mrmd-js';
+ *   const editor = mrmd.create('#editor', {
+ *     runtimes: { javascript: new JavaScriptExecutor() }
+ *   });
+ *   editor.runCurrentCell();
  *
  *   // With sync server
  *   const docs = mrmd.drive('wss://server');
@@ -52774,11 +55040,11 @@ class WebsocketProvider extends ObservableV2 {
 
 // #endregion IMPORTS
 
-// #region VERSION - Package version constant
+// #region VERSION
 const VERSION = '0.1.0';
 // #endregion VERSION
 
-// #region CODE_BLOCK_LANGUAGES - Language support for fenced code blocks
+// #region CODE_BLOCK_LANGUAGES
 const pythonSupport = python();
 const jsSupport = javascript();
 const jsxSupport = javascript({ jsx: true });
@@ -52854,10 +55120,10 @@ const languageSupportExtensions = [
 ];
 // #endregion CODE_BLOCK_LANGUAGES
 
-// #region STREAMING_WRITER - Writer class for streaming content
+// #region WRITER
 /**
  * Writer for streaming content into the editor.
- * Used by AI, code output, etc.
+ * Used by AI, code output, etc. Appears as if a collaborator is typing.
  */
 class Writer {
   constructor(editor, startPos) {
@@ -52870,7 +55136,9 @@ class Writer {
     if (!this._active) {
       throw new Error('Writer has ended');
     }
-    this._editor.insert(this._pos, text);
+    this._editor.view.dispatch({
+      changes: { from: this._pos, insert: text },
+    });
     this._pos += text.length;
     return this;
   }
@@ -52882,12 +55150,20 @@ class Writer {
   get position() {
     return this._pos;
   }
-}
-// #endregion STREAMING_WRITER
 
-// #region EDITOR_FACTORY - Main create() function
+  get active() {
+    return this._active;
+  }
+}
+// #endregion WRITER
+
+// #region CREATE
 /**
  * Create a standalone markdown editor
+ *
+ * @param {string|HTMLElement} target - CSS selector or element
+ * @param {Object} options - Editor options
+ * @returns {Editor}
  */
 function create(target, options = {}) {
   const element = typeof target === 'string'
@@ -52905,19 +55181,52 @@ function create(target, options = {}) {
     readonly = false,
     ydoc = new Doc(),
     ytext = 'content',
+    awareness: providedAwareness = null,
+    runtimes = {},
+    // Collaborator info for awareness
+    userName = 'Anonymous',
+    userColor = null,
   } = options;
 
+  // System dark mode detection
   const getSystemDarkMode = () =>
     typeof window !== 'undefined' &&
     window.matchMedia?.('(prefers-color-scheme: dark)').matches;
 
   const isDark = dark !== null ? dark : getSystemDarkMode();
+
+  // Create or use provided awareness
+  // Awareness tracks all collaborators: humans, AI, code executors
+  const awareness = providedAwareness || new Awareness(ydoc);
+
+  // Generate a random color if not provided
+  const generateColor = () => {
+    const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+    return colors[Math.floor(Math.random() * colors.length)];
+  };
+
+  // Set local awareness state for this editor instance
+  awareness.setLocalStateField('user', {
+    type: 'human',
+    name: userName,
+    color: userColor || generateColor(),
+  });
+
   const yText = ydoc.getText(ytext);
 
-  if (yText.length === 0 && doc) {
-    yText.insert(0, doc);
+  // Yjs-first initialization:
+  // Only seed content if Yjs is empty (we're creating a new document)
+  // If Yjs already has content (we're joining), use that as source of truth
+  const yjsHasContent = yText.length > 0;
+
+  if (!yjsHasContent && doc) {
+    // We're the first editor - seed Yjs with initial content
+    ydoc.transact(() => {
+      yText.insert(0, doc);
+    });
   }
 
+  // Always read initial content from Yjs (source of truth)
   const initialContent = yText.toString();
   const themeCompartment = new Compartment();
   const readonlyCompartment = new Compartment();
@@ -52939,6 +55248,9 @@ function create(target, options = {}) {
     '&.cm-focused': { outline: 'none' },
   });
 
+  // Inject output widget CSS styles
+  injectOutputWidgetStyles();
+
   const extensions = [
     basicSetup,
     markdownWithCodeBlocks,
@@ -52947,8 +55259,9 @@ function create(target, options = {}) {
     themeCompartment.of(isDark ? oneDark : []),
     readonlyCompartment.of(readonly ? EditorState.readOnly.of(true) : []),
     placeholderText ? placeholder(placeholderText) : [],
-    yCollab(yText),
+    yCollab(yText, awareness),
     keymap.of(yUndoManagerKeymap),
+    outputWidgetPlugin, // ANSI output rendering
   ];
 
   const view = new EditorView({
@@ -52960,19 +55273,6 @@ function create(target, options = {}) {
   const changeHandlers = [];
   const saveHandlers = [];
 
-  // Listen for changes
-  EditorView.updateListener.of((update) => {
-    if (update.docChanged) {
-      const content = update.state.doc.toString();
-      changeHandlers.forEach(fn => fn(content));
-    }
-  });
-
-  // Add update listener
-  view.dispatch({
-    effects: view.state.update({}).effects
-  });
-
   // Keyboard handler for save
   element.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 's') {
@@ -52982,14 +55282,30 @@ function create(target, options = {}) {
     }
   });
 
-  // #region EDITOR_API
+  // Create runtime registry
+  const registry = createRuntimeRegistry();
+
+  // Register provided runtimes
+  for (const [name, runtime] of Object.entries(runtimes)) {
+    registry.register(name, runtime);
+  }
+
+  // Create editor API object first (needed by ExecutionManager)
   const api = {
     // Core references
     view,
     ydoc,
     yText,
+    awareness,
 
+    // Runtime
+    registry,
+    execution: null, // Set below
+
+    // ===========================================================================
     // Content
+    // ===========================================================================
+
     getContent() {
       return view.state.doc.toString();
     },
@@ -53019,12 +55335,18 @@ function create(target, options = {}) {
       });
     },
 
-    // Streaming writer
+    // ===========================================================================
+    // Streaming Writer
+    // ===========================================================================
+
     writer(pos) {
       return new Writer(this, pos);
     },
 
+    // ===========================================================================
     // State
+    // ===========================================================================
+
     setReadonly(value) {
       view.dispatch({
         effects: readonlyCompartment.reconfigure(
@@ -53057,7 +55379,154 @@ function create(target, options = {}) {
       };
     },
 
+    // ===========================================================================
+    // Awareness / Collaboration
+    // ===========================================================================
+
+    /**
+     * Announce a collaborator (for runtimes, LLMs, etc.)
+     * @param {'human'|'ai'|'runtime'|'sync'} type - Collaborator type
+     * @param {string} name - Display name
+     * @param {string} [color] - Optional color
+     */
+    announceCollaborator(type, name, color) {
+      awareness.setLocalStateField('user', {
+        type,
+        name,
+        color: color || generateColor(),
+      });
+    },
+
+    /**
+     * Update collaborator status
+     * @param {'idle'|'typing'|'streaming'|'executing'} status
+     */
+    setCollaboratorStatus(status) {
+      const current = awareness.getLocalState()?.user || {};
+      awareness.setLocalStateField('user', { ...current, status });
+    },
+
+    /**
+     * Get all connected collaborators
+     * @returns {Array<{clientId: number, user: object}>}
+     */
+    getCollaborators() {
+      const states = [];
+      awareness.getStates().forEach((state, clientId) => {
+        if (state.user) {
+          states.push({ clientId, user: state.user });
+        }
+      });
+      return states;
+    },
+
+    /**
+     * Listen for collaborator changes
+     * @param {function} callback
+     * @returns {function} Unsubscribe function
+     */
+    onCollaboratorsChange(callback) {
+      const handler = () => callback(this.getCollaborators());
+      awareness.on('change', handler);
+      return () => awareness.off('change', handler);
+    },
+
+    // ===========================================================================
+    // Code Cells
+    // ===========================================================================
+
+    /**
+     * Get cells in the document
+     */
+    getCells() {
+      return findCells(this.getContent());
+    },
+
+    /**
+     * Get cell at cursor
+     */
+    getCurrentCell() {
+      const pos = view.state.selection.main.head;
+      return getCellAtCursor(this.getContent(), pos);
+    },
+
+    /**
+     * Count cells
+     */
+    cellCount() {
+      return countCells(this.getContent());
+    },
+
+    /**
+     * Run a cell by index
+     */
+    runCell(index) {
+      return this.execution.runCell(index);
+    },
+
+    /**
+     * Run the cell at cursor
+     */
+    runCurrentCell() {
+      return this.execution.runCurrentCell();
+    },
+
+    /**
+     * Run all cells in order
+     */
+    runAll() {
+      return this.execution.runAll();
+    },
+
+    /**
+     * Run all cells up to and including current
+     */
+    runAllAbove() {
+      return this.execution.runAllAbove();
+    },
+
+    /**
+     * Clear output for a cell
+     */
+    clearOutput(index) {
+      return this.execution.clearOutput(index);
+    },
+
+    /**
+     * Clear all outputs
+     */
+    clearOutputs() {
+      return this.execution.clearOutputs();
+    },
+
+    /**
+     * Cancel running execution
+     */
+    cancelExecution(index) {
+      if (index !== undefined) {
+        return this.execution.cancel(index);
+      }
+      return this.execution.cancelAll();
+    },
+
+    /**
+     * Register a runtime
+     */
+    registerRuntime(name, runtime) {
+      registry.register(name, runtime);
+    },
+
+    /**
+     * Check if a language is supported
+     */
+    supportsLanguage(language) {
+      return registry.supports(language);
+    },
+
+    // ===========================================================================
     // Events
+    // ===========================================================================
+
     onChange(callback) {
       changeHandlers.push(callback);
       return () => {
@@ -53074,58 +55543,69 @@ function create(target, options = {}) {
       };
     },
 
-    // Code cells (placeholders for runtime packages)
-    runCell(index) {
-      console.warn('mrmd: No runtime configured. Use mrmd-python, mrmd-node, etc.');
+    onCellRun(callback) {
+      return this.execution.on('cellRun', callback);
     },
 
-    runCurrentCell() {
-      console.warn('mrmd: No runtime configured.');
+    onCellOutput(callback) {
+      return this.execution.on('cellOutput', callback);
     },
 
-    runAll() {
-      console.warn('mrmd: No runtime configured.');
+    onCellComplete(callback) {
+      return this.execution.on('cellComplete', callback);
     },
 
-    clearOutput(index) {
-      // TODO: implement
+    onCellError(callback) {
+      return this.execution.on('cellError', callback);
     },
 
-    clearOutputs() {
-      // TODO: implement
-    },
+    // ===========================================================================
+    // Cleanup
+    // ===========================================================================
 
-    // Destroy
     destroy() {
+      this.execution.cancelAll();
       view.destroy();
     }
   };
-  // #endregion EDITOR_API
+
+  // Create execution manager
+  api.execution = createExecutionManager(api, registry);
+
+  // Wire up change handlers
+  const updateListener = EditorView.updateListener.of((update) => {
+    if (update.docChanged) {
+      const content = update.state.doc.toString();
+      changeHandlers.forEach(fn => fn(content));
+    }
+  });
+
+  // Add update listener extension
+  view.dispatch({
+    effects: StateEffect.appendConfig.of(updateListener)
+  });
 
   return api;
 }
-// #endregion EDITOR_FACTORY
+// #endregion CREATE
 
-// #region DRIVE - Connection to sync server
+// #region DRIVE
 /**
  * Connect to a sync server
- *
- * @param {string|Object} urlOrOptions - WebSocket URL or options object
- * @param {Object} options - Options if first arg is URL
- * @returns {Drive} Drive instance
  */
 function drive(urlOrOptions, options = {}) {
-  let url, auth;
+  let url, auth, runtimes;
 
   if (typeof urlOrOptions === 'string') {
     url = urlOrOptions;
     auth = options.auth;
+    runtimes = options.runtimes || {};
   } else {
     url = urlOrOptions.url;
     auth = urlOrOptions.auth;
+    runtimes = urlOrOptions.runtimes || {};
   }
 
-  // Normalize URL
   if (url && !url.includes('://')) {
     url = 'wss://' + url;
   }
@@ -53141,15 +55621,8 @@ function drive(urlOrOptions, options = {}) {
   return {
     url,
 
-    /**
-     * Open a file in an editor
-     */
     open(path, target, editorOptions = {}) {
       const ydoc = new Doc();
-
-      // Connect to sync server
-      // WebsocketProvider takes (serverUrl, roomName, ydoc)
-      // The room name becomes the URL path on the server
       const serverUrl = auth ? `${url}?token=${auth}` : url;
       const provider = new WebsocketProvider(serverUrl, path, ydoc);
 
@@ -53157,55 +55630,34 @@ function drive(urlOrOptions, options = {}) {
         setStatus(s);
       });
 
-      // Create editor with this ydoc
       const editor = create(target, {
         ...editorOptions,
         ydoc,
         ytext: 'content',
+        runtimes: { ...runtimes, ...editorOptions.runtimes },
       });
 
-      // Extend editor with sync-specific methods
       editor.provider = provider;
       editor.path = path;
 
-      editor.disconnect = () => {
-        provider.disconnect();
-      };
-
-      editor.reconnect = () => {
-        provider.connect();
-      };
+      editor.disconnect = () => provider.disconnect();
+      editor.reconnect = () => provider.connect();
 
       return editor;
     },
 
-    /**
-     * Read file content without mounting editor
-     */
     async read(path) {
-      // TODO: implement via REST or sync protocol
       throw new Error('drive.read() not yet implemented');
     },
 
-    /**
-     * Write file content directly
-     */
     async write(path, content) {
-      // TODO: implement via REST or sync protocol
       throw new Error('drive.write() not yet implemented');
     },
 
-    /**
-     * List files in directory
-     */
     async list(path) {
-      // TODO: implement via REST or sync protocol
       throw new Error('drive.list() not yet implemented');
     },
 
-    /**
-     * Connection status handler
-     */
     onStatus(callback) {
       statusHandlers.push(callback);
       return () => {
@@ -53214,9 +55666,6 @@ function drive(urlOrOptions, options = {}) {
       };
     },
 
-    /**
-     * Current status
-     */
     get status() {
       return status;
     }
@@ -53224,13 +55673,14 @@ function drive(urlOrOptions, options = {}) {
 }
 // #endregion DRIVE
 
-// #region EXPOSED_LIBS - Libraries exposed for power users
+// #region EXPOSED_LIBS
 const yjs = {
   Y,
   Doc: Doc,
   Text: YText,
   Array: YArray,
   Map: YMap,
+  Awareness,
   encodeStateAsUpdate: encodeStateAsUpdate,
   applyUpdate: applyUpdate,
   encodeStateVector: encodeStateVector,
@@ -53239,6 +55689,7 @@ const yjs = {
 const codemirror = {
   EditorView,
   EditorState,
+  StateEffect,
   Compartment,
   Text,
   Transaction: Transaction$1,
@@ -53258,15 +55709,38 @@ const codemirror = {
 };
 // #endregion EXPOSED_LIBS
 
-// #region EXPORTS - Module exports
+// #region TERMINAL_EXPORTS
+const terminal = {
+  TerminalBuffer,
+  processTerminalOutput,
+  terminalToHtml,
+  stripAnsi,
+  hasAnsi,
+  ansiStyles,
+  // Output widget
+  outputWidget,
+  outputWidgetPlugin,
+  injectOutputWidgetStyles,
+  outputWidgetStyles,
+};
+// #endregion TERMINAL_EXPORTS
+
+// #region EXPORTS
 const mrmd = {
   version: VERSION,
   create,
   drive,
   yjs,
   codemirror,
+  terminal,
+  // Utilities for runtime authors
+  RuntimeRegistry,
+  createRuntimeRegistry,
+  // Direct terminal exports for convenience
+  TerminalBuffer,
+  processTerminalOutput,
 };
 // #endregion EXPORTS
 
-export { mrmd as default };
+export { RuntimeRegistry, TerminalBuffer, ansiStyles, codemirror, create, createRuntimeRegistry, mrmd as default, drive, hasAnsi, processTerminalOutput, stripAnsi, terminal, terminalToHtml, yjs };
 //# sourceMappingURL=mrmd.esm.js.map

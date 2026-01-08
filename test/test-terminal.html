@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>mrmd-editor Terminal Tests</title>
+  <style>
+    body { font-family: system-ui; max-width: 900px; margin: 40px auto; padding: 20px; }
+    h1 { margin-bottom: 10px; }
+    h2 { margin-top: 30px; color: #333; }
+    .test { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
+    .test.pass { border-color: #22c55e; background: #f0fdf4; }
+    .test.fail { border-color: #ef4444; background: #fef2f2; }
+    .test-name { font-weight: bold; margin-bottom: 10px; }
+    .input, .output { margin: 5px 0; padding: 10px; font-family: monospace; font-size: 13px; white-space: pre-wrap; }
+    .input { background: #f5f5f5; }
+    .output { background: #1e1e1e; color: #d4d4d4; }
+    .output-html { background: #fff; border: 1px solid #eee; }
+    .label { font-size: 12px; color: #666; margin-bottom: 4px; }
+    .status { font-weight: bold; }
+    .pass .status { color: #22c55e; }
+    .fail .status { color: #ef4444; }
+    button { padding: 10px 20px; font-size: 14px; cursor: pointer; margin-right: 10px; margin-bottom: 20px; }
+    #editor-container { border: 1px solid #ccc; min-height: 300px; margin: 20px 0; }
+    .summary { padding: 15px; background: #f5f5f5; border-radius: 8px; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>mrmd-editor Terminal Tests</h1>
+  <p>Testing TerminalBuffer, ANSI processing, and execution integration.</p>
+
+  <button onclick="runAllTests()">Run All Tests</button>
+  <button onclick="runIntegrationTest()">Run Integration Test</button>
+
+  <div id="results"></div>
+
+  <h2>Integration Test: Editor with Mock Runtime</h2>
+  <div id="editor-container"></div>
+  <div id="rich-output" style="padding: 10px; background: #1e1e1e; color: #d4d4d4; font-family: monospace; min-height: 50px; margin-top: 10px;"></div>
+
+  <script type="module">
+    import mrmd, { TerminalBuffer, processTerminalOutput, terminalToHtml } from '../dist/mrmd.esm.js';
+
+    // Make available globally for buttons
+    window.TerminalBuffer = TerminalBuffer;
+    window.processTerminalOutput = processTerminalOutput;
+    window.terminalToHtml = terminalToHtml;
+    window.mrmd = mrmd;
+
+    // ===========================================================================
+    // Test Cases
+    // ===========================================================================
+
+    const tests = [
+      {
+        name: 'Basic text passthrough',
+        input: 'Hello World',
+        expectedPlain: 'Hello World',
+      },
+      {
+        name: 'Newline handling',
+        input: 'Line 1\nLine 2\nLine 3',
+        expectedPlain: 'Line 1\nLine 2\nLine 3',
+      },
+      {
+        name: 'Carriage return - progress bar simulation',
+        input: '0%\r25%\r50%\r75%\r100%',
+        expectedPlain: '100%',
+        description: 'Each \\r returns to start of line, overwriting previous content',
+      },
+      {
+        name: 'Carriage return with newline',
+        input: 'Loading...\rDone!     \nNext line',
+        expectedPlain: 'Done!\nNext line',
+      },
+      {
+        name: 'tqdm-style progress bar',
+        input: 'Downloading: 0%|          |\r' +
+               'Downloading: 50%|█████     |\r' +
+               'Downloading: 100%|██████████|\n',
+        expectedPlain: 'Downloading: 100%|██████████|',
+      },
+      {
+        name: 'ANSI color codes - stripped for plain text',
+        input: '\x1b[31mRed\x1b[0m Normal \x1b[32mGreen\x1b[0m',
+        expectedPlain: 'Red Normal Green',
+        checkHtml: true,
+        expectedHtmlContains: ['ansi-fg-red', 'Red', 'ansi-fg-green', 'Green'],
+      },
+      {
+        name: 'ANSI bold and styles',
+        input: '\x1b[1mBold\x1b[0m \x1b[3mItalic\x1b[0m \x1b[4mUnderline\x1b[0m',
+        expectedPlain: 'Bold Italic Underline',
+        checkHtml: true,
+        expectedHtmlContains: ['ansi-bold', 'ansi-italic', 'ansi-underline'],
+      },
+      {
+        name: 'Cursor up (for multi-line progress)',
+        input: 'Line 1\nLine 2\nLine 3\x1b[2AModified',
+        expectedPlain: 'Line 1\nModifiedLine 3',
+        description: 'Cursor moves up 2 lines and overwrites',
+      },
+      {
+        name: 'Clear to end of line',
+        input: 'Hello World\x1b[5D\x1b[K',
+        expectedPlain: 'Hello',
+        description: 'Move back 5, clear to end',
+      },
+      {
+        name: 'Complex: Rich-style output',
+        input: '\x1b[32m✓\x1b[0m Test passed\n\x1b[31m✗\x1b[0m Test failed\n\x1b[33m⚠\x1b[0m Warning',
+        expectedPlain: '✓ Test passed\n✗ Test failed\n⚠ Warning',
+        checkHtml: true,
+        expectedHtmlContains: ['ansi-fg-green', 'ansi-fg-red', 'ansi-fg-yellow'],
+      },
+      {
+        name: '256-color support',
+        input: '\x1b[38;5;208mOrange text\x1b[0m',
+        expectedPlain: 'Orange text',
+        checkHtml: true,
+        expectedHtmlContains: ['style='],
+      },
+      {
+        name: 'RGB color support',
+        input: '\x1b[38;2;255;100;50mRGB text\x1b[0m',
+        expectedPlain: 'RGB text',
+        checkHtml: true,
+        expectedHtmlContains: ['rgb(255,100,50)'],
+      },
+      {
+        name: 'Tab character',
+        input: 'Col1\tCol2\tCol3',
+        expectedPlain: 'Col1    Col2    Col3',
+      },
+      {
+        name: 'Backspace',
+        input: 'Helloo\b ',
+        expectedPlain: 'Hello ',
+      },
+      {
+        name: 'Streaming chunks simulation',
+        chunks: ['Down', 'loading', '...', '\r', 'Complete!  '],
+        expectedPlain: 'Complete!',
+        description: 'Multiple write() calls simulate streaming',
+      },
+    ];
+
+    // ===========================================================================
+    // Test Runner
+    // ===========================================================================
+
+    function runTest(test) {
+      const buffer = new TerminalBuffer();
+
+      if (test.chunks) {
+        // Streaming test - multiple writes
+        for (const chunk of test.chunks) {
+          buffer.write(chunk);
+        }
+      } else {
+        // Single write
+        buffer.write(test.input);
+      }
+
+      const plainOutput = buffer.toString();
+      const htmlOutput = buffer.toHtml();
+      const ansiOutput = buffer.toAnsi();
+
+      let passed = true;
+      const errors = [];
+
+      // Check plain text output
+      if (plainOutput !== test.expectedPlain) {
+        passed = false;
+        errors.push(`Plain text mismatch:\n  Expected: ${JSON.stringify(test.expectedPlain)}\n  Got: ${JSON.stringify(plainOutput)}`);
+      }
+
+      // Check HTML contains expected strings
+      if (test.checkHtml && test.expectedHtmlContains) {
+        for (const needle of test.expectedHtmlContains) {
+          if (!htmlOutput.includes(needle)) {
+            passed = false;
+            errors.push(`HTML missing: ${JSON.stringify(needle)}`);
+          }
+        }
+      }
+
+      return {
+        name: test.name,
+        description: test.description,
+        passed,
+        errors,
+        input: test.chunks ? test.chunks.map(c => JSON.stringify(c)).join(' + ') : test.input,
+        plainOutput,
+        htmlOutput,
+        ansiOutput,
+      };
+    }
+
+    function renderResults(results) {
+      const container = document.getElementById('results');
+
+      const passed = results.filter(r => r.passed).length;
+      const total = results.length;
+
+      let html = `<div class="summary"><strong>${passed}/${total} tests passed</strong></div>`;
+
+      for (const result of results) {
+        html += `
+          <div class="test ${result.passed ? 'pass' : 'fail'}">
+            <div class="test-name">${result.name} <span class="status">${result.passed ? '✓' : '✗'}</span></div>
+            ${result.description ? `<div style="color: #666; font-size: 13px; margin-bottom: 10px;">${result.description}</div>` : ''}
+            <div class="label">Input:</div>
+            <div class="input">${escapeHtml(result.input)}</div>
+            <div class="label">Plain output (for document):</div>
+            <div class="output">${escapeHtml(result.plainOutput)}</div>
+            <div class="label">HTML output (for rich display):</div>
+            <div class="output output-html">${result.htmlOutput}</div>
+            ${result.errors.length ? `<div style="color: #ef4444; margin-top: 10px;">${result.errors.join('<br>')}</div>` : ''}
+          </div>
+        `;
+      }
+
+      container.innerHTML = html;
+    }
+
+    function escapeHtml(str) {
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\x1b/g, '\\x1b')
+        .replace(/\r/g, '\\r')
+        .replace(/\n/g, '\\n\n');
+    }
+
+    window.runAllTests = function() {
+      const results = tests.map(runTest);
+      renderResults(results);
+    };
+
+    // ===========================================================================
+    // Integration Test: Editor with Mock Runtime
+    // ===========================================================================
+
+    class MockRuntime {
+      supports(lang) {
+        return ['javascript', 'js', 'mock', 'python'].includes(lang.toLowerCase());
+      }
+
+      async execute(code) {
+        try {
+          const result = eval(code);
+          return { success: true, stdout: String(result ?? ''), stderr: '' };
+        } catch (e) {
+          return { success: false, stdout: '', stderr: e.message, error: { type: 'Error', message: e.message } };
+        }
+      }
+
+      async executeStreaming(code, lang, onChunk) {
+        // Simulate different output patterns based on code content
+
+        if (code.includes('progress')) {
+          // Simulate progress bar
+          const steps = [
+            '\x1b[32mStarting...\x1b[0m\n',
+            'Progress: 0%|          |\r',
+            'Progress: 25%|██▌       |\r',
+            'Progress: 50%|█████     |\r',
+            'Progress: 75%|███████▌  |\r',
+            'Progress: 100%|██████████|\n',
+            '\x1b[32m✓ Done!\x1b[0m\n',
+          ];
+
+          let accumulated = '';
+          for (const chunk of steps) {
+            await new Promise(r => setTimeout(r, 300));
+            accumulated += chunk;
+            onChunk(chunk, accumulated, false);
+          }
+          onChunk('', accumulated, true);
+          return { success: true, stdout: accumulated, stderr: '' };
+        }
+
+        if (code.includes('color')) {
+          // Simulate colored output
+          const output = '\x1b[31mRed\x1b[0m \x1b[32mGreen\x1b[0m \x1b[34mBlue\x1b[0m\n';
+          onChunk(output, output, false);
+          onChunk('', output, true);
+          return { success: true, stdout: output, stderr: '' };
+        }
+
+        if (code.includes('error')) {
+          const output = '\x1b[31mError: Something went wrong!\x1b[0m\n';
+          onChunk(output, output, true);
+          return {
+            success: false,
+            stdout: '',
+            stderr: output,
+            error: { type: 'Error', message: 'Something went wrong!' }
+          };
+        }
+
+        // Default: just eval and return
+        try {
+          const result = eval(code);
+          const output = String(result ?? '') + '\n';
+          onChunk(output, output, true);
+          return { success: true, stdout: output, stderr: '' };
+        } catch (e) {
+          return { success: false, stdout: '', stderr: e.message, error: { type: 'Error', message: e.message } };
+        }
+      }
+    }
+
+    window.runIntegrationTest = async function() {
+      const container = document.getElementById('editor-container');
+      const richOutput = document.getElementById('rich-output');
+      container.innerHTML = '';
+      richOutput.innerHTML = 'Rich output will appear here during execution...';
+
+      // Create editor with mock runtime
+      const editor = mrmd.create(container, {
+        doc: `# Terminal Integration Test
+
+Try these code blocks:
+
+\`\`\`javascript
+// Simple output
+1 + 1
+\`\`\`
+
+\`\`\`javascript
+// Progress bar simulation
+"progress"
+\`\`\`
+
+\`\`\`javascript
+// Colored output
+"color"
+\`\`\`
+
+\`\`\`javascript
+// Error simulation
+"error"
+\`\`\`
+`,
+        runtimes: {
+          javascript: new MockRuntime(),
+        },
+      });
+
+      // Show rich output during streaming
+      editor.onCellOutput((index, chunk, processed) => {
+        const buffer = editor.execution.getBuffer(index);
+        if (buffer) {
+          richOutput.innerHTML = '<strong>Rich output (with colors):</strong><br><br>' + buffer.toHtml();
+        }
+      });
+
+      editor.onCellComplete((index, result) => {
+        richOutput.innerHTML += '<br><br><em>Execution complete. Document contains plain text.</em>';
+      });
+
+      // Auto-run first cell after a delay
+      setTimeout(() => {
+        editor.runCell(0);
+      }, 500);
+    };
+
+    // Run tests on load
+    runAllTests();
+  </script>
+</body>
+</html>
