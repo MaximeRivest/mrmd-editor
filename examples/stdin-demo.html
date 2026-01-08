@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MRMD Test App - Markdown Editor with Python Execution</title>
+  <style>
+    :root {
+      --output-bg: rgba(0, 0, 0, 0.4);
+      --output-text: #e0e0e0;
+      --output-border: rgba(100, 149, 237, 0.5);
+      --output-hover-bg: rgba(0, 0, 0, 0.5);
+      --stdin-bg: rgba(0, 0, 0, 0.3);
+      --stdin-border: rgba(100, 149, 237, 0.6);
+      --stdin-prompt-color: #6495ed;
+      --stdin-field-bg: rgba(255, 255, 255, 0.1);
+      --stdin-field-border: rgba(255, 255, 255, 0.2);
+      --stdin-field-color: #e0e0e0;
+      --stdin-field-focus-border: #6495ed;
+      --stdin-field-focus-shadow: rgba(100, 149, 237, 0.3);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+
+    .app-container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    header {
+      background: #16213e;
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #0f3460;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 1.4em;
+      color: #e94560;
+    }
+
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.85em;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #666;
+    }
+
+    .status-dot.connected {
+      background: #22c55e;
+    }
+
+    .status-dot.disconnected {
+      background: #ef4444;
+    }
+
+    .main-content {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .sidebar {
+      width: 280px;
+      background: #16213e;
+      padding: 16px;
+      border-right: 1px solid #0f3460;
+      overflow-y: auto;
+    }
+
+    .sidebar h3 {
+      margin: 0 0 12px 0;
+      color: #e94560;
+      font-size: 0.9em;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .instructions {
+      font-size: 0.85em;
+      line-height: 1.6;
+    }
+
+    .instructions ul {
+      margin: 8px 0;
+      padding-left: 20px;
+    }
+
+    .instructions li {
+      margin: 6px 0;
+    }
+
+    .instructions code {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 0.9em;
+    }
+
+    .instructions .kbd {
+      background: #0f3460;
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid #1a4a7a;
+      font-family: inherit;
+      font-size: 0.85em;
+    }
+
+    .server-command {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 10px;
+      border-radius: 6px;
+      margin: 12px 0;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 0.8em;
+      word-break: break-all;
+    }
+
+    .editor-container {
+      flex: 1;
+      overflow: hidden;
+    }
+
+    #editor {
+      height: 100%;
+      background: #1e1e2e;
+    }
+
+    .toolbar {
+      background: #0f3460;
+      padding: 8px 16px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .toolbar button {
+      background: #e94560;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9em;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.2s;
+    }
+
+    .toolbar button:hover {
+      background: #d63a55;
+    }
+
+    .toolbar button:disabled {
+      background: #666;
+      cursor: not-allowed;
+    }
+
+    .toolbar button.secondary {
+      background: #1a4a7a;
+    }
+
+    .toolbar button.secondary:hover {
+      background: #2a5a8a;
+    }
+
+    .error-banner {
+      background: rgba(239, 68, 68, 0.2);
+      border: 1px solid #ef4444;
+      color: #fca5a5;
+      padding: 12px 16px;
+      margin: 12px;
+      border-radius: 6px;
+      display: none;
+    }
+
+    .error-banner.visible {
+      display: block;
+    }
+
+    /* Override CodeMirror dark theme adjustments */
+    .cm-editor {
+      height: 100%;
+    }
+
+    .cm-scroller {
+      padding: 20px !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <header>
+      <h1>MRMD Test App</h1>
+      <div class="status-bar">
+        <div class="status-indicator">
+          <span class="status-dot" id="serverStatus"></span>
+          <span id="serverStatusText">Checking server...</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="error-banner" id="errorBanner"></div>
+
+    <div class="main-content">
+      <aside class="sidebar">
+        <h3>Instructions</h3>
+        <div class="instructions">
+          <ul>
+            <li>Place cursor in a code block and press <span class="kbd">Ctrl</span>+<span class="kbd">Enter</span> to run</li>
+            <li>Or click the <strong>Run Cell</strong> button</li>
+            <li>Click output to copy to clipboard</li>
+          </ul>
+
+          <h3>Start Python Server</h3>
+          <div class="server-command">
+            cd mrmd-python && python -m mrmd_python.server
+          </div>
+
+          <h3>Features Tested</h3>
+          <ul>
+            <li>ANSI colors (green/red text)</li>
+            <li>Progress bars (tqdm)</li>
+            <li><strong>NEW:</strong> stdin input() support</li>
+            <li>Click-to-copy output</li>
+          </ul>
+
+          <h3>Console Log</h3>
+          <p>Open browser DevTools (F12) to see execution events logged to console.</p>
+        </div>
+      </aside>
+
+      <div class="editor-container">
+        <div class="toolbar">
+          <button id="runCellBtn" disabled>
+            <span>&#9654;</span> Run Cell
+          </button>
+          <button id="runAllBtn" class="secondary" disabled>
+            Run All
+          </button>
+          <button id="clearOutputsBtn" class="secondary" disabled>
+            Clear Outputs
+          </button>
+        </div>
+        <div id="editor"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="../dist/mrmd.iife.js"></script>
+  <script>
+    // Initial markdown content with test cells
+    const initialMarkdown = `# MRMD Test App
+
+Welcome to the MRMD ecosystem test! This demonstrates:
+- Markdown editing with CodeMirror 6
+- Python code execution via mrmd-python
+- ANSI color output rendering
+- stdin/input() support
+
+---
+
+## Test 1: Colored Output
+
+\`\`\`python
+print("\\033[32mGreen text\\033[0m and \\033[31mred text\\033[0m")
+print("\\033[1;34mBold blue\\033[0m | \\033[4;33mUnderlined yellow\\033[0m")
+print("\\033[45;37mMagenta background\\033[0m")
+\`\`\`
+
+---
+
+## Test 2: Progress Bar (tqdm)
+
+\`\`\`python
+from tqdm import tqdm
+import time
+
+for i in tqdm(range(10), desc="Processing"):
+    time.sleep(0.2)
+
+print("\\n\\033[32mDone!\\033[0m")
+\`\`\`
+
+---
+
+## Test 3: Input (stdin support)
+
+\`\`\`python
+name = input("What is your name? ")
+print(f"Hello, {name}!")
+
+age = input("How old are you? ")
+print(f"You are {age} years old.")
+
+color = input("Favorite color? ")
+print(f"\\033[1m{name}\\033[0m likes \\033[36m{color}\\033[0m!")
+\`\`\`
+
+---
+
+## Test 4: Multi-line Output
+
+\`\`\`python
+import sys
+
+# Test stdout
+print("Line 1 - stdout")
+print("Line 2 - stdout")
+
+# Test stderr
+print("Line 3 - stderr", file=sys.stderr)
+
+# Mix
+print("Line 4 - stdout again")
+\`\`\`
+`;
+
+    // DOM elements
+    const editorEl = document.getElementById('editor');
+    const serverStatus = document.getElementById('serverStatus');
+    const serverStatusText = document.getElementById('serverStatusText');
+    const errorBanner = document.getElementById('errorBanner');
+    const runCellBtn = document.getElementById('runCellBtn');
+    const runAllBtn = document.getElementById('runAllBtn');
+    const clearOutputsBtn = document.getElementById('clearOutputsBtn');
+
+    // Create MRP client for Python runtime
+    const mrp = new mrmd.MRPClient('http://localhost:8000/mrp/v1');
+
+    // Create editor
+    const editor = mrmd.create('#editor', {
+      doc: initialMarkdown,
+      dark: true,
+    });
+
+    // Register Python runtime using MRP client
+    editor.registerRuntime('python', {
+      supports: (lang) => ['python', 'py', 'python3'].includes(lang.toLowerCase()),
+      execute: (code, lang) => mrp.execute(code, lang),
+      executeStreaming: (code, lang, onChunk, onStdinRequest) =>
+        mrp.executeStreaming(code, lang, onChunk, onStdinRequest)
+    });
+
+    // Enable buttons once ready
+    runCellBtn.disabled = false;
+    runAllBtn.disabled = false;
+    clearOutputsBtn.disabled = false;
+
+    // Button handlers
+    runCellBtn.addEventListener('click', () => {
+      editor.runCurrentCell();
+    });
+
+    runAllBtn.addEventListener('click', () => {
+      editor.runAll();
+    });
+
+    clearOutputsBtn.addEventListener('click', () => {
+      editor.clearOutputs();
+    });
+
+    // Keyboard shortcut: Ctrl+Enter to run current cell
+    editorEl.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        editor.runCurrentCell();
+      }
+    });
+
+    // Event listeners for debugging
+    editor.onCellRun((index, cell) => {
+      console.log(`[Cell ${index}] Running...`, cell);
+    });
+
+    editor.onCellOutput((index, chunk, accumulated) => {
+      console.log(`[Cell ${index}] Output chunk:`, chunk);
+    });
+
+    editor.onCellComplete((index, result) => {
+      console.log(`[Cell ${index}] Complete:`, result);
+    });
+
+    editor.onCellError((index, error) => {
+      console.error(`[Cell ${index}] Error:`, error);
+    });
+
+    // Check server status
+    async function checkServer() {
+      try {
+        const caps = await mrp.getCapabilities();
+        serverStatus.classList.add('connected');
+        serverStatus.classList.remove('disconnected');
+        serverStatusText.textContent = `Connected (${caps.runtime.name} ${caps.runtime.version})`;
+        errorBanner.classList.remove('visible');
+        return true;
+      } catch (err) {
+        serverStatus.classList.remove('connected');
+        serverStatus.classList.add('disconnected');
+        serverStatusText.textContent = 'Server not running';
+        errorBanner.innerHTML = `
+          <strong>Python server not running!</strong><br>
+          Start it with: <code>cd mrmd-python && python -m mrmd_python.server</code>
+        `;
+        errorBanner.classList.add('visible');
+        return false;
+      }
+    }
+
+    // Initial check and periodic recheck
+    checkServer();
+    setInterval(checkServer, 5000);
+
+    console.log('MRMD Test App loaded!');
+    console.log('Editor API:', editor);
+    console.log('MRP Client:', mrp);
+  </script>
+</body>
+</html>

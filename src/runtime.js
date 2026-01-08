@@ -16,7 +16,18 @@
  * @typedef {Object} Runtime
  * @property {function(string): boolean} supports - Check if runtime handles language
  * @property {function(string, string): Promise<ExecutionResult>} execute - Execute code
- * @property {function(string, string, function): Promise<ExecutionResult>} [executeStreaming] - Streaming execution
+ * @property {function(string, string, function, function?): Promise<ExecutionResult>} [executeStreaming] - Streaming execution
+ *           The 4th parameter is optional onStdinRequest(request) -> Promise<string> callback
+ *           for handling input() calls. If not provided, input() may fail.
+ */
+
+/**
+ * Stdin request from runtime (when input() is called)
+ *
+ * @typedef {Object} StdinRequest
+ * @property {string} prompt - The prompt text (may be empty)
+ * @property {boolean} password - Whether to hide input (like getpass)
+ * @property {string} execId - The execution ID
  */
 
 /**
@@ -66,6 +77,7 @@ export class RuntimeRegistry {
       'r', 'rlang',
       'bash', 'sh', 'shell',
       'html',
+      'css',
     ];
 
     for (const lang of testLanguages) {
@@ -153,9 +165,10 @@ export class RuntimeRegistry {
    * @param {string} code - Code to execute
    * @param {string} language - Language identifier
    * @param {function(string, string, boolean): void} onChunk - Callback (chunk, accumulated, done)
+   * @param {function(StdinRequest): Promise<string>} [onStdinRequest] - Callback for handling input() calls
    * @returns {Promise<ExecutionResult>}
    */
-  async executeStreaming(code, language, onChunk) {
+  async executeStreaming(code, language, onChunk, onStdinRequest) {
     const runtime = this.getRuntime(language);
     if (!runtime) {
       const error = `No runtime registered for language: ${language}`;
@@ -170,7 +183,7 @@ export class RuntimeRegistry {
 
     // Use streaming if available, otherwise wrap execute
     if (typeof runtime.executeStreaming === 'function') {
-      return runtime.executeStreaming(code, language, onChunk);
+      return runtime.executeStreaming(code, language, onChunk, onStdinRequest);
     } else {
       // Fallback: run execute and send all output at once
       const result = await runtime.execute(code, language);

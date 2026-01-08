@@ -53128,6 +53128,8 @@ const EXECUTABLE_LANGUAGES = new Set([
   'r', 'rlang',
   // HTML (rendered, not "executed")
   'html',
+  // CSS (applied to page)
+  'css',
 ]);
 
 /**
@@ -53310,7 +53312,18 @@ function countCells(content) {
  * @typedef {Object} Runtime
  * @property {function(string): boolean} supports - Check if runtime handles language
  * @property {function(string, string): Promise<ExecutionResult>} execute - Execute code
- * @property {function(string, string, function): Promise<ExecutionResult>} [executeStreaming] - Streaming execution
+ * @property {function(string, string, function, function?): Promise<ExecutionResult>} [executeStreaming] - Streaming execution
+ *           The 4th parameter is optional onStdinRequest(request) -> Promise<string> callback
+ *           for handling input() calls. If not provided, input() may fail.
+ */
+
+/**
+ * Stdin request from runtime (when input() is called)
+ *
+ * @typedef {Object} StdinRequest
+ * @property {string} prompt - The prompt text (may be empty)
+ * @property {boolean} password - Whether to hide input (like getpass)
+ * @property {string} execId - The execution ID
  */
 
 /**
@@ -53360,6 +53373,7 @@ class RuntimeRegistry {
       'r', 'rlang',
       'bash', 'sh', 'shell',
       'html',
+      'css',
     ];
 
     for (const lang of testLanguages) {
@@ -53447,9 +53461,10 @@ class RuntimeRegistry {
    * @param {string} code - Code to execute
    * @param {string} language - Language identifier
    * @param {function(string, string, boolean): void} onChunk - Callback (chunk, accumulated, done)
+   * @param {function(StdinRequest): Promise<string>} [onStdinRequest] - Callback for handling input() calls
    * @returns {Promise<ExecutionResult>}
    */
-  async executeStreaming(code, language, onChunk) {
+  async executeStreaming(code, language, onChunk, onStdinRequest) {
     const runtime = this.getRuntime(language);
     if (!runtime) {
       const error = `No runtime registered for language: ${language}`;
@@ -53464,7 +53479,7 @@ class RuntimeRegistry {
 
     // Use streaming if available, otherwise wrap execute
     if (typeof runtime.executeStreaming === 'function') {
-      return runtime.executeStreaming(code, language, onChunk);
+      return runtime.executeStreaming(code, language, onChunk, onStdinRequest);
     } else {
       // Fallback: run execute and send all output at once
       const result = await runtime.execute(code, language);
@@ -54426,6 +54441,7 @@ class ExecutionManager {
       cellOutput: [],
       cellComplete: [],
       cellError: [],
+      stdinRequest: [], // Called when input() is invoked
     };
   }
 
@@ -54703,8 +54719,107 @@ class ExecutionManager {
         this._emit('cellOutput', index, chunk, processedOutput);
       };
 
-      // Execute with streaming
-      const result = await this.registry.executeStreaming(code, language, onChunk);
+      /**
+       * Handle stdin_request from runtime (when input() is called)
+       * Creates an inline input field and waits for user input.
+       *
+       * @param {Object} request - {prompt, password, execId}
+       * @returns {Promise<string>} - User input
+       */
+      const onStdinRequest = (request) => {
+        return new Promise((resolve, reject) => {
+          if (controller.signal.aborted) {
+            reject(new Error('Execution aborted'));
+            return;
+          }
+
+          // Create input element
+          const inputContainer = document.createElement('div');
+          inputContainer.className = 'mrmd-stdin-input';
+          inputContainer.innerHTML = `
+            <span class="mrmd-stdin-prompt">${request.prompt || ''}</span>
+            <input type="${request.password ? 'password' : 'text'}"
+                   class="mrmd-stdin-field"
+                   placeholder="Enter input and press Enter..."
+                   autofocus />
+          `;
+
+          const inputField = inputContainer.querySelector('input');
+
+          // Handle submit
+          const submit = () => {
+            const value = inputField.value + '\n';
+            inputContainer.remove();
+            resolve(value);
+          };
+
+          inputField.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              submit();
+            }
+          });
+
+          // Handle abort
+          controller.signal.addEventListener('abort', () => {
+            inputContainer.remove();
+            reject(new Error('Execution aborted'));
+          });
+
+          // Find the output widget for this specific cell by checking position
+          // The output widget should be at/near outputContentStart position
+          const view = this.editor.view;
+          let targetWidget = null;
+
+          // Query all output widgets and find the one at our output position
+          const allWidgets = view.contentDOM.querySelectorAll('.cm-output-widget');
+          if (allWidgets.length === 1) {
+            // Only one widget - use it
+            targetWidget = allWidgets[0];
+          } else if (allWidgets.length > 1) {
+            // Multiple widgets - find the one closest to our output position
+            const targetCoords = view.coordsAtPos(outputContentStart);
+            if (targetCoords) {
+              let closestDist = Infinity;
+              for (const widget of allWidgets) {
+                const rect = widget.getBoundingClientRect();
+                const dist = Math.abs(rect.top - targetCoords.top);
+                if (dist < closestDist) {
+                  closestDist = dist;
+                  targetWidget = widget;
+                }
+              }
+            }
+          }
+
+          if (targetWidget) {
+            targetWidget.appendChild(inputContainer);
+          } else {
+            // Fallback: position absolutely near the output position
+            const coords = view.coordsAtPos(outputContentStart + currentDocOutputLen);
+            if (coords) {
+              inputContainer.style.position = 'absolute';
+              inputContainer.style.left = `${coords.left}px`;
+              inputContainer.style.top = `${coords.bottom + 5}px`;
+              inputContainer.style.width = '400px';
+              inputContainer.style.zIndex = '1000';
+              document.body.appendChild(inputContainer);
+            } else {
+              // Last resort: append to editor
+              view.contentDOM.appendChild(inputContainer);
+            }
+          }
+
+          // Focus the input
+          setTimeout(() => inputField.focus(), 0);
+
+          // Emit event for external handling if needed
+          this._emit('stdinRequest', index, request, resolve, reject);
+        });
+      };
+
+      // Execute with streaming (pass onStdinRequest for input() support)
+      const result = await this.registry.executeStreaming(code, language, onChunk, onStdinRequest);
 
       // Final update with ANSI codes preserved
       const finalOutput = buffer.toAnsi();
@@ -54764,6 +54879,642 @@ function createExecutionManager(editor, registry) {
 }
 
 /**
+ * MRP Client
+ *
+ * Connects mrmd-editor to any MRMD Runtime Protocol server.
+ *
+ * @module mrp-client
+ */
+
+// JSDoc imports for type hints
+/** @typedef {import('./mrp-types.js').Capabilities} Capabilities */
+/** @typedef {import('./mrp-types.js').Session} Session */
+/** @typedef {import('./mrp-types.js').ExecuteRequest} ExecuteRequest */
+/** @typedef {import('./mrp-types.js').ExecuteResult} ExecuteResult */
+/** @typedef {import('./mrp-types.js').CompleteRequest} CompleteRequest */
+/** @typedef {import('./mrp-types.js').CompleteResult} CompleteResult */
+/** @typedef {import('./mrp-types.js').InspectRequest} InspectRequest */
+/** @typedef {import('./mrp-types.js').InspectResult} InspectResult */
+/** @typedef {import('./mrp-types.js').HoverRequest} HoverRequest */
+/** @typedef {import('./mrp-types.js').HoverResult} HoverResult */
+/** @typedef {import('./mrp-types.js').VariablesRequest} VariablesRequest */
+/** @typedef {import('./mrp-types.js').VariablesResult} VariablesResult */
+/** @typedef {import('./mrp-types.js').VariableDetail} VariableDetail */
+/** @typedef {import('./mrp-types.js').IsCompleteResult} IsCompleteResult */
+/** @typedef {import('./mrp-types.js').FormatResult} FormatResult */
+/** @typedef {import('./mrp-types.js').StdinRequest} StdinRequest */
+/** @typedef {import('./mrp-types.js').SendInputResult} SendInputResult */
+
+// #region MRP_CLIENT
+
+/**
+ * MRP Client - connects to any MRMD Runtime Protocol server
+ */
+class MRPClient {
+  /** @type {string} */
+  #endpoint;
+
+  /** @type {string} */
+  #defaultSession;
+
+  /** @type {Capabilities|null} */
+  #capabilities = null;
+
+  /** @type {AbortController|null} */
+  #currentExecution = null;
+
+  /**
+   * Create MRP client
+   *
+   * @param {string} endpoint - Base URL for MRP endpoints (e.g., "http://localhost:8000/mrp/v1")
+   * @param {Object} [options]
+   * @param {string} [options.session='default'] - Default session ID
+   */
+  constructor(endpoint, options = {}) {
+    this.#endpoint = endpoint.replace(/\/$/, ''); // Remove trailing slash
+    this.#defaultSession = options.session || 'default';
+  }
+
+  // ===========================================================================
+  // Capabilities
+  // ===========================================================================
+
+  /**
+   * Get runtime capabilities (cached after first call)
+   *
+   * @returns {Promise<Capabilities>}
+   */
+  async getCapabilities() {
+    if (!this.#capabilities) {
+      const res = await fetch(`${this.#endpoint}/capabilities`);
+      if (!res.ok) {
+        throw new Error(`Failed to get capabilities: ${res.status}`);
+      }
+      this.#capabilities = await res.json();
+    }
+    return this.#capabilities;
+  }
+
+  /**
+   * Check if this runtime supports a language
+   *
+   * @param {string} language
+   * @returns {boolean}
+   */
+  supports(language) {
+    const caps = this.#capabilities;
+    if (!caps) return false;
+    return caps.languages.includes(language.toLowerCase());
+  }
+
+  /**
+   * Check if a feature is supported
+   *
+   * @param {keyof import('./mrp-types.js').CapabilityFeatures} feature
+   * @returns {boolean}
+   */
+  hasFeature(feature) {
+    return this.#capabilities?.features?.[feature] ?? false;
+  }
+
+  // ===========================================================================
+  // Sessions
+  // ===========================================================================
+
+  /**
+   * List active sessions
+   *
+   * @returns {Promise<Session[]>}
+   */
+  async listSessions() {
+    const res = await fetch(`${this.#endpoint}/sessions`);
+    if (!res.ok) throw new Error(`Failed to list sessions: ${res.status}`);
+    const data = await res.json();
+    return data.sessions;
+  }
+
+  /**
+   * Create a new session
+   *
+   * @param {import('./mrp-types.js').CreateSessionRequest} request
+   * @returns {Promise<Session>}
+   */
+  async createSession(request) {
+    const res = await fetch(`${this.#endpoint}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    if (!res.ok) throw new Error(`Failed to create session: ${res.status}`);
+    return res.json();
+  }
+
+  /**
+   * Get session info
+   *
+   * @param {string} [session]
+   * @returns {Promise<Session>}
+   */
+  async getSession(session) {
+    const sid = session || this.#defaultSession;
+    const res = await fetch(`${this.#endpoint}/sessions/${encodeURIComponent(sid)}`);
+    if (!res.ok) throw new Error(`Failed to get session: ${res.status}`);
+    return res.json();
+  }
+
+  /**
+   * Destroy a session
+   *
+   * @param {string} [session]
+   * @returns {Promise<void>}
+   */
+  async destroySession(session) {
+    const sid = session || this.#defaultSession;
+    const res = await fetch(`${this.#endpoint}/sessions/${encodeURIComponent(sid)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) throw new Error(`Failed to destroy session: ${res.status}`);
+  }
+
+  /**
+   * Reset session (clear namespace)
+   *
+   * @param {string} [session]
+   * @returns {Promise<void>}
+   */
+  async reset(session) {
+    const sid = session || this.#defaultSession;
+    const res = await fetch(`${this.#endpoint}/sessions/${encodeURIComponent(sid)}/reset`, {
+      method: 'POST',
+    });
+    if (!res.ok) throw new Error(`Failed to reset session: ${res.status}`);
+  }
+
+  // ===========================================================================
+  // Execution
+  // ===========================================================================
+
+  /**
+   * Execute code and return result
+   *
+   * @param {string} code - Code to execute
+   * @param {string} [language] - Language (for mrmd Runtime interface compatibility)
+   * @param {Partial<ExecuteRequest>} [options] - Additional options
+   * @returns {Promise<ExecuteResult>}
+   */
+  async execute(code, language, options = {}) {
+    const res = await fetch(`${this.#endpoint}/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        session: this.#defaultSession,
+        ...options,
+      }),
+    });
+    if (!res.ok) throw new Error(`Execution failed: ${res.status}`);
+    return res.json();
+  }
+
+  /**
+   * Execute code with streaming output
+   *
+   * @param {string} code - Code to execute
+   * @param {string} [language] - Language (for mrmd Runtime interface compatibility)
+   * @param {function(string, string, boolean): void} onChunk - Callback (chunk, accumulated, done)
+   * @param {function(StdinRequest): Promise<string> | Partial<ExecuteRequest> & { onStdinRequest?: function }} [optionsOrStdinHandler]
+   *        Can be either:
+   *        - A function to handle stdin requests (for Runtime interface compatibility)
+   *        - An options object with onStdinRequest property
+   * @returns {Promise<ExecuteResult>}
+   */
+  async executeStreaming(code, language, onChunk, optionsOrStdinHandler = {}) {
+    // Cancel any previous execution
+    if (this.#currentExecution) {
+      this.#currentExecution.abort();
+    }
+
+    const controller = new AbortController();
+    this.#currentExecution = controller;
+
+    // Handle both signatures:
+    // 1. executeStreaming(code, lang, onChunk, onStdinRequest) - Runtime interface
+    // 2. executeStreaming(code, lang, onChunk, { onStdinRequest, ...options }) - Original MRP client
+    let onStdinRequest;
+    let executeOptions = {};
+
+    if (typeof optionsOrStdinHandler === 'function') {
+      // Runtime interface: 4th param is the stdin handler directly
+      onStdinRequest = optionsOrStdinHandler;
+    } else {
+      // Options object
+      ({ onStdinRequest, ...executeOptions } = optionsOrStdinHandler);
+    }
+
+    try {
+      const res = await fetch(`${this.#endpoint}/execute/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          session: this.#defaultSession,
+          ...executeOptions,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) throw new Error(`Execution failed: ${res.status}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+
+      let accumulated = '';
+      let finalResult = null;
+      let currentEvent = '';
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              if (currentEvent === 'stdout' || currentEvent === 'stderr') {
+                accumulated = data.accumulated;
+                onChunk(data.content, accumulated, false);
+              } else if (currentEvent === 'stdin_request') {
+                // Runtime needs user input - call handler and send response
+                if (onStdinRequest) {
+                  // onStdinRequest returns Promise<string> with user's input
+                  // We handle this async but don't block the SSE reading
+                  // The server will wait for our /input POST
+                  Promise.resolve(onStdinRequest(data))
+                    .then((input) => {
+                      // Send the input back to the server
+                      return this.sendInput(data.execId, input);
+                    })
+                    .catch((err) => {
+                      console.error('Stdin handling error:', err);
+                    });
+                }
+              } else if (currentEvent === 'result') {
+                finalResult = data;
+              } else if (currentEvent === 'error') {
+                finalResult = { success: false, error: data, stdout: '', stderr: '' };
+              } else if (currentEvent === 'done') {
+                onChunk('', accumulated, true);
+              }
+            } catch (e) {
+              // Ignore parse errors for incomplete data
+            }
+          }
+        }
+      }
+
+      return finalResult || { success: true, stdout: accumulated, stderr: '', result: null };
+    } finally {
+      this.#currentExecution = null;
+    }
+  }
+
+  /**
+   * Send user input to a waiting execution
+   *
+   * @param {string} execId - Execution ID waiting for input
+   * @param {string} text - User input (include \n if submitting)
+   * @param {string} [session] - Session ID
+   * @returns {Promise<SendInputResult>}
+   */
+  async sendInput(execId, text, session) {
+    const res = await fetch(`${this.#endpoint}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session: session || this.#defaultSession,
+        exec_id: execId,
+        text,
+      }),
+    });
+    if (!res.ok) throw new Error(`Send input failed: ${res.status}`);
+    return res.json();
+  }
+
+  /**
+   * Interrupt running execution
+   *
+   * @param {string} [session]
+   * @returns {Promise<void>}
+   */
+  async interrupt(session) {
+    // Abort fetch if in progress
+    if (this.#currentExecution) {
+      this.#currentExecution.abort();
+      this.#currentExecution = null;
+    }
+
+    // Also tell server to interrupt
+    const res = await fetch(`${this.#endpoint}/interrupt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session: session || this.#defaultSession }),
+    });
+    if (!res.ok) throw new Error(`Failed to interrupt: ${res.status}`);
+  }
+
+  // ===========================================================================
+  // Input
+  // ===========================================================================
+
+  /**
+   * Send user input to a waiting execution (stdin_request response)
+   *
+   * @param {string} execId - The execution ID that requested input
+   * @param {string} text - The user input text (should include newline if submitting)
+   * @param {string} [session]
+   * @returns {Promise<{accepted: boolean, error?: string}>}
+   */
+  async sendInput(execId, text, session) {
+    const res = await fetch(`${this.#endpoint}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session: session || this.#defaultSession,
+        exec_id: execId,
+        text,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Failed to send input: ${res.status}`);
+    }
+
+    return res.json();
+  }
+
+  // ===========================================================================
+  // Completion
+  // ===========================================================================
+
+  /**
+   * Get completions at cursor position
+   *
+   * @param {CompleteRequest} request
+   * @returns {Promise<CompleteResult>}
+   */
+  async complete(request) {
+    const caps = await this.getCapabilities();
+
+    if (!caps.features.complete) {
+      return { matches: [], cursorStart: request.cursor, cursorEnd: request.cursor, source: 'static' };
+    }
+
+    const res = await fetch(`${this.#endpoint}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...request,
+        session: request.session || this.#defaultSession,
+      }),
+    });
+
+    if (!res.ok) throw new Error(`Completion failed: ${res.status}`);
+    return res.json();
+  }
+
+  // ===========================================================================
+  // Introspection
+  // ===========================================================================
+
+  /**
+   * Get detailed info about symbol
+   *
+   * @param {InspectRequest} request
+   * @returns {Promise<InspectResult>}
+   */
+  async inspect(request) {
+    const caps = await this.getCapabilities();
+
+    if (!caps.features.inspect) {
+      return { found: false, source: 'static' };
+    }
+
+    const res = await fetch(`${this.#endpoint}/inspect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...request,
+        session: request.session || this.#defaultSession,
+      }),
+    });
+
+    if (!res.ok) throw new Error(`Inspect failed: ${res.status}`);
+    return res.json();
+  }
+
+  /**
+   * Get hover tooltip for symbol
+   *
+   * @param {HoverRequest} request
+   * @returns {Promise<HoverResult>}
+   */
+  async hover(request) {
+    const caps = await this.getCapabilities();
+
+    if (!caps.features.hover) {
+      return { found: false };
+    }
+
+    const res = await fetch(`${this.#endpoint}/hover`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...request,
+        session: request.session || this.#defaultSession,
+      }),
+    });
+
+    if (!res.ok) throw new Error(`Hover failed: ${res.status}`);
+    return res.json();
+  }
+
+  // ===========================================================================
+  // Variables
+  // ===========================================================================
+
+  /**
+   * List variables in session
+   *
+   * @param {string} [session]
+   * @param {import('./mrp-types.js').VariablesFilter} [filter]
+   * @returns {Promise<VariablesResult>}
+   */
+  async getVariables(session, filter) {
+    const caps = await this.getCapabilities();
+
+    if (!caps.features.variables) {
+      return { variables: [], count: 0, truncated: false };
+    }
+
+    const res = await fetch(`${this.#endpoint}/variables`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session: session || this.#defaultSession,
+        filter,
+      }),
+    });
+
+    if (!res.ok) throw new Error(`Variables failed: ${res.status}`);
+    return res.json();
+  }
+
+  /**
+   * Get detailed info about a variable
+   *
+   * @param {string} name - Variable name
+   * @param {Object} [options]
+   * @param {string} [options.session] - Session ID
+   * @param {string[]} [options.path] - Drill-down path
+   * @param {number} [options.maxChildren] - Max children to return
+   * @param {number} [options.maxValueLength] - Max value length
+   * @returns {Promise<VariableDetail>}
+   */
+  async getVariableDetail(name, options = {}) {
+    const caps = await this.getCapabilities();
+
+    if (!caps.features.variableExpand) {
+      return { name, type: 'unknown', value: '?', expandable: false };
+    }
+
+    const res = await fetch(`${this.#endpoint}/variables/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session: options.session || this.#defaultSession,
+        path: options.path,
+        maxChildren: options.maxChildren,
+        maxValueLength: options.maxValueLength,
+      }),
+    });
+
+    if (!res.ok) throw new Error(`Variable detail failed: ${res.status}`);
+    return res.json();
+  }
+
+  // ===========================================================================
+  // Code Analysis
+  // ===========================================================================
+
+  /**
+   * Check if code is a complete statement
+   *
+   * @param {string} code
+   * @param {string} [session]
+   * @returns {Promise<IsCompleteResult>}
+   */
+  async isComplete(code, session) {
+    const caps = await this.getCapabilities();
+
+    if (!caps.features.isComplete) {
+      return { status: 'unknown' };
+    }
+
+    const res = await fetch(`${this.#endpoint}/is_complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        session: session || this.#defaultSession,
+      }),
+    });
+
+    if (!res.ok) throw new Error(`isComplete failed: ${res.status}`);
+    return res.json();
+  }
+
+  /**
+   * Format code
+   *
+   * @param {string} code
+   * @param {string} [session]
+   * @returns {Promise<FormatResult>}
+   */
+  async format(code, session) {
+    const caps = await this.getCapabilities();
+
+    if (!caps.features.format) {
+      return { formatted: code, changed: false };
+    }
+
+    const res = await fetch(`${this.#endpoint}/format`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        session: session || this.#defaultSession,
+      }),
+    });
+
+    if (!res.ok) throw new Error(`Format failed: ${res.status}`);
+    return res.json();
+  }
+
+  // ===========================================================================
+  // Utilities
+  // ===========================================================================
+
+  /**
+   * Get asset URL
+   *
+   * @param {string} path - Asset path
+   * @returns {string}
+   */
+  getAssetUrl(path) {
+    return `${this.#endpoint}/assets/${encodeURIComponent(path)}`;
+  }
+
+  /**
+   * Get the endpoint URL
+   *
+   * @returns {string}
+   */
+  get endpoint() {
+    return this.#endpoint;
+  }
+
+  /**
+   * Get the default session ID
+   *
+   * @returns {string}
+   */
+  get defaultSession() {
+    return this.#defaultSession;
+  }
+
+  /**
+   * Set the default session ID
+   *
+   * @param {string} session
+   */
+  set defaultSession(session) {
+    this.#defaultSession = session;
+  }
+}
+
+// #endregion FACTORY
+
+/**
  * Output Widget
  *
  * CodeMirror widget that renders output blocks with ANSI color support.
@@ -54773,6 +55524,20 @@ function createExecutionManager(editor, registry) {
  * 1. Add line decorations to hide the raw output text via CSS
  * 2. Add widget positioned after opening fence that shows colored HTML
  * 3. Don't use Decoration.replace (causes parser issues)
+ *
+ * ## IMPORTANT: CSS Specificity Gotcha
+ *
+ * When hiding lines with `color: transparent`, you MUST exclude the widget:
+ *
+ *   WRONG: `.cm-output-line-hidden * { color: transparent !important; }`
+ *   RIGHT: `.cm-output-line-hidden > *:not(.cm-output-widget) { color: transparent !important; }`
+ *
+ * The widget is positioned INSIDE a hidden line (after the opening fence).
+ * If you use `*` selector, it makes all widget content transparent too!
+ * This is a common mistake - the widget appears as an empty dark box.
+ *
+ * Always add explicit color restoration for widget content:
+ *   `.cm-output-widget pre { color: var(--output-text, #e0e0e0); }`
  *
  * @module output-widget
  */
@@ -54954,8 +55719,17 @@ const outputWidgetStyles = `
   /* Hide text but maintain line height for stable layout */
   color: transparent !important;
 }
-.cm-output-line-hidden * {
+.cm-output-line-hidden > *:not(.cm-output-widget) {
   color: transparent !important;
+}
+
+/* Widget content must NOT be transparent */
+.cm-output-widget,
+.cm-output-widget * {
+  color: inherit;
+}
+.cm-output-widget pre {
+  color: var(--output-text, #e0e0e0);
 }
 
 .cm-output-line-visible {
@@ -54982,6 +55756,45 @@ const outputWidgetStyles = `
 
 /* ANSI text styles */
 ${ansiStyles}
+
+/* Stdin input styles */
+.mrmd-stdin-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--stdin-bg, rgba(0, 0, 0, 0.2));
+  border-radius: 4px;
+  border: 1px solid var(--stdin-border, rgba(100, 149, 237, 0.5));
+}
+
+.mrmd-stdin-prompt {
+  color: var(--stdin-prompt-color, #6495ed);
+  font-weight: 500;
+  white-space: pre;
+}
+
+.mrmd-stdin-field {
+  flex: 1;
+  background: var(--stdin-field-bg, rgba(255, 255, 255, 0.1));
+  border: 1px solid var(--stdin-field-border, rgba(255, 255, 255, 0.2));
+  border-radius: 4px;
+  padding: 6px 10px;
+  color: var(--stdin-field-color, #e0e0e0);
+  font-family: inherit;
+  font-size: inherit;
+  outline: none;
+}
+
+.mrmd-stdin-field:focus {
+  border-color: var(--stdin-field-focus-border, #6495ed);
+  box-shadow: 0 0 0 2px var(--stdin-field-focus-shadow, rgba(100, 149, 237, 0.3));
+}
+
+.mrmd-stdin-field::placeholder {
+  color: var(--stdin-placeholder-color, rgba(224, 224, 224, 0.5));
+}
 `;
 
 // #endregion STYLES
@@ -55009,6 +55822,3883 @@ function injectOutputWidgetStyles() {
   style.textContent = outputWidgetStyles;
   document.head.appendChild(style);
 }
+
+// #endregion EXPORTS
+
+/**
+ * Awareness State Schema and Helpers
+ *
+ * Defines the rich awareness state model for mrmd collaboration.
+ * All collaborators (humans, runtimes, AI) share state via Yjs Awareness.
+ *
+ * @module awareness/state
+ */
+
+// #region TYPES
+
+/**
+ * @typedef {'human' | 'ai' | 'runtime' | 'sync'} CollaboratorType
+ */
+
+/**
+ * @typedef {'idle' | 'typing' | 'selecting' | 'executing' | 'streaming' | 'thinking'} CollaboratorStatus
+ */
+
+/**
+ * @typedef {Object} HoverState
+ * @property {string} symbol - The symbol being hovered (e.g., 'df')
+ * @property {string} [type] - Type of the symbol (e.g., 'DataFrame')
+ * @property {string} [info] - Short description or value preview
+ * @property {{line: number, ch: number}} position - Document position
+ * @property {number} [cellIndex] - Which cell the hover is in
+ */
+
+/**
+ * @typedef {Object} AutocompleteState
+ * @property {string} query - The completion query (e.g., 'df.he')
+ * @property {string[]} items - Top completion items (e.g., ['head()', 'hist()'])
+ * @property {{line: number, ch: number}} position - Document position
+ * @property {number} [cellIndex] - Which cell the autocomplete is in
+ */
+
+/**
+ * @typedef {Object} ExecutionState
+ * @property {number} cellIndex - Which cell is being executed
+ * @property {number} startTime - Timestamp when execution started
+ * @property {number} [progress] - Progress 0-1 if available (e.g., from tqdm)
+ * @property {string} [progressText] - Progress text (e.g., '47/100 [00:23<00:26]')
+ * @property {string} [language] - Language being executed
+ */
+
+/**
+ * @typedef {Object} GenerationState
+ * @property {number} [targetCell] - Which cell AI is writing to
+ * @property {number} [tokensGenerated] - Number of tokens generated so far
+ * @property {string} [model] - Model being used (e.g., 'claude-3.5-sonnet')
+ */
+
+/**
+ * @typedef {Object} CursorState
+ * @property {number} anchor - Selection anchor (relative position in Yjs)
+ * @property {number} head - Selection head (relative position in Yjs)
+ */
+
+/**
+ * @typedef {Object} AwarenessUserState
+ * @property {CollaboratorType} type - Type of collaborator
+ * @property {string} name - Display name
+ * @property {string} color - Hex color for UI
+ * @property {CollaboratorStatus} [status] - Current status
+ * @property {HoverState} [hover] - What they're hovering over
+ * @property {AutocompleteState} [autocomplete] - Active autocomplete
+ * @property {ExecutionState} [execution] - Active execution (for runtimes)
+ * @property {GenerationState} [generation] - Active generation (for AI)
+ * @property {number} [activeCellIndex] - Which cell cursor is in
+ * @property {number} [lastActivity] - Timestamp of last activity
+ */
+
+// #endregion TYPES
+
+// #region COLORS
+
+/**
+ * Default colors for collaborators
+ */
+const COLLABORATOR_COLORS = {
+  human: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'],
+  ai: ['#8b5cf6', '#a855f7', '#d946ef'],
+  runtime: ['#3572A5', '#f1e05a', '#e34c26', '#b07219', '#563d7c'], // Python, JS, HTML, Java, CSS colors
+  sync: ['#6b7280'],
+};
+
+/**
+ * Generate a random color for a collaborator type
+ * @param {CollaboratorType} type
+ * @returns {string}
+ */
+function generateColor(type = 'human') {
+  const colors = COLLABORATOR_COLORS[type] || COLLABORATOR_COLORS.human;
+  return colors[Math.floor(Math.random() * colors.length)];
+}
+
+/**
+ * Well-known runtime colors by language
+ */
+const LANGUAGE_COLORS = {
+  python: '#3572A5',
+  javascript: '#f1e05a',
+  typescript: '#3178c6',
+  html: '#e34c26',
+  css: '#563d7c',
+  java: '#b07219',
+  rust: '#dea584',
+  go: '#00ADD8',
+  ruby: '#701516',
+  julia: '#9558b2',
+  r: '#198ce7',
+  bash: '#89e051',
+  shell: '#89e051',
+};
+
+/**
+ * Get color for a language runtime
+ * @param {string} language
+ * @returns {string}
+ */
+function getLanguageColor(language) {
+  const lang = language?.toLowerCase();
+  return LANGUAGE_COLORS[lang] || generateColor('runtime');
+}
+
+// #endregion COLORS
+
+// #region STATE_HELPERS
+
+/**
+ * Create initial awareness state for a human collaborator
+ * @param {Object} options
+ * @param {string} [options.name='Anonymous']
+ * @param {string} [options.color]
+ * @returns {AwarenessUserState}
+ */
+function createHumanState({ name = 'Anonymous', color } = {}) {
+  return {
+    type: 'human',
+    name,
+    color: color || generateColor('human'),
+    status: 'idle',
+    lastActivity: Date.now(),
+  };
+}
+
+/**
+ * Create initial awareness state for a runtime collaborator
+ * @param {Object} options
+ * @param {string} options.language - Runtime language
+ * @param {string} [options.name]
+ * @param {string} [options.color]
+ * @returns {AwarenessUserState}
+ */
+function createRuntimeState({ language, name, color } = {}) {
+  const lang = language?.toLowerCase() || 'unknown';
+  return {
+    type: 'runtime',
+    name: name || `${language || 'Runtime'}`,
+    color: color || getLanguageColor(lang),
+    status: 'idle',
+    lastActivity: Date.now(),
+  };
+}
+
+/**
+ * Create initial awareness state for an AI collaborator
+ * @param {Object} options
+ * @param {string} [options.name='AI Assistant']
+ * @param {string} [options.model]
+ * @param {string} [options.color]
+ * @returns {AwarenessUserState}
+ */
+function createAIState({ name = 'AI Assistant', model, color } = {}) {
+  return {
+    type: 'ai',
+    name,
+    color: color || generateColor('ai'),
+    status: 'idle',
+    generation: model ? { model } : undefined,
+    lastActivity: Date.now(),
+  };
+}
+
+// #endregion STATE_HELPERS
+
+// #region STATE_UPDATES
+
+/**
+ * Update hover state
+ * @param {AwarenessUserState} state
+ * @param {HoverState|null} hover
+ * @returns {AwarenessUserState}
+ */
+function withHover(state, hover) {
+  return {
+    ...state,
+    hover: hover || undefined,
+    lastActivity: Date.now(),
+  };
+}
+
+/**
+ * Update autocomplete state
+ * @param {AwarenessUserState} state
+ * @param {AutocompleteState|null} autocomplete
+ * @returns {AwarenessUserState}
+ */
+function withAutocomplete(state, autocomplete) {
+  return {
+    ...state,
+    autocomplete: autocomplete || undefined,
+    lastActivity: Date.now(),
+  };
+}
+
+/**
+ * Update execution state
+ * @param {AwarenessUserState} state
+ * @param {ExecutionState|null} execution
+ * @returns {AwarenessUserState}
+ */
+function withExecution(state, execution) {
+  return {
+    ...state,
+    status: execution ? 'executing' : 'idle',
+    execution: execution || undefined,
+    lastActivity: Date.now(),
+  };
+}
+
+/**
+ * Update generation state (for AI)
+ * @param {AwarenessUserState} state
+ * @param {GenerationState|null} generation
+ * @returns {AwarenessUserState}
+ */
+function withGeneration(state, generation) {
+  return {
+    ...state,
+    status: generation ? 'streaming' : 'idle',
+    generation: generation ? { ...state.generation, ...generation } : state.generation,
+    lastActivity: Date.now(),
+  };
+}
+
+/**
+ * Update status
+ * @param {AwarenessUserState} state
+ * @param {CollaboratorStatus} status
+ * @returns {AwarenessUserState}
+ */
+function withStatus(state, status) {
+  return {
+    ...state,
+    status,
+    lastActivity: Date.now(),
+  };
+}
+
+/**
+ * Update active cell index
+ * @param {AwarenessUserState} state
+ * @param {number|null} cellIndex
+ * @returns {AwarenessUserState}
+ */
+function withActiveCell(state, cellIndex) {
+  return {
+    ...state,
+    activeCellIndex: cellIndex ?? undefined,
+    lastActivity: Date.now(),
+  };
+}
+
+/**
+ * Clear transient state (hover, autocomplete) - useful on blur/idle
+ * @param {AwarenessUserState} state
+ * @returns {AwarenessUserState}
+ */
+function clearTransientState(state) {
+  return {
+    ...state,
+    hover: undefined,
+    autocomplete: undefined,
+    status: 'idle',
+    lastActivity: Date.now(),
+  };
+}
+
+// #endregion STATE_UPDATES
+
+// #region AWARENESS_HELPERS
+
+/**
+ * Helper class to manage awareness state updates
+ */
+class AwarenessStateManager {
+  /**
+   * @param {import('y-protocols/awareness').Awareness} awareness
+   */
+  constructor(awareness) {
+    this.awareness = awareness;
+  }
+
+  /**
+   * Get current local user state
+   * @returns {AwarenessUserState|null}
+   */
+  getLocalState() {
+    return this.awareness.getLocalState()?.user || null;
+  }
+
+  /**
+   * Set the entire local user state
+   * @param {AwarenessUserState} state
+   */
+  setLocalState(state) {
+    this.awareness.setLocalStateField('user', state);
+  }
+
+  /**
+   * Update local state with a partial update
+   * @param {Partial<AwarenessUserState>} update
+   */
+  updateLocalState(update) {
+    const current = this.getLocalState() || {};
+    this.setLocalState({ ...current, ...update, lastActivity: Date.now() });
+  }
+
+  /**
+   * Set hover state
+   * @param {HoverState|null} hover
+   */
+  setHover(hover) {
+    const current = this.getLocalState();
+    if (current) {
+      this.setLocalState(withHover(current, hover));
+    }
+  }
+
+  /**
+   * Set autocomplete state
+   * @param {AutocompleteState|null} autocomplete
+   */
+  setAutocomplete(autocomplete) {
+    const current = this.getLocalState();
+    if (current) {
+      this.setLocalState(withAutocomplete(current, autocomplete));
+    }
+  }
+
+  /**
+   * Set execution state
+   * @param {ExecutionState|null} execution
+   */
+  setExecution(execution) {
+    const current = this.getLocalState();
+    if (current) {
+      this.setLocalState(withExecution(current, execution));
+    }
+  }
+
+  /**
+   * Set generation state
+   * @param {GenerationState|null} generation
+   */
+  setGeneration(generation) {
+    const current = this.getLocalState();
+    if (current) {
+      this.setLocalState(withGeneration(current, generation));
+    }
+  }
+
+  /**
+   * Set status
+   * @param {CollaboratorStatus} status
+   */
+  setStatus(status) {
+    const current = this.getLocalState();
+    if (current) {
+      this.setLocalState(withStatus(current, status));
+    }
+  }
+
+  /**
+   * Set active cell index
+   * @param {number|null} cellIndex
+   */
+  setActiveCell(cellIndex) {
+    const current = this.getLocalState();
+    if (current) {
+      this.setLocalState(withActiveCell(current, cellIndex));
+    }
+  }
+
+  /**
+   * Clear transient state
+   */
+  clearTransient() {
+    const current = this.getLocalState();
+    if (current) {
+      this.setLocalState(clearTransientState(current));
+    }
+  }
+
+  /**
+   * Get all collaborators (excluding self optionally)
+   * @param {Object} [options]
+   * @param {boolean} [options.includeSelf=true]
+   * @param {CollaboratorType[]} [options.types] - Filter by types
+   * @returns {Array<{clientId: number, user: AwarenessUserState}>}
+   */
+  getCollaborators({ includeSelf = true, types } = {}) {
+    const localClientId = this.awareness.clientID;
+    const states = [];
+
+    this.awareness.getStates().forEach((state, clientId) => {
+      if (!includeSelf && clientId === localClientId) return;
+      if (!state.user) return;
+      if (types && !types.includes(state.user.type)) return;
+
+      states.push({ clientId, user: state.user });
+    });
+
+    return states;
+  }
+
+  /**
+   * Get collaborators by type
+   * @param {CollaboratorType} type
+   * @returns {Array<{clientId: number, user: AwarenessUserState}>}
+   */
+  getByType(type) {
+    return this.getCollaborators({ types: [type] });
+  }
+
+  /**
+   * Get humans only
+   */
+  getHumans() {
+    return this.getByType('human');
+  }
+
+  /**
+   * Get runtimes only
+   */
+  getRuntimes() {
+    return this.getByType('runtime');
+  }
+
+  /**
+   * Get AIs only
+   */
+  getAIs() {
+    return this.getByType('ai');
+  }
+
+  /**
+   * Check if any runtime is executing
+   * @returns {{clientId: number, user: AwarenessUserState, execution: ExecutionState}|null}
+   */
+  getActiveExecution() {
+    for (const { clientId, user } of this.getCollaborators()) {
+      if (user.execution && user.status === 'executing') {
+        return { clientId, user, execution: user.execution };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Check if any AI is generating
+   * @returns {{clientId: number, user: AwarenessUserState, generation: GenerationState}|null}
+   */
+  getActiveGeneration() {
+    for (const { clientId, user } of this.getCollaborators()) {
+      if (user.generation && (user.status === 'streaming' || user.status === 'thinking')) {
+        return { clientId, user, generation: user.generation };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Subscribe to awareness changes
+   * @param {function} callback
+   * @returns {function} Unsubscribe function
+   */
+  onChange(callback) {
+    const handler = () => callback(this.getCollaborators());
+    this.awareness.on('change', handler);
+    return () => this.awareness.off('change', handler);
+  }
+}
+
+// #endregion EXPORTS
+
+/**
+ * Human Awareness Provider
+ *
+ * Tracks human collaborator state and broadcasts via Yjs Awareness:
+ * - Typing/idle status (with debounce)
+ * - Hover tooltips (what symbol they're inspecting)
+ * - Autocomplete popups (what they're completing)
+ * - Active cell (which code cell cursor is in)
+ *
+ * @module awareness/human
+ */
+
+
+// #region TYPING_TRACKER
+
+/**
+ * Creates a CodeMirror extension that tracks typing status
+ * and updates awareness accordingly.
+ *
+ * @param {Object} options
+ * @param {import('./state.js').AwarenessStateManager} options.stateManager
+ * @param {number} [options.idleTimeout=2000] - Ms of inactivity before 'idle'
+ * @param {function(): string} options.getContent - Get document content
+ * @returns {import('@codemirror/state').Extension}
+ */
+function createTypingTracker({ stateManager, idleTimeout = 2000, getContent }) {
+  return ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.view = view;
+        this.stateManager = stateManager;
+        this.getContent = getContent;
+        this.idleTimer = null;
+        this.lastCellIndex = null;
+      }
+
+      update(update) {
+        // Track typing
+        if (update.docChanged) {
+          this.onTyping();
+        }
+
+        // Track selection/cursor changes
+        if (update.selectionSet) {
+          this.onSelectionChange();
+        }
+      }
+
+      onTyping() {
+        // Clear existing idle timer
+        if (this.idleTimer) {
+          clearTimeout(this.idleTimer);
+        }
+
+        // Set status to typing
+        this.stateManager.setStatus('typing');
+
+        // Set idle timer
+        this.idleTimer = setTimeout(() => {
+          this.stateManager.setStatus('idle');
+        }, idleTimeout);
+      }
+
+      onSelectionChange() {
+        const pos = this.view.state.selection.main.head;
+        const content = this.getContent();
+        const cell = getCellAtCursor(content, pos);
+
+        // Update active cell if changed
+        const cellIndex = cell ? this.findCellIndex(content, cell) : null;
+        if (cellIndex !== this.lastCellIndex) {
+          this.lastCellIndex = cellIndex;
+          this.stateManager.setActiveCell(cellIndex);
+        }
+
+        // Update status to selecting if there's a selection range
+        const { from, to } = this.view.state.selection.main;
+        if (from !== to) {
+          this.stateManager.setStatus('selecting');
+        }
+      }
+
+      findCellIndex(content, cell) {
+        const cells = findCells(content);
+        return cells.findIndex(c => c.start === cell.start);
+      }
+
+      destroy() {
+        if (this.idleTimer) {
+          clearTimeout(this.idleTimer);
+        }
+      }
+    }
+  );
+}
+
+// #endregion TYPING_TRACKER
+
+// #region HOVER_TRACKER
+
+/**
+ * Wraps a hover tooltip provider to broadcast hover state via awareness.
+ *
+ * Use this to wrap your existing hover tooltip so collaborators can see
+ * what symbols others are inspecting.
+ *
+ * @param {Object} options
+ * @param {import('./state.js').AwarenessStateManager} options.stateManager
+ * @param {function(view, pos): Promise<object|null>} options.hoverProvider - Original hover provider
+ * @param {function(): string} options.getContent
+ * @param {number} [options.clearDelay=500] - Ms after hover closes to clear state
+ * @returns {function} Wrapped hover provider
+ */
+function createHoverTracker({ stateManager, hoverProvider, getContent, clearDelay = 500 }) {
+  let clearTimer = null;
+
+  return async (view, pos) => {
+    // Clear any pending clear
+    if (clearTimer) {
+      clearTimeout(clearTimer);
+      clearTimer = null;
+    }
+
+    // Get the hover result from original provider
+    const result = await hoverProvider(view, pos);
+
+    if (result) {
+      // Extract hover info for awareness
+      const content = getContent();
+      const cell = getCellAtCursor(content, pos);
+      const line = view.state.doc.lineAt(pos);
+
+      // Broadcast to awareness
+      stateManager.setHover({
+        symbol: result.name || extractSymbolAtPos(view, pos),
+        type: result.type,
+        info: result.value || result.signature,
+        position: {
+          line: line.number,
+          ch: pos - line.from,
+        },
+        cellIndex: cell ? findCellIndexHelper(content, cell) : undefined,
+      });
+
+      // Wrap the tooltip to clear awareness when it closes
+      const originalCreate = result.create;
+      result.create = () => {
+        const dom = originalCreate();
+
+        // Clear hover state when tooltip is removed
+        // Use MutationObserver to detect removal
+        const observer = new MutationObserver((mutations) => {
+          for (const mutation of mutations) {
+            if (mutation.removedNodes.length > 0) {
+              // Schedule clear (with delay in case user hovers again)
+              clearTimer = setTimeout(() => {
+                stateManager.setHover(null);
+              }, clearDelay);
+            }
+          }
+        });
+
+        // Observe parent for removal
+        requestAnimationFrame(() => {
+          if (dom.dom?.parentNode) {
+            observer.observe(dom.dom.parentNode, { childList: true });
+          }
+        });
+
+        return dom;
+      };
+    } else {
+      // No hover result, clear after delay
+      clearTimer = setTimeout(() => {
+        stateManager.setHover(null);
+      }, clearDelay);
+    }
+
+    return result;
+  };
+}
+
+/**
+ * Extract the symbol/word at a position
+ * @param {import('@codemirror/view').EditorView} view
+ * @param {number} pos
+ * @returns {string}
+ */
+function extractSymbolAtPos(view, pos) {
+  const line = view.state.doc.lineAt(pos);
+  const text = line.text;
+  const offset = pos - line.from;
+
+  // Find word boundaries
+  let start = offset;
+  let end = offset;
+  while (start > 0 && /\w/.test(text[start - 1])) start--;
+  while (end < text.length && /\w/.test(text[end])) end++;
+
+  return text.slice(start, end);
+}
+
+/**
+ * Find cell index for a cell
+ */
+function findCellIndexHelper(content, cell) {
+  const cells = findCells(content);
+  return cells.findIndex(c => c.start === cell.start);
+}
+
+// #endregion HOVER_TRACKER
+
+// #region AUTOCOMPLETE_TRACKER
+
+/**
+ * Wraps an autocomplete source to broadcast autocomplete state via awareness.
+ *
+ * @param {Object} options
+ * @param {import('./state.js').AwarenessStateManager} options.stateManager
+ * @param {import('@codemirror/autocomplete').CompletionSource} options.completionSource
+ * @param {function(): string} options.getContent
+ * @param {number} [options.maxItems=5] - Max items to include in awareness
+ * @returns {import('@codemirror/autocomplete').CompletionSource}
+ */
+function createAutocompleteTracker({ stateManager, completionSource, getContent, maxItems = 5 }) {
+  return async (context) => {
+    const result = await completionSource(context);
+
+    if (result && result.options && result.options.length > 0) {
+      const content = getContent();
+      const pos = context.pos;
+      const cell = getCellAtCursor(content, pos);
+      const line = context.state.doc.lineAt(pos);
+
+      // Extract query text
+      const query = context.state.doc.sliceString(result.from, result.to);
+
+      // Broadcast to awareness
+      stateManager.setAutocomplete({
+        query,
+        items: result.options.slice(0, maxItems).map(opt => opt.label),
+        position: {
+          line: line.number,
+          ch: pos - line.from,
+        },
+        cellIndex: cell ? findCellIndexHelper(content, cell) : undefined,
+      });
+    }
+
+    return result;
+  };
+}
+
+/**
+ * Creates a CodeMirror extension that clears autocomplete state when popup closes.
+ *
+ * @param {import('./state.js').AwarenessStateManager} stateManager
+ * @returns {import('@codemirror/state').Extension}
+ */
+function createAutocompleteClearTracker(stateManager) {
+  return ViewPlugin.fromClass(
+    class {
+      constructor() {
+        this.wasOpen = false;
+      }
+
+      update(update) {
+        // Check if autocomplete tooltip is present
+        const isOpen = update.view.dom.querySelector('.cm-tooltip-autocomplete') !== null;
+
+        if (this.wasOpen && !isOpen) {
+          // Autocomplete just closed
+          stateManager.setAutocomplete(null);
+        }
+
+        this.wasOpen = isOpen;
+      }
+    }
+  );
+}
+
+// #endregion AUTOCOMPLETE_TRACKER
+
+// #region IDLE_TRACKER
+
+/**
+ * Creates an extension that sets status to idle on blur/visibility change.
+ *
+ * @param {import('./state.js').AwarenessStateManager} stateManager
+ * @returns {import('@codemirror/state').Extension}
+ */
+function createIdleTracker(stateManager) {
+  return ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.view = view;
+        this.stateManager = stateManager;
+
+        // Track focus
+        this.onBlur = () => {
+          this.stateManager.clearTransient();
+        };
+
+        // Track visibility
+        this.onVisibilityChange = () => {
+          if (document.hidden) {
+            this.stateManager.clearTransient();
+          }
+        };
+
+        view.dom.addEventListener('blur', this.onBlur, true);
+        document.addEventListener('visibilitychange', this.onVisibilityChange);
+      }
+
+      destroy() {
+        this.view.dom.removeEventListener('blur', this.onBlur, true);
+        document.removeEventListener('visibilitychange', this.onVisibilityChange);
+      }
+    }
+  );
+}
+
+// #endregion IDLE_TRACKER
+
+// #region COMBINED
+
+/**
+ * Creates all human awareness tracking extensions.
+ *
+ * @param {Object} options
+ * @param {import('./state.js').AwarenessStateManager} options.stateManager
+ * @param {function(): string} options.getContent
+ * @param {Object} [options.config]
+ * @param {number} [options.config.idleTimeout=2000]
+ * @param {number} [options.config.hoverClearDelay=500]
+ * @param {number} [options.config.maxAutocompleteItems=5]
+ * @returns {import('@codemirror/state').Extension[]}
+ */
+function createHumanAwarenessExtensions({ stateManager, getContent, config = {} }) {
+  const {
+    idleTimeout = 2000,
+  } = config;
+
+  return [
+    createTypingTracker({ stateManager, idleTimeout, getContent }),
+    createAutocompleteClearTracker(stateManager),
+    createIdleTracker(stateManager),
+  ];
+}
+
+// #endregion EXPORTS
+
+/**
+ * Runtime Awareness Provider
+ *
+ * Tracks runtime/execution state and broadcasts via Yjs Awareness:
+ * - Which cell is currently executing
+ * - Execution progress (if available, e.g., from tqdm)
+ * - Runtime status (idle, executing, streaming)
+ *
+ * This integrates with the ExecutionManager to automatically
+ * update awareness when cells are run.
+ *
+ * @module awareness/runtime
+ */
+
+
+// #region EXECUTION_TRACKER
+
+/**
+ * Creates a runtime awareness tracker that hooks into ExecutionManager.
+ *
+ * This creates a separate awareness "client" for the runtime, so it appears
+ * as a distinct collaborator in the awareness list.
+ *
+ * @param {Object} options
+ * @param {import('../execution.js').ExecutionManager} options.executionManager
+ * @param {import('y-protocols/awareness').Awareness} options.awareness
+ * @param {string} [options.language='JavaScript'] - Primary runtime language
+ * @param {string} [options.name] - Runtime display name
+ * @param {string} [options.color] - Runtime color
+ * @returns {RuntimeAwarenessTracker}
+ */
+function createRuntimeAwarenessTracker({
+  executionManager,
+  awareness,
+  language = 'JavaScript',
+  name,
+  color,
+}) {
+  return new RuntimeAwarenessTracker({
+    executionManager,
+    awareness,
+    language,
+    name,
+    color,
+  });
+}
+
+/**
+ * Runtime awareness tracker class
+ */
+class RuntimeAwarenessTracker {
+  constructor({ executionManager, awareness, language, name, color }) {
+    this.executionManager = executionManager;
+    this.awareness = awareness;
+    this.language = language;
+
+    // Create state manager
+    this.stateManager = new AwarenessStateManager(awareness);
+
+    // Initialize runtime state
+    this.stateManager.setLocalState(createRuntimeState({
+      language,
+      name,
+      color,
+    }));
+
+    // Track active executions
+    this.activeExecutions = new Map();
+
+    // Bind event handlers
+    this._onCellRun = this._onCellRun.bind(this);
+    this._onCellOutput = this._onCellOutput.bind(this);
+    this._onCellComplete = this._onCellComplete.bind(this);
+    this._onCellError = this._onCellError.bind(this);
+
+    // Subscribe to execution events
+    this._subscriptions = [
+      executionManager.on('cellRun', this._onCellRun),
+      executionManager.on('cellOutput', this._onCellOutput),
+      executionManager.on('cellComplete', this._onCellComplete),
+      executionManager.on('cellError', this._onCellError),
+    ];
+  }
+
+  /**
+   * Handle cell execution start
+   * @param {number} index
+   * @param {Object} cell
+   */
+  _onCellRun(index, cell) {
+    const startTime = Date.now();
+
+    this.activeExecutions.set(index, {
+      cellIndex: index,
+      startTime,
+      language: cell.language,
+    });
+
+    // Update awareness
+    this.stateManager.setExecution({
+      cellIndex: index,
+      startTime,
+      language: cell.language,
+    });
+  }
+
+  /**
+   * Handle cell output (streaming)
+   * @param {number} index
+   * @param {string} chunk
+   * @param {string} accumulated
+   */
+  _onCellOutput(index, chunk, accumulated) {
+    const execution = this.activeExecutions.get(index);
+    if (!execution) return;
+
+    // Try to parse progress from output (tqdm, rich, etc.)
+    const progress = this._parseProgress(accumulated);
+
+    if (progress) {
+      this.stateManager.setExecution({
+        ...execution,
+        progress: progress.percent,
+        progressText: progress.text,
+      });
+    }
+  }
+
+  /**
+   * Handle cell execution complete
+   * @param {number} index
+   * @param {Object} result
+   */
+  _onCellComplete(index, result) {
+    this.activeExecutions.delete(index);
+
+    // If no more active executions, set to idle
+    if (this.activeExecutions.size === 0) {
+      this.stateManager.setExecution(null);
+    } else {
+      // Update to show next active execution
+      const [nextIndex, nextExecution] = this.activeExecutions.entries().next().value;
+      this.stateManager.setExecution(nextExecution);
+    }
+  }
+
+  /**
+   * Handle cell execution error
+   * @param {number} index
+   * @param {Error} error
+   */
+  _onCellError(index, error) {
+    // Same as complete - remove from active
+    this._onCellComplete(index, { success: false, error });
+  }
+
+  /**
+   * Try to parse progress information from output
+   * Handles common formats: tqdm, rich, percentage patterns
+   *
+   * @param {string} output
+   * @returns {{percent: number, text: string}|null}
+   */
+  _parseProgress(output) {
+    if (!output) return null;
+
+    // Get the last line (most recent progress update)
+    const lines = output.split('\n');
+    const lastLine = lines[lines.length - 1] || lines[lines.length - 2] || '';
+
+    // tqdm format: "  5%|█         | 5/100 [00:01<00:19, 4.89it/s]"
+    const tqdmMatch = lastLine.match(/(\d+)%\|[█▏▎▍▌▋▊▉ ]+\|\s*(\d+)\/(\d+)\s*\[([^\]]+)\]/);
+    if (tqdmMatch) {
+      return {
+        percent: parseInt(tqdmMatch[1]) / 100,
+        text: `${tqdmMatch[2]}/${tqdmMatch[3]} [${tqdmMatch[4]}]`,
+      };
+    }
+
+    // Simple percentage: "Progress: 45%"
+    const percentMatch = lastLine.match(/(\d+(?:\.\d+)?)\s*%/);
+    if (percentMatch) {
+      return {
+        percent: parseFloat(percentMatch[1]) / 100,
+        text: `${percentMatch[1]}%`,
+      };
+    }
+
+    // Fraction format: "Processing 45/100"
+    const fractionMatch = lastLine.match(/(\d+)\s*\/\s*(\d+)/);
+    if (fractionMatch) {
+      const current = parseInt(fractionMatch[1]);
+      const total = parseInt(fractionMatch[2]);
+      if (total > 0) {
+        return {
+          percent: current / total,
+          text: `${current}/${total}`,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Manually set execution state (useful for external runtimes)
+   * @param {Object|null} execution
+   */
+  setExecution(execution) {
+    if (execution) {
+      this.activeExecutions.set(execution.cellIndex, execution);
+    }
+    this.stateManager.setExecution(execution);
+  }
+
+  /**
+   * Get current execution state
+   * @returns {Object|null}
+   */
+  getExecution() {
+    const state = this.stateManager.getLocalState();
+    return state?.execution || null;
+  }
+
+  /**
+   * Check if any cell is currently executing
+   * @returns {boolean}
+   */
+  isExecuting() {
+    return this.activeExecutions.size > 0;
+  }
+
+  /**
+   * Get the runtime state manager
+   * @returns {AwarenessStateManager}
+   */
+  getStateManager() {
+    return this.stateManager;
+  }
+
+  /**
+   * Cleanup subscriptions
+   */
+  destroy() {
+    this._subscriptions.forEach(unsub => unsub());
+    this._subscriptions = [];
+    this.activeExecutions.clear();
+  }
+}
+
+// #endregion MULTI_RUNTIME
+
+// #region SIMPLE_TRACKER
+
+/**
+ * Simple execution state broadcaster for use without ExecutionManager.
+ *
+ * Use this when you want to manually control execution state updates,
+ * e.g., for external runtimes like mrmd-python.
+ *
+ * @param {Object} options
+ * @param {import('./state.js').AwarenessStateManager} options.stateManager
+ * @returns {Object} Execution state controller
+ */
+function createSimpleExecutionTracker({ stateManager }) {
+  return {
+    /**
+     * Start execution
+     * @param {number} cellIndex
+     * @param {string} [language]
+     */
+    start(cellIndex, language) {
+      stateManager.setExecution({
+        cellIndex,
+        startTime: Date.now(),
+        language,
+      });
+    },
+
+    /**
+     * Update progress
+     * @param {number} progress - 0 to 1
+     * @param {string} [progressText]
+     */
+    progress(progress, progressText) {
+      const state = stateManager.getLocalState();
+      if (state?.execution) {
+        stateManager.setExecution({
+          ...state.execution,
+          progress,
+          progressText,
+        });
+      }
+    },
+
+    /**
+     * End execution
+     */
+    end() {
+      stateManager.setExecution(null);
+    },
+
+    /**
+     * Check if executing
+     * @returns {boolean}
+     */
+    isExecuting() {
+      const state = stateManager.getLocalState();
+      return state?.status === 'executing';
+    },
+  };
+}
+
+// #endregion EXPORTS
+
+/**
+ * Collaborator List UI Component
+ *
+ * Renders a list of all connected collaborators with rich information:
+ * - Avatar with color
+ * - Name and type badge
+ * - Status (typing, idle, executing, etc.)
+ * - What they're doing (hovering over X, completing Y, executing cell Z)
+ *
+ * @module awareness/ui/collaborator-list
+ */
+
+// #region COMPONENT
+
+/**
+ * @typedef {Object} CollaboratorListOptions
+ * @property {HTMLElement} container - Container element to render into
+ * @property {import('../state.js').AwarenessStateManager} stateManager
+ * @property {boolean} [showSelf=true] - Show local user in list
+ * @property {boolean} [showStatus=true] - Show status indicators
+ * @property {boolean} [showActivity=true] - Show hover/autocomplete/execution info
+ * @property {boolean} [showTypes=true] - Show type badges (human, ai, runtime)
+ * @property {boolean} [compact=false] - Compact mode (less detail)
+ * @property {string} [position='inline'] - 'inline' | 'floating'
+ * @property {function} [onCollaboratorClick] - Click handler
+ */
+
+/**
+ * Creates a collaborator list component
+ *
+ * @param {CollaboratorListOptions} options
+ * @returns {{update: function, destroy: function, element: HTMLElement}}
+ */
+function createCollaboratorList(options) {
+  const {
+    container,
+    stateManager,
+    showSelf = true,
+    showStatus = true,
+    showActivity = true,
+    showTypes = true,
+    compact = false,
+    position = 'inline',
+    onCollaboratorClick,
+  } = options;
+
+  // Create wrapper element
+  const wrapper = document.createElement('div');
+  wrapper.className = `mrmd-collaborator-list mrmd-collaborator-list--${position}${compact ? ' mrmd-collaborator-list--compact' : ''}`;
+
+  /**
+   * Render the collaborator list
+   */
+  function render() {
+    const collaborators = stateManager.getCollaborators({ includeSelf: showSelf });
+
+    // Group by type for nicer display
+    const humans = collaborators.filter(c => c.user.type === 'human');
+    const ais = collaborators.filter(c => c.user.type === 'ai');
+    const runtimes = collaborators.filter(c => c.user.type === 'runtime');
+    const others = collaborators.filter(c => !['human', 'ai', 'runtime'].includes(c.user.type));
+
+    wrapper.innerHTML = '';
+
+    // Header with count
+    if (!compact) {
+      const header = document.createElement('div');
+      header.className = 'mrmd-collaborator-list__header';
+      header.innerHTML = `
+        <span class="mrmd-collaborator-list__title">Collaborators</span>
+        <span class="mrmd-collaborator-list__count">${collaborators.length}</span>
+      `;
+      wrapper.appendChild(header);
+    }
+
+    // Render each group
+    const listEl = document.createElement('div');
+    listEl.className = 'mrmd-collaborator-list__items';
+
+    // Humans first
+    humans.forEach(c => listEl.appendChild(createCollaboratorItem(c)));
+
+    // Then AIs
+    if (ais.length > 0 && !compact) {
+      listEl.appendChild(createSeparator('AI'));
+    }
+    ais.forEach(c => listEl.appendChild(createCollaboratorItem(c)));
+
+    // Then Runtimes
+    if (runtimes.length > 0 && !compact) {
+      listEl.appendChild(createSeparator('Runtimes'));
+    }
+    runtimes.forEach(c => listEl.appendChild(createCollaboratorItem(c)));
+
+    // Others
+    others.forEach(c => listEl.appendChild(createCollaboratorItem(c)));
+
+    wrapper.appendChild(listEl);
+
+    // Empty state
+    if (collaborators.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'mrmd-collaborator-list__empty';
+      empty.textContent = 'No collaborators';
+      wrapper.appendChild(empty);
+    }
+  }
+
+  /**
+   * Create a separator between groups
+   * @param {string} label
+   * @returns {HTMLElement}
+   */
+  function createSeparator(label) {
+    const sep = document.createElement('div');
+    sep.className = 'mrmd-collaborator-list__separator';
+    sep.innerHTML = `<span>${label}</span>`;
+    return sep;
+  }
+
+  /**
+   * Create a collaborator item element
+   * @param {{clientId: number, user: import('../state.js').AwarenessUserState}} collaborator
+   * @returns {HTMLElement}
+   */
+  function createCollaboratorItem({ clientId, user }) {
+    const item = document.createElement('div');
+    item.className = `mrmd-collaborator-item mrmd-collaborator-item--${user.type || 'unknown'}`;
+    item.dataset.clientId = clientId;
+
+    // Is this the local user?
+    const isLocal = clientId === stateManager.awareness.clientID;
+    if (isLocal) {
+      item.classList.add('mrmd-collaborator-item--self');
+    }
+
+    // Avatar
+    const avatar = document.createElement('div');
+    avatar.className = 'mrmd-collaborator-item__avatar';
+    avatar.style.backgroundColor = user.color || '#666';
+    avatar.textContent = getInitial(user.name, user.type);
+    avatar.title = user.name || 'Anonymous';
+
+    // Status dot on avatar
+    if (showStatus && user.status && user.status !== 'idle') {
+      const statusDot = document.createElement('span');
+      statusDot.className = `mrmd-collaborator-item__status-dot mrmd-collaborator-item__status-dot--${user.status}`;
+      avatar.appendChild(statusDot);
+    }
+
+    item.appendChild(avatar);
+
+    // Info section
+    const info = document.createElement('div');
+    info.className = 'mrmd-collaborator-item__info';
+
+    // Name row
+    const nameRow = document.createElement('div');
+    nameRow.className = 'mrmd-collaborator-item__name-row';
+
+    const name = document.createElement('span');
+    name.className = 'mrmd-collaborator-item__name';
+    name.textContent = user.name || 'Anonymous';
+    if (isLocal) {
+      name.textContent += ' (you)';
+    }
+    nameRow.appendChild(name);
+
+    // Type badge
+    if (showTypes && user.type) {
+      const badge = document.createElement('span');
+      badge.className = `mrmd-collaborator-item__badge mrmd-collaborator-item__badge--${user.type}`;
+      badge.textContent = user.type;
+      nameRow.appendChild(badge);
+    }
+
+    info.appendChild(nameRow);
+
+    // Activity row (what they're doing)
+    if (showActivity && !compact) {
+      const activity = getActivityText(user);
+      if (activity) {
+        const activityEl = document.createElement('div');
+        activityEl.className = 'mrmd-collaborator-item__activity';
+        activityEl.innerHTML = activity;
+        info.appendChild(activityEl);
+      }
+    }
+
+    item.appendChild(info);
+
+    // Click handler
+    if (onCollaboratorClick) {
+      item.style.cursor = 'pointer';
+      item.addEventListener('click', () => onCollaboratorClick({ clientId, user }));
+    }
+
+    return item;
+  }
+
+  /**
+   * Get activity description text
+   * @param {import('../state.js').AwarenessUserState} user
+   * @returns {string}
+   */
+  function getActivityText(user) {
+    // Execution takes priority
+    if (user.execution) {
+      const { cellIndex, progress, progressText } = user.execution;
+      if (progress !== undefined) {
+        const pct = Math.round(progress * 100);
+        return `<span class="activity-executing">Executing cell ${cellIndex}</span> <span class="activity-progress">${progressText || pct + '%'}</span>`;
+      }
+      return `<span class="activity-executing">Executing cell ${cellIndex}</span>`;
+    }
+
+    // AI generation
+    if (user.generation && (user.status === 'streaming' || user.status === 'thinking')) {
+      const { targetCell, tokensGenerated, model } = user.generation;
+      let text = `<span class="activity-streaming">Generating</span>`;
+      if (targetCell !== undefined) {
+        text += ` in cell ${targetCell}`;
+      }
+      if (tokensGenerated) {
+        text += ` <span class="activity-tokens">${tokensGenerated} tokens</span>`;
+      }
+      return text;
+    }
+
+    // Hover
+    if (user.hover) {
+      const { symbol, type, info } = user.hover;
+      let text = `<span class="activity-hover">Inspecting</span> <code>${symbol}</code>`;
+      if (type) {
+        text += ` <span class="activity-type">${type}</span>`;
+      }
+      return text;
+    }
+
+    // Autocomplete
+    if (user.autocomplete) {
+      const { query, items } = user.autocomplete;
+      const preview = items.slice(0, 2).join(', ');
+      return `<span class="activity-autocomplete">Completing</span> <code>${query}</code> → ${preview}...`;
+    }
+
+    // Status-based fallback
+    switch (user.status) {
+      case 'typing':
+        return '<span class="activity-typing">Typing...</span>';
+      case 'selecting':
+        return '<span class="activity-selecting">Selecting</span>';
+      case 'thinking':
+        return '<span class="activity-thinking">Thinking...</span>';
+      default:
+        return '';
+    }
+  }
+
+  /**
+   * Get initial letter for avatar
+   * @param {string} name
+   * @param {string} type
+   * @returns {string}
+   */
+  function getInitial(name, type) {
+    if (type === 'runtime') {
+      // Use language icon or first letter
+      const icons = { python: '🐍', javascript: 'JS', typescript: 'TS', rust: '🦀', go: 'Go' };
+      const lang = name?.toLowerCase();
+      return icons[lang] || (name?.[0] || 'R').toUpperCase();
+    }
+    if (type === 'ai') {
+      return '🤖';
+    }
+    return (name?.[0] || '?').toUpperCase();
+  }
+
+  // Initial render
+  render();
+
+  // Subscribe to changes
+  const unsubscribe = stateManager.onChange(() => {
+    render();
+  });
+
+  // Append to container
+  if (container) {
+    container.appendChild(wrapper);
+  }
+
+  return {
+    element: wrapper,
+    update: render,
+    destroy() {
+      unsubscribe();
+      wrapper.remove();
+    },
+  };
+}
+
+// #endregion COMPONENT
+
+// #region FLOATING
+
+/**
+ * Creates a floating collaborator list that can be positioned anywhere.
+ *
+ * @param {Object} options
+ * @param {import('../state.js').AwarenessStateManager} options.stateManager
+ * @param {Object} [options.position] - Position config
+ * @param {string} [options.position.top]
+ * @param {string} [options.position.right]
+ * @param {string} [options.position.bottom]
+ * @param {string} [options.position.left]
+ * @returns {{show: function, hide: function, toggle: function, destroy: function, element: HTMLElement}}
+ */
+function createFloatingCollaboratorList({ stateManager, position = {} }) {
+  const container = document.createElement('div');
+  container.className = 'mrmd-collaborator-list-floating';
+  container.style.cssText = `
+    position: fixed;
+    z-index: 1000;
+    min-width: 200px;
+    max-width: 300px;
+    max-height: 400px;
+    overflow: auto;
+    background: var(--mrmd-bg, #1e1e1e);
+    border: 1px solid var(--mrmd-border, #333);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    ${position.top ? `top: ${position.top};` : ''}
+    ${position.right ? `right: ${position.right};` : ''}
+    ${position.bottom ? `bottom: ${position.bottom};` : ''}
+    ${position.left ? `left: ${position.left};` : ''}
+  `;
+
+  // Default position if none specified
+  if (!position.top && !position.bottom) {
+    container.style.top = '20px';
+  }
+  if (!position.left && !position.right) {
+    container.style.right = '20px';
+  }
+
+  const list = createCollaboratorList({
+    container,
+    stateManager,
+    showSelf: true,
+    showStatus: true,
+    showActivity: true,
+    showTypes: true,
+    position: 'floating',
+  });
+
+  // Initially hidden
+  container.style.display = 'none';
+  document.body.appendChild(container);
+
+  return {
+    element: container,
+    show() {
+      container.style.display = 'block';
+    },
+    hide() {
+      container.style.display = 'none';
+    },
+    toggle() {
+      container.style.display = container.style.display === 'none' ? 'block' : 'none';
+    },
+    isVisible() {
+      return container.style.display !== 'none';
+    },
+    destroy() {
+      list.destroy();
+      container.remove();
+    },
+  };
+}
+
+// #endregion FLOATING
+
+// #region AVATAR_ROW
+
+/**
+ * Creates a compact avatar row showing just collaborator avatars.
+ * Hovering shows full info.
+ *
+ * @param {Object} options
+ * @param {HTMLElement} options.container
+ * @param {import('../state.js').AwarenessStateManager} options.stateManager
+ * @param {number} [options.maxAvatars=5] - Max avatars to show before "+N"
+ * @returns {{update: function, destroy: function, element: HTMLElement}}
+ */
+function createAvatarRow({ container, stateManager, maxAvatars = 5 }) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'mrmd-avatar-row';
+
+  function render() {
+    const collaborators = stateManager.getCollaborators();
+    wrapper.innerHTML = '';
+
+    const shown = collaborators.slice(0, maxAvatars);
+    const overflow = collaborators.length - maxAvatars;
+
+    shown.forEach(({ clientId, user }) => {
+      const avatar = document.createElement('div');
+      avatar.className = `mrmd-avatar-row__avatar mrmd-avatar-row__avatar--${user.type || 'unknown'}`;
+      avatar.style.backgroundColor = user.color || '#666';
+      avatar.textContent = (user.name?.[0] || '?').toUpperCase();
+      avatar.title = `${user.name || 'Anonymous'} (${user.type || 'unknown'})${user.status ? ' - ' + user.status : ''}`;
+
+      // Status indicator
+      if (user.status && user.status !== 'idle') {
+        avatar.classList.add(`mrmd-avatar-row__avatar--${user.status}`);
+      }
+
+      wrapper.appendChild(avatar);
+    });
+
+    if (overflow > 0) {
+      const more = document.createElement('div');
+      more.className = 'mrmd-avatar-row__more';
+      more.textContent = `+${overflow}`;
+      more.title = `${overflow} more collaborator${overflow > 1 ? 's' : ''}`;
+      wrapper.appendChild(more);
+    }
+  }
+
+  render();
+
+  const unsubscribe = stateManager.onChange(render);
+
+  if (container) {
+    container.appendChild(wrapper);
+  }
+
+  return {
+    element: wrapper,
+    update: render,
+    destroy() {
+      unsubscribe();
+      wrapper.remove();
+    },
+  };
+}
+
+// #endregion EXPORTS
+
+/**
+ * Enhanced Cursor Decorations
+ *
+ * Extends the default y-codemirror.next cursor rendering with richer labels
+ * showing collaborator status, what they're doing, etc.
+ *
+ * The default y-codemirror.next shows: colored caret + name on hover.
+ * This enhancement adds: status indicator, activity text, animation.
+ *
+ * @module awareness/ui/cursors
+ */
+
+
+// #region WIDGET
+
+/**
+ * Widget for rendering enhanced cursor label
+ */
+class CursorLabelWidget extends WidgetType {
+  /**
+   * @param {Object} options
+   * @param {string} options.name
+   * @param {string} options.color
+   * @param {string} [options.status]
+   * @param {string} [options.activity]
+   * @param {string} [options.type]
+   * @param {boolean} [options.showAlways=false]
+   */
+  constructor({ name, color, status, activity, type, showAlways = false }) {
+    super();
+    this.name = name;
+    this.color = color;
+    this.status = status;
+    this.activity = activity;
+    this.type = type;
+    this.showAlways = showAlways;
+  }
+
+  eq(other) {
+    return (
+      other.name === this.name &&
+      other.color === this.color &&
+      other.status === this.status &&
+      other.activity === this.activity
+    );
+  }
+
+  toDOM() {
+    const container = document.createElement('span');
+    container.className = `mrmd-cursor-label${this.showAlways ? ' mrmd-cursor-label--always' : ''}`;
+    container.style.setProperty('--cursor-color', this.color);
+
+    // Name
+    const nameEl = document.createElement('span');
+    nameEl.className = 'mrmd-cursor-label__name';
+    nameEl.textContent = this.name;
+    container.appendChild(nameEl);
+
+    // Status indicator
+    if (this.status && this.status !== 'idle') {
+      const statusEl = document.createElement('span');
+      statusEl.className = `mrmd-cursor-label__status mrmd-cursor-label__status--${this.status}`;
+
+      switch (this.status) {
+        case 'typing':
+          statusEl.innerHTML = '<span class="typing-indicator"><span></span><span></span><span></span></span>';
+          break;
+        case 'executing':
+          statusEl.innerHTML = '<span class="executing-indicator"></span>';
+          break;
+        case 'streaming':
+          statusEl.innerHTML = '<span class="streaming-indicator"></span>';
+          break;
+        default:
+          statusEl.textContent = this.status;
+      }
+
+      container.appendChild(statusEl);
+    }
+
+    // Activity text (short)
+    if (this.activity) {
+      const activityEl = document.createElement('span');
+      activityEl.className = 'mrmd-cursor-label__activity';
+      activityEl.textContent = this.activity;
+      container.appendChild(activityEl);
+    }
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+// #endregion WIDGET
+
+// #region CARET_WIDGET
+
+/**
+ * Widget for the actual cursor caret (the blinking line)
+ */
+class CursorCaretWidget extends WidgetType {
+  constructor({ color, status }) {
+    super();
+    this.color = color;
+    this.status = status;
+  }
+
+  eq(other) {
+    return other.color === this.color && other.status === this.status;
+  }
+
+  toDOM() {
+    const caret = document.createElement('span');
+    caret.className = `mrmd-cursor-caret${this.status ? ' mrmd-cursor-caret--' + this.status : ''}`;
+    caret.style.borderColor = this.color;
+    caret.style.setProperty('--cursor-color', this.color);
+    return caret;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+// #endregion CARET_WIDGET
+
+// #region EXTENSION
+
+/**
+ * Creates an enhanced cursor decoration extension.
+ *
+ * This works alongside y-codemirror.next's built-in cursors, adding
+ * richer labels with status information.
+ *
+ * @param {Object} options
+ * @param {import('../state.js').AwarenessStateManager} options.stateManager
+ * @param {Y.Text} [options.yText] - Yjs Text instance for position conversion
+ * @param {Object} [options.config]
+ * @param {boolean} [options.config.showLabels=true] - Show name labels
+ * @param {boolean} [options.config.showStatus=true] - Show status indicators
+ * @param {boolean} [options.config.showActivity=true] - Show activity text
+ * @param {boolean} [options.config.showAlways=false] - Always show labels (not just on hover)
+ * @param {boolean} [options.config.replaceCaret=false] - Replace default carets
+ * @returns {import('@codemirror/state').Extension}
+ */
+function createEnhancedCursors({ stateManager, yText, config = {} }) {
+  const {
+    showLabels = true,
+    showStatus = true,
+    showActivity = true,
+    showAlways = false,
+    replaceCaret = false,
+  } = config;
+
+  return ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.view = view;
+        this.stateManager = stateManager;
+        this.yText = yText;
+        try {
+          this.decorations = this.buildDecorations();
+        } catch (e) {
+          console.warn('Initial cursor decoration build failed:', e);
+          this.decorations = Decoration.none;
+        }
+
+        // Subscribe to awareness changes
+        this.unsubscribe = stateManager.onChange(() => {
+          try {
+            this.decorations = this.buildDecorations();
+            // Request a measure pass to update decorations
+            if (view.dom && view.dom.isConnected) {
+              view.requestMeasure();
+            }
+          } catch (e) {
+            console.warn('Cursor decoration update failed:', e);
+          }
+        });
+      }
+
+      update(update) {
+        // Rebuild on doc or selection changes (cursor positions may have changed)
+        if (update.docChanged || update.selectionSet) {
+          this.decorations = this.buildDecorations();
+        }
+      }
+
+      buildDecorations() {
+        const builder = new RangeSetBuilder();
+        const localClientId = this.stateManager.awareness.clientID;
+
+        // Get all remote collaborators with cursor state
+        const collaborators = [];
+        this.stateManager.awareness.getStates().forEach((state, clientId) => {
+          if (clientId === localClientId) return; // Skip self
+          if (!state.user) return;
+
+          // y-codemirror.next stores cursor in awareness
+          const cursor = state.cursor;
+          if (!cursor) return;
+
+          collaborators.push({
+            clientId,
+            user: state.user,
+            cursor,
+          });
+        });
+
+        // Sort by position to build decorations in order
+        const decorationsToAdd = [];
+
+        for (const { clientId, user, cursor } of collaborators) {
+          // Get absolute position from relative position
+          // This depends on y-codemirror.next's cursor format
+          const pos = this.getAbsolutePosition(cursor);
+          if (pos === null || pos < 0 || pos > this.view.state.doc.length) continue;
+
+          // Activity text
+          let activity = '';
+          if (showActivity && user.hover) {
+            activity = `→ ${user.hover.symbol}`;
+          } else if (showActivity && user.autocomplete) {
+            activity = `→ ${user.autocomplete.query}...`;
+          }
+
+          // Add caret decoration
+          if (replaceCaret) {
+            decorationsToAdd.push({
+              pos,
+              decoration: Decoration.widget({
+                widget: new CursorCaretWidget({
+                  color: user.color,
+                  status: user.status,
+                }),
+                side: 1,
+              }),
+            });
+          }
+
+          // Add label decoration
+          if (showLabels) {
+            decorationsToAdd.push({
+              pos,
+              decoration: Decoration.widget({
+                widget: new CursorLabelWidget({
+                  name: user.name || 'Anonymous',
+                  color: user.color || '#666',
+                  status: showStatus ? user.status : undefined,
+                  activity,
+                  type: user.type,
+                  showAlways,
+                }),
+                side: 1,
+              }),
+            });
+          }
+        }
+
+        // Sort by position and add to builder
+        decorationsToAdd.sort((a, b) => a.pos - b.pos);
+        for (const { pos, decoration } of decorationsToAdd) {
+          builder.add(pos, pos, decoration);
+        }
+
+        return builder.finish();
+      }
+
+      /**
+       * Convert y-codemirror relative position to absolute position
+       * y-codemirror.next stores cursor as {anchor, head} with RelativePositions
+       * that need to be converted using the Y.Doc
+       */
+      getAbsolutePosition(cursor) {
+        if (typeof cursor === 'number') {
+          return cursor;
+        }
+
+        // If cursor has head property as a number, use that directly
+        if (cursor && typeof cursor.head === 'number') {
+          return cursor.head;
+        }
+
+        // If cursor.head is a RelativePosition object, convert it
+        if (cursor && cursor.head && typeof cursor.head === 'object' && this.yText) {
+          try {
+            const ydoc = this.yText.doc;
+            if (ydoc) {
+              const absPos = createAbsolutePositionFromRelativePosition(cursor.head, ydoc);
+              if (absPos) {
+                return absPos.index;
+              }
+            }
+          } catch (e) {
+            // Conversion failed, fall through
+          }
+        }
+
+        // Fallback: try anchor
+        if (cursor && typeof cursor.anchor === 'number') {
+          return cursor.anchor;
+        }
+
+        if (cursor && cursor.anchor && typeof cursor.anchor === 'object' && this.yText) {
+          try {
+            const ydoc = this.yText.doc;
+            if (ydoc) {
+              const absPos = createAbsolutePositionFromRelativePosition(cursor.anchor, ydoc);
+              if (absPos) {
+                return absPos.index;
+              }
+            }
+          } catch (e) {
+            // Conversion failed
+          }
+        }
+
+        return null;
+      }
+
+      destroy() {
+        if (this.unsubscribe) {
+          this.unsubscribe();
+        }
+      }
+    },
+    {
+      decorations: (v) => v.decorations,
+    }
+  );
+}
+
+// #endregion EXTENSION
+
+// #region SELECTION_HIGHLIGHT
+
+/**
+ * Creates selection highlight decorations for remote collaborators.
+ *
+ * Shows a colored background for text selected by other users.
+ *
+ * @param {Object} options
+ * @param {import('../state.js').AwarenessStateManager} options.stateManager
+ * @param {Y.Text} [options.yText] - Yjs Text instance for position conversion
+ * @param {number} [options.opacity=0.2] - Selection background opacity
+ * @returns {import('@codemirror/state').Extension}
+ */
+function createSelectionHighlights({ stateManager, yText, opacity = 0.2 }) {
+  return ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.view = view;
+        this.stateManager = stateManager;
+        this.yText = yText;
+        try {
+          this.decorations = this.buildDecorations();
+        } catch (e) {
+          console.warn('Initial selection highlight build failed:', e);
+          this.decorations = Decoration.none;
+        }
+
+        this.unsubscribe = stateManager.onChange(() => {
+          try {
+            this.decorations = this.buildDecorations();
+            if (view.dom && view.dom.isConnected) {
+              view.requestMeasure();
+            }
+          } catch (e) {
+            console.warn('Selection highlight update failed:', e);
+          }
+        });
+      }
+
+      update(update) {
+        if (update.docChanged) {
+          this.decorations = this.buildDecorations();
+        }
+      }
+
+      /**
+       * Convert a RelativePosition to absolute index
+       */
+      getAbsoluteIndex(relPos) {
+        if (typeof relPos === 'number') return relPos;
+        if (!relPos || typeof relPos !== 'object' || !this.yText) return null;
+
+        try {
+          const ydoc = this.yText.doc;
+          if (ydoc) {
+            const absPos = createAbsolutePositionFromRelativePosition(relPos, ydoc);
+            if (absPos) return absPos.index;
+          }
+        } catch (e) {
+          // Conversion failed
+        }
+        return null;
+      }
+
+      buildDecorations() {
+        const builder = new RangeSetBuilder();
+        const localClientId = this.stateManager.awareness.clientID;
+        const docLength = this.view.state.doc.length;
+
+        const decorationsToAdd = [];
+
+        this.stateManager.awareness.getStates().forEach((state, clientId) => {
+          if (clientId === localClientId) return;
+          if (!state.user || !state.cursor) return;
+
+          const cursor = state.cursor;
+          let from, to;
+
+          if (typeof cursor === 'object') {
+            from = this.getAbsoluteIndex(cursor.anchor);
+            to = this.getAbsoluteIndex(cursor.head);
+          }
+
+          if (from === null || to === null) return;
+
+          // Ensure from < to
+          if (from > to) [from, to] = [to, from];
+
+          // Clamp to document bounds
+          from = Math.max(0, Math.min(from, docLength));
+          to = Math.max(0, Math.min(to, docLength));
+
+          // Only show if there's an actual selection (not just a cursor)
+          if (from === to) return;
+
+          const color = state.user.color || '#666';
+
+          decorationsToAdd.push({
+            from,
+            to,
+            decoration: Decoration.mark({
+              class: 'mrmd-remote-selection',
+              attributes: {
+                style: `background-color: ${hexToRgba(color, opacity)}`,
+              },
+            }),
+          });
+        });
+
+        // Sort and add
+        decorationsToAdd.sort((a, b) => a.from - b.from);
+        for (const { from, to, decoration } of decorationsToAdd) {
+          builder.add(from, to, decoration);
+        }
+
+        return builder.finish();
+      }
+
+      destroy() {
+        if (this.unsubscribe) {
+          this.unsubscribe();
+        }
+      }
+    },
+    {
+      decorations: (v) => v.decorations,
+    }
+  );
+}
+
+/**
+ * Convert hex color to rgba
+ * @param {string} hex
+ * @param {number} alpha
+ * @returns {string}
+ */
+function hexToRgba(hex, alpha) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!result) return `rgba(100, 100, 100, ${alpha})`;
+
+  const r = parseInt(result[1], 16);
+  const g = parseInt(result[2], 16);
+  const b = parseInt(result[3], 16);
+
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// #endregion SELECTION_HIGHLIGHT
+
+// #region COMBINED
+
+/**
+ * Creates all cursor-related awareness extensions.
+ *
+ * @param {Object} options
+ * @param {import('../state.js').AwarenessStateManager} options.stateManager
+ * @param {Y.Text} [options.yText] - Yjs Text instance for position conversion
+ * @param {Object} [options.config]
+ * @returns {import('@codemirror/state').Extension[]}
+ */
+function createCursorExtensions({ stateManager, yText, config = {} }) {
+  return [
+    createEnhancedCursors({ stateManager, yText, config }),
+    createSelectionHighlights({ stateManager, yText, opacity: config.selectionOpacity || 0.2 }),
+  ];
+}
+
+// #endregion EXPORTS
+
+/**
+ * Inline Status Indicators
+ *
+ * Visual indicators shown inline in the editor:
+ * - Hover indicators: small dot where others are hovering
+ * - Execution indicators: badge on cells being executed
+ * - Cell presence indicators: show who's in each cell
+ *
+ * @module awareness/ui/indicators
+ */
+
+
+// #region HOVER_INDICATOR
+
+/**
+ * Widget showing a small dot where a collaborator is hovering
+ */
+class HoverIndicatorWidget extends WidgetType {
+  constructor({ name, color, symbol }) {
+    super();
+    this.name = name;
+    this.color = color;
+    this.symbol = symbol;
+  }
+
+  eq(other) {
+    return (
+      other.name === this.name &&
+      other.color === this.color &&
+      other.symbol === this.symbol
+    );
+  }
+
+  toDOM() {
+    const dot = document.createElement('span');
+    dot.className = 'mrmd-hover-indicator';
+    dot.style.setProperty('--indicator-color', this.color);
+    dot.title = `${this.name} is inspecting ${this.symbol}`;
+
+    // Small colored dot
+    const inner = document.createElement('span');
+    inner.className = 'mrmd-hover-indicator__dot';
+    dot.appendChild(inner);
+
+    return dot;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+/**
+ * Creates hover indicator decorations.
+ *
+ * Shows small dots at positions where other collaborators have
+ * their hover tooltips open.
+ *
+ * @param {Object} options
+ * @param {import('../state.js').AwarenessStateManager} options.stateManager
+ * @param {function(): string} options.getContent
+ * @returns {import('@codemirror/state').Extension}
+ */
+function createHoverIndicators({ stateManager, getContent }) {
+  return ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.view = view;
+        this.stateManager = stateManager;
+        this.getContent = getContent;
+        this.decorations = this.buildDecorations();
+
+        this.unsubscribe = stateManager.onChange(() => {
+          try {
+            this.decorations = this.buildDecorations();
+            if (view.dom && view.dom.isConnected) {
+              view.requestMeasure();
+            }
+          } catch (e) {
+            console.warn('Indicator decoration update failed:', e);
+          }
+        });
+      }
+
+      update(update) {
+        if (update.docChanged) {
+          this.decorations = this.buildDecorations();
+        }
+      }
+
+      buildDecorations() {
+        const builder = new RangeSetBuilder();
+        const localClientId = this.stateManager.awareness.clientID;
+        const doc = this.view.state.doc;
+        const decorationsToAdd = [];
+
+        this.stateManager.awareness.getStates().forEach((state, clientId) => {
+          if (clientId === localClientId) return;
+          if (!state.user?.hover) return;
+
+          const { hover } = state.user;
+          const { position, symbol } = hover;
+
+          if (!position) return;
+
+          // Convert line/ch to absolute position
+          try {
+            const line = doc.line(position.line);
+            const pos = line.from + Math.min(position.ch, line.length);
+
+            decorationsToAdd.push({
+              pos,
+              decoration: Decoration.widget({
+                widget: new HoverIndicatorWidget({
+                  name: state.user.name || 'Anonymous',
+                  color: state.user.color || '#666',
+                  symbol: symbol || '?',
+                }),
+                side: -1, // Before the position
+              }),
+            });
+          } catch (e) {
+            // Invalid position, skip
+          }
+        });
+
+        decorationsToAdd.sort((a, b) => a.pos - b.pos);
+        for (const { pos, decoration } of decorationsToAdd) {
+          builder.add(pos, pos, decoration);
+        }
+
+        return builder.finish();
+      }
+
+      destroy() {
+        if (this.unsubscribe) {
+          this.unsubscribe();
+        }
+      }
+    },
+    {
+      decorations: (v) => v.decorations,
+    }
+  );
+}
+
+// #endregion HOVER_INDICATOR
+
+// #region EXECUTION_INDICATOR
+
+/**
+ * Widget showing execution status on a cell
+ */
+class ExecutionIndicatorWidget extends WidgetType {
+  constructor({ name, color, progress, progressText, language }) {
+    super();
+    this.name = name;
+    this.color = color;
+    this.progress = progress;
+    this.progressText = progressText;
+    this.language = language;
+  }
+
+  eq(other) {
+    return (
+      other.name === this.name &&
+      other.progress === this.progress &&
+      other.progressText === this.progressText
+    );
+  }
+
+  toDOM() {
+    const container = document.createElement('span');
+    container.className = 'mrmd-execution-indicator';
+    container.style.setProperty('--indicator-color', this.color);
+
+    // Spinner
+    const spinner = document.createElement('span');
+    spinner.className = 'mrmd-execution-indicator__spinner';
+    container.appendChild(spinner);
+
+    // Runtime name
+    const label = document.createElement('span');
+    label.className = 'mrmd-execution-indicator__label';
+    label.textContent = this.name || this.language || 'Running';
+    container.appendChild(label);
+
+    // Progress bar (if progress available)
+    if (this.progress !== undefined && this.progress !== null) {
+      const progressBar = document.createElement('span');
+      progressBar.className = 'mrmd-execution-indicator__progress';
+
+      const fill = document.createElement('span');
+      fill.className = 'mrmd-execution-indicator__progress-fill';
+      fill.style.width = `${Math.round(this.progress * 100)}%`;
+      progressBar.appendChild(fill);
+
+      container.appendChild(progressBar);
+
+      // Progress text
+      if (this.progressText) {
+        const text = document.createElement('span');
+        text.className = 'mrmd-execution-indicator__progress-text';
+        text.textContent = this.progressText;
+        container.appendChild(text);
+      }
+    }
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+/**
+ * Creates execution indicator decorations.
+ *
+ * Shows a badge on cells that are currently being executed,
+ * with optional progress information.
+ *
+ * @param {Object} options
+ * @param {import('../state.js').AwarenessStateManager} options.stateManager
+ * @param {function(): string} options.getContent
+ * @returns {import('@codemirror/state').Extension}
+ */
+function createExecutionIndicators({ stateManager, getContent }) {
+  return ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.view = view;
+        this.stateManager = stateManager;
+        this.getContent = getContent;
+        this.decorations = this.buildDecorations();
+
+        this.unsubscribe = stateManager.onChange(() => {
+          try {
+            this.decorations = this.buildDecorations();
+            if (view.dom && view.dom.isConnected) {
+              view.requestMeasure();
+            }
+          } catch (e) {
+            console.warn('Indicator decoration update failed:', e);
+          }
+        });
+      }
+
+      update(update) {
+        if (update.docChanged) {
+          this.decorations = this.buildDecorations();
+        }
+      }
+
+      buildDecorations() {
+        const builder = new RangeSetBuilder();
+        const content = this.getContent();
+        const cells = findCells(content);
+        const decorationsToAdd = [];
+
+        // Find all active executions from all collaborators
+        const activeExecutions = new Map(); // cellIndex -> execution info
+
+        this.stateManager.awareness.getStates().forEach((state, clientId) => {
+          if (!state.user?.execution) return;
+
+          const { execution } = state.user;
+          const { cellIndex } = execution;
+
+          // Prefer showing the execution with progress info
+          const existing = activeExecutions.get(cellIndex);
+          if (!existing || execution.progress !== undefined) {
+            activeExecutions.set(cellIndex, {
+              name: state.user.name,
+              color: state.user.color,
+              ...execution,
+            });
+          }
+        });
+
+        // Add indicators for executing cells
+        activeExecutions.forEach((execution, cellIndex) => {
+          const cell = cells[cellIndex];
+          if (!cell) return;
+
+          // Position at end of opening fence line
+          const doc = this.view.state.doc;
+          const cellLine = doc.lineAt(cell.start);
+
+          decorationsToAdd.push({
+            pos: cellLine.to,
+            decoration: Decoration.widget({
+              widget: new ExecutionIndicatorWidget({
+                name: execution.name,
+                color: execution.color || '#10b981',
+                progress: execution.progress,
+                progressText: execution.progressText,
+                language: execution.language,
+              }),
+              side: 1,
+            }),
+          });
+        });
+
+        decorationsToAdd.sort((a, b) => a.pos - b.pos);
+        for (const { pos, decoration } of decorationsToAdd) {
+          builder.add(pos, pos, decoration);
+        }
+
+        return builder.finish();
+      }
+
+      destroy() {
+        if (this.unsubscribe) {
+          this.unsubscribe();
+        }
+      }
+    },
+    {
+      decorations: (v) => v.decorations,
+    }
+  );
+}
+
+// #endregion EXECUTION_INDICATOR
+
+// #region CELL_PRESENCE
+
+/**
+ * Widget showing collaborators present in a cell
+ */
+class CellPresenceWidget extends WidgetType {
+  constructor({ collaborators }) {
+    super();
+    this.collaborators = collaborators;
+  }
+
+  eq(other) {
+    if (other.collaborators.length !== this.collaborators.length) return false;
+    return this.collaborators.every((c, i) =>
+      c.name === other.collaborators[i].name && c.color === other.collaborators[i].color
+    );
+  }
+
+  toDOM() {
+    const container = document.createElement('span');
+    container.className = 'mrmd-cell-presence';
+
+    // Show avatars for collaborators in this cell
+    this.collaborators.slice(0, 3).forEach(({ name, color }) => {
+      const avatar = document.createElement('span');
+      avatar.className = 'mrmd-cell-presence__avatar';
+      avatar.style.backgroundColor = color || '#666';
+      avatar.textContent = (name?.[0] || '?').toUpperCase();
+      avatar.title = name || 'Anonymous';
+      container.appendChild(avatar);
+    });
+
+    // Overflow indicator
+    if (this.collaborators.length > 3) {
+      const more = document.createElement('span');
+      more.className = 'mrmd-cell-presence__more';
+      more.textContent = `+${this.collaborators.length - 3}`;
+      container.appendChild(more);
+    }
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+/**
+ * Creates cell presence indicators.
+ *
+ * Shows small avatars in the gutter area showing which
+ * collaborators have their cursor in each cell.
+ *
+ * @param {Object} options
+ * @param {import('../state.js').AwarenessStateManager} options.stateManager
+ * @param {function(): string} options.getContent
+ * @returns {import('@codemirror/state').Extension}
+ */
+function createCellPresenceIndicators({ stateManager, getContent }) {
+  return ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.view = view;
+        this.stateManager = stateManager;
+        this.getContent = getContent;
+        this.decorations = this.buildDecorations();
+
+        this.unsubscribe = stateManager.onChange(() => {
+          try {
+            this.decorations = this.buildDecorations();
+            if (view.dom && view.dom.isConnected) {
+              view.requestMeasure();
+            }
+          } catch (e) {
+            console.warn('Indicator decoration update failed:', e);
+          }
+        });
+      }
+
+      update(update) {
+        if (update.docChanged) {
+          this.decorations = this.buildDecorations();
+        }
+      }
+
+      buildDecorations() {
+        const builder = new RangeSetBuilder();
+        const content = this.getContent();
+        const cells = findCells(content);
+        const localClientId = this.stateManager.awareness.clientID;
+
+        // Group collaborators by cell
+        const cellCollaborators = new Map(); // cellIndex -> collaborators[]
+
+        this.stateManager.awareness.getStates().forEach((state, clientId) => {
+          if (clientId === localClientId) return;
+          if (!state.user) return;
+
+          const cellIndex = state.user.activeCellIndex;
+          if (cellIndex === undefined || cellIndex === null) return;
+
+          if (!cellCollaborators.has(cellIndex)) {
+            cellCollaborators.set(cellIndex, []);
+          }
+          cellCollaborators.get(cellIndex).push({
+            name: state.user.name,
+            color: state.user.color,
+            status: state.user.status,
+          });
+        });
+
+        // Create decorations
+        const decorationsToAdd = [];
+
+        cellCollaborators.forEach((collaborators, cellIndex) => {
+          const cell = cells[cellIndex];
+          if (!cell) return;
+
+          // Position at start of cell
+          decorationsToAdd.push({
+            pos: cell.start,
+            decoration: Decoration.widget({
+              widget: new CellPresenceWidget({ collaborators }),
+              side: -1,
+            }),
+          });
+        });
+
+        decorationsToAdd.sort((a, b) => a.pos - b.pos);
+        for (const { pos, decoration } of decorationsToAdd) {
+          builder.add(pos, pos, decoration);
+        }
+
+        return builder.finish();
+      }
+
+      destroy() {
+        if (this.unsubscribe) {
+          this.unsubscribe();
+        }
+      }
+    },
+    {
+      decorations: (v) => v.decorations,
+    }
+  );
+}
+
+// #endregion CELL_PRESENCE
+
+// #region STATUS_BAR
+
+/**
+ * Creates a status bar element showing global awareness info.
+ *
+ * This is not a CodeMirror extension but a standalone DOM element
+ * that can be placed anywhere in your UI.
+ *
+ * @param {Object} options
+ * @param {import('../state.js').AwarenessStateManager} options.stateManager
+ * @param {HTMLElement} [options.container] - Container to append to
+ * @returns {{element: HTMLElement, update: function, destroy: function}}
+ */
+function createStatusBar({ stateManager, container }) {
+  const bar = document.createElement('div');
+  bar.className = 'mrmd-status-bar';
+
+  function render() {
+    const collaborators = stateManager.getCollaborators();
+    const execution = getActiveExecution(collaborators);
+    const generation = getActiveGeneration(collaborators);
+
+    let html = '';
+
+    // Collaborator count
+    html += `<span class="mrmd-status-bar__item">
+      <span class="mrmd-status-bar__icon">👥</span>
+      <span class="mrmd-status-bar__value">${collaborators.length}</span>
+    </span>`;
+
+    // Active execution
+    if (execution) {
+      html += `<span class="mrmd-status-bar__item mrmd-status-bar__item--executing">
+        <span class="mrmd-status-bar__spinner"></span>
+        <span class="mrmd-status-bar__label">${execution.name || 'Runtime'}</span>
+        <span class="mrmd-status-bar__detail">Cell ${execution.cellIndex}</span>
+        ${execution.progress !== undefined ? `
+          <span class="mrmd-status-bar__progress">
+            <span class="mrmd-status-bar__progress-fill" style="width: ${Math.round(execution.progress * 100)}%"></span>
+          </span>
+          <span class="mrmd-status-bar__progress-text">${execution.progressText || Math.round(execution.progress * 100) + '%'}</span>
+        ` : ''}
+      </span>`;
+    }
+
+    // AI generation
+    if (generation) {
+      html += `<span class="mrmd-status-bar__item mrmd-status-bar__item--streaming">
+        <span class="mrmd-status-bar__icon">🤖</span>
+        <span class="mrmd-status-bar__label">${generation.name || 'AI'}</span>
+        ${generation.tokensGenerated ? `
+          <span class="mrmd-status-bar__detail">${generation.tokensGenerated} tokens</span>
+        ` : ''}
+      </span>`;
+    }
+
+    bar.innerHTML = html;
+  }
+
+  function getActiveExecution(collaborators) {
+    for (const { user } of collaborators) {
+      if (user.execution && user.status === 'executing') {
+        return { name: user.name, ...user.execution };
+      }
+    }
+    return null;
+  }
+
+  function getActiveGeneration(collaborators) {
+    for (const { user } of collaborators) {
+      if (user.generation && (user.status === 'streaming' || user.status === 'thinking')) {
+        return { name: user.name, ...user.generation };
+      }
+    }
+    return null;
+  }
+
+  render();
+
+  const unsubscribe = stateManager.onChange(render);
+
+  if (container) {
+    container.appendChild(bar);
+  }
+
+  return {
+    element: bar,
+    update: render,
+    destroy() {
+      unsubscribe();
+      bar.remove();
+    },
+  };
+}
+
+// #endregion STATUS_BAR
+
+// #region COMBINED
+
+/**
+ * Creates all indicator extensions.
+ *
+ * @param {Object} options
+ * @param {import('../state.js').AwarenessStateManager} options.stateManager
+ * @param {function(): string} options.getContent
+ * @param {Object} [options.config]
+ * @param {boolean} [options.config.hover=true]
+ * @param {boolean} [options.config.execution=true]
+ * @param {boolean} [options.config.cellPresence=true]
+ * @returns {import('@codemirror/state').Extension[]}
+ */
+function createIndicatorExtensions({ stateManager, getContent, config = {} }) {
+  const {
+    hover = true,
+    execution = true,
+    cellPresence = true,
+  } = config;
+
+  const extensions = [];
+
+  if (hover) {
+    extensions.push(createHoverIndicators({ stateManager, getContent }));
+  }
+
+  if (execution) {
+    extensions.push(createExecutionIndicators({ stateManager, getContent }));
+  }
+
+  if (cellPresence) {
+    extensions.push(createCellPresenceIndicators({ stateManager, getContent }));
+  }
+
+  return extensions;
+}
+
+// #endregion EXPORTS
+
+/**
+ * Awareness UI Styles
+ *
+ * CSS styles for all awareness components.
+ * Can be injected automatically or used as a reference.
+ *
+ * @module awareness/ui/styles
+ */
+
+// #region STYLES
+
+const awarenessStyles = `
+/* ==========================================================================
+   MRMD Awareness Styles
+   ========================================================================== */
+
+/* CSS Custom Properties */
+.mrmd-awareness-root {
+  --mrmd-bg: #1e1e1e;
+  --mrmd-bg-secondary: #252525;
+  --mrmd-border: #333;
+  --mrmd-text: #e0e0e0;
+  --mrmd-text-muted: #888;
+  --mrmd-font-mono: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+}
+
+/* Light mode overrides */
+.mrmd-awareness-root--light {
+  --mrmd-bg: #ffffff;
+  --mrmd-bg-secondary: #f5f5f5;
+  --mrmd-border: #e0e0e0;
+  --mrmd-text: #1a1a1a;
+  --mrmd-text-muted: #666;
+}
+
+/* ==========================================================================
+   Collaborator List
+   ========================================================================== */
+
+.mrmd-collaborator-list {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  color: var(--mrmd-text, #e0e0e0);
+}
+
+.mrmd-collaborator-list__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--mrmd-border, #333);
+  background: var(--mrmd-bg-secondary, #252525);
+}
+
+.mrmd-collaborator-list__title {
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--mrmd-text-muted, #888);
+}
+
+.mrmd-collaborator-list__count {
+  background: var(--mrmd-border, #333);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.mrmd-collaborator-list__items {
+  padding: 8px;
+}
+
+.mrmd-collaborator-list__separator {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--mrmd-text-muted, #666);
+  padding: 8px 4px 4px;
+  margin-top: 8px;
+}
+
+.mrmd-collaborator-list__separator span {
+  background: var(--mrmd-bg, #1e1e1e);
+  padding-right: 8px;
+}
+
+.mrmd-collaborator-list__empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--mrmd-text-muted, #666);
+  font-style: italic;
+}
+
+/* Collaborator Item */
+.mrmd-collaborator-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  transition: background 0.15s;
+}
+
+.mrmd-collaborator-item:hover {
+  background: var(--mrmd-bg-secondary, #252525);
+}
+
+.mrmd-collaborator-item--self {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+/* Avatar */
+.mrmd-collaborator-item__avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: white;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.mrmd-collaborator-item__status-dot {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--mrmd-bg, #1e1e1e);
+  background: #888;
+}
+
+.mrmd-collaborator-item__status-dot--typing {
+  background: #3b82f6;
+  animation: pulse 1s infinite;
+}
+
+.mrmd-collaborator-item__status-dot--executing {
+  background: #10b981;
+  animation: pulse 0.5s infinite;
+}
+
+.mrmd-collaborator-item__status-dot--streaming {
+  background: #8b5cf6;
+  animation: pulse 0.8s infinite;
+}
+
+.mrmd-collaborator-item__status-dot--selecting {
+  background: #f59e0b;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(0.9); }
+}
+
+/* Info */
+.mrmd-collaborator-item__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.mrmd-collaborator-item__name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mrmd-collaborator-item__name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mrmd-collaborator-item__badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  font-weight: 500;
+}
+
+.mrmd-collaborator-item__badge--human {
+  background: #238636;
+  color: white;
+}
+
+.mrmd-collaborator-item__badge--ai {
+  background: #8b5cf6;
+  color: white;
+}
+
+.mrmd-collaborator-item__badge--runtime {
+  background: #1f6feb;
+  color: white;
+}
+
+.mrmd-collaborator-item__badge--sync {
+  background: #6b7280;
+  color: white;
+}
+
+/* Activity */
+.mrmd-collaborator-item__activity {
+  font-size: 12px;
+  color: var(--mrmd-text-muted, #888);
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mrmd-collaborator-item__activity code {
+  background: var(--mrmd-border, #333);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: var(--mrmd-font-mono);
+  font-size: 11px;
+}
+
+.mrmd-collaborator-item__activity .activity-executing,
+.mrmd-collaborator-item__activity .activity-streaming {
+  color: #10b981;
+}
+
+.mrmd-collaborator-item__activity .activity-hover,
+.mrmd-collaborator-item__activity .activity-autocomplete {
+  color: #3b82f6;
+}
+
+.mrmd-collaborator-item__activity .activity-typing {
+  color: #f59e0b;
+}
+
+.mrmd-collaborator-item__activity .activity-progress,
+.mrmd-collaborator-item__activity .activity-tokens {
+  color: #8b5cf6;
+}
+
+/* ==========================================================================
+   Avatar Row (Compact)
+   ========================================================================== */
+
+.mrmd-avatar-row {
+  display: flex;
+  align-items: center;
+  gap: -8px; /* Overlap avatars */
+}
+
+.mrmd-avatar-row__avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: white;
+  border: 2px solid var(--mrmd-bg, #1e1e1e);
+  margin-left: -8px;
+}
+
+.mrmd-avatar-row__avatar:first-child {
+  margin-left: 0;
+}
+
+.mrmd-avatar-row__avatar--typing {
+  box-shadow: 0 0 0 2px #3b82f6;
+}
+
+.mrmd-avatar-row__avatar--executing {
+  box-shadow: 0 0 0 2px #10b981;
+}
+
+.mrmd-avatar-row__more {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--mrmd-text-muted, #888);
+  background: var(--mrmd-border, #333);
+  margin-left: -8px;
+}
+
+/* ==========================================================================
+   Cursor Labels
+   ========================================================================== */
+
+.mrmd-cursor-label {
+  position: absolute;
+  top: -20px;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.15s, transform 0.15s;
+  background: var(--cursor-color, #666);
+  color: white;
+  z-index: 100;
+}
+
+/* Show on hover over caret */
+.cm-ySelectionCaret:hover + .mrmd-cursor-label,
+.mrmd-cursor-label--always,
+.mrmd-cursor-label:hover {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.mrmd-cursor-label__name {
+  font-weight: 500;
+}
+
+.mrmd-cursor-label__status {
+  opacity: 0.8;
+}
+
+/* Typing indicator animation */
+.typing-indicator {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.typing-indicator span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: white;
+  animation: typingBounce 1s infinite;
+}
+
+.typing-indicator span:nth-child(2) { animation-delay: 0.15s; }
+.typing-indicator span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes typingBounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-4px); }
+}
+
+/* Executing indicator */
+.executing-indicator {
+  width: 8px;
+  height: 8px;
+  border: 2px solid white;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Streaming indicator */
+.streaming-indicator {
+  width: 8px;
+  height: 8px;
+  background: white;
+  border-radius: 50%;
+  animation: streamPulse 1s infinite;
+}
+
+@keyframes streamPulse {
+  0%, 100% { transform: scale(0.8); opacity: 0.5; }
+  50% { transform: scale(1.2); opacity: 1; }
+}
+
+.mrmd-cursor-label__activity {
+  font-size: 10px;
+  opacity: 0.8;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ==========================================================================
+   Cursor Caret
+   ========================================================================== */
+
+.mrmd-cursor-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.2em;
+  margin-left: -1px;
+  background: var(--cursor-color, #666);
+  animation: caretBlink 1s step-end infinite;
+}
+
+.mrmd-cursor-caret--typing {
+  animation: none;
+  background: var(--cursor-color, #666);
+}
+
+.mrmd-cursor-caret--executing {
+  animation: caretPulse 0.5s infinite;
+}
+
+@keyframes caretBlink {
+  50% { opacity: 0; }
+}
+
+@keyframes caretPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Remote selection highlight */
+.mrmd-remote-selection {
+  border-radius: 2px;
+}
+
+/* ==========================================================================
+   Hover Indicator
+   ========================================================================== */
+
+.mrmd-hover-indicator {
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 2px;
+}
+
+.mrmd-hover-indicator__dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--indicator-color, #3b82f6);
+  animation: hoverPulse 1.5s infinite;
+}
+
+@keyframes hoverPulse {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+/* ==========================================================================
+   Execution Indicator
+   ========================================================================== */
+
+.mrmd-execution-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+  vertical-align: middle;
+}
+
+.mrmd-execution-indicator__spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.mrmd-execution-indicator__label {
+  font-weight: 500;
+}
+
+.mrmd-execution-indicator__progress {
+  width: 40px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.mrmd-execution-indicator__progress-fill {
+  display: block;
+  height: 100%;
+  background: currentColor;
+  transition: width 0.3s;
+}
+
+.mrmd-execution-indicator__progress-text {
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+/* ==========================================================================
+   Cell Presence
+   ========================================================================== */
+
+.mrmd-cell-presence {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.mrmd-cell-presence__avatar {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 600;
+  color: white;
+  margin-left: -4px;
+  border: 1px solid var(--mrmd-bg, #1e1e1e);
+}
+
+.mrmd-cell-presence__avatar:first-child {
+  margin-left: 0;
+}
+
+.mrmd-cell-presence__more {
+  font-size: 9px;
+  color: var(--mrmd-text-muted, #888);
+  margin-left: 2px;
+}
+
+/* ==========================================================================
+   Status Bar
+   ========================================================================== */
+
+.mrmd-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  color: var(--mrmd-text-muted, #888);
+  background: var(--mrmd-bg-secondary, #252525);
+  border-top: 1px solid var(--mrmd-border, #333);
+}
+
+.mrmd-status-bar__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mrmd-status-bar__item--executing {
+  color: #10b981;
+}
+
+.mrmd-status-bar__item--streaming {
+  color: #8b5cf6;
+}
+
+.mrmd-status-bar__icon {
+  font-size: 14px;
+}
+
+.mrmd-status-bar__spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.mrmd-status-bar__label {
+  font-weight: 500;
+}
+
+.mrmd-status-bar__detail {
+  opacity: 0.7;
+}
+
+.mrmd-status-bar__progress {
+  width: 60px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.mrmd-status-bar__progress-fill {
+  display: block;
+  height: 100%;
+  background: currentColor;
+  transition: width 0.3s;
+}
+
+.mrmd-status-bar__progress-text {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+/* ==========================================================================
+   Floating Collaborator List
+   ========================================================================== */
+
+.mrmd-collaborator-list-floating {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.mrmd-collaborator-list--floating {
+  padding: 0;
+}
+
+.mrmd-collaborator-list--floating .mrmd-collaborator-list__header {
+  border-radius: 8px 8px 0 0;
+}
+
+.mrmd-collaborator-list--compact .mrmd-collaborator-item {
+  padding: 4px 8px;
+}
+
+.mrmd-collaborator-list--compact .mrmd-collaborator-item__avatar {
+  width: 24px;
+  height: 24px;
+  font-size: 11px;
+}
+
+.mrmd-collaborator-list--compact .mrmd-collaborator-item__activity {
+  display: none;
+}
+`;
+
+// #endregion STYLES
+
+// #region INJECTION
+
+let stylesInjected = false;
+
+/**
+ * Inject awareness styles into the document head
+ */
+function injectAwarenessStyles() {
+  if (stylesInjected) return;
+  if (typeof document === 'undefined') return;
+
+  const style = document.createElement('style');
+  style.id = 'mrmd-awareness-styles';
+  style.textContent = awarenessStyles;
+  document.head.appendChild(style);
+
+  stylesInjected = true;
+}
+
+// #endregion EXPORTS
+
+/**
+ * Awareness Module
+ *
+ * Batteries-included awareness system for mrmd-editor.
+ * Provides rich collaborator presence, status tracking, and UI components.
+ *
+ * Usage:
+ *
+ *   import { createAwareness } from './awareness';
+ *
+ *   const awareness = createAwareness({
+ *     yjsAwareness: editor.awareness,
+ *     view: editor.view,
+ *     getContent: () => editor.getContent(),
+ *     userName: 'Alice',
+ *   });
+ *
+ *   // Everything is now wired up automatically!
+ *
+ * @module awareness
+ */
+
+
+// #region MAIN_API
+
+/**
+ * @typedef {Object} AwarenessConfig
+ * @property {boolean} [cursors=true] - Show enhanced cursor labels
+ * @property {boolean} [cursorStatus=true] - Show status in cursor labels
+ * @property {boolean} [cursorActivity=true] - Show activity in cursor labels
+ * @property {boolean} [selectionHighlights=true] - Show remote selections
+ * @property {boolean} [hoverIndicators=true] - Show hover position indicators
+ * @property {boolean} [executionIndicators=true] - Show execution status on cells
+ * @property {boolean} [cellPresence=true] - Show who's in each cell
+ * @property {boolean} [trackTyping=true] - Broadcast typing status
+ * @property {boolean} [trackHover=true] - Broadcast hover state
+ * @property {boolean} [trackAutocomplete=true] - Broadcast autocomplete state
+ * @property {number} [idleTimeout=2000] - Ms before status becomes 'idle'
+ * @property {number} [selectionOpacity=0.2] - Remote selection opacity
+ */
+
+/**
+ * @typedef {Object} AwarenessOptions
+ * @property {import('y-protocols/awareness').Awareness} yjsAwareness - Yjs awareness instance
+ * @property {import('@codemirror/view').EditorView} view - CodeMirror view
+ * @property {function(): string} getContent - Get document content
+ * @property {import('yjs').Text} [yText] - Yjs Text instance for cursor position conversion
+ * @property {string} [userName='Anonymous'] - Local user name
+ * @property {string} [userColor] - Local user color (auto-generated if not provided)
+ * @property {'human'|'ai'|'runtime'} [userType='human'] - Local user type
+ * @property {AwarenessConfig} [config] - Feature configuration
+ */
+
+/**
+ * Creates a fully configured awareness system.
+ *
+ * This is the main entry point for awareness functionality.
+ * It sets up state management, tracking, and UI components.
+ *
+ * @param {AwarenessOptions} options
+ * @returns {AwarenessSystem}
+ */
+function createAwareness(options) {
+  return new AwarenessSystem(options);
+}
+
+/**
+ * Main awareness system class
+ */
+class AwarenessSystem {
+  /**
+   * @param {AwarenessOptions} options
+   */
+  constructor(options) {
+    const {
+      yjsAwareness,
+      view,
+      getContent,
+      yText,
+      userName = 'Anonymous',
+      userColor,
+      userType = 'human',
+      config = {},
+    } = options;
+
+    this.yjsAwareness = yjsAwareness;
+    this.view = view;
+    this.getContent = getContent;
+    this.yText = yText;
+    this.config = {
+      cursors: true,
+      cursorStatus: true,
+      cursorActivity: true,
+      selectionHighlights: true,
+      hoverIndicators: true,
+      executionIndicators: true,
+      cellPresence: true,
+      trackTyping: true,
+      trackHover: true,
+      trackAutocomplete: true,
+      idleTimeout: 2000,
+      selectionOpacity: 0.2,
+      ...config,
+    };
+
+    // Create state manager
+    this.stateManager = new AwarenessStateManager(yjsAwareness);
+
+    // Initialize local user state
+    const initialState = this._createInitialState(userType, userName, userColor);
+    this.stateManager.setLocalState(initialState);
+
+    // Track UI components for cleanup
+    this._uiComponents = [];
+    this._subscriptions = [];
+
+    // Inject styles
+    injectAwarenessStyles();
+  }
+
+  /**
+   * Create initial state based on user type
+   */
+  _createInitialState(type, name, color) {
+    switch (type) {
+      case 'ai':
+        return createAIState({ name, color });
+      case 'runtime':
+        return createRuntimeState({ name, color });
+      default:
+        return createHumanState({ name, color });
+    }
+  }
+
+  // ===========================================================================
+  // State Management
+  // ===========================================================================
+
+  /**
+   * Get the state manager for direct access
+   * @returns {AwarenessStateManager}
+   */
+  getStateManager() {
+    return this.stateManager;
+  }
+
+  /**
+   * Update local user info
+   * @param {Object} info
+   * @param {string} [info.name]
+   * @param {string} [info.color]
+   * @param {string} [info.status]
+   */
+  updateUser(info) {
+    this.stateManager.updateLocalState(info);
+  }
+
+  /**
+   * Set hover state (for manual control)
+   * @param {Object|null} hover
+   */
+  setHover(hover) {
+    this.stateManager.setHover(hover);
+  }
+
+  /**
+   * Set autocomplete state (for manual control)
+   * @param {Object|null} autocomplete
+   */
+  setAutocomplete(autocomplete) {
+    this.stateManager.setAutocomplete(autocomplete);
+  }
+
+  /**
+   * Set execution state (for runtimes)
+   * @param {Object|null} execution
+   */
+  setExecution(execution) {
+    this.stateManager.setExecution(execution);
+  }
+
+  /**
+   * Set generation state (for AI)
+   * @param {Object|null} generation
+   */
+  setGeneration(generation) {
+    this.stateManager.setGeneration(generation);
+  }
+
+  /**
+   * Set status
+   * @param {string} status
+   */
+  setStatus(status) {
+    this.stateManager.setStatus(status);
+  }
+
+  /**
+   * Get all collaborators
+   * @param {Object} [options]
+   * @returns {Array}
+   */
+  getCollaborators(options) {
+    return this.stateManager.getCollaborators(options);
+  }
+
+  /**
+   * Subscribe to collaborator changes
+   * @param {function} callback
+   * @returns {function} Unsubscribe
+   */
+  onCollaboratorsChange(callback) {
+    return this.stateManager.onChange(callback);
+  }
+
+  // ===========================================================================
+  // CodeMirror Extensions
+  // ===========================================================================
+
+  /**
+   * Get all CodeMirror extensions for awareness features.
+   *
+   * Add these to your editor's extensions array.
+   *
+   * @returns {import('@codemirror/state').Extension[]}
+   */
+  getExtensions() {
+    const extensions = [];
+
+    // Human tracking extensions
+    if (this.config.trackTyping) {
+      extensions.push(...createHumanAwarenessExtensions({
+        stateManager: this.stateManager,
+        getContent: this.getContent,
+        config: {
+          idleTimeout: this.config.idleTimeout,
+        },
+      }));
+    }
+
+    // Cursor extensions (these enhance, not replace, y-codemirror.next cursors)
+    if (this.config.cursors) {
+      extensions.push(...createCursorExtensions({
+        stateManager: this.stateManager,
+        yText: this.yText,
+        config: {
+          showLabels: true,
+          showStatus: this.config.cursorStatus,
+          showActivity: this.config.cursorActivity,
+          selectionOpacity: this.config.selectionOpacity,
+        },
+      }));
+    }
+
+    // Indicator extensions
+    extensions.push(...createIndicatorExtensions({
+      stateManager: this.stateManager,
+      getContent: this.getContent,
+      config: {
+        hover: this.config.hoverIndicators,
+        execution: this.config.executionIndicators,
+        cellPresence: this.config.cellPresence,
+      },
+    }));
+
+    return extensions;
+  }
+
+  // ===========================================================================
+  // Hover/Autocomplete Wrappers
+  // ===========================================================================
+
+  /**
+   * Wrap a hover provider to broadcast hover state.
+   *
+   * Use this to wrap your MRP hover provider or any custom hover.
+   *
+   * @param {function} hoverProvider - Original hover provider
+   * @returns {function} Wrapped provider
+   */
+  wrapHoverProvider(hoverProvider) {
+    if (!this.config.trackHover) return hoverProvider;
+
+    return createHoverTracker({
+      stateManager: this.stateManager,
+      hoverProvider,
+      getContent: this.getContent,
+    });
+  }
+
+  /**
+   * Wrap a completion source to broadcast autocomplete state.
+   *
+   * @param {import('@codemirror/autocomplete').CompletionSource} source
+   * @returns {import('@codemirror/autocomplete').CompletionSource}
+   */
+  wrapCompletionSource(source) {
+    if (!this.config.trackAutocomplete) return source;
+
+    return createAutocompleteTracker({
+      stateManager: this.stateManager,
+      completionSource: source,
+      getContent: this.getContent,
+    });
+  }
+
+  // ===========================================================================
+  // Execution Tracking
+  // ===========================================================================
+
+  /**
+   * Create an execution tracker that automatically updates awareness
+   * when cells are run.
+   *
+   * @param {import('../execution.js').ExecutionManager} executionManager
+   * @param {Object} [options]
+   * @param {string} [options.language]
+   * @param {string} [options.name]
+   * @param {string} [options.color]
+   * @returns {import('./runtime.js').RuntimeAwarenessTracker}
+   */
+  trackExecution(executionManager, options = {}) {
+    const tracker = createRuntimeAwarenessTracker({
+      executionManager,
+      awareness: this.yjsAwareness,
+      ...options,
+    });
+
+    this._subscriptions.push(() => tracker.destroy());
+    return tracker;
+  }
+
+  /**
+   * Create a simple execution tracker for manual control.
+   *
+   * @returns {{start: function, progress: function, end: function}}
+   */
+  createExecutionTracker() {
+    return createSimpleExecutionTracker({
+      stateManager: this.stateManager,
+    });
+  }
+
+  // ===========================================================================
+  // UI Components
+  // ===========================================================================
+
+  /**
+   * Create a collaborator list component.
+   *
+   * @param {HTMLElement} container
+   * @param {Object} [options]
+   * @returns {{update: function, destroy: function, element: HTMLElement}}
+   */
+  createCollaboratorList(container, options = {}) {
+    const list = createCollaboratorList({
+      container,
+      stateManager: this.stateManager,
+      ...options,
+    });
+
+    this._uiComponents.push(list);
+    return list;
+  }
+
+  /**
+   * Create a floating collaborator list.
+   *
+   * @param {Object} [options]
+   * @param {Object} [options.position]
+   * @returns {{show: function, hide: function, toggle: function, destroy: function}}
+   */
+  createFloatingList(options = {}) {
+    const list = createFloatingCollaboratorList({
+      stateManager: this.stateManager,
+      ...options,
+    });
+
+    this._uiComponents.push(list);
+    return list;
+  }
+
+  /**
+   * Create a compact avatar row.
+   *
+   * @param {HTMLElement} container
+   * @param {Object} [options]
+   * @returns {{update: function, destroy: function, element: HTMLElement}}
+   */
+  createAvatarRow(container, options = {}) {
+    const row = createAvatarRow({
+      container,
+      stateManager: this.stateManager,
+      ...options,
+    });
+
+    this._uiComponents.push(row);
+    return row;
+  }
+
+  /**
+   * Create a status bar component.
+   *
+   * @param {HTMLElement} [container]
+   * @returns {{element: HTMLElement, update: function, destroy: function}}
+   */
+  createStatusBar(container) {
+    const bar = createStatusBar({
+      stateManager: this.stateManager,
+      container,
+    });
+
+    this._uiComponents.push(bar);
+    return bar;
+  }
+
+  // ===========================================================================
+  // Lifecycle
+  // ===========================================================================
+
+  /**
+   * Clean up all resources.
+   */
+  destroy() {
+    // Clear transient state
+    this.stateManager.clearTransient();
+
+    // Destroy UI components
+    this._uiComponents.forEach(c => c.destroy?.());
+    this._uiComponents = [];
+
+    // Unsubscribe from all
+    this._subscriptions.forEach(unsub => unsub?.());
+    this._subscriptions = [];
+  }
+}
+
+// #endregion MAIN_API
+
+// #region CONVENIENCE
+
+/**
+ * Default awareness configuration
+ */
+const defaultAwarenessConfig = {
+  cursors: true,
+  cursorStatus: true,
+  cursorActivity: true,
+  selectionHighlights: true,
+  hoverIndicators: true,
+  executionIndicators: true,
+  cellPresence: true,
+  trackTyping: true,
+  trackHover: true,
+  trackAutocomplete: true,
+  idleTimeout: 2000,
+  selectionOpacity: 0.2,
+};
+
+/**
+ * Minimal awareness configuration (just cursors)
+ */
+const minimalAwarenessConfig = {
+  cursors: true,
+  cursorStatus: false,
+  cursorActivity: false,
+  selectionHighlights: true,
+  hoverIndicators: false,
+  executionIndicators: false,
+  cellPresence: false,
+  trackTyping: false,
+  trackHover: false,
+  trackAutocomplete: false,
+};
 
 // #endregion EXPORTS
 
@@ -55190,6 +59880,10 @@ function create(target, options = {}) {
     // Collaborator info for awareness
     userName = 'Anonymous',
     userColor = null,
+    userType = 'human',
+    // Awareness configuration (batteries-included features)
+    // Set to false to disable, true for defaults, or pass config object
+    awarenessUI = true,
   } = options;
 
   // System dark mode detection
@@ -55252,8 +59946,19 @@ function create(target, options = {}) {
     '&.cm-focused': { outline: 'none' },
   });
 
-  // Inject output widget CSS styles
+  // Inject CSS styles
   injectOutputWidgetStyles();
+  if (awarenessUI) {
+    injectAwarenessStyles();
+  }
+
+  // Prepare awareness system (created after view exists)
+  let awarenessSystem = null;
+  const awarenessConfig = awarenessUI === true
+    ? defaultAwarenessConfig
+    : typeof awarenessUI === 'object'
+      ? { ...defaultAwarenessConfig, ...awarenessUI }
+      : null;
 
   const extensions = [
     basicSetup,
@@ -55272,6 +59977,28 @@ function create(target, options = {}) {
     state: EditorState.create({ doc: initialContent, extensions }),
     parent: element
   });
+
+  // Initialize awareness system after view exists
+  if (awarenessConfig) {
+    awarenessSystem = createAwareness({
+      yjsAwareness: awareness,
+      view,
+      getContent: () => view.state.doc.toString(),
+      yText,
+      userName,
+      userColor,
+      userType,
+      config: awarenessConfig,
+    });
+
+    // Add awareness extensions to the view
+    const awarenessExtensions = awarenessSystem.getExtensions();
+    if (awarenessExtensions.length > 0) {
+      view.dispatch({
+        effects: StateEffect.appendConfig.of(awarenessExtensions)
+      });
+    }
+  }
 
   // Event handlers
   const changeHandlers = [];
@@ -55301,6 +60028,9 @@ function create(target, options = {}) {
     ydoc,
     yText,
     awareness,
+
+    // Awareness system (batteries-included UI)
+    awarenessSystem,
 
     // Runtime
     registry,
@@ -55389,16 +60119,44 @@ function create(target, options = {}) {
 
     /**
      * Announce a collaborator (for runtimes, LLMs, etc.)
+     * Changes the local user's type and updates their state accordingly.
      * @param {'human'|'ai'|'runtime'|'sync'} type - Collaborator type
      * @param {string} name - Display name
      * @param {string} [color] - Optional color
      */
     announceCollaborator(type, name, color) {
-      awareness.setLocalStateField('user', {
-        type,
-        name,
-        color: color || generateColor(),
-      });
+      // Use the awareness system's state manager if available for proper state structure
+      if (awarenessSystem) {
+        const stateManager = awarenessSystem.getStateManager();
+        const current = stateManager.getLocalState() || {};
+        // Create proper state structure based on type
+        let newState;
+        switch (type) {
+          case 'ai':
+            newState = createAIState({ name, color: color || current.color });
+            break;
+          case 'runtime':
+            newState = createRuntimeState({ language: name, name, color: color || current.color });
+            break;
+          default:
+            newState = createHumanState({ name, color: color || current.color });
+        }
+        // Preserve current status and other fields
+        stateManager.setLocalState({
+          ...newState,
+          status: current.status || 'idle',
+        });
+      } else {
+        // Fallback to direct awareness update
+        const current = awareness.getLocalState()?.user || {};
+        awareness.setLocalStateField('user', {
+          ...current,
+          type,
+          name,
+          color: color || current.color || generateColor(),
+          lastActivity: Date.now(),
+        });
+      }
     },
 
     /**
@@ -55406,8 +60164,13 @@ function create(target, options = {}) {
      * @param {'idle'|'typing'|'streaming'|'executing'} status
      */
     setCollaboratorStatus(status) {
-      const current = awareness.getLocalState()?.user || {};
-      awareness.setLocalStateField('user', { ...current, status });
+      // Use the awareness system's state manager if available
+      if (awarenessSystem) {
+        awarenessSystem.setStatus(status);
+      } else {
+        const current = awareness.getLocalState()?.user || {};
+        awareness.setLocalStateField('user', { ...current, status, lastActivity: Date.now() });
+      }
     },
 
     /**
@@ -55433,6 +60196,121 @@ function create(target, options = {}) {
       const handler = () => callback(this.getCollaborators());
       awareness.on('change', handler);
       return () => awareness.off('change', handler);
+    },
+
+    // ===========================================================================
+    // Awareness UI (Batteries-Included)
+    // ===========================================================================
+
+    /**
+     * Create a collaborator list UI component
+     * @param {HTMLElement} container
+     * @param {Object} [options]
+     * @returns {{update: function, destroy: function, element: HTMLElement}|null}
+     */
+    createCollaboratorList(container, options = {}) {
+      if (!awarenessSystem) return null;
+      return awarenessSystem.createCollaboratorList(container, options);
+    },
+
+    /**
+     * Create a floating collaborator list
+     * @param {Object} [options]
+     * @returns {{show: function, hide: function, toggle: function, destroy: function}|null}
+     */
+    createFloatingCollaboratorList(options = {}) {
+      if (!awarenessSystem) return null;
+      return awarenessSystem.createFloatingList(options);
+    },
+
+    /**
+     * Create a compact avatar row showing collaborators
+     * @param {HTMLElement} container
+     * @param {Object} [options]
+     * @returns {{update: function, destroy: function, element: HTMLElement}|null}
+     */
+    createAvatarRow(container, options = {}) {
+      if (!awarenessSystem) return null;
+      return awarenessSystem.createAvatarRow(container, options);
+    },
+
+    /**
+     * Create a status bar showing global awareness info
+     * @param {HTMLElement} [container]
+     * @returns {{element: HTMLElement, update: function, destroy: function}|null}
+     */
+    createStatusBar(container) {
+      if (!awarenessSystem) return null;
+      return awarenessSystem.createStatusBar(container);
+    },
+
+    /**
+     * Set hover state for awareness broadcast
+     * @param {Object|null} hover - {symbol, type, info, position}
+     */
+    setHover(hover) {
+      if (awarenessSystem) {
+        awarenessSystem.setHover(hover);
+      }
+    },
+
+    /**
+     * Set autocomplete state for awareness broadcast
+     * @param {Object|null} autocomplete - {query, items, position}
+     */
+    setAutocomplete(autocomplete) {
+      if (awarenessSystem) {
+        awarenessSystem.setAutocomplete(autocomplete);
+      }
+    },
+
+    /**
+     * Set execution state (for runtimes)
+     * @param {Object|null} execution - {cellIndex, startTime, progress, progressText}
+     */
+    setExecution(execution) {
+      if (awarenessSystem) {
+        awarenessSystem.setExecution(execution);
+      }
+    },
+
+    /**
+     * Set generation state (for AI)
+     * @param {Object|null} generation - {targetCell, tokensGenerated, model}
+     */
+    setGeneration(generation) {
+      if (awarenessSystem) {
+        awarenessSystem.setGeneration(generation);
+      }
+    },
+
+    /**
+     * Wrap a hover provider to broadcast hover state
+     * @param {function} hoverProvider
+     * @returns {function}
+     */
+    wrapHoverProvider(hoverProvider) {
+      if (!awarenessSystem) return hoverProvider;
+      return awarenessSystem.wrapHoverProvider(hoverProvider);
+    },
+
+    /**
+     * Wrap a completion source to broadcast autocomplete state
+     * @param {function} source
+     * @returns {function}
+     */
+    wrapCompletionSource(source) {
+      if (!awarenessSystem) return source;
+      return awarenessSystem.wrapCompletionSource(source);
+    },
+
+    /**
+     * Create an execution tracker that auto-updates awareness
+     * @returns {{start: function, progress: function, end: function}|null}
+     */
+    createExecutionTracker() {
+      if (!awarenessSystem) return null;
+      return awarenessSystem.createExecutionTracker();
     },
 
     // ===========================================================================
@@ -55569,6 +60447,9 @@ function create(target, options = {}) {
 
     destroy() {
       this.execution.cancelAll();
+      if (awarenessSystem) {
+        awarenessSystem.destroy();
+      }
       view.destroy();
     }
   };
@@ -55625,7 +60506,7 @@ function drive(urlOrOptions, options = {}) {
   return {
     url,
 
-    open(path, target, editorOptions = {}) {
+    async open(path, target, editorOptions = {}) {
       const ydoc = new Doc();
       const serverUrl = auth ? `${url}?token=${auth}` : url;
       const provider = new WebsocketProvider(serverUrl, path, ydoc);
@@ -55634,12 +60515,35 @@ function drive(urlOrOptions, options = {}) {
         setStatus(s);
       });
 
-      const editor = create(target, {
+      // Wait for initial sync before creating editor
+      // This prevents duplicate content when multiple tabs open
+      await new Promise((resolve) => {
+        if (provider.synced) {
+          resolve();
+        } else {
+          provider.once('synced', resolve);
+          // Timeout fallback in case sync fails
+          setTimeout(resolve, 3000);
+        }
+      });
+
+      // Only pass doc option if the server document is empty
+      const yText = ydoc.getText('content');
+      const serverHasContent = yText.length > 0;
+      const finalOptions = {
         ...editorOptions,
         ydoc,
         ytext: 'content',
+        awareness: provider.awareness,
         runtimes: { ...runtimes, ...editorOptions.runtimes },
-      });
+      };
+
+      // Don't seed content if server already has it
+      if (serverHasContent) {
+        delete finalOptions.doc;
+      }
+
+      const editor = create(target, finalOptions);
 
       editor.provider = provider;
       editor.path = path;
@@ -55688,6 +60592,8 @@ const yjs = {
   encodeStateAsUpdate: encodeStateAsUpdate,
   applyUpdate: applyUpdate,
   encodeStateVector: encodeStateVector,
+  createAbsolutePositionFromRelativePosition: createAbsolutePositionFromRelativePosition,
+  createRelativePositionFromTypeIndex: createRelativePositionFromTypeIndex,
 };
 
 const codemirror = {
@@ -55729,6 +60635,43 @@ const terminal = {
 };
 // #endregion TERMINAL_EXPORTS
 
+// #region AWARENESS_EXPORTS
+const awarenessExports = {
+  // Main API
+  createAwareness,
+  AwarenessSystem,
+  AwarenessStateManager,
+
+  // State helpers
+  createHumanState,
+  createRuntimeState,
+  createAIState,
+  generateColor: generateColor,
+
+  // UI Components
+  createCollaboratorList,
+  createFloatingCollaboratorList,
+  createAvatarRow,
+  createStatusBar,
+
+  // Extensions
+  createCursorExtensions,
+  createIndicatorExtensions,
+
+  // Tracking
+  createHumanAwarenessExtensions,
+  createRuntimeAwarenessTracker,
+  createSimpleExecutionTracker,
+
+  // Styles
+  injectAwarenessStyles,
+
+  // Config presets
+  defaultAwarenessConfig,
+  minimalAwarenessConfig,
+};
+// #endregion AWARENESS_EXPORTS
+
 // #region EXPORTS
 const mrmd = {
   version: VERSION,
@@ -55737,24 +60680,48 @@ const mrmd = {
   yjs,
   codemirror,
   terminal,
+  awareness: awarenessExports,
   // Utilities for runtime authors
   RuntimeRegistry,
   createRuntimeRegistry,
+  // MRP Client for connecting to runtime servers
+  MRPClient,
   // Direct terminal exports for convenience
   TerminalBuffer,
   processTerminalOutput,
+  // Direct awareness exports for convenience
+  createAwareness,
+  AwarenessSystem,
+  AwarenessStateManager,
 };
 // #endregion EXPORTS
 
+exports.AwarenessStateManager = AwarenessStateManager;
+exports.AwarenessSystem = AwarenessSystem;
+exports.MRPClient = MRPClient;
 exports.RuntimeRegistry = RuntimeRegistry;
 exports.TerminalBuffer = TerminalBuffer;
 exports.ansiStyles = ansiStyles;
+exports.awareness = awarenessExports;
 exports.codemirror = codemirror;
 exports.create = create;
+exports.createAIState = createAIState;
+exports.createAvatarRow = createAvatarRow;
+exports.createAwareness = createAwareness;
+exports.createCollaboratorList = createCollaboratorList;
+exports.createCursorExtensions = createCursorExtensions;
+exports.createFloatingCollaboratorList = createFloatingCollaboratorList;
+exports.createHumanState = createHumanState;
+exports.createIndicatorExtensions = createIndicatorExtensions;
 exports.createRuntimeRegistry = createRuntimeRegistry;
+exports.createRuntimeState = createRuntimeState;
+exports.createStatusBar = createStatusBar;
 exports.default = mrmd;
+exports.defaultAwarenessConfig = defaultAwarenessConfig;
 exports.drive = drive;
 exports.hasAnsi = hasAnsi;
+exports.injectAwarenessStyles = injectAwarenessStyles;
+exports.minimalAwarenessConfig = minimalAwarenessConfig;
 exports.processTerminalOutput = processTerminalOutput;
 exports.stripAnsi = stripAnsi;
 exports.terminal = terminal;

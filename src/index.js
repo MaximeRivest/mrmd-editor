@@ -64,6 +64,7 @@ import { WebsocketProvider } from 'y-websocket';
 import { findCells, getCellAtCursor, countCells } from './cells.js';
 import { RuntimeRegistry, createRuntimeRegistry } from './runtime.js';
 import { ExecutionManager, createExecutionManager } from './execution.js';
+import { MRPClient } from './mrp-client.js';
 import {
   TerminalBuffer,
   processTerminalOutput,
@@ -78,6 +79,32 @@ import {
   injectOutputWidgetStyles,
   outputWidgetStyles,
 } from './output-widget.js';
+
+// Awareness system
+import {
+  createAwareness,
+  AwarenessSystem,
+  AwarenessStateManager,
+  createHumanState,
+  createRuntimeState,
+  createAIState,
+  generateColor as generateAwarenessColor,
+  injectAwarenessStyles,
+  defaultAwarenessConfig,
+  minimalAwarenessConfig,
+  // UI Components
+  createCollaboratorList,
+  createFloatingCollaboratorList,
+  createAvatarRow,
+  createStatusBar,
+  // Extensions
+  createCursorExtensions,
+  createIndicatorExtensions,
+  // Tracking
+  createHumanAwarenessExtensions,
+  createRuntimeAwarenessTracker,
+  createSimpleExecutionTracker,
+} from './awareness/index.js';
 // #endregion IMPORTS
 
 // #region VERSION
@@ -226,6 +253,10 @@ function create(target, options = {}) {
     // Collaborator info for awareness
     userName = 'Anonymous',
     userColor = null,
+    userType = 'human',
+    // Awareness configuration (batteries-included features)
+    // Set to false to disable, true for defaults, or pass config object
+    awarenessUI = true,
   } = options;
 
   // System dark mode detection
@@ -288,8 +319,19 @@ function create(target, options = {}) {
     '&.cm-focused': { outline: 'none' },
   });
 
-  // Inject output widget CSS styles
+  // Inject CSS styles
   injectOutputWidgetStyles();
+  if (awarenessUI) {
+    injectAwarenessStyles();
+  }
+
+  // Prepare awareness system (created after view exists)
+  let awarenessSystem = null;
+  const awarenessConfig = awarenessUI === true
+    ? defaultAwarenessConfig
+    : typeof awarenessUI === 'object'
+      ? { ...defaultAwarenessConfig, ...awarenessUI }
+      : null;
 
   const extensions = [
     basicSetup,
@@ -308,6 +350,28 @@ function create(target, options = {}) {
     state: EditorState.create({ doc: initialContent, extensions }),
     parent: element
   });
+
+  // Initialize awareness system after view exists
+  if (awarenessConfig) {
+    awarenessSystem = createAwareness({
+      yjsAwareness: awareness,
+      view,
+      getContent: () => view.state.doc.toString(),
+      yText,
+      userName,
+      userColor,
+      userType,
+      config: awarenessConfig,
+    });
+
+    // Add awareness extensions to the view
+    const awarenessExtensions = awarenessSystem.getExtensions();
+    if (awarenessExtensions.length > 0) {
+      view.dispatch({
+        effects: StateEffect.appendConfig.of(awarenessExtensions)
+      });
+    }
+  }
 
   // Event handlers
   const changeHandlers = [];
@@ -341,6 +405,9 @@ function create(target, options = {}) {
     ydoc,
     yText,
     awareness,
+
+    // Awareness system (batteries-included UI)
+    awarenessSystem,
 
     // Runtime
     registry,
@@ -429,16 +496,44 @@ function create(target, options = {}) {
 
     /**
      * Announce a collaborator (for runtimes, LLMs, etc.)
+     * Changes the local user's type and updates their state accordingly.
      * @param {'human'|'ai'|'runtime'|'sync'} type - Collaborator type
      * @param {string} name - Display name
      * @param {string} [color] - Optional color
      */
     announceCollaborator(type, name, color) {
-      awareness.setLocalStateField('user', {
-        type,
-        name,
-        color: color || generateColor(),
-      });
+      // Use the awareness system's state manager if available for proper state structure
+      if (awarenessSystem) {
+        const stateManager = awarenessSystem.getStateManager();
+        const current = stateManager.getLocalState() || {};
+        // Create proper state structure based on type
+        let newState;
+        switch (type) {
+          case 'ai':
+            newState = createAIState({ name, color: color || current.color });
+            break;
+          case 'runtime':
+            newState = createRuntimeState({ language: name, name, color: color || current.color });
+            break;
+          default:
+            newState = createHumanState({ name, color: color || current.color });
+        }
+        // Preserve current status and other fields
+        stateManager.setLocalState({
+          ...newState,
+          status: current.status || 'idle',
+        });
+      } else {
+        // Fallback to direct awareness update
+        const current = awareness.getLocalState()?.user || {};
+        awareness.setLocalStateField('user', {
+          ...current,
+          type,
+          name,
+          color: color || current.color || generateColor(),
+          lastActivity: Date.now(),
+        });
+      }
     },
 
     /**
@@ -446,8 +541,13 @@ function create(target, options = {}) {
      * @param {'idle'|'typing'|'streaming'|'executing'} status
      */
     setCollaboratorStatus(status) {
-      const current = awareness.getLocalState()?.user || {};
-      awareness.setLocalStateField('user', { ...current, status });
+      // Use the awareness system's state manager if available
+      if (awarenessSystem) {
+        awarenessSystem.setStatus(status);
+      } else {
+        const current = awareness.getLocalState()?.user || {};
+        awareness.setLocalStateField('user', { ...current, status, lastActivity: Date.now() });
+      }
     },
 
     /**
@@ -473,6 +573,121 @@ function create(target, options = {}) {
       const handler = () => callback(this.getCollaborators());
       awareness.on('change', handler);
       return () => awareness.off('change', handler);
+    },
+
+    // ===========================================================================
+    // Awareness UI (Batteries-Included)
+    // ===========================================================================
+
+    /**
+     * Create a collaborator list UI component
+     * @param {HTMLElement} container
+     * @param {Object} [options]
+     * @returns {{update: function, destroy: function, element: HTMLElement}|null}
+     */
+    createCollaboratorList(container, options = {}) {
+      if (!awarenessSystem) return null;
+      return awarenessSystem.createCollaboratorList(container, options);
+    },
+
+    /**
+     * Create a floating collaborator list
+     * @param {Object} [options]
+     * @returns {{show: function, hide: function, toggle: function, destroy: function}|null}
+     */
+    createFloatingCollaboratorList(options = {}) {
+      if (!awarenessSystem) return null;
+      return awarenessSystem.createFloatingList(options);
+    },
+
+    /**
+     * Create a compact avatar row showing collaborators
+     * @param {HTMLElement} container
+     * @param {Object} [options]
+     * @returns {{update: function, destroy: function, element: HTMLElement}|null}
+     */
+    createAvatarRow(container, options = {}) {
+      if (!awarenessSystem) return null;
+      return awarenessSystem.createAvatarRow(container, options);
+    },
+
+    /**
+     * Create a status bar showing global awareness info
+     * @param {HTMLElement} [container]
+     * @returns {{element: HTMLElement, update: function, destroy: function}|null}
+     */
+    createStatusBar(container) {
+      if (!awarenessSystem) return null;
+      return awarenessSystem.createStatusBar(container);
+    },
+
+    /**
+     * Set hover state for awareness broadcast
+     * @param {Object|null} hover - {symbol, type, info, position}
+     */
+    setHover(hover) {
+      if (awarenessSystem) {
+        awarenessSystem.setHover(hover);
+      }
+    },
+
+    /**
+     * Set autocomplete state for awareness broadcast
+     * @param {Object|null} autocomplete - {query, items, position}
+     */
+    setAutocomplete(autocomplete) {
+      if (awarenessSystem) {
+        awarenessSystem.setAutocomplete(autocomplete);
+      }
+    },
+
+    /**
+     * Set execution state (for runtimes)
+     * @param {Object|null} execution - {cellIndex, startTime, progress, progressText}
+     */
+    setExecution(execution) {
+      if (awarenessSystem) {
+        awarenessSystem.setExecution(execution);
+      }
+    },
+
+    /**
+     * Set generation state (for AI)
+     * @param {Object|null} generation - {targetCell, tokensGenerated, model}
+     */
+    setGeneration(generation) {
+      if (awarenessSystem) {
+        awarenessSystem.setGeneration(generation);
+      }
+    },
+
+    /**
+     * Wrap a hover provider to broadcast hover state
+     * @param {function} hoverProvider
+     * @returns {function}
+     */
+    wrapHoverProvider(hoverProvider) {
+      if (!awarenessSystem) return hoverProvider;
+      return awarenessSystem.wrapHoverProvider(hoverProvider);
+    },
+
+    /**
+     * Wrap a completion source to broadcast autocomplete state
+     * @param {function} source
+     * @returns {function}
+     */
+    wrapCompletionSource(source) {
+      if (!awarenessSystem) return source;
+      return awarenessSystem.wrapCompletionSource(source);
+    },
+
+    /**
+     * Create an execution tracker that auto-updates awareness
+     * @returns {{start: function, progress: function, end: function}|null}
+     */
+    createExecutionTracker() {
+      if (!awarenessSystem) return null;
+      return awarenessSystem.createExecutionTracker();
     },
 
     // ===========================================================================
@@ -609,6 +824,9 @@ function create(target, options = {}) {
 
     destroy() {
       this.execution.cancelAll();
+      if (awarenessSystem) {
+        awarenessSystem.destroy();
+      }
       view.destroy();
     }
   };
@@ -665,7 +883,7 @@ function drive(urlOrOptions, options = {}) {
   return {
     url,
 
-    open(path, target, editorOptions = {}) {
+    async open(path, target, editorOptions = {}) {
       const ydoc = new Y.Doc();
       const serverUrl = auth ? `${url}?token=${auth}` : url;
       const provider = new WebsocketProvider(serverUrl, path, ydoc);
@@ -674,12 +892,35 @@ function drive(urlOrOptions, options = {}) {
         setStatus(s);
       });
 
-      const editor = create(target, {
+      // Wait for initial sync before creating editor
+      // This prevents duplicate content when multiple tabs open
+      await new Promise((resolve) => {
+        if (provider.synced) {
+          resolve();
+        } else {
+          provider.once('synced', resolve);
+          // Timeout fallback in case sync fails
+          setTimeout(resolve, 3000);
+        }
+      });
+
+      // Only pass doc option if the server document is empty
+      const yText = ydoc.getText('content');
+      const serverHasContent = yText.length > 0;
+      const finalOptions = {
         ...editorOptions,
         ydoc,
         ytext: 'content',
+        awareness: provider.awareness,
         runtimes: { ...runtimes, ...editorOptions.runtimes },
-      });
+      };
+
+      // Don't seed content if server already has it
+      if (serverHasContent) {
+        delete finalOptions.doc;
+      }
+
+      const editor = create(target, finalOptions);
 
       editor.provider = provider;
       editor.path = path;
@@ -728,6 +969,8 @@ const yjs = {
   encodeStateAsUpdate: Y.encodeStateAsUpdate,
   applyUpdate: Y.applyUpdate,
   encodeStateVector: Y.encodeStateVector,
+  createAbsolutePositionFromRelativePosition: Y.createAbsolutePositionFromRelativePosition,
+  createRelativePositionFromTypeIndex: Y.createRelativePositionFromTypeIndex,
 };
 
 const codemirror = {
@@ -769,6 +1012,43 @@ const terminal = {
 };
 // #endregion TERMINAL_EXPORTS
 
+// #region AWARENESS_EXPORTS
+const awarenessExports = {
+  // Main API
+  createAwareness,
+  AwarenessSystem,
+  AwarenessStateManager,
+
+  // State helpers
+  createHumanState,
+  createRuntimeState,
+  createAIState,
+  generateColor: generateAwarenessColor,
+
+  // UI Components
+  createCollaboratorList,
+  createFloatingCollaboratorList,
+  createAvatarRow,
+  createStatusBar,
+
+  // Extensions
+  createCursorExtensions,
+  createIndicatorExtensions,
+
+  // Tracking
+  createHumanAwarenessExtensions,
+  createRuntimeAwarenessTracker,
+  createSimpleExecutionTracker,
+
+  // Styles
+  injectAwarenessStyles,
+
+  // Config presets
+  defaultAwarenessConfig,
+  minimalAwarenessConfig,
+};
+// #endregion AWARENESS_EXPORTS
+
 // #region EXPORTS
 const mrmd = {
   version: VERSION,
@@ -777,12 +1057,19 @@ const mrmd = {
   yjs,
   codemirror,
   terminal,
+  awareness: awarenessExports,
   // Utilities for runtime authors
   RuntimeRegistry,
   createRuntimeRegistry,
+  // MRP Client for connecting to runtime servers
+  MRPClient,
   // Direct terminal exports for convenience
   TerminalBuffer,
   processTerminalOutput,
+  // Direct awareness exports for convenience
+  createAwareness,
+  AwarenessSystem,
+  AwarenessStateManager,
 };
 
 export default mrmd;
@@ -792,13 +1079,31 @@ export {
   yjs,
   codemirror,
   terminal,
+  awarenessExports as awareness,
   RuntimeRegistry,
   createRuntimeRegistry,
+  MRPClient,
   TerminalBuffer,
   processTerminalOutput,
   terminalToHtml,
   stripAnsi,
   hasAnsi,
   ansiStyles,
+  // Awareness exports
+  createAwareness,
+  AwarenessSystem,
+  AwarenessStateManager,
+  createHumanState,
+  createRuntimeState,
+  createAIState,
+  injectAwarenessStyles,
+  defaultAwarenessConfig,
+  minimalAwarenessConfig,
+  createCollaboratorList,
+  createFloatingCollaboratorList,
+  createAvatarRow,
+  createStatusBar,
+  createCursorExtensions,
+  createIndicatorExtensions,
 };
 // #endregion EXPORTS

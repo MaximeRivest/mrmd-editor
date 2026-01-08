@@ -243,6 +243,7 @@
   <div class="app">
     <header class="header">
       <h1>mrmd Full Stack Demo</h1>
+      <div id="avatar-container" style="margin-left: auto;"></div>
       <div class="status-badges">
         <div class="badge" id="sync-status">
           <span class="dot"></span>
@@ -264,15 +265,15 @@
     <div class="sidebar">
       <div class="section">
         <h3>Collaborators</h3>
-        <div id="collaborators" class="collaborators">
-          <div class="collaborator">
-            <div class="collaborator-avatar" style="background: #3b82f6">Y</div>
-            <div class="collaborator-info">
-              <div class="collaborator-name">You</div>
-              <div class="collaborator-status">Editing</div>
-            </div>
-            <span class="collaborator-type human">human</span>
-          </div>
+        <div id="collaborator-container"></div>
+      </div>
+
+      <div class="section">
+        <h3>Change My Type</h3>
+        <div class="button-row">
+          <button class="btn btn-secondary" onclick="changeToHuman()">As Human</button>
+          <button class="btn btn-secondary" onclick="changeToAI()">As AI</button>
+          <button class="btn btn-secondary" onclick="changeToRuntime()">As Runtime</button>
         </div>
       </div>
 
@@ -316,6 +317,8 @@
         </div>
       </div>
     </div>
+
+    <div id="status-bar-container" style="grid-column: 1 / -1; border-top: 1px solid #30363d;"></div>
   </div>
 
   <!-- Load mrmd-editor -->
@@ -325,6 +328,15 @@
   <script src="../../mrmd-js/dist/mrmd-js.iife.js"></script>
 
   <script type="module">
+    // =========================================================================
+    // User Identity
+    // =========================================================================
+
+    const userNames = ['Alice', 'Bob', 'Charlie', 'Diana', 'Eve', 'Frank', 'Grace', 'Henry'];
+    const userColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+    const userName = userNames[Math.floor(Math.random() * userNames.length)];
+    const userColor = userColors[Math.floor(Math.random() * userColors.length)];
+
     // =========================================================================
     // Sample Document
     // =========================================================================
@@ -768,20 +780,15 @@ len(items)
           }
         });
 
-        // Open demo document
-        editor = docs.open('demo', '#editor', {
+        // Open demo document (now async - waits for initial sync)
+        editor = await docs.open('full-stack-demo', '#editor', {
+          doc: sampleDoc,
           dark: true,
-          userName: 'User ' + Math.floor(Math.random() * 1000),
+          userName: userName,
+          userColor: userColor,
         });
 
-        // If document is empty, seed it
-        setTimeout(() => {
-          if (editor.getContent().length < 10) {
-            editor.setContent(sampleDoc);
-          }
-        }, 500);
-
-        log('info', 'Connecting to sync server...');
+        log('info', `Editor initialized as "${userName}" with sync enabled`);
 
       } catch (err) {
         // Fall back to local-only mode
@@ -791,8 +798,11 @@ len(items)
         editor = mrmd.create('#editor', {
           doc: sampleDoc,
           dark: true,
-          userName: 'Local User',
+          userName: userName,
+          userColor: userColor,
         });
+
+        log('info', `Editor initialized as "${userName}" (local only)`);
       }
 
       // Register runtimes
@@ -820,34 +830,38 @@ len(items)
         log('error', `Cell ${index}: ${err.message || err}`);
       });
 
-      // Update collaborators display
-      function updateCollaborators() {
-        const collabs = editor.getCollaborators();
-        const container = document.getElementById('collaborators');
-        container.innerHTML = '';
+      // =========================================================================
+      // Awareness UI Components (Batteries-Included)
+      // =========================================================================
 
-        collabs.forEach(({ clientId, user }) => {
-          const div = document.createElement('div');
-          div.className = 'collaborator';
+      // Create collaborator list in sidebar
+      editor.createCollaboratorList(
+        document.getElementById('collaborator-container'),
+        {
+          showSelf: true,
+          showStatus: true,
+          showActivity: true,
+          showTypes: true,
+        }
+      );
 
-          const initial = (user.name || 'U')[0].toUpperCase();
-          const typeClass = user.type || 'human';
+      // Create avatar row in header
+      editor.createAvatarRow(
+        document.getElementById('avatar-container'),
+        { maxAvatars: 5 }
+      );
 
-          div.innerHTML = `
-            <div class="collaborator-avatar" style="background: ${user.color || '#3b82f6'}">${initial}</div>
-            <div class="collaborator-info">
-              <div class="collaborator-name">${user.name || 'Anonymous'}</div>
-              <div class="collaborator-status">${user.status || 'Connected'}</div>
-            </div>
-            <span class="collaborator-type ${typeClass}">${user.type || 'human'}</span>
-          `;
+      // Create status bar
+      editor.createStatusBar(
+        document.getElementById('status-bar-container')
+      );
 
-          container.appendChild(div);
-        });
-      }
+      // Log collaborator changes
+      editor.onCollaboratorsChange((collaborators) => {
+        log('info', `Collaborators: ${collaborators.length}`);
+      });
 
-      editor.onCollaboratorsChange(updateCollaborators);
-      updateCollaborators();
+      log('info', 'Awareness UI components created');
 
       // Keyboard shortcuts
       document.addEventListener('keydown', (e) => {
@@ -861,8 +875,6 @@ len(items)
       window.editor = editor;
       window.pythonRuntime = pythonRuntime;
       window.jsRuntime = jsRuntime;
-
-      log('info', 'Editor initialized');
     }
 
     // Global functions for buttons
@@ -892,6 +904,60 @@ len(items)
       } else {
         container.innerHTML = '<div style="color: #8b949e; font-style: italic;">Python not connected</div>';
       }
+    };
+
+    // =========================================================================
+    // Change Type Functions
+    // =========================================================================
+
+    window.changeToHuman = function() {
+      if (!editor) return;
+      const names = ['Alice', 'Bob', 'Charlie', 'Diana', 'Eve'];
+      const colors = ['#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+      const name = names[Math.floor(Math.random() * names.length)];
+      const color = colors[Math.floor(Math.random() * colors.length)];
+
+      editor.announceCollaborator('human', name, color);
+      editor.setCollaboratorStatus('typing');
+      log('info', `Changed to human: ${name}`);
+
+      setTimeout(() => {
+        editor.announceCollaborator('human', userName, userColor);
+        editor.setCollaboratorStatus('idle');
+        log('info', `Reverted to: ${userName}`);
+      }, 2000);
+    };
+
+    window.changeToAI = function() {
+      if (!editor) return;
+      editor.announceCollaborator('ai', 'Claude Assistant', '#8b5cf6');
+      editor.setGeneration({
+        targetCell: 0,
+        tokensGenerated: 156,
+        model: 'claude-3.5-sonnet'
+      });
+      editor.setCollaboratorStatus('streaming');
+      log('info', 'Changed to AI collaborator (streaming)');
+
+      setTimeout(() => {
+        editor.setGeneration(null);
+        editor.setCollaboratorStatus('idle');
+        editor.announceCollaborator('human', userName, userColor);
+        log('info', 'Reverted to human collaborator');
+      }, 3000);
+    };
+
+    window.changeToRuntime = function() {
+      if (!editor) return;
+      editor.announceCollaborator('runtime', 'Python', '#3572A5');
+      editor.setCollaboratorStatus('executing');
+      log('info', 'Changed to Python runtime (executing)');
+
+      setTimeout(() => {
+        editor.setCollaboratorStatus('idle');
+        editor.announceCollaborator('human', userName, userColor);
+        log('info', 'Reverted to human collaborator');
+      }, 3000);
     };
 
     // Start

@@ -9,6 +9,20 @@
  * 2. Add widget positioned after opening fence that shows colored HTML
  * 3. Don't use Decoration.replace (causes parser issues)
  *
+ * ## IMPORTANT: CSS Specificity Gotcha
+ *
+ * When hiding lines with `color: transparent`, you MUST exclude the widget:
+ *
+ *   WRONG: `.cm-output-line-hidden * { color: transparent !important; }`
+ *   RIGHT: `.cm-output-line-hidden > *:not(.cm-output-widget) { color: transparent !important; }`
+ *
+ * The widget is positioned INSIDE a hidden line (after the opening fence).
+ * If you use `*` selector, it makes all widget content transparent too!
+ * This is a common mistake - the widget appears as an empty dark box.
+ *
+ * Always add explicit color restoration for widget content:
+ *   `.cm-output-widget pre { color: var(--output-text, #e0e0e0); }`
+ *
  * @module output-widget
  */
 
@@ -191,8 +205,17 @@ export const outputWidgetStyles = `
   /* Hide text but maintain line height for stable layout */
   color: transparent !important;
 }
-.cm-output-line-hidden * {
+.cm-output-line-hidden > *:not(.cm-output-widget) {
   color: transparent !important;
+}
+
+/* Widget content must NOT be transparent */
+.cm-output-widget,
+.cm-output-widget * {
+  color: inherit;
+}
+.cm-output-widget pre {
+  color: var(--output-text, #e0e0e0);
 }
 
 .cm-output-line-visible {
@@ -219,6 +242,45 @@ export const outputWidgetStyles = `
 
 /* ANSI text styles */
 ${ansiStyles}
+
+/* Stdin input styles */
+.mrmd-stdin-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--stdin-bg, rgba(0, 0, 0, 0.2));
+  border-radius: 4px;
+  border: 1px solid var(--stdin-border, rgba(100, 149, 237, 0.5));
+}
+
+.mrmd-stdin-prompt {
+  color: var(--stdin-prompt-color, #6495ed);
+  font-weight: 500;
+  white-space: pre;
+}
+
+.mrmd-stdin-field {
+  flex: 1;
+  background: var(--stdin-field-bg, rgba(255, 255, 255, 0.1));
+  border: 1px solid var(--stdin-field-border, rgba(255, 255, 255, 0.2));
+  border-radius: 4px;
+  padding: 6px 10px;
+  color: var(--stdin-field-color, #e0e0e0);
+  font-family: inherit;
+  font-size: inherit;
+  outline: none;
+}
+
+.mrmd-stdin-field:focus {
+  border-color: var(--stdin-field-focus-border, #6495ed);
+  box-shadow: 0 0 0 2px var(--stdin-field-focus-shadow, rgba(100, 149, 237, 0.3));
+}
+
+.mrmd-stdin-field::placeholder {
+  color: var(--stdin-placeholder-color, rgba(224, 224, 224, 0.5));
+}
 `;
 
 // #endregion STYLES

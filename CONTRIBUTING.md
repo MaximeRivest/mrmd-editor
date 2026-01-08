@@ -8,8 +8,12 @@ mrmd-editor/
 ├── dist/                   # Built bundles (generated)
 ├── examples/               # Interactive demos
 │   ├── index.html         # Examples listing
+│   ├── full-api-demo.html # Comprehensive demo of all features
+│   ├── full-stack.html    # Complete Yjs sync + Python runtime setup
 │   ├── document.html      # Clean document editor
-│   └── executable.html    # Executable markdown with code cells
+│   ├── executable.html    # Executable markdown with JS code cells
+│   ├── awareness-demo.html # Real-time collaboration cursors
+│   └── stdin-demo.html    # Python execution with input() support
 ├── tests/                  # Feature tests
 │   ├── index.html         # Auto-discovers test files
 │   ├── api.html           # API tests

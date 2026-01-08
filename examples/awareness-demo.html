@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mrmd - Awareness Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+    }
+
+    /* Layout */
+    .app {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      grid-template-columns: 1fr 280px;
+      height: 100vh;
+    }
+
+    /* Header */
+    .header {
+      grid-column: 1 / -1;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 600;
+      color: #f0f6fc;
+    }
+    .header p {
+      font-size: 13px;
+      color: #8b949e;
+    }
+
+    /* Editor */
+    #editor {
+      overflow: auto;
+      padding: 20px;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      background: #161b22;
+      border-left: 1px solid #30363d;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .section {
+      padding: 16px;
+      border-bottom: 1px solid #30363d;
+    }
+    .section h3 {
+      margin: 0 0 12px 0;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: #8b949e;
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 8px 14px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-primary {
+      background: #238636;
+      color: white;
+    }
+    .btn-primary:hover { background: #2ea043; }
+    .btn-secondary {
+      background: #21262d;
+      color: #c9d1d9;
+      border: 1px solid #30363d;
+    }
+    .btn-secondary:hover { background: #30363d; }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    /* Instructions */
+    .instructions {
+      font-size: 13px;
+      line-height: 1.7;
+      color: #8b949e;
+    }
+    .instructions code {
+      background: #21262d;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 12px;
+    }
+    .instructions ul {
+      margin: 8px 0;
+      padding-left: 20px;
+    }
+
+    /* Collaborator container */
+    #collaborator-container {
+      min-height: 100px;
+    }
+
+    /* Avatar row container */
+    #avatar-container {
+      padding: 8px 0;
+    }
+
+    /* Status bar container */
+    #status-bar-container {
+      border-top: 1px solid #30363d;
+    }
+
+    /* Log */
+    #log {
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 11px;
+      max-height: 150px;
+      overflow: auto;
+      background: #0d1117;
+      border-radius: 4px;
+      padding: 8px;
+    }
+    .log-entry {
+      padding: 2px 0;
+      border-bottom: 1px solid #21262d;
+    }
+    .log-entry:last-child { border-bottom: none; }
+    .log-time { color: #484f58; }
+    .log-info { color: #8b949e; }
+    .log-collab { color: #ec4899; }
+    .log-hover { color: #3b82f6; }
+    .log-exec { color: #10b981; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div>
+        <h1>mrmd Awareness Demo</h1>
+        <p>Batteries-included collaboration awareness - see who's doing what</p>
+      </div>
+      <div id="avatar-container"></div>
+    </header>
+
+    <div id="editor"></div>
+
+    <div class="sidebar">
+      <div class="section">
+        <h3>Collaborators</h3>
+        <div id="collaborator-container"></div>
+      </div>
+
+      <div class="section">
+        <h3>Change My Type</h3>
+        <div class="button-row">
+          <button class="btn btn-secondary" onclick="simulateHuman()">As Human</button>
+          <button class="btn btn-secondary" onclick="simulateAI()">As AI</button>
+          <button class="btn btn-secondary" onclick="simulateRuntime()">As Runtime</button>
+        </div>
+        <div class="button-row" style="margin-top: 8px;">
+          <button class="btn btn-primary" onclick="simulateExecution()">Simulate Execution</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Floating List</h3>
+        <button class="btn btn-secondary" onclick="toggleFloating()">Toggle Floating Panel</button>
+      </div>
+
+      <div class="section">
+        <h3>Event Log</h3>
+        <div id="log"></div>
+      </div>
+
+      <div class="section">
+        <h3>Instructions</h3>
+        <div class="instructions">
+          <ul>
+            <li>Open this page in <strong>multiple tabs</strong> to see real collaboration</li>
+            <li>Click "As Human/AI/Runtime" to change <strong>your</strong> collaborator type</li>
+            <li>Click "Simulate Execution" to see execution indicators</li>
+            <li>Hover over symbols to see hover broadcasting</li>
+            <li>Type to see typing status indicators</li>
+          </ul>
+          <p>The awareness system automatically:</p>
+          <ul>
+            <li>Tracks cursor positions</li>
+            <li>Shows collaborator types (Human/AI/Runtime)</li>
+            <li>Broadcasts hover/autocomplete state</li>
+            <li>Shows execution status on cells</li>
+            <li>Updates collaborator list in real-time</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div id="status-bar-container"></div>
+  </div>
+
+  <!-- Load mrmd-editor bundle -->
+  <script src="../dist/mrmd.iife.js"></script>
+
+  <script type="module">
+    // =========================================================================
+    // Sample Document
+    // =========================================================================
+
+    const sampleDoc = `# Awareness Demo
+
+This document demonstrates the **mrmd awareness system**.
+
+## What You'll See
+
+When multiple collaborators are connected, you'll see:
+
+1. **Cursor positions** - Where each person's cursor is
+2. **Selection highlights** - What text is selected
+3. **Status indicators** - Typing, idle, executing
+4. **Hover state** - What symbols others are inspecting
+5. **Execution state** - Which cells are running
+
+## Code Cells
+
+Try clicking "Simulate Execution" to see execution indicators:
+
+\`\`\`python
+import time
+
+for i in range(100):
+    print(f"Processing {i}%")
+    time.sleep(0.1)
+\`\`\`
+
+\`\`\`javascript
+const data = [1, 2, 3, 4, 5];
+const sum = data.reduce((a, b) => a + b, 0);
+console.log("Sum:", sum);
+\`\`\`
+
+## Collaboration Features
+
+The awareness system tracks:
+
+- **Human collaborators** - Real users typing and editing
+- **AI collaborators** - AI assistants streaming responses
+- **Runtime collaborators** - Code execution engines
+
+Each type has its own visual style and status indicators.
+`;
+
+    // =========================================================================
+    // Logging
+    // =========================================================================
+
+    const logEl = document.getElementById('log');
+    function log(type, msg) {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      const time = new Date().toLocaleTimeString();
+      entry.innerHTML = `<span class="log-time">${time}</span> <span class="log-${type}">${msg}</span>`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+
+      // Keep only last 30 entries
+      while (logEl.children.length > 30) {
+        logEl.removeChild(logEl.firstChild);
+      }
+    }
+
+    // =========================================================================
+    // Initialize Editor with Sync
+    // =========================================================================
+
+    // Generate a random user name and color for this tab
+    const userNames = ['Alice', 'Bob', 'Charlie', 'Diana', 'Eve', 'Frank', 'Grace', 'Henry'];
+    const userColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+    const userName = userNames[Math.floor(Math.random() * userNames.length)];
+    const userColor = userColors[Math.floor(Math.random() * userColors.length)];
+
+    // Connect to sync server for real collaboration
+    const syncUrl = 'ws://localhost:4444';
+    let editor;
+
+    async function initEditor() {
+      try {
+        // Connect to sync server
+        const docs = mrmd.drive(syncUrl);
+
+        docs.onStatus(status => {
+          if (status === 'connected') {
+            log('info', 'Connected to sync server');
+          } else if (status === 'connecting') {
+            log('info', 'Connecting to sync server...');
+          } else {
+            log('info', 'Disconnected from sync server');
+          }
+        });
+
+        // Open a shared document (all tabs with same docId will sync)
+        editor = await docs.open('awareness-demo-v2', '#editor', {
+          doc: sampleDoc,
+          dark: true,
+          userName: userName,
+          userColor: userColor,
+        });
+
+        log('info', `Editor initialized as "${userName}" with sync enabled`);
+        setupUI();
+
+      } catch (err) {
+        // Fall back to local-only mode if sync server unavailable
+        log('info', 'Sync server not available, using local mode');
+        editor = mrmd.create('#editor', {
+          doc: sampleDoc,
+          dark: true,
+          userName: userName,
+          userColor: userColor,
+        });
+        log('info', `Editor initialized as "${userName}" (local only)`);
+        setupUI();
+      }
+    }
+
+    function setupUI() {
+      // Expose editor globally for simulation functions
+      window.editor = editor;
+      window.mrmd = mrmd;
+
+      // =========================================================================
+      // Create UI Components
+      // =========================================================================
+
+      // Create collaborator list in sidebar
+      const collabList = editor.createCollaboratorList(
+        document.getElementById('collaborator-container'),
+        {
+          showSelf: true,
+          showStatus: true,
+          showActivity: true,
+          showTypes: true,
+        }
+      );
+
+      // Create avatar row in header
+      const avatarRow = editor.createAvatarRow(
+        document.getElementById('avatar-container'),
+        { maxAvatars: 5 }
+      );
+
+      // Create status bar
+      const statusBar = editor.createStatusBar(
+        document.getElementById('status-bar-container')
+      );
+
+      // Create floating list (hidden by default)
+      window.floatingList = editor.createFloatingCollaboratorList({
+        position: { top: '80px', right: '300px' }
+      });
+
+      log('info', 'UI components created');
+
+      // =========================================================================
+      // Event Listeners
+      // =========================================================================
+
+      editor.onCollaboratorsChange((collaborators) => {
+        log('collab', `Collaborators: ${collaborators.length}`);
+      });
+
+      log('info', 'Ready! Try the simulation buttons or open in another tab.');
+    }
+
+    // Start initialization
+    initEditor();
+
+    // =========================================================================
+    // Simulation Functions
+    // =========================================================================
+
+    let simulatedClients = 0;
+
+    window.simulateHuman = function() {
+      // Cycle through different human identities
+      simulatedClients++;
+      const names = ['Alice', 'Bob', 'Charlie', 'Diana', 'Eve'];
+      const colors = ['#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+      const name = names[simulatedClients % names.length];
+      const color = colors[simulatedClients % colors.length];
+
+      // Change this user to be a different human collaborator
+      editor.announceCollaborator('human', name, color);
+      editor.setCollaboratorStatus('typing');
+
+      log('collab', `Changed to human: ${name}`);
+
+      // Revert to original identity after 2 seconds
+      setTimeout(() => {
+        editor.announceCollaborator('human', userName, userColor);
+        editor.setCollaboratorStatus('idle');
+        log('info', `Reverted to: ${userName}`);
+      }, 2000);
+    };
+
+    window.simulateAI = function() {
+      // Change this user to be an AI collaborator
+      editor.announceCollaborator('ai', 'Claude Assistant', '#8b5cf6');
+
+      // Set generation state and streaming status
+      editor.setGeneration({
+        targetCell: 0,
+        tokensGenerated: 156,
+        model: 'claude-3.5-sonnet'
+      });
+      editor.setCollaboratorStatus('streaming');
+
+      log('collab', 'Changed to AI collaborator (streaming)');
+
+      // Clear after 3 seconds and revert to human
+      setTimeout(() => {
+        editor.setGeneration(null);
+        editor.setCollaboratorStatus('idle');
+        // Revert back to human
+        editor.announceCollaborator('human', userName, userColor);
+        log('info', 'Reverted to human collaborator');
+      }, 3000);
+    };
+
+    window.simulateRuntime = function() {
+      // Change this user to be a runtime collaborator
+      editor.announceCollaborator('runtime', 'Python', '#3572A5');
+      editor.setCollaboratorStatus('executing');
+
+      log('collab', 'Changed to Python runtime (executing)');
+
+      // Revert to human after 3 seconds
+      setTimeout(() => {
+        editor.setCollaboratorStatus('idle');
+        editor.announceCollaborator('human', userName, userColor);
+        log('info', 'Reverted to human collaborator');
+      }, 3000);
+    };
+
+    window.simulateExecution = function() {
+      const tracker = editor.createExecutionTracker();
+      if (!tracker) {
+        log('info', 'Awareness not enabled');
+        return;
+      }
+
+      tracker.start(0, 'python');
+      log('exec', 'Execution started');
+
+      // Simulate progress
+      let progress = 0;
+      const interval = setInterval(() => {
+        progress += 0.1;
+        if (progress >= 1) {
+          tracker.end();
+          clearInterval(interval);
+          log('exec', 'Execution complete');
+        } else {
+          tracker.progress(progress, `${Math.round(progress * 100)}%`);
+        }
+      }, 300);
+    };
+
+    window.toggleFloating = function() {
+      if (window.floatingList) {
+        window.floatingList.toggle();
+        log('info', `Floating panel: ${window.floatingList.isVisible() ? 'shown' : 'hidden'}`);
+      }
+    };
+  </script>
+</body>
+</html>

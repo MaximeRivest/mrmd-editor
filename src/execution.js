@@ -40,6 +40,7 @@ export class ExecutionManager {
       cellOutput: [],
       cellComplete: [],
       cellError: [],
+      stdinRequest: [], // Called when input() is invoked
     };
   }
 
@@ -317,8 +318,107 @@ export class ExecutionManager {
         this._emit('cellOutput', index, chunk, processedOutput);
       };
 
-      // Execute with streaming
-      const result = await this.registry.executeStreaming(code, language, onChunk);
+      /**
+       * Handle stdin_request from runtime (when input() is called)
+       * Creates an inline input field and waits for user input.
+       *
+       * @param {Object} request - {prompt, password, execId}
+       * @returns {Promise<string>} - User input
+       */
+      const onStdinRequest = (request) => {
+        return new Promise((resolve, reject) => {
+          if (controller.signal.aborted) {
+            reject(new Error('Execution aborted'));
+            return;
+          }
+
+          // Create input element
+          const inputContainer = document.createElement('div');
+          inputContainer.className = 'mrmd-stdin-input';
+          inputContainer.innerHTML = `
+            <span class="mrmd-stdin-prompt">${request.prompt || ''}</span>
+            <input type="${request.password ? 'password' : 'text'}"
+                   class="mrmd-stdin-field"
+                   placeholder="Enter input and press Enter..."
+                   autofocus />
+          `;
+
+          const inputField = inputContainer.querySelector('input');
+
+          // Handle submit
+          const submit = () => {
+            const value = inputField.value + '\n';
+            inputContainer.remove();
+            resolve(value);
+          };
+
+          inputField.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              submit();
+            }
+          });
+
+          // Handle abort
+          controller.signal.addEventListener('abort', () => {
+            inputContainer.remove();
+            reject(new Error('Execution aborted'));
+          });
+
+          // Find the output widget for this specific cell by checking position
+          // The output widget should be at/near outputContentStart position
+          const view = this.editor.view;
+          let targetWidget = null;
+
+          // Query all output widgets and find the one at our output position
+          const allWidgets = view.contentDOM.querySelectorAll('.cm-output-widget');
+          if (allWidgets.length === 1) {
+            // Only one widget - use it
+            targetWidget = allWidgets[0];
+          } else if (allWidgets.length > 1) {
+            // Multiple widgets - find the one closest to our output position
+            const targetCoords = view.coordsAtPos(outputContentStart);
+            if (targetCoords) {
+              let closestDist = Infinity;
+              for (const widget of allWidgets) {
+                const rect = widget.getBoundingClientRect();
+                const dist = Math.abs(rect.top - targetCoords.top);
+                if (dist < closestDist) {
+                  closestDist = dist;
+                  targetWidget = widget;
+                }
+              }
+            }
+          }
+
+          if (targetWidget) {
+            targetWidget.appendChild(inputContainer);
+          } else {
+            // Fallback: position absolutely near the output position
+            const coords = view.coordsAtPos(outputContentStart + currentDocOutputLen);
+            if (coords) {
+              inputContainer.style.position = 'absolute';
+              inputContainer.style.left = `${coords.left}px`;
+              inputContainer.style.top = `${coords.bottom + 5}px`;
+              inputContainer.style.width = '400px';
+              inputContainer.style.zIndex = '1000';
+              document.body.appendChild(inputContainer);
+            } else {
+              // Last resort: append to editor
+              view.contentDOM.appendChild(inputContainer);
+            }
+          }
+
+          // Focus the input
+          setTimeout(() => inputField.focus(), 0);
+
+          // Emit event for external handling if needed
+          this._emit('stdinRequest', index, request, resolve, reject);
+        });
+      };
+
+      // Execute with streaming (pass onStdinRequest for input() support)
+      const result = await this.registry.executeStreaming(code, language, onChunk, onStdinRequest);
 
       // Final update with ANSI codes preserved
       const finalOutput = buffer.toAnsi();

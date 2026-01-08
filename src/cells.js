@@ -22,6 +22,8 @@ const EXECUTABLE_LANGUAGES = new Set([
   'r', 'rlang',
   // HTML (rendered, not "executed")
   'html',
+  // CSS (applied to page)
+  'css',
 ]);
 
 /**

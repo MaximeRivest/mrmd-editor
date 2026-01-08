@@ -202,10 +202,13 @@ export class MRPClient {
    * @param {string} code - Code to execute
    * @param {string} [language] - Language (for mrmd Runtime interface compatibility)
    * @param {function(string, string, boolean): void} onChunk - Callback (chunk, accumulated, done)
-   * @param {Partial<ExecuteRequest> & { onStdinRequest?: function(StdinRequest): void }} [options] - Additional options
+   * @param {function(StdinRequest): Promise<string> | Partial<ExecuteRequest> & { onStdinRequest?: function }} [optionsOrStdinHandler]
+   *        Can be either:
+   *        - A function to handle stdin requests (for Runtime interface compatibility)
+   *        - An options object with onStdinRequest property
    * @returns {Promise<ExecuteResult>}
    */
-  async executeStreaming(code, language, onChunk, options = {}) {
+  async executeStreaming(code, language, onChunk, optionsOrStdinHandler = {}) {
     // Cancel any previous execution
     if (this.#currentExecution) {
       this.#currentExecution.abort();
@@ -214,7 +217,19 @@ export class MRPClient {
     const controller = new AbortController();
     this.#currentExecution = controller;
 
-    const { onStdinRequest, ...executeOptions } = options;
+    // Handle both signatures:
+    // 1. executeStreaming(code, lang, onChunk, onStdinRequest) - Runtime interface
+    // 2. executeStreaming(code, lang, onChunk, { onStdinRequest, ...options }) - Original MRP client
+    let onStdinRequest;
+    let executeOptions = {};
+
+    if (typeof optionsOrStdinHandler === 'function') {
+      // Runtime interface: 4th param is the stdin handler directly
+      onStdinRequest = optionsOrStdinHandler;
+    } else {
+      // Options object
+      ({ onStdinRequest, ...executeOptions } = optionsOrStdinHandler);
+    }
 
     try {
       const res = await fetch(`${this.#endpoint}/execute/stream`, {
@@ -259,9 +274,19 @@ export class MRPClient {
                 accumulated = data.accumulated;
                 onChunk(data.content, accumulated, false);
               } else if (currentEvent === 'stdin_request') {
-                // Runtime needs user input
+                // Runtime needs user input - call handler and send response
                 if (onStdinRequest) {
-                  onStdinRequest(data);
+                  // onStdinRequest returns Promise<string> with user's input
+                  // We handle this async but don't block the SSE reading
+                  // The server will wait for our /input POST
+                  Promise.resolve(onStdinRequest(data))
+                    .then((input) => {
+                      // Send the input back to the server
+                      return this.sendInput(data.execId, input);
+                    })
+                    .catch((err) => {
+                      console.error('Stdin handling error:', err);
+                    });
                 }
               } else if (currentEvent === 'result') {
                 finalResult = data;
@@ -325,6 +350,36 @@ export class MRPClient {
       body: JSON.stringify({ session: session || this.#defaultSession }),
     });
     if (!res.ok) throw new Error(`Failed to interrupt: ${res.status}`);
+  }
+
+  // ===========================================================================
+  // Input
+  // ===========================================================================
+
+  /**
+   * Send user input to a waiting execution (stdin_request response)
+   *
+   * @param {string} execId - The execution ID that requested input
+   * @param {string} text - The user input text (should include newline if submitting)
+   * @param {string} [session]
+   * @returns {Promise<{accepted: boolean, error?: string}>}
+   */
+  async sendInput(execId, text, session) {
+    const res = await fetch(`${this.#endpoint}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session: session || this.#defaultSession,
+        exec_id: execId,
+        text,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Failed to send input: ${res.status}`);
+    }
+
+    return res.json();
   }
 
   // ===========================================================================
