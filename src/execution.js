@@ -34,6 +34,9 @@ export class ExecutionManager {
     /** @type {Map<number, TerminalBuffer>} Terminal buffers for processing output */
     this.buffers = new Map();
 
+    /** @type {Map<number, HTMLElement>} Active stdin input containers by cell index */
+    this.stdinContainers = new Map();
+
     /** @type {Object<string, function[]>} Event handlers */
     this.handlers = {
       cellRun: [],
@@ -168,6 +171,13 @@ export class ExecutionManager {
       controller.abort();
       this.running.delete(index);
     }
+
+    // Clean up stdin container if present
+    const stdinContainer = this.stdinContainers.get(index);
+    if (stdinContainer) {
+      stdinContainer.remove();
+      this.stdinContainers.delete(index);
+    }
   }
 
   /**
@@ -178,6 +188,12 @@ export class ExecutionManager {
       controller.abort();
     }
     this.running.clear();
+
+    // Clean up all stdin containers
+    for (const container of this.stdinContainers.values()) {
+      container.remove();
+    }
+    this.stdinContainers.clear();
   }
 
   /**
@@ -302,7 +318,13 @@ export class ExecutionManager {
         buffer.write(chunk);
 
         // Get processed output with ANSI codes preserved
-        const processedOutput = buffer.toAnsi();
+        let processedOutput = buffer.toAnsi();
+
+        // Ensure output ends with newline so closing ``` stays on its own line
+        // This is critical for maintaining valid markdown structure
+        if (processedOutput && !processedOutput.endsWith('\n')) {
+          processedOutput += '\n';
+        }
 
         // Replace current output with processed output
         // This handles carriage returns and cursor movement correctly
@@ -332,9 +354,16 @@ export class ExecutionManager {
             return;
           }
 
+          // Remove any existing stdin container for this cell
+          const existingContainer = this.stdinContainers.get(index);
+          if (existingContainer) {
+            existingContainer.remove();
+          }
+
           // Create input element
           const inputContainer = document.createElement('div');
           inputContainer.className = 'mrmd-stdin-input';
+          inputContainer.dataset.cellIndex = String(index);
           inputContainer.innerHTML = `
             <span class="mrmd-stdin-prompt">${request.prompt || ''}</span>
             <input type="${request.password ? 'password' : 'text'}"
@@ -343,12 +372,16 @@ export class ExecutionManager {
                    autofocus />
           `;
 
+          // Store reference for cleanup
+          this.stdinContainers.set(index, inputContainer);
+
           const inputField = inputContainer.querySelector('input');
 
           // Handle submit
           const submit = () => {
             const value = inputField.value + '\n';
             inputContainer.remove();
+            this.stdinContainers.delete(index);
             resolve(value);
           };
 
@@ -362,51 +395,32 @@ export class ExecutionManager {
           // Handle abort
           controller.signal.addEventListener('abort', () => {
             inputContainer.remove();
+            this.stdinContainers.delete(index);
             reject(new Error('Execution aborted'));
           });
 
-          // Find the output widget for this specific cell by checking position
-          // The output widget should be at/near outputContentStart position
+          // Position stdin input at the output location
+          // We use absolute positioning because CodeMirror widgets get recreated
+          // when the document changes, which would disconnect our appended elements
           const view = this.editor.view;
-          let targetWidget = null;
+          const coords = view.coordsAtPos(outputContentStart + currentDocOutputLen);
 
-          // Query all output widgets and find the one at our output position
-          const allWidgets = view.contentDOM.querySelectorAll('.cm-output-widget');
-          if (allWidgets.length === 1) {
-            // Only one widget - use it
-            targetWidget = allWidgets[0];
-          } else if (allWidgets.length > 1) {
-            // Multiple widgets - find the one closest to our output position
-            const targetCoords = view.coordsAtPos(outputContentStart);
-            if (targetCoords) {
-              let closestDist = Infinity;
-              for (const widget of allWidgets) {
-                const rect = widget.getBoundingClientRect();
-                const dist = Math.abs(rect.top - targetCoords.top);
-                if (dist < closestDist) {
-                  closestDist = dist;
-                  targetWidget = widget;
-                }
-              }
-            }
-          }
+          if (coords) {
+            const editorRect = view.dom.getBoundingClientRect();
 
-          if (targetWidget) {
-            targetWidget.appendChild(inputContainer);
+            inputContainer.style.position = 'absolute';
+            inputContainer.style.left = `${coords.left - editorRect.left}px`;
+            inputContainer.style.top = `${coords.top - editorRect.top + 5}px`;
+            inputContainer.style.width = `${Math.min(400, editorRect.width - 40)}px`;
+            inputContainer.style.zIndex = '1000';
+
+            // Append to editor DOM (which has position: relative)
+            view.dom.style.position = 'relative';
+            view.dom.appendChild(inputContainer);
           } else {
-            // Fallback: position absolutely near the output position
-            const coords = view.coordsAtPos(outputContentStart + currentDocOutputLen);
-            if (coords) {
-              inputContainer.style.position = 'absolute';
-              inputContainer.style.left = `${coords.left}px`;
-              inputContainer.style.top = `${coords.bottom + 5}px`;
-              inputContainer.style.width = '400px';
-              inputContainer.style.zIndex = '1000';
-              document.body.appendChild(inputContainer);
-            } else {
-              // Last resort: append to editor
-              view.contentDOM.appendChild(inputContainer);
-            }
+            // Fallback: append at the end of editor
+            view.dom.style.position = 'relative';
+            view.dom.appendChild(inputContainer);
           }
 
           // Focus the input
@@ -452,6 +466,13 @@ export class ExecutionManager {
     } finally {
       this.running.delete(index);
       this.buffers.delete(index);
+
+      // Clean up any lingering stdin container for this cell
+      const stdinContainer = this.stdinContainers.get(index);
+      if (stdinContainer) {
+        stdinContainer.remove();
+        this.stdinContainers.delete(index);
+      }
     }
   }
 

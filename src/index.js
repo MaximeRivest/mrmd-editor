@@ -65,6 +65,9 @@ import { findCells, getCellAtCursor, countCells } from './cells.js';
 import { RuntimeRegistry, createRuntimeRegistry } from './runtime.js';
 import { ExecutionManager, createExecutionManager } from './execution.js';
 import { MRPClient } from './mrp-client.js';
+
+// Built-in JavaScript runtime
+import { createRuntime as createMrmdJsRuntime } from 'mrmd-js';
 import {
   TerminalBuffer,
   processTerminalOutput,
@@ -110,6 +113,116 @@ import {
 // #region VERSION
 const VERSION = '0.1.0';
 // #endregion VERSION
+
+// #region BROWSER_RUNTIME
+/**
+ * Create an editor-compatible browser runtime from mrmd-js
+ * Supports JavaScript, HTML, and CSS execution
+ *
+ * @param {Object} [options]
+ * @param {string} [options.isolation='iframe'] - 'iframe' or 'main'
+ * @param {boolean} [options.allowMainAccess=false] - Allow main window access from iframe
+ * @returns {Object} Runtime compatible with editor.registerRuntime()
+ */
+function createJavaScriptRuntime(options = {}) {
+  const rt = createMrmdJsRuntime(options);
+  const session = rt.createSession({ language: 'javascript' });
+
+  // Languages supported by mrmd-js
+  const supportedLanguages = {
+    // JavaScript variants
+    'javascript': 'javascript',
+    'js': 'javascript',
+    'node': 'javascript',
+    'ecmascript': 'javascript',
+    // HTML
+    'html': 'html',
+    'htm': 'html',
+    // CSS
+    'css': 'css',
+  };
+
+  return {
+    /** Check if this runtime supports the given language */
+    supports(lang) {
+      return lang.toLowerCase() in supportedLanguages;
+    },
+
+    /** Execute code (non-streaming) */
+    async execute(code, language) {
+      const lang = supportedLanguages[language.toLowerCase()] || 'javascript';
+      const result = await session.execute(code, { language: lang });
+      return {
+        success: result.success,
+        stdout: result.stdout || '',
+        stderr: result.stderr || '',
+        result: result.resultString,
+        error: result.error,
+        displayData: result.displayData,
+      };
+    },
+
+    /** Execute code with streaming output */
+    async executeStreaming(code, language, onChunk, onStdinRequest) {
+      const lang = supportedLanguages[language.toLowerCase()] || 'javascript';
+      const result = await session.execute(code, { language: lang });
+
+      // Handle different output types
+      let output = result.stdout || '';
+
+      // For HTML/CSS, check displayData for rendered content
+      if (result.displayData && result.displayData.length > 0) {
+        const display = result.displayData[0];
+        if (display.data) {
+          // Prefer HTML representation
+          if (display.data['text/html']) {
+            output = display.data['text/html'];
+          } else if (display.data['text/plain']) {
+            output = display.data['text/plain'];
+          }
+        }
+      } else if (result.resultString) {
+        // For JS, append result
+        output += (output ? '\n' : '') + result.resultString;
+      }
+
+      // Send as single chunk (mrmd-js executes synchronously in browser)
+      if (output) {
+        onChunk(output, output, true);
+      }
+
+      return {
+        success: result.success,
+        stdout: result.stdout || '',
+        stderr: result.stderr || '',
+        result: result.resultString,
+        error: result.error,
+        displayData: result.displayData,
+      };
+    },
+
+    /** Reset the session (clear all variables) */
+    reset() {
+      session.reset();
+    },
+
+    /** Get the underlying mrmd-js runtime */
+    getRuntime() {
+      return rt;
+    },
+
+    /** Get the underlying session */
+    getSession() {
+      return session;
+    },
+
+    /** Destroy the runtime */
+    destroy() {
+      rt.destroy();
+    },
+  };
+}
+// #endregion BROWSER_RUNTIME
 
 // #region CODE_BLOCK_LANGUAGES
 const pythonSupport = python();
@@ -250,6 +363,9 @@ function create(target, options = {}) {
     ytext = 'content',
     awareness: providedAwareness = null,
     runtimes = {},
+    // Built-in JavaScript runtime (mrmd-js)
+    // true = enabled (default), false = disabled, object = custom runtime
+    javascript = true,
     // Collaborator info for awareness
     userName = 'Anonymous',
     userColor = null,
@@ -397,6 +513,20 @@ function create(target, options = {}) {
   for (const [name, runtime] of Object.entries(runtimes)) {
     registry.register(name, runtime);
   }
+
+  // Built-in JavaScript runtime (mrmd-js)
+  // - true: use built-in mrmd-js runtime (default)
+  // - false: disable JavaScript execution
+  // - object: use custom runtime (must implement supports/execute/executeStreaming)
+  let jsRuntime = null;
+  if (javascript === true) {
+    jsRuntime = createJavaScriptRuntime();
+    registry.register('javascript', jsRuntime);
+  } else if (javascript && typeof javascript === 'object') {
+    // Custom runtime provided
+    registry.register('javascript', javascript);
+  }
+  // javascript === false means no JS runtime
 
   // Create editor API object first (needed by ExecutionManager)
   const api = {
@@ -827,8 +957,23 @@ function create(target, options = {}) {
       if (awarenessSystem) {
         awarenessSystem.destroy();
       }
+      if (jsRuntime && jsRuntime.destroy) {
+        jsRuntime.destroy();
+      }
       view.destroy();
-    }
+    },
+
+    // ===========================================================================
+    // Built-in Runtimes
+    // ===========================================================================
+
+    /**
+     * Get the built-in JavaScript runtime (mrmd-js)
+     * @returns {Object|null} The JS runtime or null if disabled
+     */
+    get jsRuntime() {
+      return jsRuntime;
+    },
   };
 
   // Create execution manager
@@ -1061,6 +1206,8 @@ const mrmd = {
   // Utilities for runtime authors
   RuntimeRegistry,
   createRuntimeRegistry,
+  // Built-in JavaScript runtime (mrmd-js)
+  createJavaScriptRuntime,
   // MRP Client for connecting to runtime servers
   MRPClient,
   // Direct terminal exports for convenience
@@ -1082,6 +1229,7 @@ export {
   awarenessExports as awareness,
   RuntimeRegistry,
   createRuntimeRegistry,
+  createJavaScriptRuntime,
   MRPClient,
   TerminalBuffer,
   processTerminalOutput,

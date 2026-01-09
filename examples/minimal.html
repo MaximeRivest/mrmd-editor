@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mrmd - Minimal Full Stack</title>
+  <style>
+    body { margin: 0; height: 100vh; }
+    #editor { height: 100%; }
+  </style>
+</head>
+<body>
+
+<div id="editor"></div>
+
+<script src="../dist/mrmd.iife.js"></script>
+<script type="module">
+  const doc = `# Minimal Full Stack Demo
+
+This is mrmd with **all defaults** - no custom styling.
+
+## Python
+
+\`\`\`python
+import math
+x = 42
+print(f"The answer is {x}")
+math.sqrt(x)
+\`\`\`
+
+## JavaScript
+
+\`\`\`javascript
+const items = ["apple", "banana", "cherry"];
+console.log("Items:", items.join(", "));
+items.length
+\`\`\`
+
+---
+
+Press **Shift+Enter** to run a code cell.
+`;
+
+  // Connect to sync server (auto-fallback to local)
+  const docs = mrmd.drive('ws://localhost:4444');
+  const editor = await docs.open('minimal-demo', '#editor', { doc });
+
+  // JavaScript runtime is built-in (mrmd-js) - no setup needed!
+
+  // Python: connect to MRP server (auto-detects languages from endpoint URL)
+  editor.registerRuntime('python', new mrmd.MRPClient('http://localhost:8000/mrp/v1'));
+
+  // Shift+Enter to run (capture phase to intercept before CodeMirror)
+  document.addEventListener('keydown', (e) => {
+    if (e.shiftKey && e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      editor.runCurrentCell();
+    }
+  }, true);
+
+  window.editor = editor;
+</script>
+
+</body>
+</html>

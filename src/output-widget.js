@@ -38,28 +38,35 @@ class OutputWidget extends WidgetType {
   /**
    * @param {string} content - Output content with ANSI codes
    * @param {boolean} hidden - Whether widget should be hidden (cursor in block)
+   * @param {number} blockStart - Document position where this output block starts
    */
-  constructor(content, hidden = false) {
+  constructor(content, hidden = false, blockStart = 0) {
     super();
     this.content = content;
     this.hidden = hidden;
+    this.blockStart = blockStart;
   }
 
   eq(other) {
-    return other.content === this.content && other.hidden === this.hidden;
+    return other.content === this.content && other.hidden === this.hidden && other.blockStart === this.blockStart;
   }
 
   toDOM() {
     const container = document.createElement('div');
     container.className = 'cm-output-widget' + (this.hidden ? ' cm-output-widget-hidden' : '');
+    // Store block position for stdin widget placement
+    container.dataset.outputBlockStart = String(this.blockStart);
 
     // Render with ANSI colors
     const html = terminalToHtml(this.content);
     container.innerHTML = `<pre class="cm-output-ansi">${html}</pre>`;
 
-    // Copy on click
+    // Copy on click (only on pre, not on stdin inputs)
     container.title = 'Click to copy output';
-    container.onclick = (e) => {
+    const handleCopy = (e) => {
+      // Don't copy if clicking on stdin input
+      if (e.target.closest('.mrmd-stdin-input')) return;
+
       e.preventDefault();
       e.stopPropagation();
 
@@ -73,6 +80,7 @@ class OutputWidget extends WidgetType {
         setTimeout(() => feedback.remove(), 1500);
       });
     };
+    container.onclick = handleCopy;
 
     return container;
   }
@@ -107,11 +115,6 @@ function buildDecorations(view) {
     const blockStart = match.index;
     const blockEnd = blockStart + match[0].length;
 
-    // Only process blocks with ANSI codes
-    if (!hasAnsi(content)) {
-      continue;
-    }
-
     // Get line range
     const startLine = doc.lineAt(blockStart);
     const endLine = doc.lineAt(blockEnd);
@@ -119,20 +122,26 @@ function buildDecorations(view) {
     // Check if cursor is inside this block
     const cursorInBlock = cursorLine >= startLine.number && cursorLine <= endLine.number;
 
-    // Add line decorations to hide/show raw text
-    for (let i = startLine.number; i <= endLine.number; i++) {
-      const line = doc.line(i);
-      decorations.push(
-        Decoration.line({
-          class: cursorInBlock ? 'cm-output-line-visible' : 'cm-output-line-hidden',
-        }).range(line.from)
-      );
+    // Only hide/show lines with ANSI codes (plain text shows as-is)
+    const hasAnsiContent = hasAnsi(content);
+
+    // Add line decorations to hide/show raw text (only for ANSI content)
+    if (hasAnsiContent) {
+      for (let i = startLine.number; i <= endLine.number; i++) {
+        const line = doc.line(i);
+        decorations.push(
+          Decoration.line({
+            class: cursorInBlock ? 'cm-output-line-visible' : 'cm-output-line-hidden',
+          }).range(line.from)
+        );
+      }
     }
 
-    // Add widget after opening fence line (positioned widget, not replace)
+    // Always add widget after opening fence line for stdin input placement
+    // Widget will be hidden for plain text content but still exists in DOM
     decorations.push(
       Decoration.widget({
-        widget: new OutputWidget(content.trimEnd(), cursorInBlock),
+        widget: new OutputWidget(content.trimEnd(), cursorInBlock || !hasAnsiContent, blockStart),
         side: 1,
       }).range(startLine.to)
     );

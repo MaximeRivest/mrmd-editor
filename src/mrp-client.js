@@ -40,8 +40,14 @@ export class MRPClient {
   /** @type {Capabilities|null} */
   #capabilities = null;
 
+  /** @type {string[]|null} */
+  #fallbackLanguages = null;
+
   /** @type {AbortController|null} */
   #currentExecution = null;
+
+  /** @type {Promise<Capabilities>|null} */
+  #capabilitiesPromise = null;
 
   /**
    * Create MRP client
@@ -49,10 +55,18 @@ export class MRPClient {
    * @param {string} endpoint - Base URL for MRP endpoints (e.g., "http://localhost:8000/mrp/v1")
    * @param {Object} [options]
    * @param {string} [options.session='default'] - Default session ID
+   * @param {string[]} [options.languages] - Fallback languages if capabilities haven't loaded yet
+   * @param {boolean} [options.prefetch=true] - Auto-fetch capabilities on construction
    */
   constructor(endpoint, options = {}) {
     this.#endpoint = endpoint.replace(/\/$/, ''); // Remove trailing slash
     this.#defaultSession = options.session || 'default';
+    this.#fallbackLanguages = options.languages || null;
+
+    // Auto-fetch capabilities (fire and forget)
+    if (options.prefetch !== false) {
+      this.#capabilitiesPromise = this.getCapabilities().catch(() => null);
+    }
   }
 
   // ===========================================================================
@@ -78,13 +92,56 @@ export class MRPClient {
   /**
    * Check if this runtime supports a language
    *
+   * Checks in order:
+   * 1. Fetched capabilities (if loaded)
+   * 2. Fallback languages from constructor
+   * 3. Inferred from endpoint URL (e.g., "mrmd-python" -> python)
+   *
    * @param {string} language
    * @returns {boolean}
    */
   supports(language) {
-    const caps = this.#capabilities;
-    if (!caps) return false;
-    return caps.languages.includes(language.toLowerCase());
+    const lang = language.toLowerCase();
+
+    // Check fetched capabilities first
+    if (this.#capabilities) {
+      return this.#capabilities.languages.includes(lang);
+    }
+
+    // Check fallback languages
+    if (this.#fallbackLanguages) {
+      return this.#fallbackLanguages.includes(lang);
+    }
+
+    // Infer from endpoint URL as last resort
+    const endpoint = this.#endpoint.toLowerCase();
+    if (endpoint.includes('python') && ['python', 'py', 'python3'].includes(lang)) {
+      return true;
+    }
+    if (endpoint.includes('node') && ['javascript', 'js', 'node', 'typescript', 'ts'].includes(lang)) {
+      return true;
+    }
+    if (endpoint.includes('julia') && ['julia', 'jl'].includes(lang)) {
+      return true;
+    }
+    if (endpoint.includes('r-lang') && ['r', 'rlang'].includes(lang)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Wait for capabilities to be loaded
+   * Useful if you need to check capabilities synchronously after awaiting
+   *
+   * @returns {Promise<Capabilities|null>}
+   */
+  async ready() {
+    if (this.#capabilitiesPromise) {
+      return this.#capabilitiesPromise;
+    }
+    return this.getCapabilities().catch(() => null);
   }
 
   /**
