@@ -57,6 +57,13 @@
  */
 
 /**
+ * @typedef {Object} FocusedBlockState
+ * @property {number} start - Start position of the focused block
+ * @property {number} end - End position of the focused block
+ * @property {'output' | 'code'} blockType - Type of block being focused
+ */
+
+/**
  * @typedef {Object} AwarenessUserState
  * @property {CollaboratorType} type - Type of collaborator
  * @property {string} name - Display name
@@ -66,6 +73,7 @@
  * @property {AutocompleteState} [autocomplete] - Active autocomplete
  * @property {ExecutionState} [execution] - Active execution (for runtimes)
  * @property {GenerationState} [generation] - Active generation (for AI)
+ * @property {FocusedBlockState} [focusedBlock] - Block user is editing (reveals raw text)
  * @property {number} [activeCellIndex] - Which cell cursor is in
  * @property {number} [lastActivity] - Timestamp of last activity
  */
@@ -246,6 +254,20 @@ export function withExecution(state, execution) {
 }
 
 /**
+ * Create new state with focused block updated
+ * @param {AwarenessUserState} state
+ * @param {FocusedBlockState|null} focusedBlock
+ * @returns {AwarenessUserState}
+ */
+export function withFocusedBlock(state, focusedBlock) {
+  return {
+    ...state,
+    focusedBlock: focusedBlock || undefined,
+    lastActivity: Date.now(),
+  };
+}
+
+/**
  * Update generation state (for AI)
  * @param {AwarenessUserState} state
  * @param {GenerationState|null} generation
@@ -388,6 +410,17 @@ export class AwarenessStateManager {
   }
 
   /**
+   * Set focused block state (for syncing output widget visibility)
+   * @param {FocusedBlockState|null} focusedBlock
+   */
+  setFocusedBlock(focusedBlock) {
+    const current = this.getLocalState();
+    if (current) {
+      this.setLocalState(withFocusedBlock(current, focusedBlock));
+    }
+  }
+
+  /**
    * Set status
    * @param {CollaboratorStatus} status
    */
@@ -499,11 +532,18 @@ export class AwarenessStateManager {
 
   /**
    * Subscribe to awareness changes
-   * @param {function} callback
+   * @param {function} callback - Called with (collaborators, changeInfo)
+   *   changeInfo: { added: number[], updated: number[], removed: number[], isRemote: boolean }
    * @returns {function} Unsubscribe function
    */
   onChange(callback) {
-    const handler = () => callback(this.getCollaborators());
+    const localClientId = this.awareness.clientID;
+    const handler = ({ added, updated, removed }) => {
+      // Check if any changed client is remote (not local)
+      const changedClients = [...added, ...updated, ...removed];
+      const isRemote = changedClients.some(id => id !== localClientId);
+      callback(this.getCollaborators(), { added, updated, removed, isRemote });
+    };
     this.awareness.on('change', handler);
     return () => this.awareness.off('change', handler);
   }

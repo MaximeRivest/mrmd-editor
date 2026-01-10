@@ -26,8 +26,17 @@
  * @module output-widget
  */
 
-import { WidgetType, Decoration, ViewPlugin } from '@codemirror/view';
+import { WidgetType, Decoration, ViewPlugin, EditorView } from '@codemirror/view';
+import { Facet, Annotation } from '@codemirror/state';
 import { terminalToHtml, hasAnsi, stripAnsi, ansiStyles } from './terminal.js';
+
+// Facet to provide awareness system to the output widget
+export const outputWidgetAwarenessFacet = Facet.define({
+  combine: values => values[values.length - 1] || null
+});
+
+// Annotation to mark awareness-triggered updates (following y-codemirror.next pattern)
+const outputWidgetAwarenessAnnotation = Annotation.define();
 
 // #region WIDGET
 
@@ -95,11 +104,15 @@ class OutputWidget extends WidgetType {
 // #region DECORATION_PLUGIN
 
 /**
- * Find output blocks and create decorations
+ * Find output blocks and create decorations.
+ * Uses y-codemirror.next cursor positions (via awareness) to determine if any
+ * collaborator is focused on an output block - no separate focusedBlock state needed.
+ *
  * @param {import('@codemirror/view').EditorView} view
+ * @param {Object|null} awarenessSystem - Optional awareness system for collaborative focus
  * @returns {import('@codemirror/view').DecorationSet}
  */
-function buildDecorations(view) {
+function buildDecorations(view, awarenessSystem) {
   const decorations = [];
   const doc = view.state.doc;
   const cursorPos = view.state.selection.main.head;
@@ -119,8 +132,22 @@ function buildDecorations(view) {
     const startLine = doc.lineAt(blockStart);
     const endLine = doc.lineAt(blockEnd);
 
-    // Check if cursor is inside this block
-    const cursorInBlock = cursorLine >= startLine.number && cursorLine <= endLine.number;
+    // Check if LOCAL cursor is inside this block
+    const localCursorInBlock = cursorLine >= startLine.number && cursorLine <= endLine.number;
+
+    // Check if ANY collaborator (local or remote) is focused on this block
+    // Uses y-codemirror.next's cursor positions which survive document edits
+    let anyCollaboratorFocused = localCursorInBlock;
+    if (awarenessSystem && !localCursorInBlock) {
+      try {
+        // Check remote cursors (uses RelativePositions, survives edits)
+        anyCollaboratorFocused = awarenessSystem.isBlockFocused(blockStart, blockEnd);
+      } catch (e) {
+        // If awareness fails, fall back to local-only behavior
+        console.warn('Output widget: awareness check failed', e);
+        anyCollaboratorFocused = false;
+      }
+    }
 
     // Only hide/show lines with ANSI codes (plain text shows as-is)
     const hasAnsiContent = hasAnsi(content);
@@ -131,17 +158,17 @@ function buildDecorations(view) {
         const line = doc.line(i);
         decorations.push(
           Decoration.line({
-            class: cursorInBlock ? 'cm-output-line-visible' : 'cm-output-line-hidden',
+            class: anyCollaboratorFocused ? 'cm-output-line-visible' : 'cm-output-line-hidden',
           }).range(line.from)
         );
       }
     }
 
     // Always add widget after opening fence line for stdin input placement
-    // Widget will be hidden for plain text content but still exists in DOM
+    // Widget will be hidden for plain text content or when any collaborator is editing
     decorations.push(
       Decoration.widget({
-        widget: new OutputWidget(content.trimEnd(), cursorInBlock || !hasAnsiContent, blockStart),
+        widget: new OutputWidget(content.trimEnd(), anyCollaboratorFocused || !hasAnsiContent, blockStart),
         side: 1,
       }).range(startLine.to)
     );
@@ -151,17 +178,80 @@ function buildDecorations(view) {
 }
 
 /**
- * ViewPlugin that manages output block decorations
+ * ViewPlugin that manages output block decorations with awareness support.
+ * When any collaborator focuses on an output block, all clients see raw text.
+ *
+ * Follows y-codemirror.next pattern:
+ * - Awareness changes dispatch a transaction with annotation
+ * - update() always rebuilds decorations (no conditional)
+ * - This ensures decorations are rebuilt during the normal CodeMirror cycle
  */
 export const outputWidgetPlugin = ViewPlugin.fromClass(
   class {
     constructor(view) {
-      this.decorations = buildDecorations(view);
+      // Get awareness from facet (may be null initially)
+      this.awarenessSystem = view.state.facet(outputWidgetAwarenessFacet);
+      this.unsubscribe = null;
+
+      // Build initial decorations
+      this.decorations = buildDecorations(view, this.awarenessSystem);
+
+      // Setup awareness listener (following y-codemirror.next pattern)
+      // The listener dispatches a transaction which triggers update()
+      this._setupAwarenessListener(view);
     }
 
+    /**
+     * Setup awareness listener following y-codemirror.next pattern:
+     * When awareness changes, dispatch a transaction with annotation.
+     * This triggers the update() method during normal CodeMirror cycle.
+     *
+     * IMPORTANT: Only dispatch for REMOTE client changes to avoid
+     * recursive update errors. Local changes are already handled
+     * by the current update cycle.
+     */
+    _setupAwarenessListener(view) {
+      if (this.unsubscribe) {
+        this.unsubscribe();
+        this.unsubscribe = null;
+      }
+
+      if (this.awarenessSystem) {
+        // Following y-codemirror.next pattern exactly:
+        // Only dispatch when REMOTE clients change (not local)
+        this.unsubscribe = this.awarenessSystem.onCollaboratorsChange((collaborators, changeInfo) => {
+          // Only dispatch for remote changes to avoid recursive updates
+          // Local changes are already being processed in the current update cycle
+          if (changeInfo?.isRemote) {
+            view.dispatch({
+              annotations: [outputWidgetAwarenessAnnotation.of([])]
+            });
+          }
+        });
+      }
+    }
+
+    /**
+     * Called on every CodeMirror transaction.
+     * Following y-codemirror.next pattern: ALWAYS rebuild decorations.
+     */
     update(update) {
-      if (update.docChanged || update.viewportChanged || update.selectionSet) {
-        this.decorations = buildDecorations(update.view);
+      // Check if awareness facet changed (e.g., awareness was added after view creation)
+      const newAwareness = update.state.facet(outputWidgetAwarenessFacet);
+      if (newAwareness !== this.awarenessSystem) {
+        this.awarenessSystem = newAwareness;
+        this._setupAwarenessListener(update.view);
+      }
+
+      // ALWAYS rebuild decorations (following y-codemirror.next pattern)
+      // Uses y-codemirror.next cursor positions to check remote focus
+      // (no separate focusedBlock state needed - cursor positions survive edits)
+      this.decorations = buildDecorations(update.view, this.awarenessSystem);
+    }
+
+    destroy() {
+      if (this.unsubscribe) {
+        this.unsubscribe();
       }
     }
   },

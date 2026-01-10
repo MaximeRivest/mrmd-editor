@@ -13,6 +13,7 @@
 
 import { findCells, getCellAtIndex, getCellAtCursor, findOutputBlock } from './cells.js';
 import { TerminalBuffer } from './terminal.js';
+import * as Y from 'yjs';
 
 /**
  * Execution Manager
@@ -308,6 +309,18 @@ export class ExecutionManager {
         }
       }
 
+      // Create RelativePosition for output start - survives concurrent edits from other users
+      // This is critical for collaborative editing: if another user edits before our output
+      // block while we're streaming, the absolute position would become stale.
+      //
+      // IMPORTANT: Use assoc=-1 (left association) so the position stays PUT when we insert
+      // content at this position. Default assoc=0 would cause the position to move forward
+      // with each insert, breaking the replacement logic.
+      const yText = this.editor.getYText?.();
+      const outputStartRelPos = yText
+        ? Y.createRelativePositionFromTypeIndex(yText, outputContentStart, -1)
+        : null;
+
       // Track current output length in document for replacement
       let currentDocOutputLen = 0;
 
@@ -326,10 +339,26 @@ export class ExecutionManager {
           processedOutput += '\n';
         }
 
+        // Get current absolute position from RelativePosition (survives concurrent edits)
+        // Falls back to original position if yText not available
+        let currentOutputStart = outputContentStart;
+        if (outputStartRelPos && yText?.doc) {
+          try {
+            const absPos = Y.createAbsolutePositionFromRelativePosition(outputStartRelPos, yText.doc);
+            // Only use converted position if valid (absPos.index is a number)
+            if (absPos && typeof absPos.index === 'number') {
+              currentOutputStart = absPos.index;
+            }
+          } catch (e) {
+            // Conversion failed, use original position
+            console.warn('RelativePosition conversion failed:', e);
+          }
+        }
+
         // Replace current output with processed output
         // This handles carriage returns and cursor movement correctly
-        const from = outputContentStart;
-        const to = outputContentStart + currentDocOutputLen;
+        const from = currentOutputStart;
+        const to = currentOutputStart + currentDocOutputLen;
 
         this.editor.view.dispatch({
           changes: { from, to, insert: processedOutput },

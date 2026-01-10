@@ -11,15 +11,19 @@
  */
 
 import { ViewPlugin, Decoration, WidgetType } from '@codemirror/view';
-import { RangeSetBuilder } from '@codemirror/state';
+import { RangeSetBuilder, Annotation } from '@codemirror/state';
 import * as Y from 'yjs';
+
+// Annotation to mark awareness-triggered cursor updates (following y-codemirror.next pattern)
+const cursorAwarenessAnnotation = Annotation.define();
 
 // #region WIDGET
 
 /**
- * Widget for rendering enhanced cursor label
+ * Combined cursor widget with caret and label in a single container.
+ * This ensures proper CSS positioning (label floats above caret).
  */
-class CursorLabelWidget extends WidgetType {
+class CursorWidget extends WidgetType {
   /**
    * @param {Object} options
    * @param {string} options.name
@@ -27,15 +31,19 @@ class CursorLabelWidget extends WidgetType {
    * @param {string} [options.status]
    * @param {string} [options.activity]
    * @param {string} [options.type]
+   * @param {boolean} [options.showLabel=true]
+   * @param {boolean} [options.showCaret=true]
    * @param {boolean} [options.showAlways=false]
    */
-  constructor({ name, color, status, activity, type, showAlways = false }) {
+  constructor({ name, color, status, activity, type, showLabel = true, showCaret = true, showAlways = false }) {
     super();
     this.name = name;
     this.color = color;
     this.status = status;
     this.activity = activity;
     this.type = type;
+    this.showLabel = showLabel;
+    this.showCaret = showCaret;
     this.showAlways = showAlways;
   }
 
@@ -44,91 +52,81 @@ class CursorLabelWidget extends WidgetType {
       other.name === this.name &&
       other.color === this.color &&
       other.status === this.status &&
-      other.activity === this.activity
+      other.activity === this.activity &&
+      other.showCaret === this.showCaret
     );
   }
 
   toDOM() {
-    const container = document.createElement('span');
-    container.className = `mrmd-cursor-label${this.showAlways ? ' mrmd-cursor-label--always' : ''}`;
-    container.style.setProperty('--cursor-color', this.color);
+    // Wrapper with position:relative for label positioning
+    const wrapper = document.createElement('span');
+    wrapper.className = 'mrmd-cursor-widget';
+    wrapper.style.setProperty('--cursor-color', this.color);
 
-    // Name
-    const nameEl = document.createElement('span');
-    nameEl.className = 'mrmd-cursor-label__name';
-    nameEl.textContent = this.name;
-    container.appendChild(nameEl);
+    // Caret (the blinking line)
+    if (this.showCaret) {
+      const caret = document.createElement('span');
+      caret.className = `mrmd-cursor-caret${this.status ? ' mrmd-cursor-caret--' + this.status : ''}`;
+      wrapper.appendChild(caret);
+    }
 
-    // Status indicator
-    if (this.status && this.status !== 'idle') {
-      const statusEl = document.createElement('span');
-      statusEl.className = `mrmd-cursor-label__status mrmd-cursor-label__status--${this.status}`;
+    // Label (floats above)
+    if (this.showLabel) {
+      const label = document.createElement('span');
+      label.className = `mrmd-cursor-label${this.showAlways ? ' mrmd-cursor-label--always' : ''}`;
 
-      switch (this.status) {
-        case 'typing':
-          statusEl.innerHTML = '<span class="typing-indicator"><span></span><span></span><span></span></span>';
-          break;
-        case 'executing':
-          statusEl.innerHTML = '<span class="executing-indicator"></span>';
-          break;
-        case 'streaming':
-          statusEl.innerHTML = '<span class="streaming-indicator"></span>';
-          break;
-        default:
-          statusEl.textContent = this.status;
+      // Name
+      const nameEl = document.createElement('span');
+      nameEl.className = 'mrmd-cursor-label__name';
+      nameEl.textContent = this.name;
+      label.appendChild(nameEl);
+
+      // Status indicator
+      if (this.status && this.status !== 'idle') {
+        const statusEl = document.createElement('span');
+        statusEl.className = `mrmd-cursor-label__status mrmd-cursor-label__status--${this.status}`;
+
+        switch (this.status) {
+          case 'typing':
+            statusEl.innerHTML = '<span class="typing-indicator"><span></span><span></span><span></span></span>';
+            break;
+          case 'executing':
+            statusEl.innerHTML = '<span class="executing-indicator"></span>';
+            break;
+          case 'streaming':
+            statusEl.innerHTML = '<span class="streaming-indicator"></span>';
+            break;
+          default:
+            statusEl.textContent = this.status;
+        }
+
+        label.appendChild(statusEl);
       }
 
-      container.appendChild(statusEl);
+      // Activity text (short)
+      if (this.activity) {
+        const activityEl = document.createElement('span');
+        activityEl.className = 'mrmd-cursor-label__activity';
+        activityEl.textContent = this.activity;
+        label.appendChild(activityEl);
+      }
+
+      wrapper.appendChild(label);
     }
 
-    // Activity text (short)
-    if (this.activity) {
-      const activityEl = document.createElement('span');
-      activityEl.className = 'mrmd-cursor-label__activity';
-      activityEl.textContent = this.activity;
-      container.appendChild(activityEl);
-    }
-
-    return container;
+    return wrapper;
   }
 
   ignoreEvent() {
     return true;
   }
 }
+
+// Legacy exports for backwards compatibility
+const CursorLabelWidget = CursorWidget;
+const CursorCaretWidget = CursorWidget;
 
 // #endregion WIDGET
-
-// #region CARET_WIDGET
-
-/**
- * Widget for the actual cursor caret (the blinking line)
- */
-class CursorCaretWidget extends WidgetType {
-  constructor({ color, status }) {
-    super();
-    this.color = color;
-    this.status = status;
-  }
-
-  eq(other) {
-    return other.color === this.color && other.status === this.status;
-  }
-
-  toDOM() {
-    const caret = document.createElement('span');
-    caret.className = `mrmd-cursor-caret${this.status ? ' mrmd-cursor-caret--' + this.status : ''}`;
-    caret.style.borderColor = this.color;
-    caret.style.setProperty('--cursor-color', this.color);
-    return caret;
-  }
-
-  ignoreEvent() {
-    return true;
-  }
-}
-
-// #endregion CARET_WIDGET
 
 // #region EXTENSION
 
@@ -171,24 +169,24 @@ export function createEnhancedCursors({ stateManager, yText, config = {} }) {
           this.decorations = Decoration.none;
         }
 
-        // Subscribe to awareness changes
-        this.unsubscribe = stateManager.onChange(() => {
-          try {
-            this.decorations = this.buildDecorations();
-            // Request a measure pass to update decorations
-            if (view.dom && view.dom.isConnected) {
-              view.requestMeasure();
-            }
-          } catch (e) {
-            console.warn('Cursor decoration update failed:', e);
+        // Subscribe to awareness changes (following y-codemirror.next pattern)
+        // Only dispatch for REMOTE changes to avoid recursive updates
+        this.unsubscribe = stateManager.onChange((collaborators, changeInfo) => {
+          if (changeInfo?.isRemote) {
+            view.dispatch({
+              annotations: [cursorAwarenessAnnotation.of([])]
+            });
           }
         });
       }
 
       update(update) {
-        // Rebuild on doc or selection changes (cursor positions may have changed)
-        if (update.docChanged || update.selectionSet) {
+        // ALWAYS rebuild decorations (following y-codemirror.next pattern)
+        // This handles: doc changes, selection changes, and awareness-triggered updates
+        try {
           this.decorations = this.buildDecorations();
+        } catch (e) {
+          console.warn('Cursor decoration update failed:', e);
         }
       }
 
@@ -230,37 +228,23 @@ export function createEnhancedCursors({ stateManager, yText, config = {} }) {
             activity = `→ ${user.autocomplete.query}...`;
           }
 
-          // Add caret decoration
-          if (replaceCaret) {
-            decorationsToAdd.push({
-              pos,
-              decoration: Decoration.widget({
-                widget: new CursorCaretWidget({
-                  color: user.color,
-                  status: user.status,
-                }),
-                side: 1,
+          // Add combined cursor widget (caret + label in one container)
+          decorationsToAdd.push({
+            pos,
+            decoration: Decoration.widget({
+              widget: new CursorWidget({
+                name: user.name || 'Anonymous',
+                color: user.color || '#666',
+                status: showStatus ? user.status : undefined,
+                activity,
+                type: user.type,
+                showLabel: showLabels,
+                showCaret: replaceCaret,
+                showAlways,
               }),
-            });
-          }
-
-          // Add label decoration
-          if (showLabels) {
-            decorationsToAdd.push({
-              pos,
-              decoration: Decoration.widget({
-                widget: new CursorLabelWidget({
-                  name: user.name || 'Anonymous',
-                  color: user.color || '#666',
-                  status: showStatus ? user.status : undefined,
-                  activity,
-                  type: user.type,
-                  showAlways,
-                }),
-                side: 1,
-              }),
-            });
-          }
+              side: 1,
+            }),
+          });
         }
 
         // Sort by position and add to builder
@@ -365,21 +349,22 @@ export function createSelectionHighlights({ stateManager, yText, opacity = 0.2 }
           this.decorations = Decoration.none;
         }
 
-        this.unsubscribe = stateManager.onChange(() => {
-          try {
-            this.decorations = this.buildDecorations();
-            if (view.dom && view.dom.isConnected) {
-              view.requestMeasure();
-            }
-          } catch (e) {
-            console.warn('Selection highlight update failed:', e);
+        // Subscribe to awareness changes (following y-codemirror.next pattern)
+        this.unsubscribe = stateManager.onChange((collaborators, changeInfo) => {
+          if (changeInfo?.isRemote) {
+            view.dispatch({
+              annotations: [cursorAwarenessAnnotation.of([])]
+            });
           }
         });
       }
 
       update(update) {
-        if (update.docChanged) {
+        // ALWAYS rebuild decorations (following y-codemirror.next pattern)
+        try {
           this.decorations = this.buildDecorations();
+        } catch (e) {
+          console.warn('Selection highlight update failed:', e);
         }
       }
 
@@ -510,8 +495,9 @@ export function createCursorExtensions({ stateManager, yText, config = {} }) {
 // #region EXPORTS
 
 export default {
-  CursorLabelWidget,
-  CursorCaretWidget,
+  CursorWidget,
+  CursorLabelWidget,  // Legacy alias
+  CursorCaretWidget,  // Legacy alias
   createEnhancedCursors,
   createSelectionHighlights,
   createCursorExtensions,

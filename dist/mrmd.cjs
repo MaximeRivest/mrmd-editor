@@ -3970,6 +3970,39 @@ function findColumn$1(string, col, tabSize, strict) {
     return strict === true ? -1 : string.length;
 }
 
+var index$1 = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  Annotation: Annotation,
+  AnnotationType: AnnotationType,
+  ChangeDesc: ChangeDesc,
+  ChangeSet: ChangeSet,
+  get CharCategory () { return CharCategory; },
+  Compartment: Compartment,
+  EditorSelection: EditorSelection,
+  EditorState: EditorState,
+  Facet: Facet,
+  Line: Line$1,
+  get MapMode () { return MapMode; },
+  Prec: Prec,
+  Range: Range$1,
+  RangeSet: RangeSet,
+  RangeSetBuilder: RangeSetBuilder,
+  RangeValue: RangeValue,
+  SelectionRange: SelectionRange,
+  StateEffect: StateEffect,
+  StateEffectType: StateEffectType,
+  StateField: StateField,
+  Text: Text,
+  Transaction: Transaction$1,
+  codePointAt: codePointAt,
+  codePointSize: codePointSize,
+  combineConfig: combineConfig,
+  countColumn: countColumn,
+  findClusterBreak: findClusterBreak,
+  findColumn: findColumn$1,
+  fromCodePoint: fromCodePoint
+});
+
 const C = "\u037c";
 const COUNT = typeof Symbol == "undefined" ? "__" + C : Symbol.for(C);
 const SET = typeof Symbol == "undefined" ? "__styleSet" + Math.floor(Math.random() * 1e8) : Symbol("styleSet");
@@ -14861,7 +14894,7 @@ function getTooltip(view, tooltip) {
 }
 const closeHoverTooltipEffect = /*@__PURE__*/StateEffect.define();
 
-const panelConfig = /*@__PURE__*/Facet.define({
+const panelConfig$1 = /*@__PURE__*/Facet.define({
     combine(configs) {
         let topContainer, bottomContainer;
         for (let c of configs) {
@@ -14886,7 +14919,7 @@ const panelPlugin = /*@__PURE__*/ViewPlugin.fromClass(class {
         this.input = view.state.facet(showPanel);
         this.specs = this.input.filter(s => s);
         this.panels = this.specs.map(spec => spec(view));
-        let conf = view.state.facet(panelConfig);
+        let conf = view.state.facet(panelConfig$1);
         this.top = new PanelGroup(view, true, conf.topContainer);
         this.bottom = new PanelGroup(view, false, conf.bottomContainer);
         this.top.sync(this.panels.filter(p => p.top));
@@ -14898,7 +14931,7 @@ const panelPlugin = /*@__PURE__*/ViewPlugin.fromClass(class {
         }
     }
     update(update) {
-        let conf = update.state.facet(panelConfig);
+        let conf = update.state.facet(panelConfig$1);
         if (this.top.container != conf.topContainer) {
             this.top.sync([]);
             this.top = new PanelGroup(update.view, true, conf.topContainer);
@@ -26499,6 +26532,13 @@ Extension to enable the One Dark theme (both the editor theme and
 the highlight style).
 */
 const oneDark = [oneDarkTheme, /*@__PURE__*/syntaxHighlighting(oneDarkHighlightStyle)];
+
+var index = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  oneDark: oneDark,
+  oneDarkHighlightStyle: oneDarkHighlightStyle,
+  oneDarkTheme: oneDarkTheme
+});
 
 /**
 A parse stack. These are used internally by the parser to track
@@ -54709,6 +54749,18 @@ class ExecutionManager {
         }
       }
 
+      // Create RelativePosition for output start - survives concurrent edits from other users
+      // This is critical for collaborative editing: if another user edits before our output
+      // block while we're streaming, the absolute position would become stale.
+      //
+      // IMPORTANT: Use assoc=-1 (left association) so the position stays PUT when we insert
+      // content at this position. Default assoc=0 would cause the position to move forward
+      // with each insert, breaking the replacement logic.
+      const yText = this.editor.getYText?.();
+      const outputStartRelPos = yText
+        ? createRelativePositionFromTypeIndex(yText, outputContentStart, -1)
+        : null;
+
       // Track current output length in document for replacement
       let currentDocOutputLen = 0;
 
@@ -54727,10 +54779,26 @@ class ExecutionManager {
           processedOutput += '\n';
         }
 
+        // Get current absolute position from RelativePosition (survives concurrent edits)
+        // Falls back to original position if yText not available
+        let currentOutputStart = outputContentStart;
+        if (outputStartRelPos && yText?.doc) {
+          try {
+            const absPos = createAbsolutePositionFromRelativePosition(outputStartRelPos, yText.doc);
+            // Only use converted position if valid (absPos.index is a number)
+            if (absPos && typeof absPos.index === 'number') {
+              currentOutputStart = absPos.index;
+            }
+          } catch (e) {
+            // Conversion failed, use original position
+            console.warn('RelativePosition conversion failed:', e);
+          }
+        }
+
         // Replace current output with processed output
         // This handles carriage returns and cursor movement correctly
-        const from = outputContentStart;
-        const to = outputContentStart + currentDocOutputLen;
+        const from = currentOutputStart;
+        const to = currentOutputStart + currentDocOutputLen;
 
         this.editor.view.dispatch({
           changes: { from, to, insert: processedOutput },
@@ -55591,6 +55659,801 @@ class MRPClient {
 }
 
 // #endregion FACTORY
+
+/**
+ * Runtime LSP Provider
+ *
+ * Unified interface for LSP-like features (hover, completions, variables)
+ * from any runtime - whether mrmd-js (browser) or MRP servers (mrmd-python).
+ *
+ * This module provides:
+ * - CodeMirror hover extension with runtime-powered tooltips
+ * - CodeMirror completion source with runtime-aware completions
+ * - Variable explorer API for UI components
+ * - Integration with the awareness system
+ *
+ * The key insight: runtimes know actual values, not just types.
+ * "df" in Python isn't just "DataFrame" - it's "DataFrame with 1000 rows × 5 cols"
+ *
+ * @module runtime-lsp
+ */
+
+
+// #region INTERFACES
+
+/**
+ * @typedef {Object} RuntimeLSPProvider
+ * @property {function(string, number, string?): Promise<HoverResult|null>} hover
+ * @property {function(string, number, string?): Promise<CompletionResult>} complete
+ * @property {function(string, number, string?, Object?): Promise<InspectResult|null>} inspect
+ * @property {function(): Promise<VariableInfo[]>} listVariables
+ * @property {function(string, Object?): Promise<VariableDetail>} getVariable
+ * @property {function(string): Promise<IsCompleteResult>} isComplete
+ * @property {function(string): Promise<FormatResult>} format
+ * @property {string[]} languages - Languages this provider supports
+ */
+
+/**
+ * @typedef {Object} HoverResult
+ * @property {boolean} found
+ * @property {string} [name]
+ * @property {string} [type]
+ * @property {string} [value]
+ * @property {string} [signature]
+ * @property {string} [documentation]
+ */
+
+/**
+ * @typedef {Object} CompletionResult
+ * @property {CompletionItem[]} matches
+ * @property {number} cursorStart
+ * @property {number} cursorEnd
+ * @property {'runtime'|'static'} source
+ */
+
+/**
+ * @typedef {Object} CompletionItem
+ * @property {string} label
+ * @property {string} [kind]
+ * @property {string} [type]
+ * @property {string} [detail]
+ * @property {string} [valuePreview]
+ * @property {string} [documentation]
+ * @property {string} [insertText]
+ */
+
+/**
+ * @typedef {Object} InspectResult
+ * @property {boolean} found
+ * @property {string} [name]
+ * @property {string} [type]
+ * @property {string} [kind]
+ * @property {string} [value]
+ * @property {string} [signature]
+ * @property {string} [documentation]
+ * @property {string} [sourceCode]
+ * @property {Object[]} [children]
+ */
+
+/**
+ * @typedef {Object} VariableInfo
+ * @property {string} name
+ * @property {string} type
+ * @property {string} value
+ * @property {string} [size]
+ * @property {boolean} [expandable]
+ */
+
+/**
+ * @typedef {Object} VariableDetail
+ * @property {string} name
+ * @property {string} type
+ * @property {string} value
+ * @property {string} [fullValue]
+ * @property {VariableInfo[]} [children]
+ * @property {string[]} [methods]
+ * @property {string[]} [attributes]
+ */
+
+/**
+ * @typedef {Object} IsCompleteResult
+ * @property {'complete'|'incomplete'|'invalid'|'unknown'} status
+ * @property {string} [indent]
+ */
+
+/**
+ * @typedef {Object} FormatResult
+ * @property {string} formatted
+ * @property {boolean} changed
+ */
+
+// #endregion INTERFACES
+
+// #region ADAPTERS
+
+/**
+ * Adapt an mrmd-js session to the RuntimeLSPProvider interface.
+ *
+ * @param {Object} session - mrmd-js Session instance
+ * @returns {RuntimeLSPProvider}
+ */
+function adaptMrmdJsSession(session) {
+  return {
+    languages: ['javascript', 'js', 'html', 'css'],
+
+    async hover(code, cursor, language) {
+      try {
+        const result = session.hover(code, cursor);
+        if (!result || !result.found) return null;
+        return {
+          found: true,
+          name: result.name,
+          type: result.type,
+          value: result.value,
+          signature: result.signature,
+        };
+      } catch (e) {
+        console.warn('mrmd-js hover error:', e);
+        return null;
+      }
+    },
+
+    async complete(code, cursor, language) {
+      try {
+        const result = session.complete(code, cursor);
+        return {
+          matches: result.matches || [],
+          cursorStart: result.cursorStart ?? cursor,
+          cursorEnd: result.cursorEnd ?? cursor,
+          source: 'runtime',
+        };
+      } catch (e) {
+        console.warn('mrmd-js complete error:', e);
+        return { matches: [], cursorStart: cursor, cursorEnd: cursor, source: 'runtime' };
+      }
+    },
+
+    async inspect(code, cursor, language, options = {}) {
+      try {
+        const result = session.inspect(code, cursor, options);
+        if (!result || !result.found) return null;
+        return result;
+      } catch (e) {
+        console.warn('mrmd-js inspect error:', e);
+        return null;
+      }
+    },
+
+    async listVariables() {
+      try {
+        return session.listVariables() || [];
+      } catch (e) {
+        console.warn('mrmd-js listVariables error:', e);
+        return [];
+      }
+    },
+
+    async getVariable(name, options = {}) {
+      try {
+        return session.getVariable(name, options);
+      } catch (e) {
+        console.warn('mrmd-js getVariable error:', e);
+        return { name, type: 'unknown', value: '?', expandable: false };
+      }
+    },
+
+    async isComplete(code) {
+      try {
+        return session.isComplete(code);
+      } catch (e) {
+        return { status: 'unknown' };
+      }
+    },
+
+    async format(code) {
+      try {
+        return await session.format(code);
+      } catch (e) {
+        return { formatted: code, changed: false };
+      }
+    },
+  };
+}
+
+/**
+ * Adapt an MRPClient to the RuntimeLSPProvider interface.
+ *
+ * @param {import('./mrp-client.js').MRPClient} client - MRP client instance
+ * @param {string[]} [languages] - Override languages (defaults to client's capabilities)
+ * @returns {RuntimeLSPProvider}
+ */
+function adaptMRPClient(client, languages) {
+  // Get languages from capabilities or use provided
+  const supportedLanguages = languages || [];
+
+  // Try to get capabilities async (for supported languages)
+  client.ready().then(caps => {
+    if (caps?.languages) {
+      supportedLanguages.length = 0;
+      supportedLanguages.push(...caps.languages);
+    }
+  });
+
+  return {
+    get languages() {
+      return supportedLanguages;
+    },
+
+    async hover(code, cursor, language) {
+      try {
+        const result = await client.hover({ code, cursor });
+        if (!result || !result.found) return null;
+        return result;
+      } catch (e) {
+        console.warn('MRP hover error:', e);
+        return null;
+      }
+    },
+
+    async complete(code, cursor, language) {
+      try {
+        const result = await client.complete({ code, cursor });
+        return {
+          matches: result.matches || [],
+          cursorStart: result.cursorStart ?? cursor,
+          cursorEnd: result.cursorEnd ?? cursor,
+          source: result.source || 'runtime',
+        };
+      } catch (e) {
+        console.warn('MRP complete error:', e);
+        return { matches: [], cursorStart: cursor, cursorEnd: cursor, source: 'runtime' };
+      }
+    },
+
+    async inspect(code, cursor, language, options = {}) {
+      try {
+        const result = await client.inspect({ code, cursor, detail: options.detail ?? 1 });
+        if (!result || !result.found) return null;
+        return result;
+      } catch (e) {
+        console.warn('MRP inspect error:', e);
+        return null;
+      }
+    },
+
+    async listVariables() {
+      try {
+        const result = await client.getVariables();
+        return result.variables || [];
+      } catch (e) {
+        console.warn('MRP listVariables error:', e);
+        return [];
+      }
+    },
+
+    async getVariable(name, options = {}) {
+      try {
+        return await client.getVariableDetail(name, options);
+      } catch (e) {
+        console.warn('MRP getVariable error:', e);
+        return { name, type: 'unknown', value: '?', expandable: false };
+      }
+    },
+
+    async isComplete(code) {
+      try {
+        return await client.isComplete(code);
+      } catch (e) {
+        return { status: 'unknown' };
+      }
+    },
+
+    async format(code) {
+      try {
+        return await client.format(code);
+      } catch (e) {
+        return { formatted: code, changed: false };
+      }
+    },
+  };
+}
+
+/**
+ * Get code within a cell for a given position.
+ * Returns the code and the offset of the cursor within that code.
+ *
+ * @param {string} content - Document content
+ * @param {number} pos - Document position
+ * @returns {{code: string, offset: number, language: string, cell: Object}|null}
+ */
+function getCodeAtPosition(content, pos) {
+  const cell = getCellAtCursor(content, pos);
+  if (!cell) return null;
+
+  // Calculate offset within the cell's code
+  const offset = pos - cell.codeStart;
+  if (offset < 0 || offset > cell.code.length) return null;
+
+  return {
+    code: cell.code,
+    offset,
+    language: cell.language,
+    cell,
+  };
+}
+
+// #endregion LANGUAGE_DETECTION
+
+// #region HOVER_EXTENSION
+
+/**
+ * Create a CodeMirror hover tooltip extension powered by runtime LSP.
+ *
+ * Shows actual runtime values when hovering over variables/symbols.
+ *
+ * @param {Object} options
+ * @param {Map<string, RuntimeLSPProvider>} options.providers - Language → provider map
+ * @param {function(): string} options.getContent - Get document content
+ * @param {import('./awareness/state.js').AwarenessStateManager} [options.stateManager] - For awareness broadcast
+ * @param {import('yjs').Text} [options.yText] - For RelativePosition tracking
+ * @returns {import('@codemirror/state').Extension}
+ */
+function createRuntimeHoverExtension({ providers, getContent, stateManager, yText }) {
+  return hoverTooltip(
+    async (view, pos, side) => {
+      const content = getContent();
+      const codeInfo = getCodeAtPosition(content, pos);
+
+      if (!codeInfo) return null;
+
+      // Find provider for this language
+      const provider = findProviderForLanguage(providers, codeInfo.language);
+      if (!provider) return null;
+
+      // Get hover info from runtime
+      const hoverResult = await provider.hover(codeInfo.code, codeInfo.offset, codeInfo.language);
+      if (!hoverResult || !hoverResult.found) return null;
+
+      // Broadcast to awareness if available
+      if (stateManager) {
+        const position = yText
+          ? await Promise.resolve().then(function () { return Y; }).then(Y => Y.createRelativePositionFromTypeIndex(yText, pos))
+          : { line: view.state.doc.lineAt(pos).number, ch: pos - view.state.doc.lineAt(pos).from };
+
+        stateManager.setHover({
+          symbol: hoverResult.name,
+          type: hoverResult.type,
+          info: hoverResult.value || hoverResult.signature,
+          position,
+          cellIndex: getCellIndex(content, codeInfo.cell),
+        });
+      }
+
+      // Create tooltip DOM
+      return {
+        pos,
+        end: pos + (hoverResult.name?.length || 0),
+        above: true,
+        create() {
+          const dom = document.createElement('div');
+          dom.className = 'mrmd-runtime-hover';
+          dom.innerHTML = formatHoverContent(hoverResult);
+          return { dom };
+        },
+      };
+    },
+    {
+      hoverTime: 300,
+      hideOnChange: true,
+    }
+  );
+}
+
+/**
+ * Format hover content as HTML.
+ *
+ * @param {HoverResult} result
+ * @returns {string}
+ */
+function formatHoverContent(result) {
+  let html = '<div class="mrmd-hover-content">';
+
+  // Name and type header
+  if (result.name) {
+    html += `<div class="mrmd-hover-name"><code>${escapeHtml(result.name)}</code>`;
+    if (result.type) {
+      html += ` <span class="mrmd-hover-type">${escapeHtml(result.type)}</span>`;
+    }
+    html += '</div>';
+  }
+
+  // Signature (for functions)
+  if (result.signature) {
+    html += `<div class="mrmd-hover-signature"><code>${escapeHtml(result.signature)}</code></div>`;
+  }
+
+  // Value preview
+  if (result.value) {
+    html += `<div class="mrmd-hover-value">${escapeHtml(result.value)}</div>`;
+  }
+
+  // Documentation
+  if (result.documentation) {
+    html += `<div class="mrmd-hover-docs">${escapeHtml(result.documentation)}</div>`;
+  }
+
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Escape HTML special characters.
+ *
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeHtml(str) {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// #endregion HOVER_EXTENSION
+
+// #region COMPLETION_EXTENSION
+
+/**
+ * Create a CodeMirror completion source powered by runtime LSP.
+ *
+ * Provides completions based on actual runtime state, not just static analysis.
+ *
+ * @param {Object} options
+ * @param {Map<string, RuntimeLSPProvider>} options.providers - Language → provider map
+ * @param {function(): string} options.getContent - Get document content
+ * @param {import('./awareness/state.js').AwarenessStateManager} [options.stateManager] - For awareness broadcast
+ * @param {import('yjs').Text} [options.yText] - For RelativePosition tracking
+ * @returns {import('@codemirror/autocomplete').CompletionSource}
+ */
+function createRuntimeCompletionSource({ providers, getContent, stateManager, yText }) {
+  return async (context) => {
+    const content = getContent();
+    const pos = context.pos;
+    const codeInfo = getCodeAtPosition(content, pos);
+
+    if (!codeInfo) return null;
+
+    // Find provider for this language
+    const provider = findProviderForLanguage(providers, codeInfo.language);
+    if (!provider) return null;
+
+    // Get completions from runtime
+    const result = await provider.complete(codeInfo.code, codeInfo.offset, codeInfo.language);
+    if (!result || !result.matches || result.matches.length === 0) return null;
+
+    // Broadcast to awareness if available
+    if (stateManager) {
+      const position = yText
+        ? await Promise.resolve().then(function () { return Y; }).then(Y => Y.createRelativePositionFromTypeIndex(yText, pos))
+        : { line: context.state.doc.lineAt(pos).number, ch: pos - context.state.doc.lineAt(pos).from };
+
+      // Extract query from the completion range
+      const queryStart = codeInfo.cell.codeStart + result.cursorStart;
+      const queryEnd = codeInfo.cell.codeStart + result.cursorEnd;
+      const query = context.state.doc.sliceString(queryStart, queryEnd);
+
+      stateManager.setAutocomplete({
+        query,
+        items: result.matches.slice(0, 5).map(m => m.label),
+        position,
+        cellIndex: getCellIndex(content, codeInfo.cell),
+      });
+    }
+
+    // Convert to CodeMirror completion format
+    return {
+      from: codeInfo.cell.codeStart + result.cursorStart,
+      to: codeInfo.cell.codeStart + result.cursorEnd,
+      options: result.matches.map(match => ({
+        label: match.label,
+        type: mapCompletionKind(match.kind),
+        detail: match.valuePreview || match.detail,
+        info: match.documentation,
+        apply: match.insertText || match.label,
+        boost: match.kind === 'property' || match.kind === 'method' ? 1 : 0,
+      })),
+    };
+  };
+}
+
+/**
+ * Map runtime completion kind to CodeMirror completion type.
+ *
+ * @param {string} kind
+ * @returns {string}
+ */
+function mapCompletionKind(kind) {
+  const map = {
+    'function': 'function',
+    'method': 'method',
+    'property': 'property',
+    'variable': 'variable',
+    'class': 'class',
+    'module': 'namespace',
+    'keyword': 'keyword',
+    'constant': 'constant',
+    'field': 'property',
+    'value': 'constant',
+  };
+  return map[kind] || 'text';
+}
+
+/**
+ * Create the full autocompletion extension with runtime support.
+ *
+ * @param {Object} options
+ * @param {Map<string, RuntimeLSPProvider>} options.providers
+ * @param {function(): string} options.getContent
+ * @param {import('./awareness/state.js').AwarenessStateManager} [options.stateManager]
+ * @param {import('yjs').Text} [options.yText]
+ * @param {Object} [options.config] - Autocompletion config overrides
+ * @returns {import('@codemirror/state').Extension}
+ */
+function createRuntimeCompletionExtension({ providers, getContent, stateManager, yText, config = {} }) {
+  const source = createRuntimeCompletionSource({ providers, getContent, stateManager, yText });
+
+  return autocompletion({
+    override: [source],
+    activateOnTyping: config.activateOnTyping ?? true,
+    maxRenderedOptions: config.maxRenderedOptions ?? 50,
+    ...config,
+  });
+}
+
+// #endregion COMPLETION_EXTENSION
+
+// #region VARIABLE_EXPLORER
+
+/**
+ * Create a variable explorer API for UI components.
+ *
+ * @param {Object} options
+ * @param {Map<string, RuntimeLSPProvider>} options.providers
+ * @param {string} [options.activeLanguage] - Currently active language
+ * @returns {VariableExplorer}
+ */
+function createVariableExplorer({ providers, activeLanguage }) {
+  let currentLanguage = activeLanguage;
+
+  return {
+    /**
+     * Set the active language for variable queries.
+     * @param {string} language
+     */
+    setLanguage(language) {
+      currentLanguage = language;
+    },
+
+    /**
+     * List all variables in the current session.
+     * @returns {Promise<VariableInfo[]>}
+     */
+    async list() {
+      const provider = findProviderForLanguage(providers, currentLanguage);
+      if (!provider) return [];
+      return provider.listVariables();
+    },
+
+    /**
+     * Get detailed info about a variable.
+     * @param {string} name
+     * @param {Object} [options]
+     * @returns {Promise<VariableDetail>}
+     */
+    async get(name, options = {}) {
+      const provider = findProviderForLanguage(providers, currentLanguage);
+      if (!provider) return { name, type: 'unknown', value: '?', expandable: false };
+      return provider.getVariable(name, options);
+    },
+
+    /**
+     * Get all providers.
+     * @returns {Map<string, RuntimeLSPProvider>}
+     */
+    getProviders() {
+      return providers;
+    },
+  };
+}
+
+/**
+ * @typedef {Object} VariableExplorer
+ * @property {function(string): void} setLanguage
+ * @property {function(): Promise<VariableInfo[]>} list
+ * @property {function(string, Object?): Promise<VariableDetail>} get
+ * @property {function(): Map<string, RuntimeLSPProvider>} getProviders
+ */
+
+// #endregion VARIABLE_EXPLORER
+
+// #region UTILITIES
+
+/**
+ * Find a provider that supports the given language.
+ *
+ * @param {Map<string, RuntimeLSPProvider>} providers
+ * @param {string} language
+ * @returns {RuntimeLSPProvider|null}
+ */
+function findProviderForLanguage(providers, language) {
+  if (!language) return null;
+  const lang = language.toLowerCase();
+
+  // Direct match
+  if (providers.has(lang)) {
+    return providers.get(lang);
+  }
+
+  // Check each provider's languages array
+  for (const [, provider] of providers) {
+    if (provider.languages.includes(lang)) {
+      return provider;
+    }
+  }
+
+  // Common aliases
+  const aliases = {
+    'js': 'javascript',
+    'node': 'javascript',
+    'ecmascript': 'javascript',
+    'py': 'python',
+    'python3': 'python',
+    'jl': 'julia',
+    'rlang': 'r',
+    'sh': 'bash',
+    'zsh': 'bash',
+  };
+
+  const canonical = aliases[lang];
+  if (canonical) {
+    return findProviderForLanguage(providers, canonical);
+  }
+
+  return null;
+}
+
+/**
+ * Get cell index for a cell.
+ *
+ * @param {string} content
+ * @param {Object} cell
+ * @returns {number}
+ */
+function getCellIndex(content, cell) {
+  const cells = findCells(content);
+  return cells.findIndex(c => c.start === cell.start);
+}
+
+// #endregion UTILITIES
+
+// #region STYLES
+
+/**
+ * CSS styles for runtime LSP UI components.
+ */
+const runtimeLspStyles = `
+/* Runtime Hover Tooltip */
+.mrmd-runtime-hover {
+  background: var(--mrmd-bg, #1e1e1e);
+  border: 1px solid var(--mrmd-border, #333);
+  border-radius: 6px;
+  padding: 8px 12px;
+  max-width: 400px;
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.mrmd-hover-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mrmd-hover-name {
+  font-weight: 600;
+}
+
+.mrmd-hover-name code {
+  color: var(--mrmd-text, #e1e1e1);
+  background: none;
+  padding: 0;
+}
+
+.mrmd-hover-type {
+  color: var(--mrmd-type-color, #4ec9b0);
+  font-size: 12px;
+  font-weight: normal;
+  margin-left: 8px;
+}
+
+.mrmd-hover-signature {
+  color: var(--mrmd-signature-color, #dcdcaa);
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.mrmd-hover-signature code {
+  background: none;
+  padding: 0;
+}
+
+.mrmd-hover-value {
+  color: var(--mrmd-value-color, #ce9178);
+  font-family: monospace;
+  font-size: 12px;
+  max-height: 100px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mrmd-hover-docs {
+  color: var(--mrmd-docs-color, #9cdcfe);
+  font-size: 12px;
+  border-top: 1px solid var(--mrmd-border, #333);
+  padding-top: 6px;
+  margin-top: 2px;
+}
+
+/* Light theme adjustments */
+.cm-theme-light .mrmd-runtime-hover,
+:root:not(.dark) .mrmd-runtime-hover {
+  background: #ffffff;
+  border-color: #e0e0e0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.cm-theme-light .mrmd-hover-name code,
+:root:not(.dark) .mrmd-hover-name code {
+  color: #1e1e1e;
+}
+
+.cm-theme-light .mrmd-hover-type,
+:root:not(.dark) .mrmd-hover-type {
+  color: #267f99;
+}
+
+.cm-theme-light .mrmd-hover-value,
+:root:not(.dark) .mrmd-hover-value {
+  color: #a31515;
+}
+
+.cm-theme-light .mrmd-hover-docs,
+:root:not(.dark) .mrmd-hover-docs {
+  color: #0070c1;
+  border-top-color: #e0e0e0;
+}
+`;
+
+let stylesInjected$2 = false;
+
+/**
+ * Inject runtime LSP styles into document.
+ */
+function injectRuntimeLspStyles() {
+  if (stylesInjected$2 || typeof document === 'undefined') return;
+
+  const style = document.createElement('style');
+  style.id = 'mrmd-runtime-lsp-styles';
+  style.textContent = runtimeLspStyles;
+  document.head.appendChild(style);
+  stylesInjected$2 = true;
+}
+
+// #endregion EXPORTS
 
 /**
  * Constants
@@ -61649,6 +62512,14 @@ function createRuntime(options) {
  */
 
 
+// Facet to provide awareness system to the output widget
+const outputWidgetAwarenessFacet = Facet.define({
+  combine: values => values[values.length - 1] || null
+});
+
+// Annotation to mark awareness-triggered updates (following y-codemirror.next pattern)
+const outputWidgetAwarenessAnnotation = Annotation.define();
+
 // #region WIDGET
 
 /**
@@ -61715,11 +62586,15 @@ class OutputWidget extends WidgetType {
 // #region DECORATION_PLUGIN
 
 /**
- * Find output blocks and create decorations
+ * Find output blocks and create decorations.
+ * Uses y-codemirror.next cursor positions (via awareness) to determine if any
+ * collaborator is focused on an output block - no separate focusedBlock state needed.
+ *
  * @param {import('@codemirror/view').EditorView} view
+ * @param {Object|null} awarenessSystem - Optional awareness system for collaborative focus
  * @returns {import('@codemirror/view').DecorationSet}
  */
-function buildDecorations(view) {
+function buildDecorations(view, awarenessSystem) {
   const decorations = [];
   const doc = view.state.doc;
   const cursorPos = view.state.selection.main.head;
@@ -61739,8 +62614,22 @@ function buildDecorations(view) {
     const startLine = doc.lineAt(blockStart);
     const endLine = doc.lineAt(blockEnd);
 
-    // Check if cursor is inside this block
-    const cursorInBlock = cursorLine >= startLine.number && cursorLine <= endLine.number;
+    // Check if LOCAL cursor is inside this block
+    const localCursorInBlock = cursorLine >= startLine.number && cursorLine <= endLine.number;
+
+    // Check if ANY collaborator (local or remote) is focused on this block
+    // Uses y-codemirror.next's cursor positions which survive document edits
+    let anyCollaboratorFocused = localCursorInBlock;
+    if (awarenessSystem && !localCursorInBlock) {
+      try {
+        // Check remote cursors (uses RelativePositions, survives edits)
+        anyCollaboratorFocused = awarenessSystem.isBlockFocused(blockStart, blockEnd);
+      } catch (e) {
+        // If awareness fails, fall back to local-only behavior
+        console.warn('Output widget: awareness check failed', e);
+        anyCollaboratorFocused = false;
+      }
+    }
 
     // Only hide/show lines with ANSI codes (plain text shows as-is)
     const hasAnsiContent = hasAnsi(content);
@@ -61751,17 +62640,17 @@ function buildDecorations(view) {
         const line = doc.line(i);
         decorations.push(
           Decoration.line({
-            class: cursorInBlock ? 'cm-output-line-visible' : 'cm-output-line-hidden',
+            class: anyCollaboratorFocused ? 'cm-output-line-visible' : 'cm-output-line-hidden',
           }).range(line.from)
         );
       }
     }
 
     // Always add widget after opening fence line for stdin input placement
-    // Widget will be hidden for plain text content but still exists in DOM
+    // Widget will be hidden for plain text content or when any collaborator is editing
     decorations.push(
       Decoration.widget({
-        widget: new OutputWidget(content.trimEnd(), cursorInBlock || !hasAnsiContent, blockStart),
+        widget: new OutputWidget(content.trimEnd(), anyCollaboratorFocused || !hasAnsiContent, blockStart),
         side: 1,
       }).range(startLine.to)
     );
@@ -61771,17 +62660,80 @@ function buildDecorations(view) {
 }
 
 /**
- * ViewPlugin that manages output block decorations
+ * ViewPlugin that manages output block decorations with awareness support.
+ * When any collaborator focuses on an output block, all clients see raw text.
+ *
+ * Follows y-codemirror.next pattern:
+ * - Awareness changes dispatch a transaction with annotation
+ * - update() always rebuilds decorations (no conditional)
+ * - This ensures decorations are rebuilt during the normal CodeMirror cycle
  */
 const outputWidgetPlugin = ViewPlugin.fromClass(
   class {
     constructor(view) {
-      this.decorations = buildDecorations(view);
+      // Get awareness from facet (may be null initially)
+      this.awarenessSystem = view.state.facet(outputWidgetAwarenessFacet);
+      this.unsubscribe = null;
+
+      // Build initial decorations
+      this.decorations = buildDecorations(view, this.awarenessSystem);
+
+      // Setup awareness listener (following y-codemirror.next pattern)
+      // The listener dispatches a transaction which triggers update()
+      this._setupAwarenessListener(view);
     }
 
+    /**
+     * Setup awareness listener following y-codemirror.next pattern:
+     * When awareness changes, dispatch a transaction with annotation.
+     * This triggers the update() method during normal CodeMirror cycle.
+     *
+     * IMPORTANT: Only dispatch for REMOTE client changes to avoid
+     * recursive update errors. Local changes are already handled
+     * by the current update cycle.
+     */
+    _setupAwarenessListener(view) {
+      if (this.unsubscribe) {
+        this.unsubscribe();
+        this.unsubscribe = null;
+      }
+
+      if (this.awarenessSystem) {
+        // Following y-codemirror.next pattern exactly:
+        // Only dispatch when REMOTE clients change (not local)
+        this.unsubscribe = this.awarenessSystem.onCollaboratorsChange((collaborators, changeInfo) => {
+          // Only dispatch for remote changes to avoid recursive updates
+          // Local changes are already being processed in the current update cycle
+          if (changeInfo?.isRemote) {
+            view.dispatch({
+              annotations: [outputWidgetAwarenessAnnotation.of([])]
+            });
+          }
+        });
+      }
+    }
+
+    /**
+     * Called on every CodeMirror transaction.
+     * Following y-codemirror.next pattern: ALWAYS rebuild decorations.
+     */
     update(update) {
-      if (update.docChanged || update.viewportChanged || update.selectionSet) {
-        this.decorations = buildDecorations(update.view);
+      // Check if awareness facet changed (e.g., awareness was added after view creation)
+      const newAwareness = update.state.facet(outputWidgetAwarenessFacet);
+      if (newAwareness !== this.awarenessSystem) {
+        this.awarenessSystem = newAwareness;
+        this._setupAwarenessListener(update.view);
+      }
+
+      // ALWAYS rebuild decorations (following y-codemirror.next pattern)
+      // Uses y-codemirror.next cursor positions to check remote focus
+      // (no separate focusedBlock state needed - cursor positions survive edits)
+      this.decorations = buildDecorations(update.view, this.awarenessSystem);
+    }
+
+    destroy() {
+      if (this.unsubscribe) {
+        this.unsubscribe();
       }
     }
   },
@@ -61999,6 +62951,13 @@ function injectOutputWidgetStyles() {
  */
 
 /**
+ * @typedef {Object} FocusedBlockState
+ * @property {number} start - Start position of the focused block
+ * @property {number} end - End position of the focused block
+ * @property {'output' | 'code'} blockType - Type of block being focused
+ */
+
+/**
  * @typedef {Object} AwarenessUserState
  * @property {CollaboratorType} type - Type of collaborator
  * @property {string} name - Display name
@@ -62008,6 +62967,7 @@ function injectOutputWidgetStyles() {
  * @property {AutocompleteState} [autocomplete] - Active autocomplete
  * @property {ExecutionState} [execution] - Active execution (for runtimes)
  * @property {GenerationState} [generation] - Active generation (for AI)
+ * @property {FocusedBlockState} [focusedBlock] - Block user is editing (reveals raw text)
  * @property {number} [activeCellIndex] - Which cell cursor is in
  * @property {number} [lastActivity] - Timestamp of last activity
  */
@@ -62172,6 +63132,20 @@ function withExecution(state, execution) {
 }
 
 /**
+ * Create new state with focused block updated
+ * @param {AwarenessUserState} state
+ * @param {FocusedBlockState|null} focusedBlock
+ * @returns {AwarenessUserState}
+ */
+function withFocusedBlock(state, focusedBlock) {
+  return {
+    ...state,
+    focusedBlock: focusedBlock || undefined,
+    lastActivity: Date.now(),
+  };
+}
+
+/**
  * Update generation state (for AI)
  * @param {AwarenessUserState} state
  * @param {GenerationState|null} generation
@@ -62314,6 +63288,17 @@ class AwarenessStateManager {
   }
 
   /**
+   * Set focused block state (for syncing output widget visibility)
+   * @param {FocusedBlockState|null} focusedBlock
+   */
+  setFocusedBlock(focusedBlock) {
+    const current = this.getLocalState();
+    if (current) {
+      this.setLocalState(withFocusedBlock(current, focusedBlock));
+    }
+  }
+
+  /**
    * Set status
    * @param {CollaboratorStatus} status
    */
@@ -62425,11 +63410,18 @@ class AwarenessStateManager {
 
   /**
    * Subscribe to awareness changes
-   * @param {function} callback
+   * @param {function} callback - Called with (collaborators, changeInfo)
+   *   changeInfo: { added: number[], updated: number[], removed: number[], isRemote: boolean }
    * @returns {function} Unsubscribe function
    */
   onChange(callback) {
-    const handler = () => callback(this.getCollaborators());
+    const localClientId = this.awareness.clientID;
+    const handler = ({ added, updated, removed }) => {
+      // Check if any changed client is remote (not local)
+      const changedClients = [...added, ...updated, ...removed];
+      const isRemote = changedClients.some(id => id !== localClientId);
+      callback(this.getCollaborators(), { added, updated, removed, isRemote });
+    };
     this.awareness.on('change', handler);
     return () => this.awareness.off('change', handler);
   }
@@ -62547,10 +63539,11 @@ function createTypingTracker({ stateManager, idleTimeout = 2000, getContent }) {
  * @param {import('./state.js').AwarenessStateManager} options.stateManager
  * @param {function(view, pos): Promise<object|null>} options.hoverProvider - Original hover provider
  * @param {function(): string} options.getContent
+ * @param {import('yjs').Text} [options.yText] - Yjs Text for position tracking
  * @param {number} [options.clearDelay=500] - Ms after hover closes to clear state
  * @returns {function} Wrapped hover provider
  */
-function createHoverTracker({ stateManager, hoverProvider, getContent, clearDelay = 500 }) {
+function createHoverTracker({ stateManager, hoverProvider, getContent, yText, clearDelay = 500 }) {
   let clearTimer = null;
 
   return async (view, pos) => {
@@ -62567,17 +63560,19 @@ function createHoverTracker({ stateManager, hoverProvider, getContent, clearDela
       // Extract hover info for awareness
       const content = getContent();
       const cell = getCellAtCursor(content, pos);
-      const line = view.state.doc.lineAt(pos);
+
+      // Use RelativePosition if yText available (survives concurrent edits)
+      // Falls back to line/ch for backwards compatibility
+      const position = yText
+        ? createRelativePositionFromTypeIndex(yText, pos)
+        : { line: view.state.doc.lineAt(pos).number, ch: pos - view.state.doc.lineAt(pos).from };
 
       // Broadcast to awareness
       stateManager.setHover({
         symbol: result.name || extractSymbolAtPos(view, pos),
         type: result.type,
         info: result.value || result.signature,
-        position: {
-          line: line.number,
-          ch: pos - line.from,
-        },
+        position,
         cellIndex: cell ? findCellIndexHelper(content, cell) : undefined,
       });
 
@@ -62658,10 +63653,11 @@ function findCellIndexHelper(content, cell) {
  * @param {import('./state.js').AwarenessStateManager} options.stateManager
  * @param {import('@codemirror/autocomplete').CompletionSource} options.completionSource
  * @param {function(): string} options.getContent
+ * @param {import('yjs').Text} [options.yText] - Yjs Text for position tracking
  * @param {number} [options.maxItems=5] - Max items to include in awareness
  * @returns {import('@codemirror/autocomplete').CompletionSource}
  */
-function createAutocompleteTracker({ stateManager, completionSource, getContent, maxItems = 5 }) {
+function createAutocompleteTracker({ stateManager, completionSource, getContent, yText, maxItems = 5 }) {
   return async (context) => {
     const result = await completionSource(context);
 
@@ -62669,19 +63665,21 @@ function createAutocompleteTracker({ stateManager, completionSource, getContent,
       const content = getContent();
       const pos = context.pos;
       const cell = getCellAtCursor(content, pos);
-      const line = context.state.doc.lineAt(pos);
 
       // Extract query text
       const query = context.state.doc.sliceString(result.from, result.to);
+
+      // Use RelativePosition if yText available (survives concurrent edits)
+      // Falls back to line/ch for backwards compatibility
+      const position = yText
+        ? createRelativePositionFromTypeIndex(yText, pos)
+        : { line: context.state.doc.lineAt(pos).number, ch: pos - context.state.doc.lineAt(pos).from };
 
       // Broadcast to awareness
       stateManager.setAutocomplete({
         query,
         items: result.options.slice(0, maxItems).map(opt => opt.label),
-        position: {
-          line: line.number,
-          ch: pos - line.from,
-        },
+        position,
         cellIndex: cell ? findCellIndexHelper(content, cell) : undefined,
       });
     }
@@ -63566,12 +64564,16 @@ function createAvatarRow({ container, stateManager, maxAvatars = 5 }) {
  */
 
 
+// Annotation to mark awareness-triggered cursor updates (following y-codemirror.next pattern)
+const cursorAwarenessAnnotation = Annotation.define();
+
 // #region WIDGET
 
 /**
- * Widget for rendering enhanced cursor label
+ * Combined cursor widget with caret and label in a single container.
+ * This ensures proper CSS positioning (label floats above caret).
  */
-class CursorLabelWidget extends WidgetType {
+class CursorWidget extends WidgetType {
   /**
    * @param {Object} options
    * @param {string} options.name
@@ -63579,15 +64581,19 @@ class CursorLabelWidget extends WidgetType {
    * @param {string} [options.status]
    * @param {string} [options.activity]
    * @param {string} [options.type]
+   * @param {boolean} [options.showLabel=true]
+   * @param {boolean} [options.showCaret=true]
    * @param {boolean} [options.showAlways=false]
    */
-  constructor({ name, color, status, activity, type, showAlways = false }) {
+  constructor({ name, color, status, activity, type, showLabel = true, showCaret = true, showAlways = false }) {
     super();
     this.name = name;
     this.color = color;
     this.status = status;
     this.activity = activity;
     this.type = type;
+    this.showLabel = showLabel;
+    this.showCaret = showCaret;
     this.showAlways = showAlways;
   }
 
@@ -63596,52 +64602,69 @@ class CursorLabelWidget extends WidgetType {
       other.name === this.name &&
       other.color === this.color &&
       other.status === this.status &&
-      other.activity === this.activity
+      other.activity === this.activity &&
+      other.showCaret === this.showCaret
     );
   }
 
   toDOM() {
-    const container = document.createElement('span');
-    container.className = `mrmd-cursor-label${this.showAlways ? ' mrmd-cursor-label--always' : ''}`;
-    container.style.setProperty('--cursor-color', this.color);
+    // Wrapper with position:relative for label positioning
+    const wrapper = document.createElement('span');
+    wrapper.className = 'mrmd-cursor-widget';
+    wrapper.style.setProperty('--cursor-color', this.color);
 
-    // Name
-    const nameEl = document.createElement('span');
-    nameEl.className = 'mrmd-cursor-label__name';
-    nameEl.textContent = this.name;
-    container.appendChild(nameEl);
+    // Caret (the blinking line)
+    if (this.showCaret) {
+      const caret = document.createElement('span');
+      caret.className = `mrmd-cursor-caret${this.status ? ' mrmd-cursor-caret--' + this.status : ''}`;
+      wrapper.appendChild(caret);
+    }
 
-    // Status indicator
-    if (this.status && this.status !== 'idle') {
-      const statusEl = document.createElement('span');
-      statusEl.className = `mrmd-cursor-label__status mrmd-cursor-label__status--${this.status}`;
+    // Label (floats above)
+    if (this.showLabel) {
+      const label = document.createElement('span');
+      label.className = `mrmd-cursor-label${this.showAlways ? ' mrmd-cursor-label--always' : ''}`;
 
-      switch (this.status) {
-        case 'typing':
-          statusEl.innerHTML = '<span class="typing-indicator"><span></span><span></span><span></span></span>';
-          break;
-        case 'executing':
-          statusEl.innerHTML = '<span class="executing-indicator"></span>';
-          break;
-        case 'streaming':
-          statusEl.innerHTML = '<span class="streaming-indicator"></span>';
-          break;
-        default:
-          statusEl.textContent = this.status;
+      // Name
+      const nameEl = document.createElement('span');
+      nameEl.className = 'mrmd-cursor-label__name';
+      nameEl.textContent = this.name;
+      label.appendChild(nameEl);
+
+      // Status indicator
+      if (this.status && this.status !== 'idle') {
+        const statusEl = document.createElement('span');
+        statusEl.className = `mrmd-cursor-label__status mrmd-cursor-label__status--${this.status}`;
+
+        switch (this.status) {
+          case 'typing':
+            statusEl.innerHTML = '<span class="typing-indicator"><span></span><span></span><span></span></span>';
+            break;
+          case 'executing':
+            statusEl.innerHTML = '<span class="executing-indicator"></span>';
+            break;
+          case 'streaming':
+            statusEl.innerHTML = '<span class="streaming-indicator"></span>';
+            break;
+          default:
+            statusEl.textContent = this.status;
+        }
+
+        label.appendChild(statusEl);
       }
 
-      container.appendChild(statusEl);
+      // Activity text (short)
+      if (this.activity) {
+        const activityEl = document.createElement('span');
+        activityEl.className = 'mrmd-cursor-label__activity';
+        activityEl.textContent = this.activity;
+        label.appendChild(activityEl);
+      }
+
+      wrapper.appendChild(label);
     }
 
-    // Activity text (short)
-    if (this.activity) {
-      const activityEl = document.createElement('span');
-      activityEl.className = 'mrmd-cursor-label__activity';
-      activityEl.textContent = this.activity;
-      container.appendChild(activityEl);
-    }
-
-    return container;
+    return wrapper;
   }
 
   ignoreEvent() {
@@ -63650,37 +64673,6 @@ class CursorLabelWidget extends WidgetType {
 }
 
 // #endregion WIDGET
-
-// #region CARET_WIDGET
-
-/**
- * Widget for the actual cursor caret (the blinking line)
- */
-class CursorCaretWidget extends WidgetType {
-  constructor({ color, status }) {
-    super();
-    this.color = color;
-    this.status = status;
-  }
-
-  eq(other) {
-    return other.color === this.color && other.status === this.status;
-  }
-
-  toDOM() {
-    const caret = document.createElement('span');
-    caret.className = `mrmd-cursor-caret${this.status ? ' mrmd-cursor-caret--' + this.status : ''}`;
-    caret.style.borderColor = this.color;
-    caret.style.setProperty('--cursor-color', this.color);
-    return caret;
-  }
-
-  ignoreEvent() {
-    return true;
-  }
-}
-
-// #endregion CARET_WIDGET
 
 // #region EXTENSION
 
@@ -63723,24 +64715,24 @@ function createEnhancedCursors({ stateManager, yText, config = {} }) {
           this.decorations = Decoration.none;
         }
 
-        // Subscribe to awareness changes
-        this.unsubscribe = stateManager.onChange(() => {
-          try {
-            this.decorations = this.buildDecorations();
-            // Request a measure pass to update decorations
-            if (view.dom && view.dom.isConnected) {
-              view.requestMeasure();
-            }
-          } catch (e) {
-            console.warn('Cursor decoration update failed:', e);
+        // Subscribe to awareness changes (following y-codemirror.next pattern)
+        // Only dispatch for REMOTE changes to avoid recursive updates
+        this.unsubscribe = stateManager.onChange((collaborators, changeInfo) => {
+          if (changeInfo?.isRemote) {
+            view.dispatch({
+              annotations: [cursorAwarenessAnnotation.of([])]
+            });
           }
         });
       }
 
       update(update) {
-        // Rebuild on doc or selection changes (cursor positions may have changed)
-        if (update.docChanged || update.selectionSet) {
+        // ALWAYS rebuild decorations (following y-codemirror.next pattern)
+        // This handles: doc changes, selection changes, and awareness-triggered updates
+        try {
           this.decorations = this.buildDecorations();
+        } catch (e) {
+          console.warn('Cursor decoration update failed:', e);
         }
       }
 
@@ -63782,37 +64774,23 @@ function createEnhancedCursors({ stateManager, yText, config = {} }) {
             activity = `→ ${user.autocomplete.query}...`;
           }
 
-          // Add caret decoration
-          if (replaceCaret) {
-            decorationsToAdd.push({
-              pos,
-              decoration: Decoration.widget({
-                widget: new CursorCaretWidget({
-                  color: user.color,
-                  status: user.status,
-                }),
-                side: 1,
+          // Add combined cursor widget (caret + label in one container)
+          decorationsToAdd.push({
+            pos,
+            decoration: Decoration.widget({
+              widget: new CursorWidget({
+                name: user.name || 'Anonymous',
+                color: user.color || '#666',
+                status: showStatus ? user.status : undefined,
+                activity,
+                type: user.type,
+                showLabel: showLabels,
+                showCaret: replaceCaret,
+                showAlways,
               }),
-            });
-          }
-
-          // Add label decoration
-          if (showLabels) {
-            decorationsToAdd.push({
-              pos,
-              decoration: Decoration.widget({
-                widget: new CursorLabelWidget({
-                  name: user.name || 'Anonymous',
-                  color: user.color || '#666',
-                  status: showStatus ? user.status : undefined,
-                  activity,
-                  type: user.type,
-                  showAlways,
-                }),
-                side: 1,
-              }),
-            });
-          }
+              side: 1,
+            }),
+          });
         }
 
         // Sort by position and add to builder
@@ -63917,21 +64895,22 @@ function createSelectionHighlights({ stateManager, yText, opacity = 0.2 }) {
           this.decorations = Decoration.none;
         }
 
-        this.unsubscribe = stateManager.onChange(() => {
-          try {
-            this.decorations = this.buildDecorations();
-            if (view.dom && view.dom.isConnected) {
-              view.requestMeasure();
-            }
-          } catch (e) {
-            console.warn('Selection highlight update failed:', e);
+        // Subscribe to awareness changes (following y-codemirror.next pattern)
+        this.unsubscribe = stateManager.onChange((collaborators, changeInfo) => {
+          if (changeInfo?.isRemote) {
+            view.dispatch({
+              annotations: [cursorAwarenessAnnotation.of([])]
+            });
           }
         });
       }
 
       update(update) {
-        if (update.docChanged) {
+        // ALWAYS rebuild decorations (following y-codemirror.next pattern)
+        try {
           this.decorations = this.buildDecorations();
+        } catch (e) {
+          console.warn('Selection highlight update failed:', e);
         }
       }
 
@@ -64071,6 +65050,48 @@ function createCursorExtensions({ stateManager, yText, config = {} }) {
  */
 
 
+// Annotation to mark awareness-triggered indicator updates (following y-codemirror.next pattern)
+const indicatorAwarenessAnnotation = Annotation.define();
+
+/**
+ * Convert a position (either RelativePosition or {line, ch}) to absolute index.
+ * @param {Object} position - RelativePosition or {line, ch}
+ * @param {import('@codemirror/state').Text} doc - CodeMirror document
+ * @param {import('yjs').Text} [yText] - Yjs Text for RelativePosition conversion
+ * @returns {number|null} - Absolute position or null if invalid
+ */
+function positionToAbsolute(position, doc, yText) {
+  if (!position) return null;
+
+  // Check if it's a RelativePosition (has type/tname/item properties)
+  if (position.type !== undefined || position.tname !== undefined || position.item !== undefined) {
+    // It's a RelativePosition - convert using Yjs
+    if (yText?.doc) {
+      try {
+        const absPos = createAbsolutePositionFromRelativePosition(position, yText.doc);
+        if (absPos && absPos.type === yText) {
+          return absPos.index;
+        }
+      } catch (e) {
+        // Conversion failed
+      }
+    }
+    return null;
+  }
+
+  // Legacy format: {line, ch}
+  if (typeof position.line === 'number' && typeof position.ch === 'number') {
+    try {
+      const line = doc.line(position.line);
+      return line.from + Math.min(position.ch, line.length);
+    } catch (e) {
+      // Invalid line number
+    }
+  }
+
+  return null;
+}
+
 // #region HOVER_INDICATOR
 
 /**
@@ -64120,33 +65141,32 @@ class HoverIndicatorWidget extends WidgetType {
  * @param {Object} options
  * @param {import('../state.js').AwarenessStateManager} options.stateManager
  * @param {function(): string} options.getContent
+ * @param {import('yjs').Text} [options.yText] - Yjs Text for RelativePosition conversion
  * @returns {import('@codemirror/state').Extension}
  */
-function createHoverIndicators({ stateManager, getContent }) {
+function createHoverIndicators({ stateManager, getContent, yText }) {
   return ViewPlugin.fromClass(
     class {
       constructor(view) {
         this.view = view;
         this.stateManager = stateManager;
         this.getContent = getContent;
+        this.yText = yText;
         this.decorations = this.buildDecorations();
 
-        this.unsubscribe = stateManager.onChange(() => {
-          try {
-            this.decorations = this.buildDecorations();
-            if (view.dom && view.dom.isConnected) {
-              view.requestMeasure();
-            }
-          } catch (e) {
-            console.warn('Indicator decoration update failed:', e);
+        // Subscribe to awareness changes (following y-codemirror.next pattern)
+        this.unsubscribe = stateManager.onChange((collaborators, changeInfo) => {
+          if (changeInfo?.isRemote) {
+            view.dispatch({
+              annotations: [indicatorAwarenessAnnotation.of([])]
+            });
           }
         });
       }
 
       update(update) {
-        if (update.docChanged) {
-          this.decorations = this.buildDecorations();
-        }
+        // ALWAYS rebuild decorations (following y-codemirror.next pattern)
+        this.decorations = this.buildDecorations();
       }
 
       buildDecorations() {
@@ -64162,13 +65182,11 @@ function createHoverIndicators({ stateManager, getContent }) {
           const { hover } = state.user;
           const { position, symbol } = hover;
 
-          if (!position) return;
+          // Convert position to absolute (handles both RelativePosition and {line, ch})
+          const pos = positionToAbsolute(position, doc, this.yText);
+          if (pos === null || pos < 0 || pos > doc.length) return;
 
-          // Convert line/ch to absolute position
           try {
-            const line = doc.line(position.line);
-            const pos = line.from + Math.min(position.ch, line.length);
-
             decorationsToAdd.push({
               pos,
               decoration: Decoration.widget({
@@ -64295,22 +65313,19 @@ function createExecutionIndicators({ stateManager, getContent }) {
         this.getContent = getContent;
         this.decorations = this.buildDecorations();
 
-        this.unsubscribe = stateManager.onChange(() => {
-          try {
-            this.decorations = this.buildDecorations();
-            if (view.dom && view.dom.isConnected) {
-              view.requestMeasure();
-            }
-          } catch (e) {
-            console.warn('Indicator decoration update failed:', e);
+        // Subscribe to awareness changes (following y-codemirror.next pattern)
+        this.unsubscribe = stateManager.onChange((collaborators, changeInfo) => {
+          if (changeInfo?.isRemote) {
+            view.dispatch({
+              annotations: [indicatorAwarenessAnnotation.of([])]
+            });
           }
         });
       }
 
       update(update) {
-        if (update.docChanged) {
-          this.decorations = this.buildDecorations();
-        }
+        // ALWAYS rebuild decorations (following y-codemirror.next pattern)
+        this.decorations = this.buildDecorations();
       }
 
       buildDecorations() {
@@ -64439,36 +65454,59 @@ class CellPresenceWidget extends WidgetType {
  * Shows small avatars in the gutter area showing which
  * collaborators have their cursor in each cell.
  *
+ * Calculates cell index from cursor position (RelativePosition) at render time
+ * to avoid stale indices when cells are added/removed.
+ *
  * @param {Object} options
  * @param {import('../state.js').AwarenessStateManager} options.stateManager
  * @param {function(): string} options.getContent
+ * @param {import('yjs').Text} [options.yText] - Yjs Text for cursor position conversion
  * @returns {import('@codemirror/state').Extension}
  */
-function createCellPresenceIndicators({ stateManager, getContent }) {
+function createCellPresenceIndicators({ stateManager, getContent, yText }) {
   return ViewPlugin.fromClass(
     class {
       constructor(view) {
         this.view = view;
         this.stateManager = stateManager;
         this.getContent = getContent;
+        this.yText = yText;
         this.decorations = this.buildDecorations();
 
-        this.unsubscribe = stateManager.onChange(() => {
-          try {
-            this.decorations = this.buildDecorations();
-            if (view.dom && view.dom.isConnected) {
-              view.requestMeasure();
-            }
-          } catch (e) {
-            console.warn('Indicator decoration update failed:', e);
+        // Subscribe to awareness changes (following y-codemirror.next pattern)
+        this.unsubscribe = stateManager.onChange((collaborators, changeInfo) => {
+          if (changeInfo?.isRemote) {
+            view.dispatch({
+              annotations: [indicatorAwarenessAnnotation.of([])]
+            });
           }
         });
       }
 
       update(update) {
-        if (update.docChanged) {
-          this.decorations = this.buildDecorations();
+        // ALWAYS rebuild decorations (following y-codemirror.next pattern)
+        this.decorations = this.buildDecorations();
+      }
+
+      /**
+       * Get cell index from cursor position (most accurate) or fallback to stored index
+       */
+      getCellIndexFromCursor(state, cells) {
+        const cursor = state.cursor;
+        if (cursor?.head && this.yText?.doc) {
+          try {
+            const absPos = createAbsolutePositionFromRelativePosition(cursor.head, this.yText.doc);
+            if (absPos && absPos.type === this.yText) {
+              const pos = absPos.index;
+              const cellIndex = cells.findIndex(cell => pos >= cell.start && pos <= cell.end);
+              if (cellIndex !== -1) return cellIndex;
+            }
+          } catch (e) {
+            // Fall through to stored index
+          }
         }
+        // Fallback: stored activeCellIndex (may be stale)
+        return state.user?.activeCellIndex;
       }
 
       buildDecorations() {
@@ -64484,8 +65522,9 @@ function createCellPresenceIndicators({ stateManager, getContent }) {
           if (clientId === localClientId) return;
           if (!state.user) return;
 
-          const cellIndex = state.user.activeCellIndex;
-          if (cellIndex === undefined || cellIndex === null) return;
+          // Calculate cell index from cursor (survives cell add/remove)
+          const cellIndex = this.getCellIndexFromCursor(state, cells);
+          if (cellIndex === undefined || cellIndex === null || cellIndex < 0) return;
 
           if (!cellCollaborators.has(cellIndex)) {
             cellCollaborators.set(cellIndex, []);
@@ -64641,13 +65680,14 @@ function createStatusBar({ stateManager, container }) {
  * @param {Object} options
  * @param {import('../state.js').AwarenessStateManager} options.stateManager
  * @param {function(): string} options.getContent
+ * @param {import('yjs').Text} [options.yText] - Yjs Text for RelativePosition conversion
  * @param {Object} [options.config]
  * @param {boolean} [options.config.hover=true]
  * @param {boolean} [options.config.execution=true]
  * @param {boolean} [options.config.cellPresence=true]
  * @returns {import('@codemirror/state').Extension[]}
  */
-function createIndicatorExtensions({ stateManager, getContent, config = {} }) {
+function createIndicatorExtensions({ stateManager, getContent, yText, config = {} }) {
   const {
     hover = true,
     execution = true,
@@ -64657,7 +65697,7 @@ function createIndicatorExtensions({ stateManager, getContent, config = {} }) {
   const extensions = [];
 
   if (hover) {
-    extensions.push(createHoverIndicators({ stateManager, getContent }));
+    extensions.push(createHoverIndicators({ stateManager, getContent, yText }));
   }
 
   if (execution) {
@@ -64665,7 +65705,7 @@ function createIndicatorExtensions({ stateManager, getContent, config = {} }) {
   }
 
   if (cellPresence) {
-    extensions.push(createCellPresenceIndicators({ stateManager, getContent }));
+    extensions.push(createCellPresenceIndicators({ stateManager, getContent, yText }));
   }
 
   return extensions;
@@ -64688,6 +65728,19 @@ const awarenessStyles = `
 /* ==========================================================================
    MRMD Awareness Styles
    ========================================================================== */
+
+/* Hide y-codemirror.next's built-in cursor rendering.
+   We use our own awareness system for all cursor/presence rendering
+   so that humans, AI, and runtimes are treated uniformly. */
+.cm-ySelectionCaret {
+  display: none !important;
+}
+.cm-ySelectionCaretDot {
+  display: none !important;
+}
+.cm-ySelectionInfo {
+  display: none !important;
+}
 
 /* CSS Custom Properties */
 .mrmd-awareness-root {
@@ -64971,6 +66024,16 @@ const awarenessStyles = `
 }
 
 /* ==========================================================================
+   Cursor Widget (Combined Caret + Label)
+   ========================================================================== */
+
+.mrmd-cursor-widget {
+  position: relative;
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+/* ==========================================================================
    Cursor Labels
    ========================================================================== */
 
@@ -64995,9 +66058,14 @@ const awarenessStyles = `
   z-index: 100;
 }
 
-/* Show on hover over caret */
-.cm-ySelectionCaret:hover + .mrmd-cursor-label,
-.mrmd-cursor-label--always,
+/* Always-visible labels (default mode) */
+.mrmd-cursor-label--always {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Hover mode: fade in on hover near the caret area */
+.mrmd-cursor-caret:hover ~ .mrmd-cursor-label,
 .mrmd-cursor-label:hover {
   opacity: 1;
   transform: translateY(0);
@@ -65321,13 +66389,13 @@ const awarenessStyles = `
 
 // #region INJECTION
 
-let stylesInjected = false;
+let stylesInjected$1 = false;
 
 /**
  * Inject awareness styles into the document head
  */
 function injectAwarenessStyles() {
-  if (stylesInjected) return;
+  if (stylesInjected$1) return;
   if (typeof document === 'undefined') return;
 
   const style = document.createElement('style');
@@ -65335,7 +66403,7 @@ function injectAwarenessStyles() {
   style.textContent = awarenessStyles;
   document.head.appendChild(style);
 
-  stylesInjected = true;
+  stylesInjected$1 = true;
 }
 
 // #endregion EXPORTS
@@ -65530,6 +66598,72 @@ class AwarenessSystem {
   }
 
   /**
+   * Set focused block state (syncs output widget visibility across clients)
+   * When a user focuses on an output block to edit it, all clients see raw text.
+   * @param {{start: number, end: number, blockType: 'output'|'code'}|null} focusedBlock
+   */
+  setFocusedBlock(focusedBlock) {
+    this.stateManager.setFocusedBlock(focusedBlock);
+  }
+
+  /**
+   * Get all focused blocks from all collaborators
+   * @returns {Array<{start: number, end: number, blockType: string, clientId: number}>}
+   */
+  getFocusedBlocks() {
+    const blocks = [];
+    this.yjsAwareness.getStates().forEach((state, clientId) => {
+      if (state.user?.focusedBlock) {
+        blocks.push({
+          ...state.user.focusedBlock,
+          clientId,
+        });
+      }
+    });
+    return blocks;
+  }
+
+  /**
+   * Check if any REMOTE collaborator's cursor is inside a block.
+   * Uses y-codemirror.next's cursor positions (RelativePositions) which survive edits.
+   * @param {number} blockStart
+   * @param {number} blockEnd
+   * @returns {boolean}
+   */
+  isBlockFocused(blockStart, blockEnd) {
+    const localClientId = this.yjsAwareness.clientID;
+    const yText = this.yText;
+    const ydoc = yText?.doc;
+
+    if (!ydoc) return false;
+
+    let focused = false;
+    this.yjsAwareness.getStates().forEach((state, clientId) => {
+      // Skip local client - we check local cursor position directly
+      if (clientId === localClientId) return;
+
+      // Use y-codemirror.next's cursor (RelativePosition) instead of our focusedBlock
+      const cursor = state.cursor;
+      if (!cursor?.head) return;
+
+      try {
+        // Convert RelativePosition to absolute position
+        const absPos = createAbsolutePositionFromRelativePosition(cursor.head, ydoc);
+        if (absPos && absPos.type === yText) {
+          const pos = absPos.index;
+          // Check if cursor is inside the block
+          if (pos >= blockStart && pos <= blockEnd) {
+            focused = true;
+          }
+        }
+      } catch (e) {
+        // Position conversion failed, skip this collaborator
+      }
+    });
+    return focused;
+  }
+
+  /**
    * Set status
    * @param {string} status
    */
@@ -65580,7 +66714,8 @@ class AwarenessSystem {
       }));
     }
 
-    // Cursor extensions (these enhance, not replace, y-codemirror.next cursors)
+    // Cursor extensions - these ARE the cursor rendering (y-codemirror.next disabled)
+    // All collaborators (humans, AI, runtimes) render through this unified system
     if (this.config.cursors) {
       extensions.push(...createCursorExtensions({
         stateManager: this.stateManager,
@@ -65590,6 +66725,8 @@ class AwarenessSystem {
           showStatus: this.config.cursorStatus,
           showActivity: this.config.cursorActivity,
           selectionOpacity: this.config.selectionOpacity,
+          replaceCaret: true,   // We handle all cursor rendering
+          showAlways: true,     // Always show labels, not just on hover
         },
       }));
     }
@@ -65598,6 +66735,7 @@ class AwarenessSystem {
     extensions.push(...createIndicatorExtensions({
       stateManager: this.stateManager,
       getContent: this.getContent,
+      yText: this.yText,  // For RelativePosition conversion
       config: {
         hover: this.config.hoverIndicators,
         execution: this.config.executionIndicators,
@@ -65627,6 +66765,7 @@ class AwarenessSystem {
       stateManager: this.stateManager,
       hoverProvider,
       getContent: this.getContent,
+      yText: this.yText,  // For RelativePosition tracking
     });
   }
 
@@ -65643,6 +66782,7 @@ class AwarenessSystem {
       stateManager: this.stateManager,
       completionSource: source,
       getContent: this.getContent,
+      yText: this.yText,  // For RelativePosition tracking
     });
   }
 
@@ -65818,6 +66958,2212 @@ const minimalAwarenessConfig = {
 // #endregion EXPORTS
 
 /**
+ * @fileoverview Config schema type definitions
+ *
+ * Config is what you DECLARE. It's serializable and restorable.
+ * Changing config reconfigures the editor.
+ */
+
+// =============================================================================
+// MAIN CONFIG
+// =============================================================================
+
+/**
+ * Editor configuration - everything you can declare
+ * @typedef {Object} EditorConfig
+ * @property {DriveConfig} [drive] - Sync server connection
+ * @property {DocumentConfig} [document] - Document settings
+ * @property {AppearanceConfig} [appearance] - Visual settings
+ * @property {UserConfig} [user] - User identity
+ * @property {Record<string, RuntimeConfig>} [runtimes] - Code execution runtimes
+ * @property {AIConfig} [ai] - AI service endpoints
+ * @property {AwarenessConfig} [awareness] - Collaboration UI settings
+ * @property {boolean | DevPanelConfig} [devPanel] - Developer panel
+ */
+
+// =============================================================================
+// DRIVE / CONNECTION
+// =============================================================================
+
+/**
+ * Sync server connection configuration
+ * @typedef {Object} DriveConfig
+ * @property {string} url - WebSocket URL (e.g., 'ws://localhost:4444')
+ * @property {string} [auth] - Authentication token
+ */
+
+/**
+ * Document configuration
+ * @typedef {Object} DocumentConfig
+ * @property {string} [path] - Path on drive (e.g., 'notes/readme.md')
+ * @property {string} [content] - Initial content (only used if no drive or new file)
+ */
+
+// =============================================================================
+// APPEARANCE
+// =============================================================================
+
+/**
+ * Visual appearance configuration
+ * @typedef {Object} AppearanceConfig
+ * @property {boolean | null} [dark] - Theme: true=dark, false=light, null=system
+ * @property {boolean} [readonly] - View-only mode
+ * @property {string} [placeholder] - Placeholder text when empty
+ */
+
+/** @type {AppearanceConfig} */
+const DEFAULT_APPEARANCE = {
+  dark: null,
+  readonly: false,
+  placeholder: 'Start typing...'
+};
+
+// =============================================================================
+// USER / IDENTITY
+// =============================================================================
+
+/**
+ * User identity configuration
+ * @typedef {Object} UserConfig
+ * @property {string} [name] - Display name
+ * @property {string} [color] - Cursor/highlight color
+ * @property {'human' | 'ai' | 'runtime' | 'sync'} [type] - Collaborator type
+ */
+
+/** @type {UserConfig} */
+const DEFAULT_USER = {
+  name: 'Anonymous',
+  color: null, // Will be randomly generated
+  type: 'human'
+};
+
+// =============================================================================
+// RUNTIMES
+// =============================================================================
+
+/**
+ * Runtime configuration - can be declarative or instance-based
+ * @typedef {BuiltinRuntimeConfig | MRPRuntimeConfig | CustomRuntimeConfig} RuntimeConfig
+ */
+
+/**
+ * Built-in JavaScript runtime (mrmd-js)
+ * @typedef {Object} BuiltinRuntimeConfig
+ * @property {'builtin'} type
+ * @property {'main' | 'iframe'} [isolation] - Execution isolation mode
+ */
+
+/**
+ * MRP (MRMD Runtime Protocol) server runtime
+ * @typedef {Object} MRPRuntimeConfig
+ * @property {'mrp'} type
+ * @property {string} url - Server URL (e.g., 'http://localhost:8000/mrp/v1')
+ * @property {number} [timeout] - Request timeout in ms
+ */
+
+/**
+ * Custom runtime instance (not serializable)
+ * @typedef {Object} CustomRuntimeConfig
+ * @property {'custom'} type
+ * @property {RuntimeInstance} instance - The actual runtime object
+ */
+
+/**
+ * Runtime instance interface (for custom runtimes)
+ * @typedef {Object} RuntimeInstance
+ * @property {(language: string) => boolean} supports - Check language support
+ * @property {(code: string, language: string) => Promise<ExecutionResult>} execute - Execute code
+ * @property {(code: string, language: string, onChunk: Function, onStdin?: Function) => Promise<ExecutionResult>} [executeStreaming] - Streaming execution
+ */
+
+/**
+ * Execution result from a runtime
+ * @typedef {Object} ExecutionResult
+ * @property {string} [stdout] - Standard output
+ * @property {string} [stderr] - Standard error
+ * @property {string} [result] - Return value
+ * @property {boolean} success - Whether execution succeeded
+ * @property {number} [duration] - Duration in ms
+ * @property {ExecutionError} [error] - Error details if failed
+ */
+
+/**
+ * Execution error details
+ * @typedef {Object} ExecutionError
+ * @property {string} name - Error name/type
+ * @property {string} message - Error message
+ * @property {string} [traceback] - Stack trace
+ */
+
+// =============================================================================
+// AI ENDPOINTS
+// =============================================================================
+
+/**
+ * AI services configuration
+ * @typedef {Object} AIConfig
+ * @property {AIEndpointConfig[]} [endpoints] - Configured endpoints
+ * @property {string} [default] - Default endpoint ID
+ */
+
+/**
+ * Single AI endpoint configuration
+ * @typedef {Object} AIEndpointConfig
+ * @property {string} id - Unique identifier
+ * @property {'chat' | 'completion' | 'transcription' | 'code'} type - Endpoint type
+ * @property {'openai' | 'anthropic' | 'local' | 'custom'} provider - Provider
+ * @property {string} [url] - Custom endpoint URL
+ * @property {string} [model] - Model name (e.g., 'gpt-4', 'claude-sonnet-4-20250514')
+ */
+
+// =============================================================================
+// AWARENESS / COLLABORATION
+// =============================================================================
+
+/**
+ * Awareness/collaboration UI configuration
+ * @typedef {Object} AwarenessConfig
+ * @property {boolean} [enabled] - Enable awareness features
+ * @property {boolean} [showCursors] - Show other users' cursors
+ * @property {boolean} [showNames] - Show cursor name labels
+ * @property {boolean} [showActivity] - Show typing/executing indicators
+ */
+
+/** @type {AwarenessConfig} */
+const DEFAULT_AWARENESS = {
+  enabled: true,
+  showCursors: true,
+  showNames: true,
+  showActivity: true
+};
+
+// =============================================================================
+// EXECUTION
+// =============================================================================
+
+/**
+ * Execution configuration
+ * @typedef {Object} ExecutionConfig
+ * @property {boolean} [autoRefreshVariables] - Auto-refresh variables after execution
+ */
+
+/** @type {ExecutionConfig} */
+const DEFAULT_EXECUTION = {
+  autoRefreshVariables: false
+};
+
+// =============================================================================
+// DEV PANEL
+// =============================================================================
+
+/**
+ * Developer panel configuration
+ * @typedef {Object} DevPanelConfig
+ * @property {boolean} [enabled] - Enable the panel
+ * @property {boolean} [startOpen] - Start with panel open
+ * @property {'bottom' | 'right'} [position] - Panel position
+ * @property {number} [maxHeight] - Maximum height in pixels
+ */
+
+/** @type {DevPanelConfig} */
+const DEFAULT_DEV_PANEL = {
+  enabled: false,
+  startOpen: false,
+  position: 'bottom',
+  maxHeight: 300
+};
+
+// =============================================================================
+// FULL DEFAULTS
+// =============================================================================
+
+/**
+ * Get default config with all values filled in
+ * @returns {EditorConfig}
+ */
+function getDefaultConfig() {
+  return {
+    drive: null,
+    document: {
+      path: null,
+      content: ''
+    },
+    appearance: { ...DEFAULT_APPEARANCE },
+    user: { ...DEFAULT_USER },
+    runtimes: {},
+    execution: { ...DEFAULT_EXECUTION },
+    ai: {
+      endpoints: [],
+      default: null
+    },
+    awareness: { ...DEFAULT_AWARENESS },
+    devPanel: { ...DEFAULT_DEV_PANEL }
+  };
+}
+
+// =============================================================================
+// NORMALIZATION
+// =============================================================================
+
+/**
+ * Normalize flat options (current API) to structured config
+ * This maintains backward compatibility with the existing API.
+ *
+ * @param {Object} options - Flat options from create()
+ * @returns {EditorConfig}
+ */
+function normalizeOptions(options = {}) {
+  const config = getDefaultConfig();
+
+  // Document
+  if (options.doc !== undefined) {
+    config.document.content = options.doc;
+  }
+
+  // Appearance
+  if (options.dark !== undefined) {
+    config.appearance.dark = options.dark;
+  }
+  if (options.readonly !== undefined) {
+    config.appearance.readonly = options.readonly;
+  }
+  if (options.placeholder !== undefined) {
+    config.appearance.placeholder = options.placeholder;
+  }
+
+  // User
+  if (options.userName !== undefined) {
+    config.user.name = options.userName;
+  }
+  if (options.userColor !== undefined) {
+    config.user.color = options.userColor;
+  }
+  if (options.userType !== undefined) {
+    config.user.type = options.userType;
+  }
+
+  // Runtimes - convert instances to custom config
+  if (options.runtimes) {
+    for (const [name, runtime] of Object.entries(options.runtimes)) {
+      if (runtime && typeof runtime === 'object') {
+        if (runtime.type === 'mrp' || runtime.type === 'builtin') {
+          // Already in config format
+          config.runtimes[name] = runtime;
+        } else {
+          // Instance - wrap in custom config
+          config.runtimes[name] = { type: 'custom', instance: runtime };
+        }
+      }
+    }
+  }
+
+  // JavaScript runtime shorthand
+  if (options.javascript === true) {
+    config.runtimes.javascript = { type: 'builtin' };
+  } else if (options.javascript === false) ; else if (options.javascript && typeof options.javascript === 'object') {
+    config.runtimes.javascript = { type: 'custom', instance: options.javascript };
+  } else if (options.javascript === undefined) {
+    // Default: enable builtin
+    config.runtimes.javascript = { type: 'builtin' };
+  }
+
+  // Awareness
+  if (options.awarenessUI === false) {
+    config.awareness.enabled = false;
+  } else if (typeof options.awarenessUI === 'object') {
+    config.awareness = { ...config.awareness, ...options.awarenessUI };
+  }
+
+  // Dev panel (new option)
+  if (options.devPanel !== undefined) {
+    if (options.devPanel === true) {
+      config.devPanel = { ...DEFAULT_DEV_PANEL, enabled: true };
+    } else if (options.devPanel === false) {
+      config.devPanel = { ...DEFAULT_DEV_PANEL, enabled: false };
+    } else if (typeof options.devPanel === 'object') {
+      config.devPanel = { ...DEFAULT_DEV_PANEL, ...options.devPanel, enabled: true };
+    }
+  }
+
+  // Execution options
+  if (options.autoRefreshVariables !== undefined) {
+    config.execution.autoRefreshVariables = options.autoRefreshVariables;
+  }
+
+  // If structured config properties are provided, use them directly
+  if (options.drive) config.drive = options.drive;
+  if (options.document) config.document = { ...config.document, ...options.document };
+  if (options.appearance) config.appearance = { ...config.appearance, ...options.appearance };
+  if (options.user) config.user = { ...config.user, ...options.user };
+  if (options.execution) config.execution = { ...config.execution, ...options.execution };
+  if (options.ai) config.ai = options.ai;
+  if (options.awareness && typeof options.awareness === 'object') {
+    config.awareness = { ...config.awareness, ...options.awareness };
+  }
+
+  return config;
+}
+
+// =============================================================================
+// SERIALIZATION
+// =============================================================================
+
+/**
+ * Serialize config to JSON-safe object
+ * Custom runtime instances are converted to markers.
+ *
+ * @param {EditorConfig} config
+ * @returns {Object}
+ */
+function serializeConfig(config) {
+  const serialized = JSON.parse(JSON.stringify(config, (key, value) => {
+    // Handle custom runtime instances
+    if (key === 'instance' && typeof value === 'object' && value !== null) {
+      return '[CustomRuntime - not serializable]';
+    }
+    return value;
+  }));
+
+  return serialized;
+}
+
+/**
+ * Check if config can be fully serialized
+ * @param {EditorConfig} config
+ * @returns {boolean}
+ */
+function isFullySerializable(config) {
+  if (!config.runtimes) return true;
+
+  for (const runtime of Object.values(config.runtimes)) {
+    if (runtime.type === 'custom') {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * @fileoverview Reactive config proxy
+ *
+ * Creates a deeply reactive proxy around config objects.
+ * When any property changes (at any depth), handlers are triggered.
+ */
+
+/**
+ * @typedef {Object} ReactiveConfig
+ * @property {Function} _subscribe - Subscribe to changes
+ * @property {Function} _unsubscribe - Unsubscribe from changes
+ * @property {Function} _getPath - Get value at path
+ * @property {Function} _setPath - Set value at path
+ * @property {Object} _raw - Get raw (non-proxied) config
+ */
+
+/**
+ * Change event emitted when config changes
+ * @typedef {Object} ConfigChangeEvent
+ * @property {string[]} path - Path to changed property (e.g., ['appearance', 'dark'])
+ * @property {any} value - New value
+ * @property {any} oldValue - Previous value
+ * @property {'set' | 'delete'} type - Type of change
+ */
+
+/**
+ * Create a deeply reactive proxy around a config object
+ *
+ * @param {Object} target - The config object to make reactive
+ * @param {(event: ConfigChangeEvent) => void} [onChange] - Change handler
+ * @returns {Object} Proxied config
+ */
+function createReactiveConfig(target, onChange) {
+  /** @type {Set<(event: ConfigChangeEvent) => void>} */
+  const listeners = new Set();
+
+  if (onChange) {
+    listeners.add(onChange);
+  }
+
+  /**
+   * Emit a change event
+   * @param {ConfigChangeEvent} event
+   */
+  function emit(event) {
+    for (const listener of listeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        console.error('[ReactiveConfig] Listener error:', err);
+      }
+    }
+  }
+
+  /**
+   * Create a proxy for an object at a given path
+   * @param {Object} obj - Object to proxy
+   * @param {string[]} path - Current path
+   * @returns {Object} Proxied object
+   */
+  function createProxy(obj, path = []) {
+    // Don't proxy null, primitives, or already-proxied objects
+    if (obj === null || typeof obj !== 'object') {
+      return obj;
+    }
+
+    // Don't proxy special objects (functions, dates, etc.)
+    if (typeof obj === 'function' || obj instanceof Date || obj instanceof RegExp) {
+      return obj;
+    }
+
+    // Don't proxy runtime instances (they have their own methods)
+    if (obj.type === 'custom' && obj.instance) {
+      return obj;
+    }
+
+    return new Proxy(obj, {
+      get(target, prop, receiver) {
+        // Special properties for the reactive system
+        if (prop === '_isReactiveConfig') return true;
+        if (prop === '_raw') return target;
+        if (prop === '_path') return path;
+
+        if (prop === '_subscribe') {
+          return (listener) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          };
+        }
+
+        if (prop === '_unsubscribe') {
+          return (listener) => listeners.delete(listener);
+        }
+
+        if (prop === '_getPath') {
+          return (pathStr) => getAtPath(target, pathStr.split('.'));
+        }
+
+        if (prop === '_setPath') {
+          return (pathStr, value) => setAtPath(receiver, pathStr.split('.'), value);
+        }
+
+        const value = Reflect.get(target, prop, receiver);
+
+        // Recursively proxy nested objects
+        if (value !== null && typeof value === 'object' && !value._isReactiveConfig) {
+          return createProxy(value, [...path, String(prop)]);
+        }
+
+        return value;
+      },
+
+      set(target, prop, value, receiver) {
+        const oldValue = target[prop];
+
+        // Don't emit if value hasn't changed
+        if (oldValue === value) {
+          return true;
+        }
+
+        const success = Reflect.set(target, prop, value, receiver);
+
+        if (success) {
+          emit({
+            path: [...path, String(prop)],
+            value,
+            oldValue,
+            type: 'set'
+          });
+        }
+
+        return success;
+      },
+
+      deleteProperty(target, prop) {
+        const oldValue = target[prop];
+        const existed = prop in target;
+        const success = Reflect.deleteProperty(target, prop);
+
+        if (success && existed) {
+          emit({
+            path: [...path, String(prop)],
+            value: undefined,
+            oldValue,
+            type: 'delete'
+          });
+        }
+
+        return success;
+      }
+    });
+  }
+
+  return createProxy(target);
+}
+
+/**
+ * Get value at a path in an object
+ * @param {Object} obj
+ * @param {string[]} path
+ * @returns {any}
+ */
+function getAtPath(obj, path) {
+  let current = obj;
+  for (const key of path) {
+    if (current === null || current === undefined) {
+      return undefined;
+    }
+    current = current[key];
+  }
+  return current;
+}
+
+/**
+ * Set value at a path in an object (creates intermediate objects if needed)
+ * @param {Object} obj
+ * @param {string[]} path
+ * @param {any} value
+ */
+function setAtPath(obj, path, value) {
+  if (path.length === 0) return;
+
+  let current = obj;
+  for (let i = 0; i < path.length - 1; i++) {
+    const key = path[i];
+    if (current[key] === null || current[key] === undefined) {
+      current[key] = {};
+    }
+    current = current[key];
+  }
+
+  current[path[path.length - 1]] = value;
+}
+
+/**
+ * Create a path string from path array
+ * @param {string[]} path
+ * @returns {string}
+ */
+function pathToString(path) {
+  return path.join('.');
+}
+
+/**
+ * Check if a path matches a pattern
+ * Patterns can include '*' for single segment wildcard
+ *
+ * @param {string[]} path - Actual path
+ * @param {string} pattern - Pattern like 'appearance.*' or 'runtimes.*.url'
+ * @returns {boolean}
+ */
+function matchesPattern(path, pattern) {
+  const patternParts = pattern.split('.');
+
+  if (patternParts.length !== path.length) {
+    // Special case: pattern ends with '**' means match any depth
+    if (patternParts[patternParts.length - 1] === '**') {
+      const prefix = patternParts.slice(0, -1);
+      return path.slice(0, prefix.length).every((p, i) =>
+        prefix[i] === '*' || prefix[i] === p
+      );
+    }
+    return false;
+  }
+
+  return patternParts.every((part, i) =>
+    part === '*' || part === path[i]
+  );
+}
+
+/**
+ * @fileoverview Config change handlers
+ *
+ * Maps config changes to editor actions.
+ * Each handler is responsible for reconfiguring a part of the editor
+ * when the corresponding config changes.
+ */
+
+
+/**
+ * @typedef {import('./reactive.js').ConfigChangeEvent} ConfigChangeEvent
+ */
+
+/**
+ * @typedef {Object} EditorInternals
+ * @property {import('@codemirror/view').EditorView} view
+ * @property {import('@codemirror/state').Compartment} themeCompartment
+ * @property {import('@codemirror/state').Compartment} readonlyCompartment
+ * @property {import('yjs').Awareness} awareness
+ * @property {Object} registry - RuntimeRegistry
+ * @property {Object} [awarenessSystem] - AwarenessSystem
+ * @property {Object} [provider] - WebsocketProvider
+ * @property {Function} createRuntime - Factory to create runtime from config
+ */
+
+/**
+ * Create config change handler for an editor
+ *
+ * @param {EditorInternals} internals - Editor internal objects
+ * @returns {(event: ConfigChangeEvent) => void}
+ */
+function createConfigHandler(internals) {
+  const handlers = {
+    // Appearance handlers
+    'appearance.dark': (event) => handleDarkMode(internals, event),
+    'appearance.readonly': (event) => handleReadonly(internals, event),
+    'appearance.placeholder': (event) => handlePlaceholder(),
+
+    // User handlers
+    'user.name': (event) => handleUserChange(internals, event),
+    'user.color': (event) => handleUserChange(internals, event),
+    'user.type': (event) => handleUserChange(internals, event),
+
+    // Runtime handlers
+    'runtimes.*': (event) => handleRuntimeChange(internals, event),
+
+    // Drive handlers
+    'drive.url': (event) => handleDriveUrlChange(internals),
+
+    // Document handlers
+    'document.path': (event) => handleDocumentPathChange(internals),
+
+    // Awareness handlers
+    'awareness.*': (event) => handleAwarenessChange(internals, event),
+  };
+
+  return (event) => {
+    const pathStr = pathToString(event.path);
+
+    // Try exact match first
+    if (handlers[pathStr]) {
+      handlers[pathStr](event);
+      return;
+    }
+
+    // Try pattern matches
+    for (const [pattern, handler] of Object.entries(handlers)) {
+      if (pattern.includes('*') && matchesPattern(event.path, pattern)) {
+        handler(event);
+        return;
+      }
+    }
+
+    // No handler - that's fine, not all config changes need immediate action
+  };
+}
+
+// =============================================================================
+// APPEARANCE HANDLERS
+// =============================================================================
+
+/**
+ * Handle dark mode change
+ * @param {EditorInternals} internals
+ * @param {ConfigChangeEvent} event
+ */
+function handleDarkMode(internals, event) {
+  const { view, themeCompartment } = internals;
+  const dark = event.value;
+
+  // Determine actual dark mode (null = system preference)
+  let isDark = dark;
+  if (dark === null) {
+    isDark = typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+  }
+
+  // Import dynamically to avoid circular deps
+  Promise.resolve().then(function () { return index; }).then(({ oneDark }) => {
+    view.dispatch({
+      effects: themeCompartment.reconfigure(isDark ? oneDark : [])
+    });
+  });
+}
+
+/**
+ * Handle readonly mode change
+ * @param {EditorInternals} internals
+ * @param {ConfigChangeEvent} event
+ */
+function handleReadonly(internals, event) {
+  const { view, readonlyCompartment } = internals;
+  const readonly = event.value;
+
+  Promise.resolve().then(function () { return index$1; }).then(({ EditorState }) => {
+    view.dispatch({
+      effects: readonlyCompartment.reconfigure(
+        readonly ? EditorState.readOnly.of(true) : []
+      )
+    });
+  });
+}
+
+/**
+ * Handle placeholder change
+ * @param {EditorInternals} internals
+ * @param {ConfigChangeEvent} event
+ */
+function handlePlaceholder(internals, event) {
+  // Placeholder requires re-creating the extension
+  // For now, log a warning - full implementation would need a compartment
+  console.warn('[Config] Placeholder change requires editor recreation. Change will apply on next create().');
+}
+
+// =============================================================================
+// USER HANDLERS
+// =============================================================================
+
+/**
+ * Handle user info change (name, color, type)
+ * @param {EditorInternals} internals
+ * @param {ConfigChangeEvent} event
+ */
+function handleUserChange(internals, event) {
+  const { awareness, awarenessSystem } = internals;
+  const prop = event.path[event.path.length - 1];
+
+  if (awarenessSystem) {
+    // Use awareness system's state manager for proper state structure
+    const stateManager = awarenessSystem.getStateManager();
+    const current = stateManager.getLocalState() || {};
+
+    stateManager.setLocalState({
+      ...current,
+      [prop]: event.value,
+      lastActivity: Date.now()
+    });
+  } else {
+    // Direct awareness update
+    const currentUser = awareness.getLocalState()?.user || {};
+    awareness.setLocalStateField('user', {
+      ...currentUser,
+      [prop]: event.value,
+      lastActivity: Date.now()
+    });
+  }
+}
+
+// =============================================================================
+// RUNTIME HANDLERS
+// =============================================================================
+
+/**
+ * Handle runtime config change (add, update, remove)
+ * @param {EditorInternals} internals
+ * @param {ConfigChangeEvent} event
+ */
+function handleRuntimeChange(internals, event) {
+  const { registry, createRuntime } = internals;
+
+  // Path is ['runtimes', runtimeName] or ['runtimes', runtimeName, property]
+  const runtimeName = event.path[1];
+
+  if (event.path.length === 2) {
+    // Direct assignment to runtimes.name
+    if (event.type === 'delete' || event.value === undefined) {
+      // Remove runtime
+      if (registry.has(runtimeName)) {
+        registry.unregister(runtimeName);
+      }
+    } else {
+      // Add or replace runtime
+      const runtimeConfig = event.value;
+
+      // Remove existing if present
+      if (registry.has(runtimeName)) {
+        registry.unregister(runtimeName);
+      }
+
+      // Create and register new runtime
+      const runtime = createRuntime(runtimeConfig);
+      if (runtime) {
+        registry.register(runtimeName, runtime);
+      }
+    }
+  } else {
+    // Nested property change (e.g., runtimes.python.url)
+    // For now, trigger full runtime re-creation
+    console.warn(`[Config] Runtime property change (${pathToString(event.path)}) - consider replacing entire runtime config`);
+  }
+}
+
+// =============================================================================
+// DRIVE HANDLERS
+// =============================================================================
+
+/**
+ * Handle drive URL change
+ * @param {EditorInternals} internals
+ * @param {ConfigChangeEvent} event
+ */
+function handleDriveUrlChange(internals, event) {
+  const { provider } = internals;
+
+  if (!provider) {
+    console.warn('[Config] Cannot change drive URL - editor was not created with drive connection');
+    return;
+  }
+
+  // Reconnecting to a different server is complex - warn for now
+  console.warn('[Config] Changing drive URL requires editor recreation. Disconnect and create new editor.');
+
+  // Future: Could implement:
+  // provider.disconnect();
+  // Create new provider with new URL
+  // Re-sync document
+}
+
+/**
+ * Handle document path change
+ * @param {EditorInternals} internals
+ * @param {ConfigChangeEvent} event
+ */
+function handleDocumentPathChange(internals, event) {
+  const { provider } = internals;
+
+  if (!provider) {
+    console.warn('[Config] Cannot change document path - editor was not created with drive connection');
+    return;
+  }
+
+  // Changing document requires loading new content
+  console.warn('[Config] Changing document path requires editor recreation. Use drive.open() for new document.');
+}
+
+// =============================================================================
+// AWARENESS HANDLERS
+// =============================================================================
+
+/**
+ * Handle awareness config change
+ * @param {EditorInternals} internals
+ * @param {ConfigChangeEvent} event
+ */
+function handleAwarenessChange(internals, event) {
+  const { awarenessSystem } = internals;
+
+  if (!awarenessSystem) {
+    console.warn('[Config] Awareness system not enabled');
+    return;
+  }
+
+  const prop = event.path[event.path.length - 1];
+
+  switch (prop) {
+    case 'enabled':
+      // Enabling/disabling awareness requires extension reconfiguration
+      console.warn('[Config] Toggling awareness requires editor recreation');
+      break;
+
+    case 'showCursors':
+    case 'showNames':
+    case 'showActivity':
+      // These could potentially be toggled via CSS or config
+      // For now, awareness system would need to support runtime config
+      if (awarenessSystem.setConfig) {
+        awarenessSystem.setConfig({ [prop]: event.value });
+      } else {
+        console.warn(`[Config] Awareness ${prop} change requires editor recreation`);
+      }
+      break;
+  }
+}
+
+/**
+ * @fileoverview State schema type definitions
+ *
+ * State is what you OBSERVE. It's derived from running instances.
+ * State is read-only from the user's perspective - the editor updates it.
+ */
+
+// =============================================================================
+// MAIN STATE
+// =============================================================================
+
+/**
+ * Editor state - everything you can observe
+ * @typedef {Object} EditorState
+ * @property {ConnectionState} connection - Sync server connection
+ * @property {DocumentState} document - Document info
+ * @property {Record<string, RuntimeState>} runtimes - Runtime status
+ * @property {Record<string, SessionState>} sessions - Execution sessions
+ * @property {Record<string, Record<string, VariableInfo>>} variables - Variables by session
+ * @property {ExecutionRecord[]} history - Execution history
+ * @property {CollaboratorInfo[]} collaborators - Connected collaborators
+ * @property {CurrentExecution | null} execution - Current running execution
+ * @property {AIState} ai - AI endpoint status
+ */
+
+// =============================================================================
+// CONNECTION STATE
+// =============================================================================
+
+/**
+ * Connection state to sync server
+ * @typedef {Object} ConnectionState
+ * @property {'disconnected' | 'connecting' | 'connected' | 'error'} status
+ * @property {number} [latency] - Round-trip latency in ms
+ * @property {number} [reconnectAttempts] - Number of reconnect attempts
+ * @property {number} [lastConnected] - Timestamp of last successful connection
+ * @property {string} [error] - Error message if status is 'error'
+ */
+
+/** @type {ConnectionState} */
+const INITIAL_CONNECTION_STATE = {
+  status: 'disconnected',
+  latency: undefined,
+  reconnectAttempts: 0,
+  lastConnected: undefined,
+  error: undefined
+};
+
+// =============================================================================
+// DOCUMENT STATE
+// =============================================================================
+
+/**
+ * Document state
+ * @typedef {Object} DocumentState
+ * @property {boolean} dirty - Has unsaved changes
+ * @property {string} [path] - Current path (from config or drive)
+ * @property {number} size - Character count
+ * @property {number} lines - Line count
+ * @property {number} words - Word count
+ * @property {number} cells - Code cell count
+ * @property {number} [lastModified] - Timestamp of last modification
+ * @property {boolean} canUndo - Is undo available?
+ * @property {boolean} canRedo - Is redo available?
+ * @property {number} undoDepth - Number of undo steps available
+ * @property {number} redoDepth - Number of redo steps available
+ */
+
+/** @type {DocumentState} */
+const INITIAL_DOCUMENT_STATE = {
+  dirty: false,
+  path: undefined,
+  size: 0,
+  lines: 0,
+  words: 0,
+  cells: 0,
+  lastModified: undefined,
+  canUndo: false,
+  canRedo: false,
+  undoDepth: 0,
+  redoDepth: 0
+};
+
+// =============================================================================
+// RUNTIME STATE
+// =============================================================================
+
+/**
+ * Runtime status
+ * @typedef {Object} RuntimeState
+ * @property {'initializing' | 'ready' | 'busy' | 'error' | 'stopped'} status
+ * @property {string[]} languages - Languages this runtime supports
+ * @property {string} [error] - Error message if status is 'error'
+ * @property {string} [version] - Runtime/language version
+ * @property {string[]} [capabilities] - MRP capabilities
+ */
+
+/** @type {RuntimeState} */
+const INITIAL_RUNTIME_STATE = {
+  status: 'initializing',
+  languages: [],
+  error: undefined,
+  version: undefined,
+  capabilities: undefined
+};
+
+// =============================================================================
+// SESSION STATE
+// =============================================================================
+
+/**
+ * Execution session state
+ * @typedef {Object} SessionState
+ * @property {string} runtime - Which runtime this session belongs to
+ * @property {string} language - Language of this session
+ * @property {number} executionCount - Number of executions in this session
+ * @property {number} [lastActivity] - Timestamp of last activity
+ */
+
+// =============================================================================
+// VARIABLES
+// =============================================================================
+
+/**
+ * Variable information
+ * @typedef {Object} VariableInfo
+ * @property {string} name - Variable name
+ * @property {string} type - Type name (number, string, DataFrame, etc.)
+ * @property {string} preview - Short preview of value
+ * @property {any} [value] - Full value (may be truncated)
+ * @property {number} [size] - Size in bytes or element count
+ * @property {boolean} [expandable] - Can drill down into this value
+ */
+
+// =============================================================================
+// EXECUTION HISTORY
+// =============================================================================
+
+/**
+ * Execution record
+ * @typedef {Object} ExecutionRecord
+ * @property {string} id - Unique identifier
+ * @property {number} cellIndex - Which cell was executed
+ * @property {string} language - Language executed
+ * @property {string} codePreview - First ~100 chars of code
+ * @property {boolean} success - Whether execution succeeded
+ * @property {string} [error] - Error message if failed
+ * @property {number} startTime - Timestamp when started
+ * @property {number} duration - Duration in ms
+ * @property {string} [sessionId] - Which session executed it
+ */
+
+// =============================================================================
+// COLLABORATORS
+// =============================================================================
+
+/**
+ * Collaborator information
+ * @typedef {Object} CollaboratorInfo
+ * @property {number} clientId - Yjs client ID
+ * @property {string} name - Display name
+ * @property {string} color - Cursor/highlight color
+ * @property {'human' | 'ai' | 'runtime' | 'sync'} type - Collaborator type
+ * @property {'idle' | 'typing' | 'executing' | 'streaming'} status - Current activity
+ * @property {{line: number, ch: number}} [cursor] - Cursor position
+ */
+
+// =============================================================================
+// CURRENT EXECUTION
+// =============================================================================
+
+/**
+ * Currently running execution
+ * @typedef {Object} CurrentExecution
+ * @property {number} cellIndex - Which cell is executing
+ * @property {string} language - Language being executed
+ * @property {number} startTime - When execution started
+ * @property {number} [progress] - Progress 0-1 (if available)
+ * @property {string} [progressText] - Progress text (e.g., '47/100')
+ */
+
+// =============================================================================
+// AI STATE
+// =============================================================================
+
+/**
+ * AI services state
+ * @typedef {Object} AIState
+ * @property {string} [activeEndpoint] - Currently active endpoint ID
+ * @property {Record<string, AIEndpointState>} endpoints - Endpoint status
+ */
+
+/**
+ * Single AI endpoint state
+ * @typedef {Object} AIEndpointState
+ * @property {'unconfigured' | 'available' | 'error'} status
+ * @property {string} [error] - Error message if status is 'error'
+ */
+
+/** @type {AIState} */
+const INITIAL_AI_STATE = {
+  activeEndpoint: undefined,
+  endpoints: {}
+};
+
+// =============================================================================
+// INITIAL STATE
+// =============================================================================
+
+/**
+ * Get initial state with all values filled in
+ * @returns {EditorState}
+ */
+function getInitialState() {
+  return {
+    connection: { ...INITIAL_CONNECTION_STATE },
+    document: { ...INITIAL_DOCUMENT_STATE },
+    runtimes: {},
+    sessions: {},
+    variables: {},
+    history: [],
+    collaborators: [],
+    execution: null,
+    ai: { ...INITIAL_AI_STATE }
+  };
+}
+
+/**
+ * @fileoverview State manager
+ *
+ * Manages editor state - the observable, derived data that reflects
+ * what's happening in the editor. State is read-only from the user's
+ * perspective; the editor updates it internally.
+ */
+
+
+/**
+ * @typedef {import('./schema.js').EditorState} EditorState
+ * @typedef {import('./schema.js').ConnectionState} ConnectionState
+ * @typedef {import('./schema.js').DocumentState} DocumentState
+ * @typedef {import('./schema.js').RuntimeState} RuntimeState
+ * @typedef {import('./schema.js').SessionState} SessionState
+ * @typedef {import('./schema.js').VariableInfo} VariableInfo
+ * @typedef {import('./schema.js').ExecutionRecord} ExecutionRecord
+ * @typedef {import('./schema.js').CollaboratorInfo} CollaboratorInfo
+ * @typedef {import('./schema.js').CurrentExecution} CurrentExecution
+ */
+
+/**
+ * State change event
+ * @typedef {Object} StateChangeEvent
+ * @property {string} path - Dot-separated path to changed property
+ * @property {any} value - New value
+ * @property {any} [oldValue] - Previous value
+ */
+
+/**
+ * State manager - internal API for updating state
+ * Users get a read-only proxy; the editor uses this manager to update.
+ */
+class StateManager {
+  constructor() {
+    /** @type {EditorState} */
+    this._state = getInitialState();
+
+    /** @type {Set<(event: StateChangeEvent) => void>} */
+    this._listeners = new Set();
+
+    /** @type {Map<string, Set<(value: any) => void>>} */
+    this._pathListeners = new Map();
+
+    /** @type {number} */
+    this._executionIdCounter = 0;
+  }
+
+  // ===========================================================================
+  // READ-ONLY PROXY
+  // ===========================================================================
+
+  /**
+   * Get a read-only proxy of the state
+   * @returns {EditorState}
+   */
+  getReadOnlyProxy() {
+    return this._createReadOnlyProxy(this._state);
+  }
+
+  /**
+   * Create a read-only proxy for an object
+   * @param {Object} obj
+   * @param {string[]} [path]
+   * @returns {Object}
+   */
+  _createReadOnlyProxy(obj, path = []) {
+    if (obj === null || typeof obj !== 'object') {
+      return obj;
+    }
+
+    const self = this;
+
+    return new Proxy(obj, {
+      get(target, prop) {
+        // Special method to subscribe to this specific path
+        if (prop === '_subscribe') {
+          return (listener) => self._subscribeToPath(path.join('.') || '*', listener);
+        }
+
+        const value = target[prop];
+
+        // Recursively proxy nested objects
+        if (value !== null && typeof value === 'object') {
+          return self._createReadOnlyProxy(value, [...path, String(prop)]);
+        }
+
+        return value;
+      },
+
+      set() {
+        console.warn('[State] State is read-only. Use editor methods to change state.');
+        return false;
+      },
+
+      deleteProperty() {
+        console.warn('[State] State is read-only. Cannot delete properties.');
+        return false;
+      }
+    });
+  }
+
+  // ===========================================================================
+  // SUBSCRIPTIONS
+  // ===========================================================================
+
+  /**
+   * Subscribe to all state changes
+   * @param {(event: StateChangeEvent) => void} listener
+   * @returns {() => void} Unsubscribe function
+   */
+  subscribe(listener) {
+    this._listeners.add(listener);
+    return () => this._listeners.delete(listener);
+  }
+
+  /**
+   * Subscribe to changes at a specific path
+   * @param {string} path - Dot-separated path (e.g., 'connection.status')
+   * @param {(value: any) => void} listener
+   * @returns {() => void} Unsubscribe function
+   */
+  _subscribeToPath(path, listener) {
+    if (!this._pathListeners.has(path)) {
+      this._pathListeners.set(path, new Set());
+    }
+    this._pathListeners.get(path).add(listener);
+    return () => this._pathListeners.get(path)?.delete(listener);
+  }
+
+  /**
+   * Subscribe to changes at a specific path (public API)
+   * @param {string} path
+   * @param {(value: any) => void} listener
+   * @returns {() => void}
+   */
+  onPath(path, listener) {
+    return this._subscribeToPath(path, listener);
+  }
+
+  /**
+   * Emit a state change
+   * @param {string} path
+   * @param {any} value
+   * @param {any} [oldValue]
+   */
+  _emit(path, value, oldValue) {
+    const event = { path, value, oldValue };
+
+    // Global listeners
+    for (const listener of this._listeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        console.error('[StateManager] Listener error:', err);
+      }
+    }
+
+    // Path-specific listeners
+    const pathListeners = this._pathListeners.get(path);
+    if (pathListeners) {
+      for (const listener of pathListeners) {
+        try {
+          listener(value);
+        } catch (err) {
+          console.error('[StateManager] Path listener error:', err);
+        }
+      }
+    }
+
+    // Also notify listeners of parent paths
+    const parts = path.split('.');
+    for (let i = parts.length - 1; i > 0; i--) {
+      const parentPath = parts.slice(0, i).join('.');
+      const parentListeners = this._pathListeners.get(parentPath);
+      if (parentListeners) {
+        const parentValue = this._getAtPath(parentPath);
+        for (const listener of parentListeners) {
+          try {
+            listener(parentValue);
+          } catch (err) {
+            console.error('[StateManager] Parent listener error:', err);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Get value at path
+   * @param {string} path
+   * @returns {any}
+   */
+  _getAtPath(path) {
+    const parts = path.split('.');
+    let current = this._state;
+    for (const part of parts) {
+      if (current === null || current === undefined) return undefined;
+      current = current[part];
+    }
+    return current;
+  }
+
+  // ===========================================================================
+  // CONNECTION STATE
+  // ===========================================================================
+
+  /**
+   * Update connection status
+   * @param {ConnectionState['status']} status
+   * @param {Object} [extra] - Additional properties
+   */
+  setConnectionStatus(status, extra = {}) {
+    const old = this._state.connection.status;
+    this._state.connection.status = status;
+
+    if (status === 'connected') {
+      this._state.connection.lastConnected = Date.now();
+      this._state.connection.error = undefined;
+    }
+
+    if (extra.error) {
+      this._state.connection.error = extra.error;
+    }
+    if (extra.latency !== undefined) {
+      this._state.connection.latency = extra.latency;
+    }
+    if (extra.reconnectAttempts !== undefined) {
+      this._state.connection.reconnectAttempts = extra.reconnectAttempts;
+    }
+
+    this._emit('connection.status', status, old);
+  }
+
+  /**
+   * Update connection latency
+   * @param {number} latency
+   */
+  setConnectionLatency(latency) {
+    const old = this._state.connection.latency;
+    this._state.connection.latency = latency;
+    this._emit('connection.latency', latency, old);
+  }
+
+  // ===========================================================================
+  // DOCUMENT STATE
+  // ===========================================================================
+
+  /**
+   * Update document stats
+   * @param {Partial<DocumentState>} updates
+   */
+  updateDocument(updates) {
+    for (const [key, value] of Object.entries(updates)) {
+      const old = this._state.document[key];
+      if (old !== value) {
+        this._state.document[key] = value;
+        this._emit(`document.${key}`, value, old);
+      }
+    }
+  }
+
+  /**
+   * Set dirty flag
+   * @param {boolean} dirty
+   */
+  setDirty(dirty) {
+    this.updateDocument({ dirty, lastModified: Date.now() });
+  }
+
+  /**
+   * Update undo/redo state
+   * @param {Object} undoState
+   * @param {boolean} undoState.canUndo
+   * @param {boolean} undoState.canRedo
+   * @param {number} [undoState.undoDepth]
+   * @param {number} [undoState.redoDepth]
+   */
+  updateUndoState(undoState) {
+    this.updateDocument(undoState);
+  }
+
+  // ===========================================================================
+  // RUNTIME STATE
+  // ===========================================================================
+
+  /**
+   * Add or update a runtime
+   * @param {string} name
+   * @param {Partial<RuntimeState>} state
+   */
+  setRuntime(name, state) {
+    const existing = this._state.runtimes[name];
+    this._state.runtimes[name] = {
+      ...INITIAL_RUNTIME_STATE,
+      ...existing,
+      ...state
+    };
+    this._emit(`runtimes.${name}`, this._state.runtimes[name], existing);
+  }
+
+  /**
+   * Update runtime status
+   * @param {string} name
+   * @param {RuntimeState['status']} status
+   * @param {string} [error]
+   */
+  setRuntimeStatus(name, status, error) {
+    if (!this._state.runtimes[name]) {
+      this._state.runtimes[name] = { ...INITIAL_RUNTIME_STATE };
+    }
+    const old = this._state.runtimes[name].status;
+    this._state.runtimes[name].status = status;
+    if (error !== undefined) {
+      this._state.runtimes[name].error = error;
+    }
+    this._emit(`runtimes.${name}.status`, status, old);
+  }
+
+  /**
+   * Remove a runtime
+   * @param {string} name
+   */
+  removeRuntime(name) {
+    const old = this._state.runtimes[name];
+    delete this._state.runtimes[name];
+    this._emit(`runtimes.${name}`, undefined, old);
+  }
+
+  // ===========================================================================
+  // SESSION STATE
+  // ===========================================================================
+
+  /**
+   * Add or update a session
+   * @param {string} id
+   * @param {SessionState} state
+   */
+  setSession(id, state) {
+    const old = this._state.sessions[id];
+    this._state.sessions[id] = state;
+    this._emit(`sessions.${id}`, state, old);
+  }
+
+  /**
+   * Increment session execution count
+   * @param {string} id
+   */
+  incrementSessionCount(id) {
+    if (this._state.sessions[id]) {
+      this._state.sessions[id].executionCount++;
+      this._state.sessions[id].lastActivity = Date.now();
+      this._emit(`sessions.${id}`, this._state.sessions[id]);
+    }
+  }
+
+  /**
+   * Remove a session
+   * @param {string} id
+   */
+  removeSession(id) {
+    const old = this._state.sessions[id];
+    delete this._state.sessions[id];
+    delete this._state.variables[id];
+    this._emit(`sessions.${id}`, undefined, old);
+  }
+
+  // ===========================================================================
+  // VARIABLES
+  // ===========================================================================
+
+  /**
+   * Set variables for a session
+   * @param {string} sessionId
+   * @param {Record<string, VariableInfo>} variables
+   */
+  setVariables(sessionId, variables) {
+    const old = this._state.variables[sessionId];
+    this._state.variables[sessionId] = variables;
+    this._emit(`variables.${sessionId}`, variables, old);
+  }
+
+  /**
+   * Update a single variable
+   * @param {string} sessionId
+   * @param {string} name
+   * @param {VariableInfo} info
+   */
+  setVariable(sessionId, name, info) {
+    if (!this._state.variables[sessionId]) {
+      this._state.variables[sessionId] = {};
+    }
+    const old = this._state.variables[sessionId][name];
+    this._state.variables[sessionId][name] = info;
+    this._emit(`variables.${sessionId}.${name}`, info, old);
+  }
+
+  /**
+   * Clear variables for a session
+   * @param {string} sessionId
+   */
+  clearVariables(sessionId) {
+    const old = this._state.variables[sessionId];
+    delete this._state.variables[sessionId];
+    this._emit(`variables.${sessionId}`, undefined, old);
+  }
+
+  // ===========================================================================
+  // EXECUTION HISTORY
+  // ===========================================================================
+
+  /**
+   * Add an execution record
+   * @param {Omit<ExecutionRecord, 'id'>} record
+   * @returns {string} Record ID
+   */
+  addExecution(record) {
+    const id = `exec_${++this._executionIdCounter}_${Date.now()}`;
+    const fullRecord = { ...record, id };
+    this._state.history.push(fullRecord);
+
+    // Keep history bounded (last 100)
+    if (this._state.history.length > 100) {
+      this._state.history.shift();
+    }
+
+    this._emit('history', this._state.history);
+    return id;
+  }
+
+  /**
+   * Clear execution history
+   */
+  clearHistory() {
+    this._state.history = [];
+    this._emit('history', []);
+  }
+
+  // ===========================================================================
+  // CURRENT EXECUTION
+  // ===========================================================================
+
+  /**
+   * Set current execution
+   * @param {CurrentExecution | null} execution
+   */
+  setExecution(execution) {
+    const old = this._state.execution;
+    this._state.execution = execution;
+    this._emit('execution', execution, old);
+  }
+
+  /**
+   * Update execution progress
+   * @param {number} progress - 0 to 1
+   * @param {string} [progressText]
+   */
+  updateExecutionProgress(progress, progressText) {
+    if (this._state.execution) {
+      this._state.execution.progress = progress;
+      if (progressText) {
+        this._state.execution.progressText = progressText;
+      }
+      this._emit('execution', this._state.execution);
+    }
+  }
+
+  // ===========================================================================
+  // COLLABORATORS
+  // ===========================================================================
+
+  /**
+   * Update collaborators list
+   * @param {CollaboratorInfo[]} collaborators
+   */
+  setCollaborators(collaborators) {
+    const old = this._state.collaborators;
+    this._state.collaborators = collaborators;
+    this._emit('collaborators', collaborators, old);
+  }
+
+  // ===========================================================================
+  // AI STATE
+  // ===========================================================================
+
+  /**
+   * Set AI endpoint status
+   * @param {string} id
+   * @param {'unconfigured' | 'available' | 'error'} status
+   * @param {string} [error]
+   */
+  setAIEndpointStatus(id, status, error) {
+    if (!this._state.ai.endpoints[id]) {
+      this._state.ai.endpoints[id] = { status: 'unconfigured' };
+    }
+    const old = this._state.ai.endpoints[id].status;
+    this._state.ai.endpoints[id].status = status;
+    if (error !== undefined) {
+      this._state.ai.endpoints[id].error = error;
+    }
+    this._emit(`ai.endpoints.${id}.status`, status, old);
+  }
+
+  /**
+   * Set active AI endpoint
+   * @param {string | undefined} id
+   */
+  setActiveAIEndpoint(id) {
+    const old = this._state.ai.activeEndpoint;
+    this._state.ai.activeEndpoint = id;
+    this._emit('ai.activeEndpoint', id, old);
+  }
+
+  // ===========================================================================
+  // UTILITIES
+  // ===========================================================================
+
+  /**
+   * Get raw state (for serialization)
+   * @returns {EditorState}
+   */
+  getRawState() {
+    return this._state;
+  }
+
+  /**
+   * Reset to initial state
+   */
+  reset() {
+    this._state = getInitialState();
+    this._emit('*', this._state);
+  }
+}
+
+/**
+ * Create a new state manager
+ * @returns {StateManager}
+ */
+function createStateManager() {
+  return new StateManager();
+}
+
+/**
+ * @fileoverview Dev Panel - Shows editor config and state
+ *
+ * A collapsible panel that displays:
+ * - Current configuration (reactive, editable)
+ * - Current state (observable, read-only)
+ *
+ * Usage:
+ *   import { createDevPanel, devPanelExtension } from './devpanel.js';
+ *
+ *   // As extension
+ *   const extensions = [devPanelExtension({ config, stateManager })];
+ *
+ *   // Or standalone
+ *   const panel = createDevPanel(container, { config, stateManager });
+ */
+
+
+// =============================================================================
+// State Effects
+// =============================================================================
+
+const toggleDevPanelEffect = StateEffect.define();
+
+// =============================================================================
+// Styles
+// =============================================================================
+
+const STYLES = `
+.mrmd-devpanel {
+  font-family: ui-monospace, 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  font-size: 12px;
+  background: var(--mrmd-devpanel-bg, #1e1e1e);
+  color: var(--mrmd-devpanel-fg, #d4d4d4);
+  border-top: 1px solid var(--mrmd-devpanel-border, #333);
+  max-height: 300px;
+  overflow: auto;
+}
+
+.mrmd-devpanel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--mrmd-devpanel-header-bg, #252526);
+  border-bottom: 1px solid var(--mrmd-devpanel-border, #333);
+  cursor: pointer;
+  user-select: none;
+}
+
+.mrmd-devpanel-header:hover {
+  background: var(--mrmd-devpanel-header-hover, #2d2d2d);
+}
+
+.mrmd-devpanel-title {
+  font-weight: 600;
+  color: var(--mrmd-devpanel-title, #e0e0e0);
+}
+
+.mrmd-devpanel-toggle {
+  font-size: 10px;
+  color: var(--mrmd-devpanel-toggle, #888);
+}
+
+.mrmd-devpanel-content {
+  padding: 8px 12px;
+}
+
+.mrmd-devpanel-section {
+  margin-bottom: 12px;
+}
+
+.mrmd-devpanel-section:last-child {
+  margin-bottom: 0;
+}
+
+.mrmd-devpanel-section-title {
+  font-weight: 600;
+  color: var(--mrmd-devpanel-section-title, #4fc1ff);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mrmd-devpanel-section-title .icon {
+  opacity: 0.7;
+}
+
+.mrmd-devpanel-tree {
+  margin-left: 12px;
+}
+
+.mrmd-devpanel-row {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+  line-height: 1.4;
+}
+
+.mrmd-devpanel-key {
+  color: var(--mrmd-devpanel-key, #9cdcfe);
+}
+
+.mrmd-devpanel-value {
+  color: var(--mrmd-devpanel-value, #ce9178);
+}
+
+.mrmd-devpanel-value.string {
+  color: var(--mrmd-devpanel-string, #ce9178);
+}
+
+.mrmd-devpanel-value.number {
+  color: var(--mrmd-devpanel-number, #b5cea8);
+}
+
+.mrmd-devpanel-value.boolean {
+  color: var(--mrmd-devpanel-boolean, #569cd6);
+}
+
+.mrmd-devpanel-value.null {
+  color: var(--mrmd-devpanel-null, #808080);
+}
+
+.mrmd-devpanel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.mrmd-devpanel-badge.connected {
+  background: #1e3a29;
+  color: #4ade80;
+}
+
+.mrmd-devpanel-badge.disconnected {
+  background: #3a1e1e;
+  color: #f87171;
+}
+
+.mrmd-devpanel-badge.ready {
+  background: #1e2a3a;
+  color: #60a5fa;
+}
+
+.mrmd-devpanel-collapsed .mrmd-devpanel-content {
+  display: none;
+}
+
+/* Light theme - comprehensive overrides */
+/* Use explicit class set by the panel based on config */
+.mrmd-devpanel-light {
+  --mrmd-devpanel-bg: #f8f8f8;
+  --mrmd-devpanel-fg: #1e1e1e;
+  --mrmd-devpanel-border: #d0d0d0;
+  --mrmd-devpanel-header-bg: #ebebeb;
+  --mrmd-devpanel-header-hover: #e0e0e0;
+  --mrmd-devpanel-title: #333;
+  --mrmd-devpanel-toggle: #666;
+  --mrmd-devpanel-section-title: #0066cc;
+  --mrmd-devpanel-key: #0451a5;
+  --mrmd-devpanel-value: #a31515;
+  --mrmd-devpanel-string: #a31515;
+  --mrmd-devpanel-number: #098658;
+  --mrmd-devpanel-boolean: #0000ff;
+  --mrmd-devpanel-null: #808080;
+
+  background: var(--mrmd-devpanel-bg);
+  color: var(--mrmd-devpanel-fg);
+  border-color: var(--mrmd-devpanel-border);
+}
+
+.mrmd-devpanel-light .mrmd-devpanel-header {
+  background: var(--mrmd-devpanel-header-bg);
+  border-color: var(--mrmd-devpanel-border);
+}
+
+.mrmd-devpanel-light .mrmd-devpanel-header:hover {
+  background: var(--mrmd-devpanel-header-hover);
+}
+
+.mrmd-devpanel-light .mrmd-devpanel-title {
+  color: var(--mrmd-devpanel-title);
+}
+
+.mrmd-devpanel-light .mrmd-devpanel-section-title {
+  color: var(--mrmd-devpanel-section-title);
+}
+
+.mrmd-devpanel-light .mrmd-devpanel-key {
+  color: var(--mrmd-devpanel-key);
+}
+
+.mrmd-devpanel-light .mrmd-devpanel-value {
+  color: var(--mrmd-devpanel-value);
+}
+
+.mrmd-devpanel-light .mrmd-devpanel-value.string {
+  color: var(--mrmd-devpanel-string);
+}
+
+.mrmd-devpanel-light .mrmd-devpanel-value.number {
+  color: var(--mrmd-devpanel-number);
+}
+
+.mrmd-devpanel-light .mrmd-devpanel-value.boolean {
+  color: var(--mrmd-devpanel-boolean);
+}
+
+.mrmd-devpanel-light .mrmd-devpanel-value.null {
+  color: var(--mrmd-devpanel-null);
+}
+
+.mrmd-devpanel-light .mrmd-devpanel-badge.connected {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.mrmd-devpanel-light .mrmd-devpanel-badge.disconnected {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.mrmd-devpanel-light .mrmd-devpanel-badge.ready {
+  background: #dbeafe;
+  color: #1e40af;
+}
+`;
+
+let stylesInjected = false;
+
+function injectDevPanelStyles() {
+  if (stylesInjected) return;
+  const style = document.createElement('style');
+  style.textContent = STYLES;
+  document.head.appendChild(style);
+  stylesInjected = true;
+}
+
+// =============================================================================
+// Panel Rendering
+// =============================================================================
+
+/**
+ * Render a value with syntax highlighting
+ * @param {any} value
+ * @returns {string}
+ */
+function renderValue(value) {
+  if (value === null || value === undefined) {
+    return `<span class="mrmd-devpanel-value null">${value}</span>`;
+  }
+  if (typeof value === 'boolean') {
+    return `<span class="mrmd-devpanel-value boolean">${value}</span>`;
+  }
+  if (typeof value === 'number') {
+    return `<span class="mrmd-devpanel-value number">${value}</span>`;
+  }
+  if (typeof value === 'string') {
+    const escaped = value.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<span class="mrmd-devpanel-value string">"${escaped}"</span>`;
+  }
+  if (Array.isArray(value)) {
+    return `<span class="mrmd-devpanel-value">[${value.length} items]</span>`;
+  }
+  if (typeof value === 'object') {
+    const keys = Object.keys(value);
+    return `<span class="mrmd-devpanel-value">{${keys.length} props}</span>`;
+  }
+  return `<span class="mrmd-devpanel-value">${String(value)}</span>`;
+}
+
+/**
+ * Render an object as a tree
+ * @param {object} obj
+ * @param {number} maxDepth
+ * @param {number} currentDepth
+ * @returns {string}
+ */
+function renderTree(obj, maxDepth = 2, currentDepth = 0) {
+  if (obj === null || obj === undefined) {
+    return renderValue(obj);
+  }
+
+  if (typeof obj !== 'object' || currentDepth >= maxDepth) {
+    return renderValue(obj);
+  }
+
+  const entries = Object.entries(obj);
+  if (entries.length === 0) {
+    return Array.isArray(obj) ? '[]' : '{}';
+  }
+
+  let html = '<div class="mrmd-devpanel-tree">';
+  for (const [key, value] of entries) {
+    html += `<div class="mrmd-devpanel-row">`;
+    html += `<span class="mrmd-devpanel-key">${key}:</span>`;
+
+    if (value !== null && typeof value === 'object' && currentDepth < maxDepth - 1) {
+      html += renderTree(value, maxDepth, currentDepth + 1);
+    } else {
+      html += renderValue(value);
+    }
+
+    html += '</div>';
+  }
+  html += '</div>';
+
+  return html;
+}
+
+/**
+ * Create the dev panel DOM
+ * @param {object} options
+ * @param {object} options.config - Reactive config
+ * @param {object} options.stateManager - State manager
+ * @returns {HTMLElement}
+ */
+function createDevPanelDOM({ config, stateManager }) {
+  const dom = document.createElement('div');
+  const configRaw = config._raw || config;
+  const isDark = configRaw.appearance?.dark !== false; // default to dark
+  dom.className = `mrmd-devpanel ${isDark ? 'mrmd-devpanel-dark' : 'mrmd-devpanel-light'}`;
+
+  // Header
+  const header = document.createElement('div');
+  header.className = 'mrmd-devpanel-header';
+  header.innerHTML = `
+    <span class="mrmd-devpanel-title">📊 Editor Debug</span>
+    <span class="mrmd-devpanel-toggle">▼</span>
+  `;
+
+  header.addEventListener('click', () => {
+    dom.classList.toggle('mrmd-devpanel-collapsed');
+    header.querySelector('.mrmd-devpanel-toggle').textContent =
+      dom.classList.contains('mrmd-devpanel-collapsed') ? '▶' : '▼';
+  });
+
+  dom.appendChild(header);
+
+  // Content
+  const content = document.createElement('div');
+  content.className = 'mrmd-devpanel-content';
+  dom.appendChild(content);
+
+  // Update function
+  const update = () => {
+    const state = stateManager.getRawState();
+    const configRaw = config._raw || config;
+
+    // Update theme class based on current config
+    const isDark = configRaw.appearance?.dark !== false;
+    dom.classList.remove('mrmd-devpanel-dark', 'mrmd-devpanel-light');
+    dom.classList.add(isDark ? 'mrmd-devpanel-dark' : 'mrmd-devpanel-light');
+
+    let html = '';
+
+    // State section
+    html += `<div class="mrmd-devpanel-section">`;
+    html += `<div class="mrmd-devpanel-section-title"><span class="icon">📡</span> State</div>`;
+
+    // Connection status badge
+    const connStatus = state.connection?.status || 'disconnected';
+    html += `<div class="mrmd-devpanel-row">`;
+    html += `<span class="mrmd-devpanel-key">connection:</span>`;
+    html += `<span class="mrmd-devpanel-badge ${connStatus}">${connStatus}</span>`;
+    html += `</div>`;
+
+    // Document stats
+    html += `<div class="mrmd-devpanel-row">`;
+    html += `<span class="mrmd-devpanel-key">document:</span>`;
+    html += `<span class="mrmd-devpanel-value">`;
+    html += `${state.document?.lines || 0} lines, `;
+    html += `${state.document?.cells || 0} cells`;
+    if (state.document?.dirty) html += ` (dirty)`;
+    if (state.document?.canUndo) html += ` [undo: ${state.document.undoDepth}]`;
+    html += `</span>`;
+    html += `</div>`;
+
+    // Execution
+    if (state.execution) {
+      html += `<div class="mrmd-devpanel-row">`;
+      html += `<span class="mrmd-devpanel-key">execution:</span>`;
+      html += `<span class="mrmd-devpanel-value">`;
+      html += `cell ${state.execution.cellIndex} (${state.execution.language})`;
+      if (state.execution.progress) {
+        html += ` ${Math.round(state.execution.progress * 100)}%`;
+      }
+      html += `</span>`;
+      html += `</div>`;
+    }
+
+    // Runtimes
+    const runtimeEntries = Object.entries(state.runtimes || {});
+    if (runtimeEntries.length > 0) {
+      html += `<div class="mrmd-devpanel-row">`;
+      html += `<span class="mrmd-devpanel-key">runtimes:</span>`;
+      html += `<span class="mrmd-devpanel-value">`;
+      html += runtimeEntries.map(([name, rt]) =>
+        `${name} <span class="mrmd-devpanel-badge ${rt.status}">${rt.status}</span>`
+      ).join(', ');
+      html += `</span>`;
+      html += `</div>`;
+    }
+
+    // Collaborators
+    if (state.collaborators?.length > 0) {
+      html += `<div class="mrmd-devpanel-row">`;
+      html += `<span class="mrmd-devpanel-key">collaborators:</span>`;
+      html += `<span class="mrmd-devpanel-value">${state.collaborators.length} online</span>`;
+      html += `</div>`;
+    }
+
+    // History
+    if (state.history?.length > 0) {
+      const success = state.history.filter(h => h.success).length;
+      html += `<div class="mrmd-devpanel-row">`;
+      html += `<span class="mrmd-devpanel-key">history:</span>`;
+      html += `<span class="mrmd-devpanel-value">${state.history.length} executions (${success} success)</span>`;
+      html += `</div>`;
+    }
+
+    // Variables
+    const varSessions = Object.keys(state.variables || {});
+    if (varSessions.length > 0) {
+      const totalVars = varSessions.reduce((sum, s) =>
+        sum + Object.keys(state.variables[s] || {}).length, 0);
+      html += `<div class="mrmd-devpanel-row">`;
+      html += `<span class="mrmd-devpanel-key">variables:</span>`;
+      html += `<span class="mrmd-devpanel-value">${totalVars} across ${varSessions.length} sessions</span>`;
+      html += `</div>`;
+    }
+
+    html += `</div>`;
+
+    // Config section
+    html += `<div class="mrmd-devpanel-section">`;
+    html += `<div class="mrmd-devpanel-section-title"><span class="icon">⚙️</span> Config</div>`;
+    html += renderTree({
+      appearance: configRaw.appearance,
+      user: configRaw.user,
+      runtimes: Object.keys(configRaw.runtimes || {}).length + ' registered',
+      execution: configRaw.execution,
+    }, 2);
+    html += `</div>`;
+
+    content.innerHTML = html;
+  };
+
+  // Initial render
+  update();
+
+  // Subscribe to state changes
+  stateManager.subscribe(update);
+
+  // Subscribe to config changes (if reactive)
+  if (config._subscribe) {
+    config._subscribe(update);
+  }
+
+  return dom;
+}
+
+// =============================================================================
+// CodeMirror Extension
+// =============================================================================
+
+/**
+ * State field for panel visibility
+ */
+const devPanelStateField = StateField.define({
+  create() {
+    return { isOpen: true };
+  },
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(toggleDevPanelEffect)) {
+        return { isOpen: !value.isOpen };
+      }
+    }
+    return value;
+  },
+  provide: field => showPanel.from(field, val => val.isOpen ? createPanel : null)
+});
+
+let panelConfig = null;
+
+function createPanel(view) {
+  if (!panelConfig) return null;
+
+  injectDevPanelStyles();
+  const dom = createDevPanelDOM(panelConfig);
+
+  return {
+    dom,
+    top: false,
+  };
+}
+
+/**
+ * Create dev panel extension
+ * @param {object} options
+ * @param {object} options.config - Reactive config
+ * @param {object} options.stateManager - State manager
+ * @param {boolean} [options.startOpen=true] - Start with panel open
+ * @returns {import('@codemirror/state').Extension}
+ */
+function devPanelExtension({ config, stateManager, startOpen = true }) {
+  panelConfig = { config, stateManager };
+  return devPanelStateField;
+}
+
+/**
+ * Toggle the dev panel
+ * @param {EditorView} view
+ */
+function toggleDevPanel(view) {
+  view.dispatch({
+    effects: toggleDevPanelEffect.of(null)
+  });
+}
+
+/**
  * mrmd - Markdown editor with realtime collaboration
  *
  * A markdown editor where humans, code, and AI all collaborate through
@@ -65852,6 +69198,56 @@ const minimalAwarenessConfig = {
 // #region VERSION
 const VERSION = '0.1.0';
 // #endregion VERSION
+
+// #region PROGRESS_PARSING
+/**
+ * Parse progress information from streaming output.
+ * Handles common formats: tqdm, rich, percentage patterns.
+ *
+ * @param {string} output
+ * @returns {{percent: number, text: string}|null}
+ */
+function parseProgress(output) {
+  if (!output) return null;
+
+  // Get the last line (most recent progress update)
+  const lines = output.split('\n');
+  const lastLine = lines[lines.length - 1] || lines[lines.length - 2] || '';
+
+  // tqdm format: "  5%|█████     | 5/100 [00:01<00:19, 4.89it/s]"
+  const tqdmMatch = lastLine.match(/(\d+)%\|[█▏▎▍▌▋▊▉ ]+\|\s*(\d+)\/(\d+)\s*\[([^\]]+)\]/);
+  if (tqdmMatch) {
+    return {
+      percent: parseInt(tqdmMatch[1]) / 100,
+      text: `${tqdmMatch[2]}/${tqdmMatch[3]} [${tqdmMatch[4]}]`,
+    };
+  }
+
+  // Simple percentage: "Progress: 45%"
+  const percentMatch = lastLine.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (percentMatch) {
+    return {
+      percent: parseFloat(percentMatch[1]) / 100,
+      text: `${percentMatch[1]}%`,
+    };
+  }
+
+  // Fraction format: "Processing 45/100"
+  const fractionMatch = lastLine.match(/(\d+)\s*\/\s*(\d+)/);
+  if (fractionMatch) {
+    const current = parseInt(fractionMatch[1]);
+    const total = parseInt(fractionMatch[2]);
+    if (total > 0) {
+      return {
+        percent: current / total,
+        text: `${current}/${total}`,
+      };
+    }
+  }
+
+  return null;
+}
+// #endregion PROGRESS_PARSING
 
 // #region BROWSER_RUNTIME
 /**
@@ -65958,6 +69354,94 @@ function createJavaScriptRuntime(options = {}) {
     /** Destroy the runtime */
     destroy() {
       rt.destroy();
+    },
+
+    // =========================================================================
+    // LSP Features (powered by mrmd-js session)
+    // =========================================================================
+
+    /**
+     * Get hover information for a position in code.
+     * Returns runtime values, not just types.
+     *
+     * @param {string} code - The code to analyze
+     * @param {number} cursor - Cursor position within code
+     * @returns {{found: boolean, name?: string, type?: string, value?: string, signature?: string}|null}
+     */
+    hover(code, cursor) {
+      return session.hover(code, cursor);
+    },
+
+    /**
+     * Get completions at a cursor position.
+     * Returns actual object properties and runtime-aware suggestions.
+     *
+     * @param {string} code - The code to complete
+     * @param {number} cursor - Cursor position
+     * @returns {{matches: Array, cursorStart: number, cursorEnd: number}}
+     */
+    complete(code, cursor) {
+      return session.complete(code, cursor);
+    },
+
+    /**
+     * Get detailed inspection for a symbol.
+     *
+     * @param {string} code - The code to inspect
+     * @param {number} cursor - Cursor position
+     * @param {Object} [options] - Inspection options
+     * @returns {Object|null}
+     */
+    inspect(code, cursor, options = {}) {
+      return session.inspect(code, cursor, options);
+    },
+
+    /**
+     * List all variables in the session namespace.
+     *
+     * @returns {Array<{name: string, type: string, value: string, expandable?: boolean}>}
+     */
+    listVariables() {
+      return session.listVariables();
+    },
+
+    /**
+     * Get detailed info about a specific variable.
+     *
+     * @param {string} name - Variable name
+     * @param {Object} [options] - Options like path, maxChildren
+     * @returns {Object}
+     */
+    getVariable(name, options = {}) {
+      return session.getVariable(name, options);
+    },
+
+    /**
+     * Check if code is a complete statement.
+     *
+     * @param {string} code
+     * @returns {{status: 'complete'|'incomplete'|'invalid'|'unknown', indent?: string}}
+     */
+    isComplete(code) {
+      return session.isComplete(code);
+    },
+
+    /**
+     * Format code.
+     *
+     * @param {string} code
+     * @returns {Promise<{formatted: string, changed: boolean}>}
+     */
+    format(code) {
+      return session.format(code);
+    },
+
+    /**
+     * Get the adapted LSP provider for use with runtime-lsp module.
+     * @returns {import('./runtime-lsp.js').RuntimeLSPProvider}
+     */
+    getLSPProvider() {
+      return adaptMrmdJsSession(session);
     },
   };
 }
@@ -66093,26 +69577,48 @@ function create(target, options = {}) {
     throw new Error('mrmd: Target element not found');
   }
 
+  // =========================================================================
+  // CONFIG & STATE SETUP
+  // Normalize options to structured config and create state manager
+  // =========================================================================
+  const config = normalizeOptions(options);
+  const stateManager = createStateManager();
+
+  // Make config reactive (changes trigger handlers)
+  // Created early so it's available for dev panel and other components
+  const reactiveConfig = createReactiveConfig(config);
+
+  // Extract values from config (maintains backward compatibility)
+  // These variables are used throughout the function
+  const doc = config.document.content || '';
+  const dark = config.appearance.dark;
+  const placeholderText = config.appearance.placeholder;
+  const readonly = config.appearance.readonly;
+  const userName = config.user.name;
+  const userColor = config.user.color;
+  const userType = config.user.type;
+
+  // Yjs options (not in structured config yet - passed directly)
   const {
-    doc = '',
-    dark = null,
-    placeholder: placeholderText = 'Start typing...',
-    readonly = false,
     ydoc = new Doc(),
     ytext = 'content',
     awareness: providedAwareness = null,
-    runtimes = {},
-    // Built-in JavaScript runtime (mrmd-js)
-    // true = enabled (default), false = disabled, object = custom runtime
-    javascript = true,
-    // Collaborator info for awareness
-    userName = 'Anonymous',
-    userColor = null,
-    userType = 'human',
     // Awareness configuration (batteries-included features)
     // Set to false to disable, true for defaults, or pass config object
     awarenessUI = true,
   } = options;
+
+  // Runtimes from normalized config
+  const runtimes = {};
+  for (const [name, rtConfig] of Object.entries(config.runtimes)) {
+    if (rtConfig.type === 'custom' && rtConfig.instance) {
+      runtimes[name] = rtConfig.instance;
+    }
+    // MRP and builtin types are handled separately below
+  }
+
+  // JavaScript runtime option (backward compat)
+  const javascript = options.javascript !== undefined ? options.javascript : true;
 
   // System dark mode detection
   const getSystemDarkMode = () =>
@@ -66157,6 +69663,10 @@ function create(target, options = {}) {
   const themeCompartment = new Compartment();
   const readonlyCompartment = new Compartment();
 
+  // Create UndoManager for undo/redo tracking
+  // We create it ourselves so we can listen to stack changes
+  const undoManager = new UndoManager(yText);
+
   const markdownWithCodeBlocks = markdown({
     codeLanguages: codeBlockLanguage
   });
@@ -66196,7 +69706,10 @@ function create(target, options = {}) {
     themeCompartment.of(isDark ? oneDark : []),
     readonlyCompartment.of(readonly ? EditorState.readOnly.of(true) : []),
     placeholderText ? placeholder(placeholderText) : [],
-    yCollab(yText, awareness),
+    // Yjs collaboration - y-codemirror.next handles sync and undo
+    // Its cursor rendering is hidden via CSS (see awareness/ui/styles.js)
+    // Our awareness system handles all cursor/presence rendering uniformly
+    yCollab(yText, awareness, { undoManager }),
     keymap.of(yUndoManagerKeymap),
     outputWidgetPlugin, // ANSI output rendering
   ];
@@ -66221,11 +69734,28 @@ function create(target, options = {}) {
 
     // Add awareness extensions to the view
     const awarenessExtensions = awarenessSystem.getExtensions();
+    // Also configure output widget to use awareness (for collaborative focus sync)
+    awarenessExtensions.push(outputWidgetAwarenessFacet.of(awarenessSystem));
+
     if (awarenessExtensions.length > 0) {
       view.dispatch({
         effects: StateEffect.appendConfig.of(awarenessExtensions)
       });
     }
+  }
+
+  // Add dev panel if enabled
+  if (config.devPanel?.enabled) {
+    injectDevPanelStyles();
+    view.dispatch({
+      effects: StateEffect.appendConfig.of([
+        devPanelExtension({
+          config: reactiveConfig,
+          stateManager,
+          startOpen: config.devPanel.startOpen ?? false
+        })
+      ])
+    });
   }
 
   // Event handlers
@@ -66263,8 +69793,110 @@ function create(target, options = {}) {
   }
   // javascript === false means no JS runtime
 
+  // =========================================================================
+  // RUNTIME LSP PROVIDERS
+  // Build map of LSP providers for hover, completions, variables
+  // Works with both mrmd-js (browser) and MRP servers (mrmd-python)
+  // =========================================================================
+  const runtimeLspProviders = new Map();
+
+  // Add JS runtime LSP provider if available
+  if (jsRuntime) {
+    const jsProvider = jsRuntime.getLSPProvider();
+    runtimeLspProviders.set('javascript', jsProvider);
+  }
+
+  // Check config for MRP runtimes and add their LSP providers
+  for (const [name, rtConfig] of Object.entries(config.runtimes)) {
+    if (rtConfig.type === 'mrp' && rtConfig.url) {
+      const client = new MRPClient(rtConfig.url);
+      const mrpProvider = adaptMRPClient(client, rtConfig.languages);
+      runtimeLspProviders.set(name, mrpProvider);
+      // Also register the client for execution
+      registry.register(name, client);
+    }
+  }
+
+  // Inject runtime LSP styles
+  injectRuntimeLspStyles();
+
+  // Create variable explorer for UI components
+  const variableExplorer = createVariableExplorer({
+    providers: runtimeLspProviders,
+    activeLanguage: 'javascript',
+  });
+
+  // Add runtime LSP extensions (hover, completions) to the view
+  // Only add if we have at least one LSP provider
+  if (runtimeLspProviders.size > 0) {
+    const runtimeLspExtensions = [];
+
+    // Create hover extension with awareness integration
+    const hoverExt = createRuntimeHoverExtension({
+      providers: runtimeLspProviders,
+      getContent: () => view.state.doc.toString(),
+      stateManager: awarenessSystem?.getStateManager(),
+      yText,
+    });
+    runtimeLspExtensions.push(hoverExt);
+
+    // Create completion extension with awareness integration
+    const completionExt = createRuntimeCompletionExtension({
+      providers: runtimeLspProviders,
+      getContent: () => view.state.doc.toString(),
+      stateManager: awarenessSystem?.getStateManager(),
+      yText,
+      config: {
+        activateOnTyping: config.completion?.activateOnTyping ?? true,
+        maxRenderedOptions: config.completion?.maxRenderedOptions ?? 50,
+      },
+    });
+    runtimeLspExtensions.push(completionExt);
+
+    // Add extensions to the view
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(runtimeLspExtensions),
+    });
+  }
+
   // Create editor API object first (needed by ExecutionManager)
   const api = {
+    // =========================================================================
+    // CONFIG & STATE (new architecture)
+    // =========================================================================
+
+    /**
+     * Reactive configuration object.
+     * Changes to config properties trigger editor reconfiguration.
+     *
+     * @example
+     * editor.config.appearance.dark = true;  // Switches to dark mode
+     * editor.config.user.name = 'Alice';     // Updates collaborator name
+     *
+     * @type {import('./config/schema.js').EditorConfig}
+     */
+    config: reactiveConfig,
+
+    /**
+     * Observable state (read-only).
+     * Reflects the current state of the editor and its subsystems.
+     *
+     * @example
+     * console.log(editor.state.document.dirty);   // false
+     * console.log(editor.state.connection.status); // 'disconnected'
+     * console.log(editor.state.history.length);    // 5
+     *
+     * @type {import('./state/schema.js').EditorState}
+     */
+    state: stateManager.getReadOnlyProxy(),
+
+    /**
+     * Internal state manager (for advanced use).
+     * Use this to subscribe to specific state paths.
+     * @private
+     */
+    _stateManager: stateManager,
+
     // Core references
     view,
     ydoc,
@@ -66278,12 +69910,25 @@ function create(target, options = {}) {
     registry,
     execution: null, // Set below
 
+    // Runtime LSP (hover, completions, variables)
+    runtimeLspProviders,
+    variableExplorer,
+
     // ===========================================================================
     // Content
     // ===========================================================================
 
     getContent() {
       return view.state.doc.toString();
+    },
+
+    /**
+     * Get the Yjs Text instance for position tracking.
+     * Use with Y.createRelativePositionFromTypeIndex() for positions that survive edits.
+     * @returns {import('yjs').Text}
+     */
+    getYText() {
+      return yText;
     },
 
     setContent(text) {
@@ -66353,6 +69998,73 @@ function create(target, options = {}) {
         chars: doc.length,
         words: text.split(/\s+/).filter(w => w.length > 0).length
       };
+    },
+
+    // ===========================================================================
+    // Undo / Redo
+    // ===========================================================================
+
+    /**
+     * Undo the last change
+     * @returns {boolean} Whether undo was performed
+     */
+    undo() {
+      if (undoManager.undoStack.length > 0) {
+        undoManager.undo();
+        return true;
+      }
+      return false;
+    },
+
+    /**
+     * Redo the last undone change
+     * @returns {boolean} Whether redo was performed
+     */
+    redo() {
+      if (undoManager.redoStack.length > 0) {
+        undoManager.redo();
+        return true;
+      }
+      return false;
+    },
+
+    /**
+     * Check if undo is available
+     * @returns {boolean}
+     */
+    canUndo() {
+      return undoManager.undoStack.length > 0;
+    },
+
+    /**
+     * Check if redo is available
+     * @returns {boolean}
+     */
+    canRedo() {
+      return undoManager.redoStack.length > 0;
+    },
+
+    /**
+     * Get undo stack depth
+     * @returns {number}
+     */
+    undoDepth() {
+      return undoManager.undoStack.length;
+    },
+
+    /**
+     * Get redo stack depth
+     * @returns {number}
+     */
+    redoDepth() {
+      return undoManager.redoStack.length;
+    },
+
+    /**
+     * Clear undo/redo history
+     */
+    clearUndoHistory() {
+      undoManager.clear();
     },
 
     // ===========================================================================
@@ -66431,11 +70143,17 @@ function create(target, options = {}) {
 
     /**
      * Listen for collaborator changes
-     * @param {function} callback
+     * @param {function} callback - Called with (collaborators, changeInfo)
+     *   changeInfo: { added: number[], updated: number[], removed: number[], isRemote: boolean }
      * @returns {function} Unsubscribe function
      */
     onCollaboratorsChange(callback) {
-      const handler = () => callback(this.getCollaborators());
+      const localClientId = awareness.clientID;
+      const handler = ({ added, updated, removed }) => {
+        const changedClients = [...added, ...updated, ...removed];
+        const isRemote = changedClients.some(id => id !== localClientId);
+        callback(this.getCollaborators(), { added, updated, removed, isRemote });
+      };
       awareness.on('change', handler);
       return () => awareness.off('change', handler);
     },
@@ -66648,6 +70366,180 @@ function create(target, options = {}) {
     },
 
     // ===========================================================================
+    // Runtime LSP (hover, completions, variables)
+    // ===========================================================================
+
+    /**
+     * Register an LSP provider for a language.
+     * Use this to add runtime LSP features for additional languages.
+     *
+     * @param {string} language - Language name (e.g., 'python')
+     * @param {import('./runtime-lsp.js').RuntimeLSPProvider} provider - The LSP provider
+     */
+    registerLSPProvider(language, provider) {
+      runtimeLspProviders.set(language, provider);
+    },
+
+    /**
+     * Get hover information at cursor position.
+     * Returns runtime values for the symbol under cursor.
+     *
+     * @param {number} [pos] - Position (defaults to cursor)
+     * @returns {Promise<{found: boolean, name?: string, type?: string, value?: string}|null>}
+     */
+    async getHoverInfo(pos) {
+      const position = pos ?? view.state.selection.main.head;
+      const content = this.getContent();
+      const cell = getCellAtCursor(content, position);
+
+      if (!cell) return null;
+
+      const provider = runtimeLspProviders.get(cell.language) ||
+        Array.from(runtimeLspProviders.values()).find(p =>
+          p.languages.includes(cell.language.toLowerCase())
+        );
+
+      if (!provider) return null;
+
+      const offset = position - cell.codeStart;
+      return provider.hover(cell.code, offset, cell.language);
+    },
+
+    /**
+     * Get completions at cursor position.
+     *
+     * @param {number} [pos] - Position (defaults to cursor)
+     * @returns {Promise<{matches: Array, cursorStart: number, cursorEnd: number}|null>}
+     */
+    async getCompletions(pos) {
+      const position = pos ?? view.state.selection.main.head;
+      const content = this.getContent();
+      const cell = getCellAtCursor(content, position);
+
+      if (!cell) return null;
+
+      const provider = runtimeLspProviders.get(cell.language) ||
+        Array.from(runtimeLspProviders.values()).find(p =>
+          p.languages.includes(cell.language.toLowerCase())
+        );
+
+      if (!provider) return null;
+
+      const offset = position - cell.codeStart;
+      return provider.complete(cell.code, offset, cell.language);
+    },
+
+    /**
+     * List all variables in a runtime session.
+     *
+     * @param {string} [language='javascript'] - Language/runtime to query
+     * @returns {Promise<Array<{name: string, type: string, value: string}>>}
+     */
+    async listVariables(language = 'javascript') {
+      const provider = runtimeLspProviders.get(language) ||
+        Array.from(runtimeLspProviders.values()).find(p =>
+          p.languages.includes(language.toLowerCase())
+        );
+
+      if (!provider) return [];
+      return provider.listVariables();
+    },
+
+    /**
+     * Get detailed info about a variable.
+     *
+     * @param {string} name - Variable name
+     * @param {string} [language='javascript'] - Language/runtime to query
+     * @param {Object} [options] - Options like path, maxChildren
+     * @returns {Promise<Object>}
+     */
+    async getVariableDetail(name, language = 'javascript', options = {}) {
+      const provider = runtimeLspProviders.get(language) ||
+        Array.from(runtimeLspProviders.values()).find(p =>
+          p.languages.includes(language.toLowerCase())
+        );
+
+      if (!provider) return { name, type: 'unknown', value: '?', expandable: false };
+      return provider.getVariable(name, options);
+    },
+
+    /**
+     * Format code using the runtime's formatter.
+     *
+     * @param {string} code - Code to format
+     * @param {string} [language='javascript'] - Language/runtime to use
+     * @returns {Promise<{formatted: string, changed: boolean}>}
+     */
+    async formatCode(code, language = 'javascript') {
+      const provider = runtimeLspProviders.get(language) ||
+        Array.from(runtimeLspProviders.values()).find(p =>
+          p.languages.includes(language.toLowerCase())
+        );
+
+      if (!provider) return { formatted: code, changed: false };
+      return provider.format(code);
+    },
+
+    /**
+     * Refresh variables from all MRP runtimes
+     * Fetches current variable state and updates state.variables
+     *
+     * @param {string} [sessionId] - Specific session to refresh (optional)
+     * @returns {Promise<void>}
+     */
+    async refreshVariables(sessionId) {
+      for (const [name, runtime] of registry.runtimes) {
+        // Check if runtime is an MRP client (has getVariables method)
+        if (typeof runtime.getVariables === 'function') {
+          try {
+            const result = await runtime.getVariables(sessionId);
+            if (result && result.variables) {
+              const session = sessionId || 'default';
+              const variables = {};
+              for (const v of result.variables) {
+                variables[v.name] = {
+                  name: v.name,
+                  type: v.type || 'unknown',
+                  preview: v.repr || String(v.value),
+                  value: v.value,
+                  size: v.size,
+                  expandable: v.expandable || false,
+                };
+              }
+              stateManager.setVariables(session, variables);
+
+              // Also update session info
+              stateManager.setSession(session, {
+                runtime: name,
+                language: runtime.language || 'unknown',
+                executionCount: result.executionCount || 0,
+                lastActivity: Date.now(),
+              });
+            }
+          } catch (err) {
+            console.warn(`[refreshVariables] Failed for runtime ${name}:`, err);
+          }
+        }
+      }
+    },
+
+    /**
+     * Clear variables for a session
+     * @param {string} [sessionId] - Session to clear (default: all)
+     */
+    clearVariables(sessionId) {
+      if (sessionId) {
+        stateManager.clearVariables(sessionId);
+      } else {
+        // Clear all sessions
+        const state = stateManager.getRawState();
+        for (const sid of Object.keys(state.variables)) {
+          stateManager.clearVariables(sid);
+        }
+      }
+    },
+
+    // ===========================================================================
     // Events
     // ===========================================================================
 
@@ -66683,6 +70575,35 @@ function create(target, options = {}) {
       return this.execution.on('cellError', callback);
     },
 
+    /**
+     * Subscribe to config changes
+     * @param {(event: import('./config/reactive.js').ConfigChangeEvent) => void} callback
+     * @returns {() => void} Unsubscribe function
+     */
+    onConfigChange(callback) {
+      return reactiveConfig._subscribe(callback);
+    },
+
+    /**
+     * Subscribe to state changes
+     * @param {string | ((event: import('./state/manager.js').StateChangeEvent) => void)} pathOrCallback
+     * @param {((value: any) => void)} [callback] - If pathOrCallback is a path string
+     * @returns {() => void} Unsubscribe function
+     *
+     * @example
+     * // Subscribe to all state changes
+     * editor.onStateChange((event) => console.log(event.path, event.value));
+     *
+     * // Subscribe to specific path
+     * editor.onStateChange('connection.status', (status) => console.log(status));
+     */
+    onStateChange(pathOrCallback, callback) {
+      if (typeof pathOrCallback === 'function') {
+        return stateManager.subscribe(pathOrCallback);
+      }
+      return stateManager.onPath(pathOrCallback, callback);
+    },
+
     // ===========================================================================
     // Cleanup
     // ===========================================================================
@@ -66695,6 +70616,8 @@ function create(target, options = {}) {
       if (jsRuntime && jsRuntime.destroy) {
         jsRuntime.destroy();
       }
+      // Clean up undo manager
+      undoManager.destroy();
       view.destroy();
     },
 
@@ -66709,16 +70632,187 @@ function create(target, options = {}) {
     get jsRuntime() {
       return jsRuntime;
     },
+
+    /**
+     * Debug helper - returns current config and state for console debugging
+     * @returns {{config: Object, state: Object, serializedConfig: Object}}
+     */
+    get _debug() {
+      return {
+        config: config,
+        state: stateManager.getRawState(),
+        serializedConfig: serializeConfig(config),
+        isFullySerializable: isFullySerializable(config),
+      };
+    },
+
+    /**
+     * Toggle the dev panel visibility
+     */
+    toggleDevPanel() {
+      toggleDevPanel(view);
+    },
   };
 
   // Create execution manager
   api.execution = createExecutionManager(api, registry);
+
+  // Wire execution events to awareness (so execution badges work automatically)
+  // This makes the runtime appear as a collaborator executing code
+  if (awarenessSystem) {
+    api.execution.on('cellRun', (index, cell) => {
+      awarenessSystem.setExecution({
+        cellIndex: index,
+        startTime: Date.now(),
+        language: cell.language,
+      });
+    });
+
+    api.execution.on('cellOutput', (index, chunk, accumulated) => {
+      // Try to parse progress from output (tqdm, etc.)
+      const progress = parseProgress(accumulated);
+      if (progress) {
+        const current = awarenessSystem.getStateManager().getLocalState();
+        if (current?.execution) {
+          awarenessSystem.setExecution({
+            ...current.execution,
+            progress: progress.percent,
+            progressText: progress.text,
+          });
+        }
+      }
+    });
+
+    api.execution.on('cellComplete', () => {
+      awarenessSystem.setExecution(null);
+    });
+
+    api.execution.on('cellError', () => {
+      awarenessSystem.setExecution(null);
+    });
+  }
+
+  // =========================================================================
+  // WIRE STATE UPDATES
+  // Execution events update state.history and state.execution
+  // =========================================================================
+
+  api.execution.on('cellRun', (index, cell) => {
+    stateManager.setExecution({
+      cellIndex: index,
+      language: cell.language,
+      startTime: Date.now(),
+    });
+  });
+
+  api.execution.on('cellOutput', (index, chunk, accumulated) => {
+    // Parse progress and update execution state
+    const progress = parseProgress(accumulated);
+    if (progress) {
+      stateManager.updateExecutionProgress(progress.percent, progress.text);
+    }
+  });
+
+  api.execution.on('cellComplete', (index, result) => {
+    const execution = stateManager.getRawState().execution;
+    const startTime = execution?.startTime || Date.now();
+
+    // Add to history
+    stateManager.addExecution({
+      cellIndex: index,
+      language: execution?.language || 'unknown',
+      codePreview: result?.code?.slice(0, 100) || '',
+      success: result?.success !== false,
+      error: result?.error?.message,
+      startTime,
+      duration: Date.now() - startTime,
+    });
+
+    stateManager.setExecution(null);
+
+    // Auto-refresh variables if enabled
+    if (config.execution?.autoRefreshVariables) {
+      api.refreshVariables().catch(err => {
+        console.warn('[autoRefreshVariables] Failed:', err);
+      });
+    }
+  });
+
+  api.execution.on('cellError', (index, error) => {
+    const execution = stateManager.getRawState().execution;
+    const startTime = execution?.startTime || Date.now();
+
+    // Add failed execution to history
+    stateManager.addExecution({
+      cellIndex: index,
+      language: execution?.language || 'unknown',
+      codePreview: '',
+      success: false,
+      error: error?.message || String(error),
+      startTime,
+      duration: Date.now() - startTime,
+    });
+
+    stateManager.setExecution(null);
+  });
+
+  // =========================================================================
+  // WIRE CONFIG CHANGE HANDLERS
+  // Config changes trigger editor reconfiguration
+  // =========================================================================
+
+  const configHandler = createConfigHandler({
+    view,
+    themeCompartment,
+    readonlyCompartment,
+    awareness,
+    registry,
+    awarenessSystem,
+    createRuntime: (rtConfig) => {
+      // Create runtime from config
+      if (rtConfig.type === 'builtin') {
+        return createJavaScriptRuntime();
+      } else if (rtConfig.type === 'custom' && rtConfig.instance) {
+        return rtConfig.instance;
+      } else if (rtConfig.type === 'mrp' && rtConfig.url) {
+        return new MRPClient(rtConfig.url);
+      }
+      return null;
+    },
+  });
+
+  reactiveConfig._subscribe(configHandler);
+
+  // =========================================================================
+  // UPDATE DOCUMENT STATE
+  // Document changes update state.document
+  // =========================================================================
+
+  const updateDocumentState = () => {
+    const doc = view.state.doc;
+    const text = doc.toString();
+    const cells = findCells(text);
+
+    stateManager.updateDocument({
+      size: doc.length,
+      lines: doc.lines,
+      words: text.split(/\s+/).filter(w => w.length > 0).length,
+      cells: cells.length,
+    });
+  };
+
+  // Initialize document state
+  updateDocumentState();
 
   // Wire up change handlers
   const updateListener = EditorView.updateListener.of((update) => {
     if (update.docChanged) {
       const content = update.state.doc.toString();
       changeHandlers.forEach(fn => fn(content));
+
+      // Update document state
+      stateManager.setDirty(true);
+      updateDocumentState();
     }
   });
 
@@ -66726,6 +70820,75 @@ function create(target, options = {}) {
   view.dispatch({
     effects: StateEffect.appendConfig.of(updateListener)
   });
+
+  // =========================================================================
+  // INITIALIZE RUNTIME STATE
+  // Register runtimes in state
+  // =========================================================================
+
+  for (const [name, runtime] of registry.runtimes) {
+    const languages = [];
+    // Discover languages
+    const testLangs = ['javascript', 'python', 'julia', 'r', 'bash'];
+    for (const lang of testLangs) {
+      if (runtime.supports?.(lang)) {
+        languages.push(lang);
+      }
+    }
+    stateManager.setRuntime(name, { status: 'ready', languages });
+  }
+
+  // =========================================================================
+  // WIRE UNDO MANAGER TO STATE
+  // Track undo/redo availability in state.document
+  // =========================================================================
+
+  const updateUndoState = () => {
+    stateManager.updateUndoState({
+      canUndo: undoManager.undoStack.length > 0,
+      canRedo: undoManager.redoStack.length > 0,
+      undoDepth: undoManager.undoStack.length,
+      redoDepth: undoManager.redoStack.length,
+    });
+  };
+
+  // Initialize undo state
+  updateUndoState();
+
+  // Listen for stack changes
+  undoManager.on('stack-item-added', updateUndoState);
+  undoManager.on('stack-item-popped', updateUndoState);
+  undoManager.on('stack-cleared', updateUndoState);
+
+  // =========================================================================
+  // WIRE COLLABORATORS TO STATE
+  // Track connected collaborators in state.collaborators
+  // =========================================================================
+
+  const updateCollaboratorsState = () => {
+    const collaborators = [];
+    awareness.getStates().forEach((state, clientId) => {
+      if (state.user || state.name) {
+        // Handle both state structures (user object or flat)
+        const user = state.user || state;
+        collaborators.push({
+          clientId,
+          name: user.name || 'Anonymous',
+          color: user.color || '#888888',
+          type: user.type || 'human',
+          status: user.status || state.status || 'idle',
+          cursor: state.cursor,
+        });
+      }
+    });
+    stateManager.setCollaborators(collaborators);
+  };
+
+  // Initialize collaborators state
+  updateCollaboratorsState();
+
+  // Listen for awareness changes
+  awareness.on('change', updateCollaboratorsState);
 
   return api;
 }
@@ -66804,6 +70967,50 @@ function drive(urlOrOptions, options = {}) {
 
       editor.provider = provider;
       editor.path = path;
+
+      // Wire connection status to state
+      const stateManager = editor._stateManager;
+      if (stateManager) {
+        // Set document path
+        stateManager.updateDocument({ path });
+
+        // Map provider status to our status enum
+        const mapStatus = (s) => {
+          if (s === 'connected') return 'connected';
+          if (s === 'connecting') return 'connecting';
+          if (s === 'disconnected') return 'disconnected';
+          return 'error';
+        };
+
+        // Set initial connection status
+        stateManager.setConnectionStatus(
+          provider.wsconnected ? 'connected' : 'connecting'
+        );
+
+        // Listen for status changes
+        provider.on('status', ({ status: s }) => {
+          stateManager.setConnectionStatus(mapStatus(s));
+        });
+
+        // Track connection errors
+        provider.on('connection-error', (event) => {
+          stateManager.setConnectionStatus('error', {
+            error: event.message || 'Connection error'
+          });
+        });
+
+        // Track reconnection attempts
+        let reconnectAttempts = 0;
+        provider.on('status', ({ status: s }) => {
+          if (s === 'connecting') {
+            reconnectAttempts++;
+            stateManager.setConnectionStatus('connecting', { reconnectAttempts });
+          } else if (s === 'connected') {
+            reconnectAttempts = 0;
+            stateManager.setConnectionStatus('connected', { reconnectAttempts: 0 });
+          }
+        });
+      }
 
       editor.disconnect = () => provider.disconnect();
       editor.reconnect = () => provider.connect();
@@ -66929,6 +71136,38 @@ const awarenessExports = {
 };
 // #endregion AWARENESS_EXPORTS
 
+// #region CONFIG_STATE_EXPORTS
+const configExports = {
+  normalizeOptions,
+  createReactiveConfig,
+  createConfigHandler,
+  serializeConfig,
+  isFullySerializable,
+};
+
+const stateExports = {
+  createStateManager,
+};
+// #endregion CONFIG_STATE_EXPORTS
+
+// #region RUNTIME_LSP_EXPORTS
+const runtimeLspExports = {
+  // Adapters
+  adaptMrmdJsSession,
+  adaptMRPClient,
+
+  // Extensions
+  createRuntimeHoverExtension,
+  createRuntimeCompletionExtension,
+
+  // Variable Explorer
+  createVariableExplorer,
+
+  // Styles
+  injectRuntimeLspStyles,
+};
+// #endregion RUNTIME_LSP_EXPORTS
+
 // #region EXPORTS
 const mrmd = {
   version: VERSION,
@@ -66938,6 +71177,11 @@ const mrmd = {
   codemirror,
   terminal,
   awareness: awarenessExports,
+  // Config & State systems
+  configUtils: configExports,
+  stateUtils: stateExports,
+  // Runtime LSP (hover, completions, variables)
+  runtimeLsp: runtimeLspExports,
   // Utilities for runtime authors
   RuntimeRegistry,
   createRuntimeRegistry,
@@ -66952,6 +71196,12 @@ const mrmd = {
   createAwareness,
   AwarenessSystem,
   AwarenessStateManager,
+  // Direct runtime LSP exports for convenience
+  adaptMrmdJsSession,
+  adaptMRPClient,
+  createRuntimeHoverExtension,
+  createRuntimeCompletionExtension,
+  createVariableExplorer,
 };
 // #endregion EXPORTS
 
@@ -66960,31 +71210,49 @@ exports.AwarenessSystem = AwarenessSystem;
 exports.MRPClient = MRPClient;
 exports.RuntimeRegistry = RuntimeRegistry;
 exports.TerminalBuffer = TerminalBuffer;
+exports.adaptMRPClient = adaptMRPClient;
+exports.adaptMrmdJsSession = adaptMrmdJsSession;
 exports.ansiStyles = ansiStyles;
 exports.awareness = awarenessExports;
 exports.codemirror = codemirror;
+exports.configExports = configExports;
 exports.create = create;
 exports.createAIState = createAIState;
 exports.createAvatarRow = createAvatarRow;
 exports.createAwareness = createAwareness;
 exports.createCollaboratorList = createCollaboratorList;
+exports.createConfigHandler = createConfigHandler;
 exports.createCursorExtensions = createCursorExtensions;
 exports.createFloatingCollaboratorList = createFloatingCollaboratorList;
 exports.createHumanState = createHumanState;
 exports.createIndicatorExtensions = createIndicatorExtensions;
 exports.createJavaScriptRuntime = createJavaScriptRuntime;
+exports.createReactiveConfig = createReactiveConfig;
+exports.createRuntimeCompletionExtension = createRuntimeCompletionExtension;
+exports.createRuntimeHoverExtension = createRuntimeHoverExtension;
 exports.createRuntimeRegistry = createRuntimeRegistry;
 exports.createRuntimeState = createRuntimeState;
+exports.createStateManager = createStateManager;
 exports.createStatusBar = createStatusBar;
+exports.createVariableExplorer = createVariableExplorer;
 exports.default = mrmd;
 exports.defaultAwarenessConfig = defaultAwarenessConfig;
+exports.devPanelExtension = devPanelExtension;
 exports.drive = drive;
 exports.hasAnsi = hasAnsi;
 exports.injectAwarenessStyles = injectAwarenessStyles;
+exports.injectDevPanelStyles = injectDevPanelStyles;
+exports.injectRuntimeLspStyles = injectRuntimeLspStyles;
+exports.isFullySerializable = isFullySerializable;
 exports.minimalAwarenessConfig = minimalAwarenessConfig;
+exports.normalizeOptions = normalizeOptions;
 exports.processTerminalOutput = processTerminalOutput;
+exports.runtimeLspExports = runtimeLspExports;
+exports.serializeConfig = serializeConfig;
+exports.stateExports = stateExports;
 exports.stripAnsi = stripAnsi;
 exports.terminal = terminal;
 exports.terminalToHtml = terminalToHtml;
+exports.toggleDevPanel = toggleDevPanel;
 exports.yjs = yjs;
 //# sourceMappingURL=mrmd.cjs.map

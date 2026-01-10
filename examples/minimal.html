@@ -19,7 +19,20 @@
 
 This is mrmd with **all defaults** - no custom styling.
 
-## Python
+## JavaScript (with Runtime LSP!)
+
+Run this cell first, then **hover** over \`items\` or \`data\` to see actual values:
+
+\`\`\`javascript
+const items = ["apple", "banana", "cherry"];
+const data = { count: items.length, first: items[0] };
+console.log("Items:", items.join(", "));
+data
+\`\`\`
+
+After running, try typing \`data.\` to see **runtime completions** (actual properties, not guesses).
+
+## Python (if mrmd-python is running)
 
 \`\`\`python
 import math
@@ -28,27 +41,44 @@ print(f"The answer is {x}")
 math.sqrt(x)
 \`\`\`
 
-## JavaScript
-
-\`\`\`javascript
-const items = ["apple", "banana", "cherry"];
-console.log("Items:", items.join(", "));
-items.length
-\`\`\`
-
 ---
+
+**Runtime LSP Features:**
+- **Hover**: Shows actual values (\`items = ["apple", "banana", "cherry"]\`)
+- **Completions**: Type \`data.\` after running to see real properties
+- **Variables**: Check \`editor.listVariables()\` in console
 
 Press **Shift+Enter** to run a code cell.
 `;
 
-  // Connect to sync server (auto-fallback to local)
+  // Connect to sync server (auto-fallback to local if server not running)
   const docs = mrmd.drive('ws://localhost:4444');
-  const editor = await docs.open('minimal-demo', '#editor', { doc });
 
-  // JavaScript runtime is built-in (mrmd-js) - no setup needed!
+  // Open document with dev panel enabled
+  // JavaScript runtime is built-in automatically
+  const editor = await docs.open('minimal-demo', '#editor', {
+    doc,
+    dark: true,
+    devPanel: {
+      enabled: true,
+      startOpen: true,
+      maxHeight: 300
+    }
+  });
 
-  // Python: connect to MRP server (auto-detects languages from endpoint URL)
-  editor.registerRuntime('python', new mrmd.MRPClient('http://localhost:8000/mrp/v1'));
+  // Python: connect to MRP server (if available)
+  try {
+    const pythonClient = new mrmd.MRPClient('http://localhost:8000/mrp/v1');
+    editor.registerRuntime('python', pythonClient);
+
+    // Also register LSP provider for Python hover/completions
+    const pythonLspProvider = mrmd.adaptMRPClient(pythonClient, ['python', 'py']);
+    editor.registerLSPProvider('python', pythonLspProvider);
+
+    console.log('Python MRP client + LSP registered');
+  } catch (err) {
+    console.log('Python MRP server not available:', err.message);
+  }
 
   // Shift+Enter to run (capture phase to intercept before CodeMirror)
   document.addEventListener('keydown', (e) => {
@@ -59,7 +89,21 @@ Press **Shift+Enter** to run a code cell.
     }
   }, true);
 
+  // Subscribe to state changes for debugging
+  editor.onStateChange((event) => {
+    if (event.path.startsWith('execution') || event.path.startsWith('history')) {
+      console.log('State:', event.path, event.value);
+    }
+  });
+
+  // Expose for debugging
   window.editor = editor;
+  window.mrmd = mrmd;
+
+  console.log('Editor ready! Access via window.editor');
+  console.log('Try: editor.config, editor.state');
+  console.log('Runtime LSP: editor.listVariables(), editor.getHoverInfo()');
+  console.log('After running JS cell: hover over variables to see values!');
 </script>
 
 </body>

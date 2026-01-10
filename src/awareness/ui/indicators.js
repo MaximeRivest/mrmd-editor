@@ -10,8 +10,51 @@
  */
 
 import { ViewPlugin, Decoration, WidgetType, EditorView } from '@codemirror/view';
-import { RangeSetBuilder } from '@codemirror/state';
+import { RangeSetBuilder, Annotation } from '@codemirror/state';
 import { findCells } from '../../cells.js';
+import * as Y from 'yjs';
+
+// Annotation to mark awareness-triggered indicator updates (following y-codemirror.next pattern)
+const indicatorAwarenessAnnotation = Annotation.define();
+
+/**
+ * Convert a position (either RelativePosition or {line, ch}) to absolute index.
+ * @param {Object} position - RelativePosition or {line, ch}
+ * @param {import('@codemirror/state').Text} doc - CodeMirror document
+ * @param {import('yjs').Text} [yText] - Yjs Text for RelativePosition conversion
+ * @returns {number|null} - Absolute position or null if invalid
+ */
+function positionToAbsolute(position, doc, yText) {
+  if (!position) return null;
+
+  // Check if it's a RelativePosition (has type/tname/item properties)
+  if (position.type !== undefined || position.tname !== undefined || position.item !== undefined) {
+    // It's a RelativePosition - convert using Yjs
+    if (yText?.doc) {
+      try {
+        const absPos = Y.createAbsolutePositionFromRelativePosition(position, yText.doc);
+        if (absPos && absPos.type === yText) {
+          return absPos.index;
+        }
+      } catch (e) {
+        // Conversion failed
+      }
+    }
+    return null;
+  }
+
+  // Legacy format: {line, ch}
+  if (typeof position.line === 'number' && typeof position.ch === 'number') {
+    try {
+      const line = doc.line(position.line);
+      return line.from + Math.min(position.ch, line.length);
+    } catch (e) {
+      // Invalid line number
+    }
+  }
+
+  return null;
+}
 
 // #region HOVER_INDICATOR
 
@@ -62,33 +105,32 @@ class HoverIndicatorWidget extends WidgetType {
  * @param {Object} options
  * @param {import('../state.js').AwarenessStateManager} options.stateManager
  * @param {function(): string} options.getContent
+ * @param {import('yjs').Text} [options.yText] - Yjs Text for RelativePosition conversion
  * @returns {import('@codemirror/state').Extension}
  */
-export function createHoverIndicators({ stateManager, getContent }) {
+export function createHoverIndicators({ stateManager, getContent, yText }) {
   return ViewPlugin.fromClass(
     class {
       constructor(view) {
         this.view = view;
         this.stateManager = stateManager;
         this.getContent = getContent;
+        this.yText = yText;
         this.decorations = this.buildDecorations();
 
-        this.unsubscribe = stateManager.onChange(() => {
-          try {
-            this.decorations = this.buildDecorations();
-            if (view.dom && view.dom.isConnected) {
-              view.requestMeasure();
-            }
-          } catch (e) {
-            console.warn('Indicator decoration update failed:', e);
+        // Subscribe to awareness changes (following y-codemirror.next pattern)
+        this.unsubscribe = stateManager.onChange((collaborators, changeInfo) => {
+          if (changeInfo?.isRemote) {
+            view.dispatch({
+              annotations: [indicatorAwarenessAnnotation.of([])]
+            });
           }
         });
       }
 
       update(update) {
-        if (update.docChanged) {
-          this.decorations = this.buildDecorations();
-        }
+        // ALWAYS rebuild decorations (following y-codemirror.next pattern)
+        this.decorations = this.buildDecorations();
       }
 
       buildDecorations() {
@@ -104,13 +146,11 @@ export function createHoverIndicators({ stateManager, getContent }) {
           const { hover } = state.user;
           const { position, symbol } = hover;
 
-          if (!position) return;
+          // Convert position to absolute (handles both RelativePosition and {line, ch})
+          const pos = positionToAbsolute(position, doc, this.yText);
+          if (pos === null || pos < 0 || pos > doc.length) return;
 
-          // Convert line/ch to absolute position
           try {
-            const line = doc.line(position.line);
-            const pos = line.from + Math.min(position.ch, line.length);
-
             decorationsToAdd.push({
               pos,
               decoration: Decoration.widget({
@@ -237,22 +277,19 @@ export function createExecutionIndicators({ stateManager, getContent }) {
         this.getContent = getContent;
         this.decorations = this.buildDecorations();
 
-        this.unsubscribe = stateManager.onChange(() => {
-          try {
-            this.decorations = this.buildDecorations();
-            if (view.dom && view.dom.isConnected) {
-              view.requestMeasure();
-            }
-          } catch (e) {
-            console.warn('Indicator decoration update failed:', e);
+        // Subscribe to awareness changes (following y-codemirror.next pattern)
+        this.unsubscribe = stateManager.onChange((collaborators, changeInfo) => {
+          if (changeInfo?.isRemote) {
+            view.dispatch({
+              annotations: [indicatorAwarenessAnnotation.of([])]
+            });
           }
         });
       }
 
       update(update) {
-        if (update.docChanged) {
-          this.decorations = this.buildDecorations();
-        }
+        // ALWAYS rebuild decorations (following y-codemirror.next pattern)
+        this.decorations = this.buildDecorations();
       }
 
       buildDecorations() {
@@ -381,36 +418,59 @@ class CellPresenceWidget extends WidgetType {
  * Shows small avatars in the gutter area showing which
  * collaborators have their cursor in each cell.
  *
+ * Calculates cell index from cursor position (RelativePosition) at render time
+ * to avoid stale indices when cells are added/removed.
+ *
  * @param {Object} options
  * @param {import('../state.js').AwarenessStateManager} options.stateManager
  * @param {function(): string} options.getContent
+ * @param {import('yjs').Text} [options.yText] - Yjs Text for cursor position conversion
  * @returns {import('@codemirror/state').Extension}
  */
-export function createCellPresenceIndicators({ stateManager, getContent }) {
+export function createCellPresenceIndicators({ stateManager, getContent, yText }) {
   return ViewPlugin.fromClass(
     class {
       constructor(view) {
         this.view = view;
         this.stateManager = stateManager;
         this.getContent = getContent;
+        this.yText = yText;
         this.decorations = this.buildDecorations();
 
-        this.unsubscribe = stateManager.onChange(() => {
-          try {
-            this.decorations = this.buildDecorations();
-            if (view.dom && view.dom.isConnected) {
-              view.requestMeasure();
-            }
-          } catch (e) {
-            console.warn('Indicator decoration update failed:', e);
+        // Subscribe to awareness changes (following y-codemirror.next pattern)
+        this.unsubscribe = stateManager.onChange((collaborators, changeInfo) => {
+          if (changeInfo?.isRemote) {
+            view.dispatch({
+              annotations: [indicatorAwarenessAnnotation.of([])]
+            });
           }
         });
       }
 
       update(update) {
-        if (update.docChanged) {
-          this.decorations = this.buildDecorations();
+        // ALWAYS rebuild decorations (following y-codemirror.next pattern)
+        this.decorations = this.buildDecorations();
+      }
+
+      /**
+       * Get cell index from cursor position (most accurate) or fallback to stored index
+       */
+      getCellIndexFromCursor(state, cells) {
+        const cursor = state.cursor;
+        if (cursor?.head && this.yText?.doc) {
+          try {
+            const absPos = Y.createAbsolutePositionFromRelativePosition(cursor.head, this.yText.doc);
+            if (absPos && absPos.type === this.yText) {
+              const pos = absPos.index;
+              const cellIndex = cells.findIndex(cell => pos >= cell.start && pos <= cell.end);
+              if (cellIndex !== -1) return cellIndex;
+            }
+          } catch (e) {
+            // Fall through to stored index
+          }
         }
+        // Fallback: stored activeCellIndex (may be stale)
+        return state.user?.activeCellIndex;
       }
 
       buildDecorations() {
@@ -426,8 +486,9 @@ export function createCellPresenceIndicators({ stateManager, getContent }) {
           if (clientId === localClientId) return;
           if (!state.user) return;
 
-          const cellIndex = state.user.activeCellIndex;
-          if (cellIndex === undefined || cellIndex === null) return;
+          // Calculate cell index from cursor (survives cell add/remove)
+          const cellIndex = this.getCellIndexFromCursor(state, cells);
+          if (cellIndex === undefined || cellIndex === null || cellIndex < 0) return;
 
           if (!cellCollaborators.has(cellIndex)) {
             cellCollaborators.set(cellIndex, []);
@@ -583,13 +644,14 @@ export function createStatusBar({ stateManager, container }) {
  * @param {Object} options
  * @param {import('../state.js').AwarenessStateManager} options.stateManager
  * @param {function(): string} options.getContent
+ * @param {import('yjs').Text} [options.yText] - Yjs Text for RelativePosition conversion
  * @param {Object} [options.config]
  * @param {boolean} [options.config.hover=true]
  * @param {boolean} [options.config.execution=true]
  * @param {boolean} [options.config.cellPresence=true]
  * @returns {import('@codemirror/state').Extension[]}
  */
-export function createIndicatorExtensions({ stateManager, getContent, config = {} }) {
+export function createIndicatorExtensions({ stateManager, getContent, yText, config = {} }) {
   const {
     hover = true,
     execution = true,
@@ -599,7 +661,7 @@ export function createIndicatorExtensions({ stateManager, getContent, config = {
   const extensions = [];
 
   if (hover) {
-    extensions.push(createHoverIndicators({ stateManager, getContent }));
+    extensions.push(createHoverIndicators({ stateManager, getContent, yText }));
   }
 
   if (execution) {
@@ -607,7 +669,7 @@ export function createIndicatorExtensions({ stateManager, getContent, config = {
   }
 
   if (cellPresence) {
-    extensions.push(createCellPresenceIndicators({ stateManager, getContent }));
+    extensions.push(createCellPresenceIndicators({ stateManager, getContent, yText }));
   }
 
   return extensions;

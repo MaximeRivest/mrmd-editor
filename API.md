@@ -181,6 +181,66 @@ editor.onCollaboratorsChange(collaborators => {
 });
 ```
 
+### Runtime LSP (Hover, Completions, Variables)
+
+Runtime-powered IntelliSense. Unlike traditional LSP (static analysis), this uses actual runtime values.
+
+```javascript
+// Automatic: hover tooltips and completions work in code cells
+// Shows actual values: "sum = 42" not just "sum: number"
+
+// Manual queries
+await editor.getHoverInfo()            // Get hover info at cursor
+await editor.getHoverInfo(pos)         // Get hover info at position
+await editor.getCompletions()          // Get completions at cursor
+
+// Variable explorer
+await editor.listVariables()           // List all JS variables
+await editor.listVariables('python')   // List Python variables
+await editor.getVariableDetail('df')   // Get details: type, value, children
+
+// Code formatting
+await editor.formatCode(code)          // Format JS code
+await editor.formatCode(code, 'python') // Format Python code
+
+// Register additional LSP providers
+editor.registerLSPProvider('python', provider);
+```
+
+**Built-in JavaScript runtime LSP:**
+
+When `javascript: true` (default), you get:
+- Hover tooltips showing actual values (not just types)
+- Completions based on runtime objects (actual properties, not guesses)
+- Variable inspection in the session namespace
+- Awareness integration (collaborators see "Alice is inspecting `sum`")
+
+**MRP Server LSP (Python, etc):**
+
+```javascript
+const editor = mrmd.create('#editor', {
+  runtimes: {
+    python: {
+      type: 'mrp',
+      url: 'http://localhost:8000/mrp/v1',
+      languages: ['python']
+    }
+  }
+});
+
+// Now Python cells get the same features:
+// - Runtime hover (actual DataFrame shape, not just "pd.DataFrame")
+// - Runtime completions (actual object attributes)
+// - Variable explorer
+```
+
+**Properties:**
+
+```javascript
+editor.runtimeLspProviders  // Map<string, RuntimeLSPProvider>
+editor.variableExplorer     // { list(), get(name), setLanguage(lang) }
+```
+
 ### Events
 
 ```javascript
@@ -202,12 +262,15 @@ editor.destroy()                       // cleanup
 ### Internals (power users)
 
 ```javascript
-editor.view       // CodeMirror EditorView
-editor.ydoc       // Yjs Y.Doc
-editor.yText      // Yjs Y.Text
-editor.awareness  // Yjs Awareness
-editor.registry   // Runtime registry
-editor.execution  // Execution manager
+editor.view                  // CodeMirror EditorView
+editor.ydoc                  // Yjs Y.Doc
+editor.yText                 // Yjs Y.Text
+editor.awareness             // Yjs Awareness
+editor.registry              // Runtime registry
+editor.execution             // Execution manager
+editor.runtimeLspProviders   // Runtime LSP providers map
+editor.variableExplorer      // Variable explorer API
+editor.jsRuntime             // Built-in JS runtime (if enabled)
 ```
 
 ---
@@ -453,6 +516,11 @@ Progress bars work correctly because cursor movement is processed - you get the 
 | ANSI color support | yes |
 | Progress bar handling | yes |
 | Keyboard shortcuts | yes (defaults) |
+| **Runtime LSP (JS)** | yes |
+| Runtime hover tooltips | yes |
+| Runtime completions | yes |
+| Variable explorer | yes |
+| MRP client (Python, etc) | yes |
 
 ## What's Separate Packages
 

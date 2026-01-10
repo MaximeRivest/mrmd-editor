@@ -86,6 +86,17 @@ Methods available on the editor instance returned by `create()`:
 | `registerRuntime(name, runtime)` | Register a code execution runtime |
 | `supportsLanguage(lang)` | Check if a language has a registered runtime |
 
+### Runtime LSP (Hover, Completions, Variables)
+
+| Method | Description |
+|--------|-------------|
+| `registerLSPProvider(lang, provider)` | Register LSP provider for a language |
+| `getHoverInfo(pos?)` | Get runtime hover info at position |
+| `getCompletions(pos?)` | Get runtime completions at position |
+| `listVariables(lang?)` | List variables in runtime session |
+| `getVariableDetail(name, lang?)` | Get detailed variable info |
+| `formatCode(code, lang?)` | Format code using runtime formatter |
+
 ### Events
 
 | Method | Description |
@@ -107,6 +118,9 @@ Methods available on the editor instance returned by `create()`:
 | `awareness` | Yjs Awareness instance |
 | `registry` | Runtime registry |
 | `execution` | Execution manager |
+| `runtimeLspProviders` | Map of language → LSP provider |
+| `variableExplorer` | Variable explorer API |
+| `jsRuntime` | Built-in JavaScript runtime (if enabled) |
 
 ---
 
@@ -171,6 +185,14 @@ For console exploration and advanced usage:
 - `oneDark`
 - `javascript`, `python`, `markdown`
 
+### `mrmd.runtimeLsp`
+- `adaptMrmdJsSession` - Adapt mrmd-js session to LSP provider interface
+- `adaptMRPClient` - Adapt MRP client (mrmd-python, etc) to LSP provider interface
+- `createRuntimeHoverExtension` - CodeMirror hover extension with runtime values
+- `createRuntimeCompletionExtension` - CodeMirror completion with runtime awareness
+- `createVariableExplorer` - Variable explorer API for UI components
+- `injectRuntimeLspStyles` - Inject CSS styles for runtime LSP UI
+
 ---
 
 ## Features Implemented
@@ -202,3 +224,12 @@ For console exploration and advanced usage:
 - [x] **Collaborator types** - Support for human, AI, runtime, and sync collaborators
 - [x] **Collaborator status** - Track idle/typing/streaming/executing states
 - [x] **Yjs-first initialization** - Yjs is source of truth; editors joining get content from Yjs
+
+### Runtime LSP
+- [x] **Runtime hover tooltips** - Show actual values, not just types (e.g., `sum = 42` not `sum: number`)
+- [x] **Runtime completions** - Completions based on actual runtime state (real object properties)
+- [x] **Variable explorer** - List and inspect variables in runtime session
+- [x] **Awareness integration** - Collaborators see what others are inspecting/completing
+- [x] **MRP client support** - Connect to mrmd-python and other MRP servers for Python/etc LSP
+- [x] **Unified provider interface** - Same API for browser JS (mrmd-js) and server runtimes (MRP)
+- [x] **Code formatting** - Format code using runtime formatters

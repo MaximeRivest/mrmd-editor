@@ -14,6 +14,19 @@ export const awarenessStyles = `
    MRMD Awareness Styles
    ========================================================================== */
 
+/* Hide y-codemirror.next's built-in cursor rendering.
+   We use our own awareness system for all cursor/presence rendering
+   so that humans, AI, and runtimes are treated uniformly. */
+.cm-ySelectionCaret {
+  display: none !important;
+}
+.cm-ySelectionCaretDot {
+  display: none !important;
+}
+.cm-ySelectionInfo {
+  display: none !important;
+}
+
 /* CSS Custom Properties */
 .mrmd-awareness-root {
   --mrmd-bg: #1e1e1e;
@@ -296,6 +309,16 @@ export const awarenessStyles = `
 }
 
 /* ==========================================================================
+   Cursor Widget (Combined Caret + Label)
+   ========================================================================== */
+
+.mrmd-cursor-widget {
+  position: relative;
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+/* ==========================================================================
    Cursor Labels
    ========================================================================== */
 
@@ -320,9 +343,14 @@ export const awarenessStyles = `
   z-index: 100;
 }
 
-/* Show on hover over caret */
-.cm-ySelectionCaret:hover + .mrmd-cursor-label,
-.mrmd-cursor-label--always,
+/* Always-visible labels (default mode) */
+.mrmd-cursor-label--always {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Hover mode: fade in on hover near the caret area */
+.mrmd-cursor-caret:hover ~ .mrmd-cursor-label,
 .mrmd-cursor-label:hover {
   opacity: 1;
   transform: translateY(0);

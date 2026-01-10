@@ -12,6 +12,7 @@
 
 import { ViewPlugin } from '@codemirror/view';
 import { getCellAtCursor, findCells } from '../cells.js';
+import * as Y from 'yjs';
 
 // #region TYPING_TRACKER
 
@@ -110,10 +111,11 @@ export function createTypingTracker({ stateManager, idleTimeout = 2000, getConte
  * @param {import('./state.js').AwarenessStateManager} options.stateManager
  * @param {function(view, pos): Promise<object|null>} options.hoverProvider - Original hover provider
  * @param {function(): string} options.getContent
+ * @param {import('yjs').Text} [options.yText] - Yjs Text for position tracking
  * @param {number} [options.clearDelay=500] - Ms after hover closes to clear state
  * @returns {function} Wrapped hover provider
  */
-export function createHoverTracker({ stateManager, hoverProvider, getContent, clearDelay = 500 }) {
+export function createHoverTracker({ stateManager, hoverProvider, getContent, yText, clearDelay = 500 }) {
   let clearTimer = null;
 
   return async (view, pos) => {
@@ -130,17 +132,19 @@ export function createHoverTracker({ stateManager, hoverProvider, getContent, cl
       // Extract hover info for awareness
       const content = getContent();
       const cell = getCellAtCursor(content, pos);
-      const line = view.state.doc.lineAt(pos);
+
+      // Use RelativePosition if yText available (survives concurrent edits)
+      // Falls back to line/ch for backwards compatibility
+      const position = yText
+        ? Y.createRelativePositionFromTypeIndex(yText, pos)
+        : { line: view.state.doc.lineAt(pos).number, ch: pos - view.state.doc.lineAt(pos).from };
 
       // Broadcast to awareness
       stateManager.setHover({
         symbol: result.name || extractSymbolAtPos(view, pos),
         type: result.type,
         info: result.value || result.signature,
-        position: {
-          line: line.number,
-          ch: pos - line.from,
-        },
+        position,
         cellIndex: cell ? findCellIndexHelper(content, cell) : undefined,
       });
 
@@ -221,10 +225,11 @@ function findCellIndexHelper(content, cell) {
  * @param {import('./state.js').AwarenessStateManager} options.stateManager
  * @param {import('@codemirror/autocomplete').CompletionSource} options.completionSource
  * @param {function(): string} options.getContent
+ * @param {import('yjs').Text} [options.yText] - Yjs Text for position tracking
  * @param {number} [options.maxItems=5] - Max items to include in awareness
  * @returns {import('@codemirror/autocomplete').CompletionSource}
  */
-export function createAutocompleteTracker({ stateManager, completionSource, getContent, maxItems = 5 }) {
+export function createAutocompleteTracker({ stateManager, completionSource, getContent, yText, maxItems = 5 }) {
   return async (context) => {
     const result = await completionSource(context);
 
@@ -232,19 +237,21 @@ export function createAutocompleteTracker({ stateManager, completionSource, getC
       const content = getContent();
       const pos = context.pos;
       const cell = getCellAtCursor(content, pos);
-      const line = context.state.doc.lineAt(pos);
 
       // Extract query text
       const query = context.state.doc.sliceString(result.from, result.to);
+
+      // Use RelativePosition if yText available (survives concurrent edits)
+      // Falls back to line/ch for backwards compatibility
+      const position = yText
+        ? Y.createRelativePositionFromTypeIndex(yText, pos)
+        : { line: context.state.doc.lineAt(pos).number, ch: pos - context.state.doc.lineAt(pos).from };
 
       // Broadcast to awareness
       stateManager.setAutocomplete({
         query,
         items: result.options.slice(0, maxItems).map(opt => opt.label),
-        position: {
-          line: line.number,
-          ch: pos - line.from,
-        },
+        position,
         cellIndex: cell ? findCellIndexHelper(content, cell) : undefined,
       });
     }

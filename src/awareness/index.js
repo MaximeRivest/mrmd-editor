@@ -29,6 +29,8 @@ export * from './ui/cursors.js';
 export * from './ui/indicators.js';
 export * from './ui/styles.js';
 
+import * as Y from 'yjs';
+
 // Import for internal use
 import {
   AwarenessStateManager,
@@ -241,6 +243,72 @@ export class AwarenessSystem {
   }
 
   /**
+   * Set focused block state (syncs output widget visibility across clients)
+   * When a user focuses on an output block to edit it, all clients see raw text.
+   * @param {{start: number, end: number, blockType: 'output'|'code'}|null} focusedBlock
+   */
+  setFocusedBlock(focusedBlock) {
+    this.stateManager.setFocusedBlock(focusedBlock);
+  }
+
+  /**
+   * Get all focused blocks from all collaborators
+   * @returns {Array<{start: number, end: number, blockType: string, clientId: number}>}
+   */
+  getFocusedBlocks() {
+    const blocks = [];
+    this.yjsAwareness.getStates().forEach((state, clientId) => {
+      if (state.user?.focusedBlock) {
+        blocks.push({
+          ...state.user.focusedBlock,
+          clientId,
+        });
+      }
+    });
+    return blocks;
+  }
+
+  /**
+   * Check if any REMOTE collaborator's cursor is inside a block.
+   * Uses y-codemirror.next's cursor positions (RelativePositions) which survive edits.
+   * @param {number} blockStart
+   * @param {number} blockEnd
+   * @returns {boolean}
+   */
+  isBlockFocused(blockStart, blockEnd) {
+    const localClientId = this.yjsAwareness.clientID;
+    const yText = this.yText;
+    const ydoc = yText?.doc;
+
+    if (!ydoc) return false;
+
+    let focused = false;
+    this.yjsAwareness.getStates().forEach((state, clientId) => {
+      // Skip local client - we check local cursor position directly
+      if (clientId === localClientId) return;
+
+      // Use y-codemirror.next's cursor (RelativePosition) instead of our focusedBlock
+      const cursor = state.cursor;
+      if (!cursor?.head) return;
+
+      try {
+        // Convert RelativePosition to absolute position
+        const absPos = Y.createAbsolutePositionFromRelativePosition(cursor.head, ydoc);
+        if (absPos && absPos.type === yText) {
+          const pos = absPos.index;
+          // Check if cursor is inside the block
+          if (pos >= blockStart && pos <= blockEnd) {
+            focused = true;
+          }
+        }
+      } catch (e) {
+        // Position conversion failed, skip this collaborator
+      }
+    });
+    return focused;
+  }
+
+  /**
    * Set status
    * @param {string} status
    */
@@ -291,7 +359,8 @@ export class AwarenessSystem {
       }));
     }
 
-    // Cursor extensions (these enhance, not replace, y-codemirror.next cursors)
+    // Cursor extensions - these ARE the cursor rendering (y-codemirror.next disabled)
+    // All collaborators (humans, AI, runtimes) render through this unified system
     if (this.config.cursors) {
       extensions.push(...createCursorExtensions({
         stateManager: this.stateManager,
@@ -301,6 +370,8 @@ export class AwarenessSystem {
           showStatus: this.config.cursorStatus,
           showActivity: this.config.cursorActivity,
           selectionOpacity: this.config.selectionOpacity,
+          replaceCaret: true,   // We handle all cursor rendering
+          showAlways: true,     // Always show labels, not just on hover
         },
       }));
     }
@@ -309,6 +380,7 @@ export class AwarenessSystem {
     extensions.push(...createIndicatorExtensions({
       stateManager: this.stateManager,
       getContent: this.getContent,
+      yText: this.yText,  // For RelativePosition conversion
       config: {
         hover: this.config.hoverIndicators,
         execution: this.config.executionIndicators,
@@ -338,6 +410,7 @@ export class AwarenessSystem {
       stateManager: this.stateManager,
       hoverProvider,
       getContent: this.getContent,
+      yText: this.yText,  // For RelativePosition tracking
     });
   }
 
@@ -354,6 +427,7 @@ export class AwarenessSystem {
       stateManager: this.stateManager,
       completionSource: source,
       getContent: this.getContent,
+      yText: this.yText,  // For RelativePosition tracking
     });
   }
 
