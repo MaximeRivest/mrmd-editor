@@ -11,8 +11,9 @@
  * through TerminalBuffer to produce clean, readable text for storage.
  */
 
-import { findCells, getCellAtIndex, getCellAtCursor, findOutputBlock } from './cells.js';
+import { findCells, getCellAtIndex, getCellAtCursor, findOutputBlock, findOutputBlockByExecId, findStdinBlockByExecId, generateExecId } from './cells.js';
 import { TerminalBuffer } from './terminal.js';
+import { pendingStdinRequests } from './output-widget.js';
 import * as Y from 'yjs';
 
 /**
@@ -29,14 +30,17 @@ export class ExecutionManager {
     this.editor = editor;
     this.registry = registry;
 
-    /** @type {Map<number, AbortController>} Running executions by cell index */
+    /** @type {Map<string, AbortController>} Running executions by execId */
     this.running = new Map();
 
-    /** @type {Map<number, TerminalBuffer>} Terminal buffers for processing output */
+    /** @type {Map<string, TerminalBuffer>} Terminal buffers by execId */
     this.buffers = new Map();
 
-    /** @type {Map<number, HTMLElement>} Active stdin input containers by cell index */
-    this.stdinContainers = new Map();
+    /** @type {Map<string, {cellIndex: number, reject: function}>} Active stdin requests by execId */
+    this.stdinRequests = new Map();
+
+    /** @type {Map<number, string>} Maps cell index to current execId (for cancellation by index) */
+    this.cellExecIds = new Map();
 
     /** @type {Object<string, function[]>} Event handlers */
     this.handlers = {
@@ -46,6 +50,184 @@ export class ExecutionManager {
       cellError: [],
       stdinRequest: [], // Called when input() is invoked
     };
+
+    // Setup terminal-like stdin handler
+    this._setupStdinKeyHandler();
+  }
+
+  /**
+   * Setup keydown handler for stdin block input and Ctrl+C cancellation.
+   * - Enter in stdin block: extract content, send to server, delete block
+   * - Escape in stdin block: cancel input, delete block
+   * - Ctrl+C in output/stdin block with running execution: cancels it
+   */
+  _setupStdinKeyHandler() {
+    // Use capture phase to run before CodeMirror's handlers
+    this.editor.view.dom.addEventListener('keydown', (e) => {
+      const view = this.editor.view;
+      const cursorPos = view.state.selection.main.head;
+      const content = view.state.doc.toString();
+
+      // Handle Ctrl+C - cancel execution
+      if (e.key === 'c' && (e.ctrlKey || e.metaKey)) {
+        // Check if cursor is in an output block with running execution
+        for (const [execId] of this.running) {
+          const outputBlock = findOutputBlockByExecId(content, execId);
+          if (outputBlock && cursorPos >= outputBlock.start && cursorPos <= outputBlock.end) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('[stdin] Ctrl+C - cancelling execution:', execId);
+
+            // Add visual feedback
+            const interruptText = '^C\n[Interrupted]\n';
+            view.dispatch({
+              changes: { from: outputBlock.contentEnd, to: outputBlock.contentEnd, insert: interruptText },
+            });
+
+            this.cancel(execId);
+            return;
+          }
+
+          // Also check stdin block
+          const stdinBlock = findStdinBlockByExecId(content, execId);
+          if (stdinBlock && cursorPos >= stdinBlock.start && cursorPos <= stdinBlock.end) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('[stdin] Ctrl+C in stdin block - cancelling:', execId);
+            this.cancel(execId);
+            return;
+          }
+        }
+      }
+
+      // Handle Escape - cancel stdin input
+      if (e.key === 'Escape') {
+        for (const [execId, request] of pendingStdinRequests) {
+          const stdinBlock = findStdinBlockByExecId(content, execId);
+          if (!stdinBlock) continue;
+
+          if (cursorPos >= stdinBlock.start && cursorPos <= stdinBlock.end) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('[stdin] Escape - cancelling input for:', execId);
+
+            // Delete the stdin block
+            view.dispatch({
+              changes: { from: stdinBlock.start, to: stdinBlock.end },
+            });
+
+            // Clean up and reject
+            pendingStdinRequests.delete(execId);
+            this.stdinRequests.delete(execId);
+
+            if (request.reject) {
+              request.reject(new Error('Input cancelled by user'));
+            }
+            return;
+          }
+        }
+      }
+
+      // Handle Enter - submit stdin input
+      if (e.key === 'Enter') {
+        // Find any stdin block the cursor is in (even if we're not the owner)
+        const stdinBlockRegex = /```stdin:([^\n:]+)(?::password)?\n([\s\S]*?)```/g;
+        let stdinMatch;
+
+        while ((stdinMatch = stdinBlockRegex.exec(content)) !== null) {
+          const execId = stdinMatch[1];
+          const stdinContent = stdinMatch[2];
+          const blockStart = stdinMatch.index;
+          const blockEnd = blockStart + stdinMatch[0].length;
+
+          // Is cursor inside this stdin block?
+          if (cursorPos >= blockStart && cursorPos <= blockEnd) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+
+            const userInput = stdinContent.trim();
+            console.log('[stdin] Enter pressed in stdin block:', execId, 'input:', JSON.stringify(userInput));
+
+            // Check if WE own this stdin request (we started the execution)
+            const request = pendingStdinRequests.get(execId);
+
+            if (request && request.resolve) {
+              // We own it - submit directly
+              console.log('[stdin] We own this request - submitting directly');
+
+              // Delete the stdin block
+              view.dispatch({
+                changes: { from: blockStart, to: blockEnd },
+              });
+
+              // Clean up and resolve
+              pendingStdinRequests.delete(execId);
+              this.stdinRequests.delete(execId);
+              request.resolve(userInput + '\n');
+            } else {
+              // We DON'T own it - signal via awareness that we want to submit
+              console.log('[stdin] We do not own this request - signaling via awareness');
+
+              // Mark the block as submitted by changing content to include a marker
+              // The owner will see this and submit
+              const submittedMarker = `\n__STDIN_SUBMIT__`;
+              if (!stdinContent.includes('__STDIN_SUBMIT__')) {
+                // Add submit marker to the content
+                const markerPos = blockEnd - 3; // Before closing ```
+                view.dispatch({
+                  changes: { from: markerPos, to: markerPos, insert: submittedMarker },
+                });
+              }
+            }
+
+            return;
+          }
+        }
+      }
+    }, { capture: true });
+
+    // Watch for stdin submission markers from collaborators
+    this._watchForStdinSubmissions();
+  }
+
+  /**
+   * Watch for stdin blocks that have been marked for submission by collaborators.
+   * When we see __STDIN_SUBMIT__ in a block we own, we submit it.
+   */
+  _watchForStdinSubmissions() {
+    // Poll periodically for submission markers
+    setInterval(() => {
+      if (pendingStdinRequests.size === 0) return;
+
+      const content = this.editor.getContent();
+
+      for (const [execId, request] of pendingStdinRequests) {
+        const stdinBlock = findStdinBlockByExecId(content, execId);
+        if (!stdinBlock) continue;
+
+        // Check if there's a submission marker
+        if (stdinBlock.content.includes('__STDIN_SUBMIT__')) {
+          console.log('[stdin] Detected submission marker from collaborator for:', execId);
+
+          // Extract the actual input (remove the marker)
+          const userInput = stdinBlock.content.replace('__STDIN_SUBMIT__', '').trim();
+
+          // Delete the stdin block
+          this.editor.view.dispatch({
+            changes: { from: stdinBlock.start, to: stdinBlock.end },
+          });
+
+          // Clean up and resolve
+          pendingStdinRequests.delete(execId);
+          this.stdinRequests.delete(execId);
+
+          if (request.resolve) {
+            request.resolve(userInput + '\n');
+          }
+        }
+      }
+    }, 100); // Check every 100ms
   }
 
   /**
@@ -165,36 +347,80 @@ export class ExecutionManager {
    * Cancel a running execution
    *
    * @param {number} index - Cell index
+   * @param {Object} [mrpClient] - MRP client for cancelling stdin requests
    */
-  cancel(index) {
-    const controller = this.running.get(index);
+  cancel(index, mrpClient) {
+    // Get execId for this cell
+    const execId = this.cellExecIds.get(index);
+    if (!execId) return;
+
+    // Abort the execution
+    const controller = this.running.get(execId);
     if (controller) {
       controller.abort();
-      this.running.delete(index);
+      this.running.delete(execId);
     }
 
-    // Clean up stdin container if present
-    const stdinContainer = this.stdinContainers.get(index);
-    if (stdinContainer) {
-      stdinContainer.remove();
-      this.stdinContainers.delete(index);
+    // Cancel stdin request if pending (notify backend)
+    const stdinRequest = this.stdinRequests.get(execId);
+    if (stdinRequest) {
+      // Notify backend to cancel the pending input
+      if (mrpClient) {
+        mrpClient.cancelInput(execId).catch(() => {
+          // Ignore errors - best effort cancellation
+        });
+      }
+      // Clean up from pending map (decoration will disappear on next rebuild)
+      pendingStdinRequests.delete(execId);
+      // Reject the promise
+      stdinRequest.reject(new Error('Execution cancelled'));
+      this.stdinRequests.delete(execId);
+    }
+
+    // Clean up buffers
+    this.buffers.delete(execId);
+    this.cellExecIds.delete(index);
+
+    // Trigger view update
+    if (this.editor?.view) {
+      this.editor.view.dispatch({ effects: [] });
     }
   }
 
   /**
    * Cancel all running executions
+   *
+   * @param {Object} [mrpClient] - MRP client for cancelling stdin requests
    */
-  cancelAll() {
+  cancelAll(mrpClient) {
+    // Abort all running executions
     for (const controller of this.running.values()) {
       controller.abort();
     }
     this.running.clear();
 
-    // Clean up all stdin containers
-    for (const container of this.stdinContainers.values()) {
-      container.remove();
+    // Cancel all stdin requests (notify backend)
+    for (const [execId, stdinRequest] of this.stdinRequests.entries()) {
+      if (mrpClient) {
+        mrpClient.cancelInput(execId).catch(() => {
+          // Ignore errors - best effort cancellation
+        });
+      }
+      // Clean up from pending map (decoration will disappear on next rebuild)
+      pendingStdinRequests.delete(execId);
+      // Reject the promise
+      stdinRequest.reject(new Error('Execution cancelled'));
     }
-    this.stdinContainers.clear();
+    this.stdinRequests.clear();
+
+    // Clear all buffers and cell mappings
+    this.buffers.clear();
+    this.cellExecIds.clear();
+
+    // Trigger view update
+    if (this.editor?.view) {
+      this.editor.view.dispatch({ effects: [] });
+    }
   }
 
   /**
@@ -204,7 +430,18 @@ export class ExecutionManager {
    * @returns {boolean}
    */
   isRunning(index) {
-    return this.running.has(index);
+    const execId = this.cellExecIds.get(index);
+    return execId ? this.running.has(execId) : false;
+  }
+
+  /**
+   * Check if an execution is running by execId
+   *
+   * @param {string} execId - Execution ID
+   * @returns {boolean}
+   */
+  isExecRunning(execId) {
+    return this.running.has(execId);
   }
 
   // ===========================================================================
@@ -235,8 +472,12 @@ export class ExecutionManager {
    * Uses TerminalBuffer to process ANSI codes and cursor movement,
    * producing clean readable output for the document.
    *
+   * Key design: Output blocks are tagged with execId (```output:exec-xxx)
+   * which allows robust tracking regardless of document edits.
+   *
    * @param {Object} cell - Cell info
    * @param {number} index - Cell index
+   * @returns {Promise<string>} The execution ID
    */
   async _executeCell(cell, index) {
     const { language, code } = cell;
@@ -245,21 +486,25 @@ export class ExecutionManager {
     if (!this.registry.supports(language)) {
       console.warn(`No runtime for language: ${language}`);
       this._emit('cellError', index, `No runtime registered for ${language}`);
-      return;
+      return null;
     }
 
     // Cancel any existing execution for this cell
     this.cancel(index);
 
+    // Generate unique execution ID - this is the stable identifier for this execution
+    const execId = generateExecId();
+
     // Create abort controller and terminal buffer
     const controller = new AbortController();
-    this.running.set(index, controller);
+    this.running.set(execId, controller);
+    this.cellExecIds.set(index, execId);
 
     const buffer = new TerminalBuffer();
-    this.buffers.set(index, buffer);
+    this.buffers.set(execId, buffer);
 
     // Emit start event
-    this._emit('cellRun', index, cell);
+    this._emit('cellRun', index, cell, execId);
 
     try {
       // Prepare output position
@@ -271,43 +516,36 @@ export class ExecutionManager {
         throw new Error('Cell no longer exists');
       }
 
-      // Clear existing output and create new output block
+      // Check for existing output block and create/update with new execId
       const existingOutput = findOutputBlock(content, currentCell.end);
 
-      let outputContentStart;
-      let outputContentEnd;
-
       if (existingOutput) {
-        // Use existing output block
-        outputContentStart = existingOutput.contentStart;
-        outputContentEnd = existingOutput.contentEnd;
-
-        // Clear existing content
-        if (outputContentEnd > outputContentStart) {
-          this.editor.view.dispatch({
-            changes: { from: outputContentStart, to: outputContentEnd, insert: '' },
-          });
-          outputContentEnd = outputContentStart;
-        }
+        // Replace existing output block with new one that has our execId
+        // This ensures clean slate and proper execId tagging
+        this.editor.view.dispatch({
+          changes: {
+            from: existingOutput.start,
+            to: existingOutput.end,
+            insert: `\`\`\`output:${execId}\n\`\`\``
+          },
+        });
       } else {
-        // Create new output block after the code block
+        // Create new output block with execId
         const insertPos = currentCell.end;
         this.editor.view.dispatch({
-          changes: { from: insertPos, insert: '\n\n```output\n```' },
+          changes: { from: insertPos, insert: `\n\n\`\`\`output:${execId}\n\`\`\`` },
         });
-
-        // Re-read to get updated positions
-        content = this.editor.getContent();
-        const newOutput = findOutputBlock(content, currentCell.end);
-        if (newOutput) {
-          outputContentStart = newOutput.contentStart;
-          outputContentEnd = newOutput.contentStart;
-        } else {
-          // Fallback: calculate position
-          outputContentStart = currentCell.end + '\n\n```output\n'.length;
-          outputContentEnd = outputContentStart;
-        }
       }
+
+      // Now find the output block by execId - this is the robust way
+      content = this.editor.getContent();
+      const outputBlock = findOutputBlockByExecId(content, execId);
+
+      if (!outputBlock) {
+        throw new Error('Failed to create output block');
+      }
+
+      let outputContentStart = outputBlock.contentStart;
 
       // Create RelativePosition for output start - survives concurrent edits from other users
       // This is critical for collaborative editing: if another user edits before our output
@@ -339,19 +577,27 @@ export class ExecutionManager {
           processedOutput += '\n';
         }
 
-        // Get current absolute position from RelativePosition (survives concurrent edits)
-        // Falls back to original position if yText not available
+        // Get current position - prefer finding by execId for robustness
         let currentOutputStart = outputContentStart;
+
+        // First try RelativePosition (for Yjs collaborative)
         if (outputStartRelPos && yText?.doc) {
           try {
             const absPos = Y.createAbsolutePositionFromRelativePosition(outputStartRelPos, yText.doc);
-            // Only use converted position if valid (absPos.index is a number)
             if (absPos && typeof absPos.index === 'number') {
               currentOutputStart = absPos.index;
             }
           } catch (e) {
-            // Conversion failed, use original position
-            console.warn('RelativePosition conversion failed:', e);
+            // Conversion failed, fall back to execId lookup
+          }
+        }
+
+        // Fallback: find by execId if position seems stale
+        if (!outputStartRelPos) {
+          const currentContent = this.editor.getContent();
+          const currentOutput = findOutputBlockByExecId(currentContent, execId);
+          if (currentOutput) {
+            currentOutputStart = currentOutput.contentStart;
           }
         }
 
@@ -366,12 +612,12 @@ export class ExecutionManager {
 
         currentDocOutputLen = processedOutput.length;
 
-        this._emit('cellOutput', index, chunk, processedOutput);
+        this._emit('cellOutput', index, chunk, processedOutput, execId);
       };
 
       /**
        * Handle stdin_request from runtime (when input() is called)
-       * Creates an inline input field and waits for user input.
+       * Terminal-like approach: move cursor into output block and capture Enter.
        *
        * @param {Object} request - {prompt, password, execId}
        * @returns {Promise<string>} - User input
@@ -383,124 +629,141 @@ export class ExecutionManager {
             return;
           }
 
-          // Remove any existing stdin container for this cell
-          const existingContainer = this.stdinContainers.get(index);
-          if (existingContainer) {
-            existingContainer.remove();
-          }
+          const stdinExecId = execId;
 
-          // Create input element
-          const inputContainer = document.createElement('div');
-          inputContainer.className = 'mrmd-stdin-input';
-          inputContainer.dataset.cellIndex = String(index);
-          inputContainer.innerHTML = `
-            <span class="mrmd-stdin-prompt">${request.prompt || ''}</span>
-            <input type="${request.password ? 'password' : 'text'}"
-                   class="mrmd-stdin-field"
-                   placeholder="Enter input and press Enter..."
-                   autofocus />
-          `;
+          // Wait for any pending output to be written to the document
+          requestAnimationFrame(() => {
+            const currentContent = this.editor.getContent();
+            const outputBlock = findOutputBlockByExecId(currentContent, stdinExecId);
 
-          // Store reference for cleanup
-          this.stdinContainers.set(index, inputContainer);
-
-          const inputField = inputContainer.querySelector('input');
-
-          // Handle submit
-          const submit = () => {
-            const value = inputField.value + '\n';
-            inputContainer.remove();
-            this.stdinContainers.delete(index);
-            resolve(value);
-          };
-
-          inputField.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              submit();
+            if (!outputBlock) {
+              reject(new Error('Output block not found for stdin'));
+              return;
             }
+
+            console.log('[stdin] Request received, prompt:', JSON.stringify(request.prompt));
+            console.log('[stdin] Creating stdin block after output block');
+
+            // Create the stdin block marker
+            // For password inputs, add :password flag to execId
+            const stdinMarker = request.password
+              ? `\n\n\`\`\`stdin:${stdinExecId}:password\n\n\`\`\``
+              : `\n\n\`\`\`stdin:${stdinExecId}\n\n\`\`\``;
+
+            // Insert stdin block after the output block
+            const insertPos = outputBlock.end;
+
+            this.editor.view.dispatch({
+              changes: { from: insertPos, to: insertPos, insert: stdinMarker },
+            });
+
+            // Store the request for later resolution
+            pendingStdinRequests.set(stdinExecId, {
+              prompt: request.prompt,
+              password: request.password,
+              execId: stdinExecId,
+              cellIndex: index,
+              resolve,
+              reject,
+            });
+
+            // Track for cancellation
+            this.stdinRequests.set(stdinExecId, {
+              cellIndex: index,
+              reject,
+            });
+
+            // Handle abort signal - clean up stdin block
+            controller.signal.addEventListener('abort', () => {
+              const content = this.editor.getContent();
+              const stdinBlock = findStdinBlockByExecId(content, stdinExecId);
+              if (stdinBlock) {
+                this.editor.view.dispatch({
+                  changes: { from: stdinBlock.start, to: stdinBlock.end },
+                });
+              }
+              pendingStdinRequests.delete(stdinExecId);
+              this.stdinRequests.delete(stdinExecId);
+              reject(new Error('Execution aborted'));
+            }, { once: true });
+
+            // Position cursor inside the stdin block (after the opening fence)
+            // The stdin block is: ```stdin:execId\n\n```
+            // We want cursor on the empty line between fences
+            requestAnimationFrame(() => {
+              const updatedContent = this.editor.getContent();
+              const stdinBlock = findStdinBlockByExecId(updatedContent, stdinExecId);
+              if (stdinBlock) {
+                // Position cursor at contentStart (inside the block)
+                this.editor.view.dispatch({
+                  selection: { anchor: stdinBlock.contentStart },
+                  scrollIntoView: true,
+                });
+                this.editor.view.focus();
+              }
+            });
+
+            // Emit event for external handling
+            this._emit('stdinRequest', index, request, resolve, reject, execId);
           });
-
-          // Handle abort
-          controller.signal.addEventListener('abort', () => {
-            inputContainer.remove();
-            this.stdinContainers.delete(index);
-            reject(new Error('Execution aborted'));
-          });
-
-          // Position stdin input at the output location
-          // We use absolute positioning because CodeMirror widgets get recreated
-          // when the document changes, which would disconnect our appended elements
-          const view = this.editor.view;
-          const coords = view.coordsAtPos(outputContentStart + currentDocOutputLen);
-
-          if (coords) {
-            const editorRect = view.dom.getBoundingClientRect();
-
-            inputContainer.style.position = 'absolute';
-            inputContainer.style.left = `${coords.left - editorRect.left}px`;
-            inputContainer.style.top = `${coords.top - editorRect.top + 5}px`;
-            inputContainer.style.width = `${Math.min(400, editorRect.width - 40)}px`;
-            inputContainer.style.zIndex = '1000';
-
-            // Append to editor DOM (which has position: relative)
-            view.dom.style.position = 'relative';
-            view.dom.appendChild(inputContainer);
-          } else {
-            // Fallback: append at the end of editor
-            view.dom.style.position = 'relative';
-            view.dom.appendChild(inputContainer);
-          }
-
-          // Focus the input
-          setTimeout(() => inputField.focus(), 0);
-
-          // Emit event for external handling if needed
-          this._emit('stdinRequest', index, request, resolve, reject);
         });
       };
 
       // Execute with streaming (pass onStdinRequest for input() support)
       const result = await this.registry.executeStreaming(code, language, onChunk, onStdinRequest);
 
-      // Final update with ANSI codes preserved
-      const finalOutput = buffer.toAnsi();
-      const from = outputContentStart;
-      const to = outputContentStart + currentDocOutputLen;
+      // Final update - find output block by execId for robustness
+      content = this.editor.getContent();
+      const finalOutputBlock = findOutputBlockByExecId(content, execId);
 
-      // Handle errors
-      let outputWithError = finalOutput;
-      if (result.error) {
-        const errorText = `\n[Error: ${result.error.message || result.stderr}]`;
-        outputWithError = finalOutput + errorText;
-        this._emit('cellError', index, result.error);
+      if (finalOutputBlock) {
+        const finalOutput = buffer.toAnsi();
+
+        // Handle errors
+        let outputWithError = finalOutput;
+        if (result.error) {
+          const errorText = `\n[Error: ${result.error.message || result.stderr}]`;
+          outputWithError = finalOutput + errorText;
+          this._emit('cellError', index, result.error, execId);
+        }
+
+        // Ensure output ends with newline so closing ``` is on its own line
+        if (outputWithError && !outputWithError.endsWith('\n')) {
+          outputWithError += '\n';
+        }
+
+        // Final replace to ensure clean output
+        this.editor.view.dispatch({
+          changes: {
+            from: finalOutputBlock.contentStart,
+            to: finalOutputBlock.contentEnd,
+            insert: outputWithError
+          },
+        });
       }
 
-      // Ensure output ends with newline so closing ``` is on its own line
-      if (outputWithError && !outputWithError.endsWith('\n')) {
-        outputWithError += '\n';
-      }
-
-      // Final replace to ensure clean output
-      this.editor.view.dispatch({
-        changes: { from, to, insert: outputWithError },
-      });
-
-      this._emit('cellComplete', index, result);
+      this._emit('cellComplete', index, result, execId);
+      return execId;
     } catch (err) {
       if (err.name !== 'AbortError') {
         console.error('Cell execution error:', err);
-        this._emit('cellError', index, err);
+        this._emit('cellError', index, err, execId);
       }
+      return execId;
     } finally {
-      this.running.delete(index);
-      this.buffers.delete(index);
+      this.running.delete(execId);
+      this.buffers.delete(execId);
 
-      // Clean up any lingering stdin container for this cell
-      const stdinContainer = this.stdinContainers.get(index);
-      if (stdinContainer) {
-        stdinContainer.remove();
-        this.stdinContainers.delete(index);
+      // Clean up any lingering stdin request (decoration will disappear on next rebuild)
+      pendingStdinRequests.delete(execId);
+      this.stdinRequests.delete(execId);
+
+      // Note: Don't delete cellExecIds here - keep it for reference
+      // It will be overwritten on next execution
+
+      // Trigger view update
+      if (this.editor?.view) {
+        this.editor.view.dispatch({ effects: [] });
       }
     }
   }
@@ -512,7 +775,28 @@ export class ExecutionManager {
    * @returns {TerminalBuffer|null}
    */
   getBuffer(index) {
-    return this.buffers.get(index) || null;
+    const execId = this.cellExecIds.get(index);
+    return execId ? this.buffers.get(execId) || null : null;
+  }
+
+  /**
+   * Get the terminal buffer by execId
+   *
+   * @param {string} execId - Execution ID
+   * @returns {TerminalBuffer|null}
+   */
+  getBufferByExecId(execId) {
+    return this.buffers.get(execId) || null;
+  }
+
+  /**
+   * Get the current execId for a cell
+   *
+   * @param {number} index - Cell index
+   * @returns {string|null}
+   */
+  getExecId(index) {
+    return this.cellExecIds.get(index) || null;
   }
 }
 

@@ -46,6 +46,7 @@ All endpoints are prefixed with `/mrp/v1/`.
 | `/execute` | POST | Run code, return result |
 | `/execute/stream` | POST | Run code, SSE stream output |
 | `/input` | POST | Send user input to waiting execution |
+| `/input/cancel` | POST | Cancel pending input request |
 | `/interrupt` | POST | Cancel running execution |
 | `/complete` | POST | Completions at cursor position |
 | `/inspect` | POST | Detailed info about symbol |
@@ -401,7 +402,46 @@ If no execution is waiting for input:
 }
 ```
 
-**Typical flow:**
+### `POST /input/cancel`
+
+Cancel a pending input request. Called when the user dismisses the input field without providing input (e.g., cancels the execution, presses Escape, navigates away).
+
+**Request:**
+
+```json
+{
+  "session": "default",
+  "exec_id": "exec-123"
+}
+```
+
+**Response:**
+
+```json
+{
+  "cancelled": true
+}
+```
+
+If no execution is waiting for input:
+
+```json
+{
+  "cancelled": false,
+  "error": "No pending input request"
+}
+```
+
+**When to call:**
+
+- User presses Escape in the input field
+- User cancels/interrupts the cell execution
+- User navigates away from the cell
+- Input field is dismissed for any reason without submitting
+
+This unblocks the runtime's waiting thread and allows it to return an error result indicating the input was cancelled.
+
+**Typical flow (input submitted):**
 
 ```
 1. Client: POST /execute/stream { code: "name = input('Name: ')" }
@@ -414,6 +454,20 @@ If no execution is waiting for input:
 8. Server: Execution continues...
 9. Server: event: result, data: {...}
 10. Server: event: done
+```
+
+**Typical flow (input cancelled):**
+
+```
+1. Client: POST /execute/stream { code: "name = input('Name: ')" }
+2. Server: event: stdout, data: {"content": "Name: ", ...}
+3. Server: event: stdin_request, data: {"prompt": "", "password": false, "exec_id": "exec-123"}
+4. Client: [Shows input cursor in output area]
+5. User presses Escape (or cancels execution)
+6. Client: POST /input/cancel { exec_id: "exec-123" }
+7. Server: Execution unblocks with InputCancelledError
+8. Server: event: error, data: {"type": "InputCancelled", "message": "Input cancelled by user"}
+9. Server: event: done
 ```
 
 ### `POST /interrupt`

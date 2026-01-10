@@ -342,7 +342,12 @@ export class MRPClient {
                       return this.sendInput(data.execId, input);
                     })
                     .catch((err) => {
-                      console.error('Stdin handling error:', err);
+                      // User cancelled input (e.g., pressed Escape)
+                      // Notify server to unblock the waiting execution
+                      console.log('Stdin cancelled:', err.message);
+                      this.cancelInput(data.execId).catch(() => {
+                        // Ignore errors - best effort cancellation
+                      });
                     });
                 }
               } else if (currentEvent === 'result') {
@@ -434,6 +439,33 @@ export class MRPClient {
 
     if (!res.ok) {
       throw new Error(`Failed to send input: ${res.status}`);
+    }
+
+    return res.json();
+  }
+
+  /**
+   * Cancel a pending input request
+   *
+   * Called when the user dismisses the input field without providing input.
+   * This unblocks the waiting execution on the server.
+   *
+   * @param {string} execId - The execution ID waiting for input
+   * @param {string} [session]
+   * @returns {Promise<{cancelled: boolean, error?: string}>}
+   */
+  async cancelInput(execId, session) {
+    const res = await fetch(`${this.#endpoint}/input/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session: session || this.#defaultSession,
+        exec_id: execId,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Failed to cancel input: ${res.status}`);
     }
 
     return res.json();

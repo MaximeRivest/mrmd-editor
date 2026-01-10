@@ -66,6 +66,13 @@ import { RuntimeRegistry, createRuntimeRegistry } from './runtime.js';
 import { ExecutionManager, createExecutionManager } from './execution.js';
 import { MRPClient } from './mrp-client.js';
 
+// Cell controls (run buttons, queue, status)
+import { createCellControls, CellControlsSystem } from './cell-controls/index.js';
+
+// Commands and keymap
+import { commandRegistry } from './commands.js';
+import { createKeymap, mergeKeybindings, defaultKeybindings } from './keymap.js';
+
 // Runtime LSP (hover, completions, variables)
 import {
   adaptMrmdJsSession,
@@ -624,6 +631,7 @@ function create(target, options = {}) {
   const initialContent = yText.toString();
   const themeCompartment = new Compartment();
   const readonlyCompartment = new Compartment();
+  const keymapCompartment = new Compartment();
 
   // Create UndoManager for undo/redo tracking
   // We create it ourselves so we can listen to stack changes
@@ -681,6 +689,9 @@ function create(target, options = {}) {
     // Our awareness system handles all cursor/presence rendering uniformly
     yCollab(yText, awareness, { undoManager }),
     keymap.of(yUndoManagerKeymap),
+    // Cell execution keymap (Shift-Enter, Mod-Enter, etc.)
+    // Initially empty, configured after api is created
+    keymapCompartment.of([]),
     outputWidgetPlugin, // ANSI output rendering
   ];
 
@@ -811,9 +822,14 @@ function create(target, options = {}) {
     activeLanguage: 'javascript',
   });
 
-  // Add runtime LSP extensions (hover, completions) to the view
-  // Only add if we have at least one LSP provider
-  if (runtimeLspProviders.size > 0) {
+  // Track whether LSP extensions have been added (needed for dynamic connectRuntime)
+  let lspExtensionsAdded = false;
+
+  // Helper to add LSP extensions (called at init or on first connectRuntime)
+  function addLspExtensions() {
+    if (lspExtensionsAdded) return;
+    lspExtensionsAdded = true;
+
     const runtimeLspExtensions = [];
 
     // Create hover extension with awareness integration
@@ -842,6 +858,11 @@ function create(target, options = {}) {
     view.dispatch({
       effects: StateEffect.appendConfig.of(runtimeLspExtensions),
     });
+  }
+
+  // Add runtime LSP extensions at init if we have providers
+  if (runtimeLspProviders.size > 0) {
+    addLspExtensions();
   }
 
   // Create editor API object first (needed by ExecutionManager)
@@ -1369,6 +1390,83 @@ function create(target, options = {}) {
     },
 
     /**
+     * Connect to an MRP runtime server with full features (execution + LSP).
+     * This is the recommended one-liner for adding language runtimes.
+     *
+     * @param {string} language - Language name (e.g., 'python', 'julia', 'r')
+     * @param {string} url - MRP server URL (e.g., 'http://localhost:8000/mrp/v1')
+     * @param {Object} [options] - Optional configuration
+     * @param {string[]} [options.languages] - Language aliases (defaults to [language])
+     * @returns {MRPClient} The connected client (for advanced use)
+     *
+     * @example
+     * // Connect Python with all features (hover, completions, execution)
+     * editor.connectRuntime('python', 'http://localhost:8000/mrp/v1');
+     *
+     * // With language aliases
+     * editor.connectRuntime('python', 'http://localhost:8000/mrp/v1', {
+     *   languages: ['python', 'py', 'python3']
+     * });
+     */
+    connectRuntime(language, url, options = {}) {
+      // Create MRP client
+      const client = new MRPClient(url);
+
+      // Register for execution
+      registry.register(language, client);
+
+      // Create and register LSP provider
+      const languages = options.languages || [language.toLowerCase()];
+      const provider = adaptMRPClient(client, languages);
+      runtimeLspProviders.set(language, provider);
+
+      // Ensure LSP extensions are added (if this is the first provider)
+      addLspExtensions();
+
+      return client;
+    },
+
+    // ===========================================================================
+    // Commands and Keymap (initialized after api is created)
+    // ===========================================================================
+
+    /**
+     * Available commands that can be bound to keyboard shortcuts.
+     * Initialized after api creation - see below.
+     */
+    commands: null, // Placeholder, set after api is created
+
+    /**
+     * Update keyboard shortcuts at runtime.
+     * Merges with existing bindings by default.
+     *
+     * @param {Object} bindings - Key-to-command mapping
+     * @param {Object} [options]
+     * @param {boolean} [options.replace=false] - Replace all bindings instead of merging
+     *
+     * @example
+     * // Add/override specific bindings
+     * editor.setKeymap({
+     *   'F5': 'runAllCells',
+     *   'Shift-Enter': 'runCell',  // Override default
+     * });
+     *
+     * // Disable a default binding
+     * editor.setKeymap({ 'Mod-Shift-Enter': false });
+     *
+     * // Replace all bindings
+     * editor.setKeymap({ 'F5': 'runCell' }, { replace: true });
+     */
+    setKeymap: null, // Placeholder, set after api is created
+
+    /**
+     * Get the current keymap configuration.
+     *
+     * @returns {Object} Current key-to-command mapping
+     */
+    getKeymap: null, // Placeholder, set after api is created
+
+    /**
      * Get hover information at cursor position.
      * Returns runtime values for the symbol under cursor.
      *
@@ -1598,6 +1696,9 @@ function create(target, options = {}) {
 
     destroy() {
       this.execution.cancelAll();
+      if (cellControls) {
+        cellControls.destroy();
+      }
       if (awarenessSystem) {
         awarenessSystem.destroy();
       }
@@ -1646,6 +1747,41 @@ function create(target, options = {}) {
 
   // Create execution manager
   api.execution = createExecutionManager(api, registry);
+
+  // Configure keymap now that api is ready
+  // Merge user keybindings with defaults
+  const userKeybindings = options.keymap || {};
+  let currentKeybindings = mergeKeybindings(userKeybindings);
+  view.dispatch({
+    effects: keymapCompartment.reconfigure(createKeymap(api, currentKeybindings))
+  });
+
+  // Initialize commands object (now that api is available)
+  api.commands = Object.fromEntries(
+    Object.entries(commandRegistry).map(([name, factory]) => [
+      name,
+      () => factory(api)(view)
+    ])
+  );
+
+  // Initialize setKeymap method
+  api.setKeymap = function(bindings, options = {}) {
+    const newBindings = options.replace
+      ? bindings
+      : mergeKeybindings(bindings, currentKeybindings);
+
+    // Update stored bindings for future merges
+    currentKeybindings = newBindings;
+
+    view.dispatch({
+      effects: keymapCompartment.reconfigure(createKeymap(api, newBindings))
+    });
+  };
+
+  // Initialize getKeymap method
+  api.getKeymap = function() {
+    return { ...currentKeybindings };
+  };
 
   // Wire execution events to awareness (so execution badges work automatically)
   // This makes the runtime appear as a collaborator executing code
@@ -1747,6 +1883,40 @@ function create(target, options = {}) {
   });
 
   // =========================================================================
+  // CELL CONTROLS
+  // Run buttons, stop buttons, queue status for code cells
+  // =========================================================================
+
+  let cellControls = null;
+
+  console.log('[CellControls] Config:', config.cellControls);
+  if (config.cellControls?.enabled !== false) {
+    console.log('[CellControls] Creating cell controls system...');
+    cellControls = createCellControls({
+      editor: api,
+      executionManager: api.execution,
+      stateManager,
+      config: config.cellControls,
+      awareness: awarenessSystem?.yjsAwareness || awareness,
+    });
+
+    // Add cell controls extensions to the view
+    const cellControlsExtensions = cellControls.getExtensions();
+    console.log('[CellControls] Extensions to add:', cellControlsExtensions.length);
+    if (cellControlsExtensions.length > 0) {
+      view.dispatch({
+        effects: StateEffect.appendConfig.of(cellControlsExtensions)
+      });
+      console.log('[CellControls] Extensions added to view');
+    }
+
+    // Expose on API
+    api.cellControls = cellControls;
+  } else {
+    console.log('[CellControls] Disabled by config');
+  }
+
+  // =========================================================================
   // WIRE CONFIG CHANGE HANDLERS
   // Config changes trigger editor reconfiguration
   // =========================================================================
@@ -1758,6 +1928,7 @@ function create(target, options = {}) {
     awareness,
     registry,
     awarenessSystem,
+    cellControls,
     createRuntime: (rtConfig) => {
       // Create runtime from config
       if (rtConfig.type === 'builtin') {
@@ -2140,6 +2311,13 @@ const stateExports = {
 };
 // #endregion CONFIG_STATE_EXPORTS
 
+// #region CELL_CONTROLS_EXPORTS
+const cellControlsExports = {
+  createCellControls,
+  CellControlsSystem,
+};
+// #endregion CELL_CONTROLS_EXPORTS
+
 // #region RUNTIME_LSP_EXPORTS
 const runtimeLspExports = {
   // Adapters
@@ -2172,6 +2350,8 @@ const mrmd = {
   // Config & State systems
   configUtils: configExports,
   stateUtils: stateExports,
+  // Cell controls (run buttons, queue, status)
+  cellControls: cellControlsExports,
   // Runtime LSP (hover, completions, variables)
   runtimeLsp: runtimeLspExports,
   // Utilities for runtime authors
@@ -2265,5 +2445,9 @@ export {
   getTheme,
   getThemeNames,
   generateThemeCSS,
+  // Cell controls exports
+  cellControlsExports,
+  createCellControls,
+  CellControlsSystem,
 };
 // #endregion EXPORTS

@@ -20,6 +20,8 @@
  * @property {ExecutionRecord[]} history - Execution history
  * @property {CollaboratorInfo[]} collaborators - Connected collaborators
  * @property {CurrentExecution | null} execution - Current running execution
+ * @property {QueueState} queue - Execution queue state
+ * @property {Record<number, CellStatusInfo>} cellStatus - Status by cell index
  * @property {AIState} ai - AI endpoint status
  */
 
@@ -180,6 +182,58 @@ export const INITIAL_RUNTIME_STATE = {
  */
 
 // =============================================================================
+// EXECUTION QUEUE
+// =============================================================================
+
+/**
+ * Execution queue state
+ * @typedef {Object} QueueState
+ * @property {QueueEntry[]} entries - Queued executions (in order)
+ * @property {string|null} running - Currently running execId
+ * @property {number} total - Total entries (running + queued)
+ */
+
+/**
+ * Queue entry
+ * @typedef {Object} QueueEntry
+ * @property {string} execId - Unique execution ID
+ * @property {number} cellIndex - Cell index in document
+ * @property {string} language - Language of the cell
+ * @property {number} queuePosition - 1-indexed position in queue
+ * @property {number} queuedAt - Timestamp when queued
+ */
+
+/** @type {QueueState} */
+export const INITIAL_QUEUE_STATE = {
+  entries: [],
+  running: null,
+  total: 0
+};
+
+// =============================================================================
+// CELL STATUS
+// =============================================================================
+
+/**
+ * Cell status information
+ * @typedef {Object} CellStatusInfo
+ * @property {'idle'|'queued'|'running'|'success'|'error'} status - Current status
+ * @property {number|null} queuePosition - Position in queue (1-indexed), null if not queued
+ * @property {string|null} execId - Current or last execution ID
+ * @property {number|null} lastRunAt - Timestamp of last run
+ * @property {string|null} error - Error message if status is 'error'
+ */
+
+/** @type {CellStatusInfo} */
+export const INITIAL_CELL_STATUS = {
+  status: 'idle',
+  queuePosition: null,
+  execId: null,
+  lastRunAt: null,
+  error: null
+};
+
+// =============================================================================
 // AI STATE
 // =============================================================================
 
@@ -221,6 +275,8 @@ export function getInitialState() {
     history: [],
     collaborators: [],
     execution: null,
+    queue: { ...INITIAL_QUEUE_STATE },
+    cellStatus: {},
     ai: { ...INITIAL_AI_STATE }
   };
 }

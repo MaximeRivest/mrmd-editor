@@ -20,6 +20,7 @@ import { pathToString, matchesPattern } from './reactive.js';
  * @property {import('yjs').Awareness} awareness
  * @property {Object} registry - RuntimeRegistry
  * @property {Object} [awarenessSystem] - AwarenessSystem
+ * @property {Object} [cellControls] - CellControlsSystem
  * @property {Object} [provider] - WebsocketProvider
  * @property {Function} createRuntime - Factory to create runtime from config
  */
@@ -53,6 +54,9 @@ export function createConfigHandler(internals) {
 
     // Awareness handlers
     'awareness.*': (event) => handleAwarenessChange(internals, event),
+
+    // Cell controls handlers
+    'cellControls.*': (event) => handleCellControlsChange(internals, event),
   };
 
   return (event) => {
@@ -290,6 +294,71 @@ function handleAwarenessChange(internals, event) {
         console.warn(`[Config] Awareness ${prop} change requires editor recreation`);
       }
       break;
+  }
+}
+
+// =============================================================================
+// CELL CONTROLS HANDLERS
+// =============================================================================
+
+/**
+ * Handle cell controls config change
+ * @param {EditorInternals} internals
+ * @param {ConfigChangeEvent} event
+ */
+function handleCellControlsChange(internals, event) {
+  const { cellControls, view } = internals;
+
+  if (!cellControls) {
+    // Cell controls not initialized yet - will be used on creation
+    return;
+  }
+
+  const pathStr = pathToString(event.path);
+
+  // Handle enabled toggle
+  if (pathStr === 'cellControls.enabled') {
+    // Toggling enabled requires extension reconfiguration
+    console.warn('[Config] Toggling cellControls.enabled requires editor recreation');
+    return;
+  }
+
+  // Handle position change
+  if (pathStr === 'cellControls.position') {
+    // Position change requires extension reconfiguration (line vs gutter)
+    console.warn('[Config] Changing cellControls.position requires editor recreation');
+    return;
+  }
+
+  // Handle button visibility changes
+  if (event.path[1] === 'buttons') {
+    cellControls.updateConfig({
+      buttons: { ...cellControls.config.buttons, [event.path[2]]: event.value }
+    });
+    // Trigger decoration rebuild
+    if (view) {
+      import('../cell-controls/plugin.js').then(({ rebuildCellControlsEffect }) => {
+        view.dispatch({ effects: rebuildCellControlsEffect.of(null) });
+      });
+    }
+    return;
+  }
+
+  // Handle status config changes
+  if (event.path[1] === 'status') {
+    cellControls.updateConfig({
+      status: { ...cellControls.config.status, [event.path[2]]: event.value }
+    });
+    return;
+  }
+
+  // Handle queue config changes
+  if (event.path[1] === 'queue') {
+    // Queue mode changes don't require rebuild - just update config
+    cellControls.updateConfig({
+      queue: { ...cellControls.config.queue, [event.path[2]]: event.value }
+    });
+    return;
   }
 }
 

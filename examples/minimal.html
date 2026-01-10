@@ -43,12 +43,20 @@ math.sqrt(x)
 
 ---
 
+**Cell Controls** (buttons next to code cells):
+- **Play button**: Click to run the cell (adds to queue)
+- **Stop button**: Cancel running/queued execution
+- **Copy button**: Copy code to clipboard
+- **Clear button**: Remove output
+
+**Queue Status**: When multiple cells are queued, you'll see position indicators like \`2/3\`.
+
 **Runtime LSP Features:**
 - **Hover**: Shows actual values (\`items = ["apple", "banana", "cherry"]\`)
 - **Completions**: Type \`data.\` after running to see real properties
 - **Variables**: Check \`editor.listVariables()\` in console
 
-Press **Shift+Enter** to run a code cell.
+Press **Shift+Enter** to run a code cell, or click the **play button**.
 `;
 
   // Connect to sync server (auto-fallback to local if server not running)
@@ -63,31 +71,39 @@ Press **Shift+Enter** to run a code cell.
       enabled: true,
       startOpen: true,
       maxHeight: 300
+    },
+    // Cell controls: run buttons, queue status, copy buttons
+    // All enabled by default - showing explicit config for reference
+    cellControls: {
+      enabled: true,
+      position: 'line-start',  // 'line-start' | 'line-end' | 'gutter' | 'none'
+      buttons: {
+        run: true,        // Play button
+        stop: true,       // Stop/cancel button (shown when running/queued)
+        clear: true,      // Clear output button
+        copy: true,       // Copy code button
+        copyOutput: true, // Copy output button
+        copyBoth: true,   // Copy code + output (off by default, enabling for demo)
+      },
+      status: {
+        show: true,              // Show status indicator
+        showQueuePosition: true, // Show "2/3" in queue
+        statusLineInOutput: true // Add [status:queued] lines to output
+      },
+      queue: {
+        mode: 'sequential'  // FIFO execution like Jupyter
+      }
     }
   });
 
-  // Python: connect to MRP server (if available)
-  try {
-    const pythonClient = new mrmd.MRPClient('http://localhost:8000/mrp/v1');
-    editor.registerRuntime('python', pythonClient);
+  // Python: connect to MRP server with full features (execution + hover + completions)
+  editor.connectRuntime('python', 'http://localhost:8000/mrp/v1');
 
-    // Also register LSP provider for Python hover/completions
-    const pythonLspProvider = mrmd.adaptMRPClient(pythonClient, ['python', 'py']);
-    editor.registerLSPProvider('python', pythonLspProvider);
-
-    console.log('Python MRP client + LSP registered');
-  } catch (err) {
-    console.log('Python MRP server not available:', err.message);
-  }
-
-  // Shift+Enter to run (capture phase to intercept before CodeMirror)
-  document.addEventListener('keydown', (e) => {
-    if (e.shiftKey && e.key === 'Enter') {
-      e.preventDefault();
-      e.stopPropagation();
-      editor.runCurrentCell();
-    }
-  }, true);
+  // Keyboard shortcuts are built-in:
+  // - Shift+Enter: Run cell and advance to next
+  // - Mod+Enter: Run cell and stay
+  // - Alt+Arrow: Navigate between cells
+  // Customize with: editor.setKeymap({ 'F5': 'runAllCells' })
 
   // Subscribe to state changes for debugging
   editor.onStateChange((event) => {
@@ -101,9 +117,12 @@ Press **Shift+Enter** to run a code cell.
   window.mrmd = mrmd;
 
   console.log('Editor ready! Access via window.editor');
-  console.log('Try: editor.config, editor.state');
+  console.log('Try: editor.config, editor.state, editor.commands');
+  console.log('Keymaps: editor.getKeymap(), editor.setKeymap({ "F5": "runAllCells" })');
   console.log('Runtime LSP: editor.listVariables(), editor.getHoverInfo()');
-  console.log('After running JS cell: hover over variables to see values!');
+  console.log('Cell Controls: editor.cellControls.runCell(0), editor.cellControls.getQueueSnapshot()');
+  console.log('Shift+Enter to run and advance, Mod+Enter to run and stay');
+  console.log('Click the play button next to code cells to run them!');
 </script>
 
 </body>

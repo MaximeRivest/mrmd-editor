@@ -17,6 +17,8 @@
  * @property {AppearanceConfig} [appearance] - Visual settings
  * @property {UserConfig} [user] - User identity
  * @property {Record<string, RuntimeConfig>} [runtimes] - Code execution runtimes
+ * @property {ExecutionConfig} [execution] - Execution settings
+ * @property {CellControlsConfig} [cellControls] - Cell controls (buttons, status, queue)
  * @property {AIConfig} [ai] - AI service endpoints
  * @property {AwarenessConfig} [awareness] - Collaboration UI settings
  * @property {boolean | DevPanelConfig} [devPanel] - Developer panel
@@ -194,6 +196,78 @@ export const DEFAULT_EXECUTION = {
 };
 
 // =============================================================================
+// CELL CONTROLS
+// =============================================================================
+
+/**
+ * Cell controls configuration - buttons and status for code cells
+ * @typedef {Object} CellControlsConfig
+ * @property {boolean} [enabled] - Master switch for cell controls
+ * @property {'line-start'|'line-end'|'gutter'|'none'} [position] - Where to show controls
+ * @property {CellButtonsConfig} [buttons] - Which buttons to show
+ * @property {CellStatusConfig} [status] - Status indicator settings
+ * @property {CellQueueConfig} [queue] - Queue behavior settings
+ */
+
+/**
+ * Cell buttons configuration
+ * @typedef {Object} CellButtonsConfig
+ * @property {boolean} [run] - Show run/play button
+ * @property {boolean} [stop] - Show stop/cancel button (when running/queued)
+ * @property {boolean} [clear] - Show clear output button
+ * @property {boolean} [copy] - Show copy code button
+ * @property {boolean} [copyOutput] - Show copy output button
+ * @property {boolean} [copyBoth] - Show copy code+output button
+ */
+
+/**
+ * Cell status indicator configuration
+ * @typedef {Object} CellStatusConfig
+ * @property {boolean} [show] - Show status indicator (idle/queued/running)
+ * @property {boolean} [showQueuePosition] - Show position in queue (e.g., "2/3")
+ * @property {boolean} [statusLineInOutput] - Add [status:...] lines to output blocks
+ */
+
+/**
+ * Cell execution queue configuration
+ * @typedef {Object} CellQueueConfig
+ * @property {'sequential'|'parallel'} [mode] - Queue processing mode
+ * @property {number} [maxConcurrent] - Max concurrent executions (for parallel mode)
+ */
+
+/** @type {CellButtonsConfig} */
+export const DEFAULT_CELL_BUTTONS = {
+  run: true,
+  stop: true,
+  clear: true,
+  copy: true,
+  copyOutput: true,
+  copyBoth: false
+};
+
+/** @type {CellStatusConfig} */
+export const DEFAULT_CELL_STATUS = {
+  show: true,
+  showQueuePosition: true,
+  statusLineInOutput: true
+};
+
+/** @type {CellQueueConfig} */
+export const DEFAULT_CELL_QUEUE = {
+  mode: 'sequential',
+  maxConcurrent: 1
+};
+
+/** @type {CellControlsConfig} */
+export const DEFAULT_CELL_CONTROLS = {
+  enabled: true,
+  position: 'line-start',
+  buttons: { ...DEFAULT_CELL_BUTTONS },
+  status: { ...DEFAULT_CELL_STATUS },
+  queue: { ...DEFAULT_CELL_QUEUE }
+};
+
+// =============================================================================
 // DEV PANEL
 // =============================================================================
 
@@ -233,6 +307,13 @@ export function getDefaultConfig() {
     user: { ...DEFAULT_USER },
     runtimes: {},
     execution: { ...DEFAULT_EXECUTION },
+    cellControls: {
+      enabled: DEFAULT_CELL_CONTROLS.enabled,
+      position: DEFAULT_CELL_CONTROLS.position,
+      buttons: { ...DEFAULT_CELL_BUTTONS },
+      status: { ...DEFAULT_CELL_STATUS },
+      queue: { ...DEFAULT_CELL_QUEUE }
+    },
     ai: {
       endpoints: [],
       default: null
@@ -331,6 +412,23 @@ export function normalizeOptions(options = {}) {
   // Execution options
   if (options.autoRefreshVariables !== undefined) {
     config.execution.autoRefreshVariables = options.autoRefreshVariables;
+  }
+
+  // Cell controls
+  if (options.cellControls !== undefined) {
+    if (options.cellControls === true) {
+      config.cellControls.enabled = true;
+    } else if (options.cellControls === false) {
+      config.cellControls.enabled = false;
+    } else if (typeof options.cellControls === 'object') {
+      config.cellControls = {
+        ...config.cellControls,
+        ...options.cellControls,
+        buttons: { ...config.cellControls.buttons, ...options.cellControls.buttons },
+        status: { ...config.cellControls.status, ...options.cellControls.status },
+        queue: { ...config.cellControls.queue, ...options.cellControls.queue }
+      };
+    }
   }
 
   // If structured config properties are provided, use them directly

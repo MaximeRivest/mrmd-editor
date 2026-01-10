@@ -114,23 +114,26 @@ export function findCodeBlockAtPosition(content, pos) {
 
 /**
  * Find the output block following a code block
+ * Supports both ```output and ```output:execId formats
  *
  * @param {string} content - Document content
  * @param {number} codeBlockEnd - End position of the code block
- * @returns {{start: number, end: number, content: string}|null}
+ * @returns {{start: number, end: number, contentStart: number, contentEnd: number, content: string, execId: string|null}|null}
  */
 export function findOutputBlock(content, codeBlockEnd) {
-  // Look for ```output immediately after the code block
+  // Look for ```output or ```output:execId immediately after the code block
   const after = content.slice(codeBlockEnd);
 
   // Allow for whitespace/newlines between blocks
-  const match = after.match(/^(\s*\n)(```output\n)([\s\S]*?)(```)/);
+  // Group 1: gap, Group 2: full fence line, Group 3: execId (optional), Group 4: content, Group 5: closing
+  const match = after.match(/^(\s*\n)(```output(?::([^\n]*))?\n)([\s\S]*?)(```)/);
   if (!match) return null;
 
   const gapLength = match[1].length;
   const fenceLength = match[2].length;
-  const outputContent = match[3];
-  const closingLength = match[4].length;
+  const execId = match[3] || null;
+  const outputContent = match[4];
+  const closingLength = match[5].length;
 
   return {
     start: codeBlockEnd + gapLength,
@@ -138,7 +141,84 @@ export function findOutputBlock(content, codeBlockEnd) {
     contentStart: codeBlockEnd + gapLength + fenceLength,
     contentEnd: codeBlockEnd + gapLength + fenceLength + outputContent.length,
     content: outputContent,
+    execId,
   };
+}
+
+/**
+ * Find an output block by its execution ID
+ * Searches the entire document for ```output:execId
+ *
+ * @param {string} content - Document content
+ * @param {string} execId - Execution ID to find
+ * @returns {{start: number, end: number, contentStart: number, contentEnd: number, content: string, execId: string}|null}
+ */
+export function findOutputBlockByExecId(content, execId) {
+  const marker = '```output:' + execId;
+  const pos = content.indexOf(marker);
+  if (pos === -1) return null;
+
+  // Parse the block from that position
+  const after = content.slice(pos);
+  // Group 1: fence line with execId, Group 2: content, Group 3: closing
+  const match = after.match(/^(```output:[^\n]*\n)([\s\S]*?)(```)/);
+  if (!match) return null;
+
+  const fenceLength = match[1].length;
+  const outputContent = match[2];
+  const closingLength = match[3].length;
+
+  return {
+    start: pos,
+    end: pos + fenceLength + outputContent.length + closingLength,
+    contentStart: pos + fenceLength,
+    contentEnd: pos + fenceLength + outputContent.length,
+    content: outputContent,
+    execId,
+  };
+}
+
+/**
+ * Find a stdin block by execution ID
+ * Searches the entire document for ```stdin:execId
+ *
+ * @param {string} content - Document content
+ * @param {string} execId - Execution ID to find
+ * @returns {{start: number, end: number, contentStart: number, contentEnd: number, content: string, execId: string}|null}
+ */
+export function findStdinBlockByExecId(content, execId) {
+  const marker = '```stdin:' + execId;
+  const pos = content.indexOf(marker);
+  if (pos === -1) return null;
+
+  // Parse the block from that position
+  const after = content.slice(pos);
+  // Group 1: fence line with execId, Group 2: content, Group 3: closing
+  const match = after.match(/^(```stdin:[^\n]*\n)([\s\S]*?)(```)/);
+  if (!match) return null;
+
+  const fenceLength = match[1].length;
+  const stdinContent = match[2];
+  const closingLength = match[3].length;
+
+  return {
+    start: pos,
+    end: pos + fenceLength + stdinContent.length + closingLength,
+    contentStart: pos + fenceLength,
+    contentEnd: pos + fenceLength + stdinContent.length,
+    content: stdinContent,
+    execId,
+  };
+}
+
+/**
+ * Generate a unique execution ID
+ * Format: exec-{timestamp}-{random}
+ *
+ * @returns {string}
+ */
+export function generateExecId() {
+  return `exec-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
 /**

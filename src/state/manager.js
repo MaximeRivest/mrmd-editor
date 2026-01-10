@@ -6,7 +6,7 @@
  * perspective; the editor updates it internally.
  */
 
-import { getInitialState, INITIAL_RUNTIME_STATE } from './schema.js';
+import { getInitialState, INITIAL_RUNTIME_STATE, INITIAL_QUEUE_STATE, INITIAL_CELL_STATUS } from './schema.js';
 
 /**
  * @typedef {import('./schema.js').EditorState} EditorState
@@ -18,6 +18,9 @@ import { getInitialState, INITIAL_RUNTIME_STATE } from './schema.js';
  * @typedef {import('./schema.js').ExecutionRecord} ExecutionRecord
  * @typedef {import('./schema.js').CollaboratorInfo} CollaboratorInfo
  * @typedef {import('./schema.js').CurrentExecution} CurrentExecution
+ * @typedef {import('./schema.js').QueueState} QueueState
+ * @typedef {import('./schema.js').QueueEntry} QueueEntry
+ * @typedef {import('./schema.js').CellStatusInfo} CellStatusInfo
  */
 
 /**
@@ -464,6 +467,131 @@ export class StateManager {
       }
       this._emit('execution', this._state.execution);
     }
+  }
+
+  // ===========================================================================
+  // EXECUTION QUEUE
+  // ===========================================================================
+
+  /**
+   * Set the entire queue state
+   * @param {QueueState} queueState
+   */
+  setQueue(queueState) {
+    const old = this._state.queue;
+    this._state.queue = queueState;
+    this._emit('queue', queueState, old);
+  }
+
+  /**
+   * Add an entry to the queue
+   * @param {QueueEntry} entry
+   */
+  addToQueue(entry) {
+    this._state.queue.entries.push(entry);
+    this._state.queue.total = this._state.queue.entries.length + (this._state.queue.running ? 1 : 0);
+    this._emit('queue', this._state.queue);
+    this._emit('queue.entries', this._state.queue.entries);
+  }
+
+  /**
+   * Remove an entry from the queue by execId
+   * @param {string} execId
+   */
+  removeFromQueue(execId) {
+    const idx = this._state.queue.entries.findIndex(e => e.execId === execId);
+    if (idx !== -1) {
+      this._state.queue.entries.splice(idx, 1);
+      // Recalculate queue positions
+      this._state.queue.entries.forEach((e, i) => {
+        e.queuePosition = i + 1;
+      });
+      this._state.queue.total = this._state.queue.entries.length + (this._state.queue.running ? 1 : 0);
+      this._emit('queue', this._state.queue);
+      this._emit('queue.entries', this._state.queue.entries);
+    }
+  }
+
+  /**
+   * Set the currently running execution
+   * @param {string|null} execId
+   */
+  setQueueRunning(execId) {
+    const old = this._state.queue.running;
+    this._state.queue.running = execId;
+    this._state.queue.total = this._state.queue.entries.length + (execId ? 1 : 0);
+    this._emit('queue.running', execId, old);
+    this._emit('queue', this._state.queue);
+  }
+
+  /**
+   * Clear the queue
+   */
+  clearQueue() {
+    this._state.queue = { ...INITIAL_QUEUE_STATE };
+    this._emit('queue', this._state.queue);
+  }
+
+  /**
+   * Get queue state
+   * @returns {QueueState}
+   */
+  getQueue() {
+    return this._state.queue;
+  }
+
+  // ===========================================================================
+  // CELL STATUS
+  // ===========================================================================
+
+  /**
+   * Set status for a cell
+   * @param {number} cellIndex
+   * @param {Partial<CellStatusInfo>} status
+   */
+  setCellStatus(cellIndex, status) {
+    const existing = this._state.cellStatus[cellIndex] || { ...INITIAL_CELL_STATUS };
+    const updated = { ...existing, ...status };
+    const old = this._state.cellStatus[cellIndex];
+    this._state.cellStatus[cellIndex] = updated;
+    this._emit(`cellStatus.${cellIndex}`, updated, old);
+    this._emit('cellStatus', this._state.cellStatus);
+  }
+
+  /**
+   * Get status for a cell
+   * @param {number} cellIndex
+   * @returns {CellStatusInfo}
+   */
+  getCellStatus(cellIndex) {
+    return this._state.cellStatus[cellIndex] || { ...INITIAL_CELL_STATUS };
+  }
+
+  /**
+   * Clear status for a cell (reset to idle)
+   * @param {number} cellIndex
+   */
+  clearCellStatus(cellIndex) {
+    const old = this._state.cellStatus[cellIndex];
+    delete this._state.cellStatus[cellIndex];
+    this._emit(`cellStatus.${cellIndex}`, undefined, old);
+    this._emit('cellStatus', this._state.cellStatus);
+  }
+
+  /**
+   * Clear all cell statuses
+   */
+  clearAllCellStatus() {
+    this._state.cellStatus = {};
+    this._emit('cellStatus', {});
+  }
+
+  /**
+   * Get all cell statuses
+   * @returns {Record<number, CellStatusInfo>}
+   */
+  getAllCellStatus() {
+    return this._state.cellStatus;
   }
 
   // ===========================================================================
