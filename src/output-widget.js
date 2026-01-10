@@ -266,20 +266,26 @@ export const outputWidgetPlugin = ViewPlugin.fromClass(
 
 /**
  * CSS styles for output widget
+ *
+ * Uses CSS custom properties from the widget theme system.
+ * See widgets/theme.js for available tokens.
  */
 export const outputWidgetStyles = `
 /* Output widget container */
+/* Widget is absolutely positioned - overlays on transparent text lines, doesn't add to flow */
 .cm-output-widget {
-  font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', monospace);
-  font-size: 0.9em;
-  line-height: 1.4;
-  padding: 8px 12px;
-  background: var(--output-bg, rgba(0, 0, 0, 0.3));
-  border-radius: 6px;
-  margin: 4px 0;
-  position: relative;
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  font-family: var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', monospace);
+  font-size: var(--widget-font-size, 0.9em);
+  line-height: var(--widget-line-height, inherit);
+  padding: var(--widget-padding-y, 8px) var(--widget-padding-x, 12px);
+  background: var(--widget-surface, rgba(0, 0, 0, 0.35));
+  border-radius: var(--widget-border-radius, 6px);
   overflow-x: auto;
-  border-left: 3px solid var(--output-border, rgba(100, 100, 100, 0.5));
+  border-left: var(--widget-border-accent-width, 3px) solid var(--widget-border-accent, rgba(100, 149, 237, 0.6));
   cursor: pointer;
 }
 
@@ -291,46 +297,62 @@ export const outputWidgetStyles = `
 }
 
 .cm-output-widget:hover {
-  background: var(--output-hover-bg, rgba(0, 0, 0, 0.35));
+  background: var(--widget-surface-hover, rgba(0, 0, 0, 0.45));
 }
 
-/* Hidden when cursor is in block (show raw source) */
+/* ==========================================================================
+   CRITICAL: Stable Layout Pattern
+
+   The widget is position:absolute so it doesn't add to document flow.
+   Text lines ALWAYS provide the vertical space. Widget overlays on top.
+
+   Viewing mode: text transparent, widget visible (z-index: 1)
+   Editing mode: text visible (z-index: 2, opaque bg), widget hidden
+   ========================================================================== */
+
+/* Hidden when cursor is in block (editing mode) */
 .cm-output-widget-hidden {
-  display: none;
+  display: none !important;
 }
 
-/* Line visibility classes */
-.cm-output-line-hidden {
-  /* Hide text but maintain line height for stable layout */
-  color: transparent !important;
-}
-.cm-output-line-hidden > *:not(.cm-output-widget) {
-  color: transparent !important;
-}
-
-/* Widget content must NOT be transparent */
-.cm-output-widget,
-.cm-output-widget * {
-  color: inherit;
-}
-.cm-output-widget pre {
-  color: var(--output-text, #e0e0e0);
-}
-
+/* Both states: lines always take same space */
+.cm-output-line-hidden,
 .cm-output-line-visible {
-  /* Normal visibility when editing */
+  position: relative;
+}
+
+/* Hidden: text invisible but same space */
+.cm-output-line-hidden {
+  color: transparent !important;
+  user-select: none;
+}
+.cm-output-line-hidden > span {
+  visibility: hidden !important;
+}
+
+/* Visible: text shown for editing - must cover the widget underneath */
+.cm-output-line-visible {
+  color: var(--widget-text, #e0e0e0);
+  position: relative;
+  z-index: 2;
+  background: var(--widget-surface-elevated, #1e1e1e);
+}
+
+/* Widget text color */
+.cm-output-widget pre {
+  color: var(--widget-text, #e0e0e0);
 }
 
 /* Copy feedback */
 .cm-output-copy-feedback {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: var(--widget-padding-y, 8px);
+  right: var(--widget-padding-x, 12px);
   padding: 4px 8px;
-  background: var(--feedback-bg, rgba(34, 197, 94, 0.9));
-  color: var(--feedback-color, white);
+  background: var(--widget-success, #22c55e);
+  color: white;
   border-radius: 4px;
-  font-size: 0.8em;
+  font-size: var(--widget-font-size-small, 0.8em);
   animation: fadeOut 1.5s ease-out forwards;
 }
 
@@ -347,38 +369,38 @@ ${ansiStyles}
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
-  padding: 8px;
-  background: var(--stdin-bg, rgba(0, 0, 0, 0.2));
+  margin-top: var(--widget-padding-y, 8px);
+  padding: var(--widget-padding-y, 8px);
+  background: var(--widget-surface-inset, rgba(0, 0, 0, 0.2));
   border-radius: 4px;
-  border: 1px solid var(--stdin-border, rgba(100, 149, 237, 0.5));
+  border: var(--widget-border-width, 1px) solid var(--widget-border-focus, #6495ed);
 }
 
 .mrmd-stdin-prompt {
-  color: var(--stdin-prompt-color, #6495ed);
+  color: var(--widget-text-accent, #6495ed);
   font-weight: 500;
   white-space: pre;
 }
 
 .mrmd-stdin-field {
   flex: 1;
-  background: var(--stdin-field-bg, rgba(255, 255, 255, 0.1));
-  border: 1px solid var(--stdin-field-border, rgba(255, 255, 255, 0.2));
+  background: var(--widget-surface-inset, rgba(0, 0, 0, 0.2));
+  border: var(--widget-border-width, 1px) solid var(--widget-border, rgba(255, 255, 255, 0.1));
   border-radius: 4px;
   padding: 6px 10px;
-  color: var(--stdin-field-color, #e0e0e0);
+  color: var(--widget-text, #e0e0e0);
   font-family: inherit;
   font-size: inherit;
   outline: none;
 }
 
 .mrmd-stdin-field:focus {
-  border-color: var(--stdin-field-focus-border, #6495ed);
-  box-shadow: 0 0 0 2px var(--stdin-field-focus-shadow, rgba(100, 149, 237, 0.3));
+  border-color: var(--widget-border-focus, #6495ed);
+  box-shadow: 0 0 0 2px rgba(100, 149, 237, 0.3);
 }
 
 .mrmd-stdin-field::placeholder {
-  color: var(--stdin-placeholder-color, rgba(224, 224, 224, 0.5));
+  color: var(--widget-text-muted, #888888);
 }
 `;
 

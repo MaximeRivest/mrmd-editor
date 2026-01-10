@@ -138,6 +138,23 @@ import {
   toggleDevPanel,
   injectDevPanelStyles,
 } from './devpanel.js';
+
+// Widget theme system
+import {
+  widgets,
+  initTheme,
+  applyTheme,
+  detectTheme,
+  watchTheme,
+  midnightTheme,
+  daylightTheme,
+  githubTheme,
+  registerTheme,
+  createTheme,
+  getTheme,
+  getThemeNames,
+  generateThemeCSS,
+} from './widgets/index.js';
 // #endregion IMPORTS
 
 // #region VERSION
@@ -635,6 +652,14 @@ function create(target, options = {}) {
     injectAwarenessStyles();
   }
 
+  // Initialize widget theme system
+  // Detect theme based on CodeMirror theme class and system preference
+  const initialTheme = detectTheme({
+    themeName: config.appearance?.widgetTheme,
+    editorElement: element,
+  });
+  applyTheme(initialTheme);
+
   // Prepare awareness system (created after view exists)
   let awarenessSystem = null;
   const awarenessConfig = awarenessUI === true
@@ -662,6 +687,17 @@ function create(target, options = {}) {
   const view = new EditorView({
     state: EditorState.create({ doc: initialContent, extensions }),
     parent: element
+  });
+
+  // Watch for theme changes (CodeMirror theme toggle, system preference)
+  let currentWidgetTheme = initialTheme;
+  const unwatchTheme = watchTheme({
+    editorElement: view.dom,
+    currentTheme: currentWidgetTheme,
+    onThemeChange: (newTheme) => {
+      currentWidgetTheme = newTheme;
+      applyTheme(newTheme);
+    },
   });
 
   // Initialize awareness system after view exists
@@ -862,6 +898,9 @@ function create(target, options = {}) {
     // Runtime LSP (hover, completions, variables)
     runtimeLspProviders,
     variableExplorer,
+
+    // Built-in JS runtime (for debugging)
+    jsRuntime,
 
     // ===========================================================================
     // Content
@@ -1565,6 +1604,8 @@ function create(target, options = {}) {
       if (jsRuntime && jsRuntime.destroy) {
         jsRuntime.destroy();
       }
+      // Clean up theme watcher
+      unwatchTheme();
       // Clean up undo manager
       undoManager.destroy();
       view.destroy();
@@ -2126,6 +2167,8 @@ const mrmd = {
   codemirror,
   terminal,
   awareness: awarenessExports,
+  // Widget theme system
+  widgets,
   // Config & State systems
   configUtils: configExports,
   stateUtils: stateExports,
@@ -2208,5 +2251,19 @@ export {
   createRuntimeCompletionExtension,
   createVariableExplorer,
   injectRuntimeLspStyles,
+  // Widget theme system exports
+  widgets,
+  initTheme,
+  applyTheme,
+  detectTheme,
+  watchTheme,
+  midnightTheme,
+  daylightTheme,
+  githubTheme,
+  registerTheme,
+  createTheme,
+  getTheme,
+  getThemeNames,
+  generateThemeCSS,
 };
 // #endregion EXPORTS

@@ -54402,41 +54402,41 @@ const ansiStyles = `
 .ansi-strikethrough { text-decoration: line-through; }
 .ansi-inverse { filter: invert(1); }
 
-/* ANSI foreground colors */
-.ansi-fg-black { color: #000000; }
-.ansi-fg-red { color: #cc0000; }
-.ansi-fg-green { color: #00cc00; }
-.ansi-fg-yellow { color: #cccc00; }
-.ansi-fg-blue { color: #0000cc; }
-.ansi-fg-magenta { color: #cc00cc; }
-.ansi-fg-cyan { color: #00cccc; }
-.ansi-fg-white { color: #cccccc; }
-.ansi-fg-bright-black { color: #666666; }
-.ansi-fg-bright-red { color: #ff0000; }
-.ansi-fg-bright-green { color: #00ff00; }
-.ansi-fg-bright-yellow { color: #ffff00; }
-.ansi-fg-bright-blue { color: #0000ff; }
-.ansi-fg-bright-magenta { color: #ff00ff; }
-.ansi-fg-bright-cyan { color: #00ffff; }
-.ansi-fg-bright-white { color: #ffffff; }
+/* ANSI foreground colors - use CSS variables from widget theme */
+.ansi-fg-black { color: var(--ansi-black, #1e1e1e); }
+.ansi-fg-red { color: var(--ansi-red, #f87171); }
+.ansi-fg-green { color: var(--ansi-green, #4ade80); }
+.ansi-fg-yellow { color: var(--ansi-yellow, #facc15); }
+.ansi-fg-blue { color: var(--ansi-blue, #60a5fa); }
+.ansi-fg-magenta { color: var(--ansi-magenta, #c084fc); }
+.ansi-fg-cyan { color: var(--ansi-cyan, #22d3ee); }
+.ansi-fg-white { color: var(--ansi-white, #e0e0e0); }
+.ansi-fg-bright-black { color: var(--ansi-bright-black, #6b7280); }
+.ansi-fg-bright-red { color: var(--ansi-bright-red, #fca5a5); }
+.ansi-fg-bright-green { color: var(--ansi-bright-green, #86efac); }
+.ansi-fg-bright-yellow { color: var(--ansi-bright-yellow, #fde047); }
+.ansi-fg-bright-blue { color: var(--ansi-bright-blue, #93c5fd); }
+.ansi-fg-bright-magenta { color: var(--ansi-bright-magenta, #d8b4fe); }
+.ansi-fg-bright-cyan { color: var(--ansi-bright-cyan, #67e8f9); }
+.ansi-fg-bright-white { color: var(--ansi-bright-white, #ffffff); }
 
-/* ANSI background colors */
-.ansi-bg-black { background-color: #000000; }
-.ansi-bg-red { background-color: #cc0000; }
-.ansi-bg-green { background-color: #00cc00; }
-.ansi-bg-yellow { background-color: #cccc00; }
-.ansi-bg-blue { background-color: #0000cc; }
-.ansi-bg-magenta { background-color: #cc00cc; }
-.ansi-bg-cyan { background-color: #00cccc; }
-.ansi-bg-white { background-color: #cccccc; }
-.ansi-bg-bright-black { background-color: #666666; }
-.ansi-bg-bright-red { background-color: #ff0000; }
-.ansi-bg-bright-green { background-color: #00ff00; }
-.ansi-bg-bright-yellow { background-color: #ffff00; }
-.ansi-bg-bright-blue { background-color: #0000ff; }
-.ansi-bg-bright-magenta { background-color: #ff00ff; }
-.ansi-bg-bright-cyan { background-color: #00ffff; }
-.ansi-bg-bright-white { background-color: #ffffff; }
+/* ANSI background colors - use CSS variables from widget theme */
+.ansi-bg-black { background-color: var(--ansi-black, #1e1e1e); }
+.ansi-bg-red { background-color: var(--ansi-red, #f87171); }
+.ansi-bg-green { background-color: var(--ansi-green, #4ade80); }
+.ansi-bg-yellow { background-color: var(--ansi-yellow, #facc15); }
+.ansi-bg-blue { background-color: var(--ansi-blue, #60a5fa); }
+.ansi-bg-magenta { background-color: var(--ansi-magenta, #c084fc); }
+.ansi-bg-cyan { background-color: var(--ansi-cyan, #22d3ee); }
+.ansi-bg-white { background-color: var(--ansi-white, #e0e0e0); }
+.ansi-bg-bright-black { background-color: var(--ansi-bright-black, #6b7280); }
+.ansi-bg-bright-red { background-color: var(--ansi-bright-red, #fca5a5); }
+.ansi-bg-bright-green { background-color: var(--ansi-bright-green, #86efac); }
+.ansi-bg-bright-yellow { background-color: var(--ansi-bright-yellow, #fde047); }
+.ansi-bg-bright-blue { background-color: var(--ansi-bright-blue, #93c5fd); }
+.ansi-bg-bright-magenta { background-color: var(--ansi-bright-magenta, #d8b4fe); }
+.ansi-bg-bright-cyan { background-color: var(--ansi-bright-cyan, #67e8f9); }
+.ansi-bg-bright-white { background-color: var(--ansi-bright-white, #ffffff); }
 `;
 
 // #endregion EXPORTS
@@ -62748,20 +62748,26 @@ const outputWidgetPlugin = ViewPlugin.fromClass(
 
 /**
  * CSS styles for output widget
+ *
+ * Uses CSS custom properties from the widget theme system.
+ * See widgets/theme.js for available tokens.
  */
 const outputWidgetStyles = `
 /* Output widget container */
+/* Widget is absolutely positioned - overlays on transparent text lines, doesn't add to flow */
 .cm-output-widget {
-  font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', monospace);
-  font-size: 0.9em;
-  line-height: 1.4;
-  padding: 8px 12px;
-  background: var(--output-bg, rgba(0, 0, 0, 0.3));
-  border-radius: 6px;
-  margin: 4px 0;
-  position: relative;
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  font-family: var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', monospace);
+  font-size: var(--widget-font-size, 0.9em);
+  line-height: var(--widget-line-height, inherit);
+  padding: var(--widget-padding-y, 8px) var(--widget-padding-x, 12px);
+  background: var(--widget-surface, rgba(0, 0, 0, 0.35));
+  border-radius: var(--widget-border-radius, 6px);
   overflow-x: auto;
-  border-left: 3px solid var(--output-border, rgba(100, 100, 100, 0.5));
+  border-left: var(--widget-border-accent-width, 3px) solid var(--widget-border-accent, rgba(100, 149, 237, 0.6));
   cursor: pointer;
 }
 
@@ -62773,46 +62779,62 @@ const outputWidgetStyles = `
 }
 
 .cm-output-widget:hover {
-  background: var(--output-hover-bg, rgba(0, 0, 0, 0.35));
+  background: var(--widget-surface-hover, rgba(0, 0, 0, 0.45));
 }
 
-/* Hidden when cursor is in block (show raw source) */
+/* ==========================================================================
+   CRITICAL: Stable Layout Pattern
+
+   The widget is position:absolute so it doesn't add to document flow.
+   Text lines ALWAYS provide the vertical space. Widget overlays on top.
+
+   Viewing mode: text transparent, widget visible (z-index: 1)
+   Editing mode: text visible (z-index: 2, opaque bg), widget hidden
+   ========================================================================== */
+
+/* Hidden when cursor is in block (editing mode) */
 .cm-output-widget-hidden {
-  display: none;
+  display: none !important;
 }
 
-/* Line visibility classes */
-.cm-output-line-hidden {
-  /* Hide text but maintain line height for stable layout */
-  color: transparent !important;
-}
-.cm-output-line-hidden > *:not(.cm-output-widget) {
-  color: transparent !important;
-}
-
-/* Widget content must NOT be transparent */
-.cm-output-widget,
-.cm-output-widget * {
-  color: inherit;
-}
-.cm-output-widget pre {
-  color: var(--output-text, #e0e0e0);
-}
-
+/* Both states: lines always take same space */
+.cm-output-line-hidden,
 .cm-output-line-visible {
-  /* Normal visibility when editing */
+  position: relative;
+}
+
+/* Hidden: text invisible but same space */
+.cm-output-line-hidden {
+  color: transparent !important;
+  user-select: none;
+}
+.cm-output-line-hidden > span {
+  visibility: hidden !important;
+}
+
+/* Visible: text shown for editing - must cover the widget underneath */
+.cm-output-line-visible {
+  color: var(--widget-text, #e0e0e0);
+  position: relative;
+  z-index: 2;
+  background: var(--widget-surface-elevated, #1e1e1e);
+}
+
+/* Widget text color */
+.cm-output-widget pre {
+  color: var(--widget-text, #e0e0e0);
 }
 
 /* Copy feedback */
 .cm-output-copy-feedback {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: var(--widget-padding-y, 8px);
+  right: var(--widget-padding-x, 12px);
   padding: 4px 8px;
-  background: var(--feedback-bg, rgba(34, 197, 94, 0.9));
-  color: var(--feedback-color, white);
+  background: var(--widget-success, #22c55e);
+  color: white;
   border-radius: 4px;
-  font-size: 0.8em;
+  font-size: var(--widget-font-size-small, 0.8em);
   animation: fadeOut 1.5s ease-out forwards;
 }
 
@@ -62829,38 +62851,38 @@ ${ansiStyles}
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
-  padding: 8px;
-  background: var(--stdin-bg, rgba(0, 0, 0, 0.2));
+  margin-top: var(--widget-padding-y, 8px);
+  padding: var(--widget-padding-y, 8px);
+  background: var(--widget-surface-inset, rgba(0, 0, 0, 0.2));
   border-radius: 4px;
-  border: 1px solid var(--stdin-border, rgba(100, 149, 237, 0.5));
+  border: var(--widget-border-width, 1px) solid var(--widget-border-focus, #6495ed);
 }
 
 .mrmd-stdin-prompt {
-  color: var(--stdin-prompt-color, #6495ed);
+  color: var(--widget-text-accent, #6495ed);
   font-weight: 500;
   white-space: pre;
 }
 
 .mrmd-stdin-field {
   flex: 1;
-  background: var(--stdin-field-bg, rgba(255, 255, 255, 0.1));
-  border: 1px solid var(--stdin-field-border, rgba(255, 255, 255, 0.2));
+  background: var(--widget-surface-inset, rgba(0, 0, 0, 0.2));
+  border: var(--widget-border-width, 1px) solid var(--widget-border, rgba(255, 255, 255, 0.1));
   border-radius: 4px;
   padding: 6px 10px;
-  color: var(--stdin-field-color, #e0e0e0);
+  color: var(--widget-text, #e0e0e0);
   font-family: inherit;
   font-size: inherit;
   outline: none;
 }
 
 .mrmd-stdin-field:focus {
-  border-color: var(--stdin-field-focus-border, #6495ed);
-  box-shadow: 0 0 0 2px var(--stdin-field-focus-shadow, rgba(100, 149, 237, 0.3));
+  border-color: var(--widget-border-focus, #6495ed);
+  box-shadow: 0 0 0 2px rgba(100, 149, 237, 0.3);
 }
 
 .mrmd-stdin-field::placeholder {
-  color: var(--stdin-placeholder-color, rgba(224, 224, 224, 0.5));
+  color: var(--widget-text-muted, #888888);
 }
 `;
 
@@ -65717,7 +65739,8 @@ function createIndicatorExtensions({ stateManager, getContent, yText, config = {
  * Awareness UI Styles
  *
  * CSS styles for all awareness components.
- * Can be injected automatically or used as a reference.
+ * Uses CSS custom properties from the widget theme system.
+ * See widgets/theme.js for available tokens.
  *
  * @module awareness/ui/styles
  */
@@ -65727,6 +65750,7 @@ function createIndicatorExtensions({ stateManager, getContent, yText, config = {
 const awarenessStyles = `
 /* ==========================================================================
    MRMD Awareness Styles
+   Uses widget theme tokens (--widget-*)
    ========================================================================== */
 
 /* Hide y-codemirror.next's built-in cursor rendering.
@@ -65742,25 +65766,6 @@ const awarenessStyles = `
   display: none !important;
 }
 
-/* CSS Custom Properties */
-.mrmd-awareness-root {
-  --mrmd-bg: #1e1e1e;
-  --mrmd-bg-secondary: #252525;
-  --mrmd-border: #333;
-  --mrmd-text: #e0e0e0;
-  --mrmd-text-muted: #888;
-  --mrmd-font-mono: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-}
-
-/* Light mode overrides */
-.mrmd-awareness-root--light {
-  --mrmd-bg: #ffffff;
-  --mrmd-bg-secondary: #f5f5f5;
-  --mrmd-border: #e0e0e0;
-  --mrmd-text: #1a1a1a;
-  --mrmd-text-muted: #666;
-}
-
 /* ==========================================================================
    Collaborator List
    ========================================================================== */
@@ -65768,7 +65773,7 @@ const awarenessStyles = `
 .mrmd-collaborator-list {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 13px;
-  color: var(--mrmd-text, #e0e0e0);
+  color: var(--widget-text, #e0e0e0);
 }
 
 .mrmd-collaborator-list__header {
@@ -65776,8 +65781,8 @@ const awarenessStyles = `
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--mrmd-border, #333);
-  background: var(--mrmd-bg-secondary, #252525);
+  border-bottom: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
+  background: var(--widget-surface-elevated, #1e1e1e);
 }
 
 .mrmd-collaborator-list__title {
@@ -65785,11 +65790,11 @@ const awarenessStyles = `
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: var(--mrmd-text-muted, #888);
+  color: var(--widget-text-muted, #888888);
 }
 
 .mrmd-collaborator-list__count {
-  background: var(--mrmd-border, #333);
+  background: var(--widget-border, rgba(255, 255, 255, 0.1));
   padding: 2px 8px;
   border-radius: 10px;
   font-size: 11px;
@@ -65802,20 +65807,20 @@ const awarenessStyles = `
 .mrmd-collaborator-list__separator {
   font-size: 10px;
   text-transform: uppercase;
-  color: var(--mrmd-text-muted, #666);
+  color: var(--widget-text-muted, #888888);
   padding: 8px 4px 4px;
   margin-top: 8px;
 }
 
 .mrmd-collaborator-list__separator span {
-  background: var(--mrmd-bg, #1e1e1e);
+  background: var(--widget-surface-elevated, #1e1e1e);
   padding-right: 8px;
 }
 
 .mrmd-collaborator-list__empty {
   padding: 16px;
   text-align: center;
-  color: var(--mrmd-text-muted, #666);
+  color: var(--widget-text-muted, #888888);
   font-style: italic;
 }
 
@@ -65831,7 +65836,7 @@ const awarenessStyles = `
 }
 
 .mrmd-collaborator-item:hover {
-  background: var(--mrmd-bg-secondary, #252525);
+  background: var(--widget-surface-elevated, #1e1e1e);
 }
 
 .mrmd-collaborator-item--self {
@@ -65860,7 +65865,7 @@ const awarenessStyles = `
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  border: 2px solid var(--mrmd-bg, #1e1e1e);
+  border: 2px solid var(--widget-surface-elevated, #1e1e1e);
   background: #888;
 }
 
@@ -65939,7 +65944,7 @@ const awarenessStyles = `
 /* Activity */
 .mrmd-collaborator-item__activity {
   font-size: 12px;
-  color: var(--mrmd-text-muted, #888);
+  color: var(--widget-text-muted, #888888);
   margin-top: 4px;
   white-space: nowrap;
   overflow: hidden;
@@ -65947,10 +65952,10 @@ const awarenessStyles = `
 }
 
 .mrmd-collaborator-item__activity code {
-  background: var(--mrmd-border, #333);
+  background: var(--widget-border, rgba(255, 255, 255, 0.1));
   padding: 1px 4px;
   border-radius: 3px;
-  font-family: var(--mrmd-font-mono);
+  font-family: var(--widget-font-mono, 'SF Mono', Monaco, monospace);
   font-size: 11px;
 }
 
@@ -65993,7 +65998,7 @@ const awarenessStyles = `
   font-size: 11px;
   font-weight: 600;
   color: white;
-  border: 2px solid var(--mrmd-bg, #1e1e1e);
+  border: 2px solid var(--widget-surface-elevated, #1e1e1e);
   margin-left: -8px;
 }
 
@@ -66018,8 +66023,8 @@ const awarenessStyles = `
   justify-content: center;
   font-size: 10px;
   font-weight: 600;
-  color: var(--mrmd-text-muted, #888);
-  background: var(--mrmd-border, #333);
+  color: var(--widget-text-muted, #888888);
+  background: var(--widget-border, rgba(255, 255, 255, 0.1));
   margin-left: -8px;
 }
 
@@ -66270,7 +66275,7 @@ const awarenessStyles = `
   font-weight: 600;
   color: white;
   margin-left: -4px;
-  border: 1px solid var(--mrmd-bg, #1e1e1e);
+  border: 1px solid var(--widget-surface-elevated, #1e1e1e);
 }
 
 .mrmd-cell-presence__avatar:first-child {
@@ -66279,7 +66284,7 @@ const awarenessStyles = `
 
 .mrmd-cell-presence__more {
   font-size: 9px;
-  color: var(--mrmd-text-muted, #888);
+  color: var(--widget-text-muted, #888888);
   margin-left: 2px;
 }
 
@@ -66294,9 +66299,9 @@ const awarenessStyles = `
   padding: 4px 12px;
   font-size: 12px;
   font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-  color: var(--mrmd-text-muted, #888);
-  background: var(--mrmd-bg-secondary, #252525);
-  border-top: 1px solid var(--mrmd-border, #333);
+  color: var(--widget-text-muted, #888888);
+  background: var(--widget-surface-elevated, #1e1e1e);
+  border-top: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
 }
 
 .mrmd-status-bar__item {
@@ -69164,6 +69169,1021 @@ function toggleDevPanel(view) {
 }
 
 /**
+ * Widget Theme System
+ *
+ * Design tokens and built-in themes for MRMD widgets.
+ * Themes are plain objects mapping semantic token names to CSS values.
+ *
+ * ## Creating a Custom Theme
+ *
+ * Themes are just objects. Extend a built-in theme:
+ *
+ * ```javascript
+ * import { midnightTheme, createTheme } from 'mrmd-editor/widgets';
+ *
+ * const myTheme = createTheme({
+ *   name: 'my-brand',
+ *   base: 'midnight',
+ *   overrides: {
+ *     '--widget-border-accent': '#ff6b6b',
+ *     '--widget-text-accent': '#ff6b6b',
+ *   }
+ * });
+ * ```
+ *
+ * Or override CSS variables directly:
+ *
+ * ```css
+ * :root {
+ *   --widget-border-accent: #ff6b6b;
+ * }
+ * ```
+ *
+ * @module widgets/theme
+ */
+
+// #region TOKEN_DEFINITIONS
+
+/**
+ * All available design tokens with their descriptions.
+ * This serves as documentation and schema for themes.
+ *
+ * @type {Record<string, {description: string, category: string, default: string}>}
+ */
+const tokenDefinitions = {
+  // ===========================================================================
+  // SPACING
+  // ===========================================================================
+  '--widget-line-height': {
+    description: 'Line height for widget content. Use "inherit" to match editor.',
+    category: 'spacing',
+    default: 'inherit',
+  },
+  '--widget-padding-x': {
+    description: 'Horizontal padding inside widgets',
+    category: 'spacing',
+    default: '12px',
+  },
+  '--widget-padding-y': {
+    description: 'Vertical padding inside widgets',
+    category: 'spacing',
+    default: '8px',
+  },
+  '--widget-margin-y': {
+    description: 'Vertical margin around widgets',
+    category: 'spacing',
+    default: '4px',
+  },
+  '--widget-border-radius': {
+    description: 'Border radius for widgets',
+    category: 'spacing',
+    default: '6px',
+  },
+  '--widget-border-width': {
+    description: 'Default border width',
+    category: 'spacing',
+    default: '1px',
+  },
+  '--widget-border-accent-width': {
+    description: 'Width of accent border (e.g., left bar on output)',
+    category: 'spacing',
+    default: '3px',
+  },
+
+  // ===========================================================================
+  // TYPOGRAPHY
+  // ===========================================================================
+  '--widget-font-mono': {
+    description: 'Monospace font stack for code/output',
+    category: 'typography',
+    default: "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  },
+  '--widget-font-sans': {
+    description: 'Sans-serif font stack for UI elements',
+    category: 'typography',
+    default: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  },
+  '--widget-font-size': {
+    description: 'Base font size for widgets (relative to editor)',
+    category: 'typography',
+    default: '0.9em',
+  },
+  '--widget-font-size-small': {
+    description: 'Small font size for secondary text',
+    category: 'typography',
+    default: '0.8em',
+  },
+  '--widget-font-size-label': {
+    description: 'Font size for labels (cursor labels, badges)',
+    category: 'typography',
+    default: '11px',
+  },
+
+  // ===========================================================================
+  // SURFACES (backgrounds)
+  // ===========================================================================
+  '--widget-surface': {
+    description: 'Main widget background',
+    category: 'surfaces',
+    default: 'rgba(0, 0, 0, 0.35)',
+  },
+  '--widget-surface-hover': {
+    description: 'Widget background on hover',
+    category: 'surfaces',
+    default: 'rgba(0, 0, 0, 0.45)',
+  },
+  '--widget-surface-elevated': {
+    description: 'Background for floating elements (tooltips, menus)',
+    category: 'surfaces',
+    default: '#1e1e1e',
+  },
+  '--widget-surface-inset': {
+    description: 'Background for inset/recessed areas (inputs)',
+    category: 'surfaces',
+    default: 'rgba(0, 0, 0, 0.2)',
+  },
+
+  // ===========================================================================
+  // BORDERS
+  // ===========================================================================
+  '--widget-border': {
+    description: 'Default border color',
+    category: 'borders',
+    default: 'rgba(255, 255, 255, 0.1)',
+  },
+  '--widget-border-accent': {
+    description: 'Accent border color (left bar on output widget)',
+    category: 'borders',
+    default: 'rgba(100, 149, 237, 0.6)',
+  },
+  '--widget-border-focus': {
+    description: 'Border color for focused elements',
+    category: 'borders',
+    default: '#6495ed',
+  },
+
+  // ===========================================================================
+  // TEXT COLORS
+  // ===========================================================================
+  '--widget-text': {
+    description: 'Primary text color',
+    category: 'text',
+    default: '#e0e0e0',
+  },
+  '--widget-text-muted': {
+    description: 'Secondary/dimmed text color',
+    category: 'text',
+    default: '#888888',
+  },
+  '--widget-text-accent': {
+    description: 'Accent text color (links, interactive)',
+    category: 'text',
+    default: '#6495ed',
+  },
+
+  // ===========================================================================
+  // SEMANTIC COLORS
+  // ===========================================================================
+  '--widget-success': {
+    description: 'Success state color (green)',
+    category: 'semantic',
+    default: '#22c55e',
+  },
+  '--widget-warning': {
+    description: 'Warning state color (yellow/orange)',
+    category: 'semantic',
+    default: '#f59e0b',
+  },
+  '--widget-error': {
+    description: 'Error state color (red)',
+    category: 'semantic',
+    default: '#ef4444',
+  },
+  '--widget-info': {
+    description: 'Info state color (blue)',
+    category: 'semantic',
+    default: '#3b82f6',
+  },
+
+  // ===========================================================================
+  // ANSI TERMINAL COLORS
+  // ===========================================================================
+  '--ansi-black': { description: 'ANSI black', category: 'ansi', default: '#1e1e1e' },
+  '--ansi-red': { description: 'ANSI red', category: 'ansi', default: '#f87171' },
+  '--ansi-green': { description: 'ANSI green', category: 'ansi', default: '#4ade80' },
+  '--ansi-yellow': { description: 'ANSI yellow', category: 'ansi', default: '#facc15' },
+  '--ansi-blue': { description: 'ANSI blue', category: 'ansi', default: '#60a5fa' },
+  '--ansi-magenta': { description: 'ANSI magenta', category: 'ansi', default: '#c084fc' },
+  '--ansi-cyan': { description: 'ANSI cyan', category: 'ansi', default: '#22d3ee' },
+  '--ansi-white': { description: 'ANSI white', category: 'ansi', default: '#e0e0e0' },
+  // Bright variants
+  '--ansi-bright-black': { description: 'ANSI bright black (gray)', category: 'ansi', default: '#6b7280' },
+  '--ansi-bright-red': { description: 'ANSI bright red', category: 'ansi', default: '#fca5a5' },
+  '--ansi-bright-green': { description: 'ANSI bright green', category: 'ansi', default: '#86efac' },
+  '--ansi-bright-yellow': { description: 'ANSI bright yellow', category: 'ansi', default: '#fde047' },
+  '--ansi-bright-blue': { description: 'ANSI bright blue', category: 'ansi', default: '#93c5fd' },
+  '--ansi-bright-magenta': { description: 'ANSI bright magenta', category: 'ansi', default: '#d8b4fe' },
+  '--ansi-bright-cyan': { description: 'ANSI bright cyan', category: 'ansi', default: '#67e8f9' },
+  '--ansi-bright-white': { description: 'ANSI bright white', category: 'ansi', default: '#ffffff' },
+
+  // ===========================================================================
+  // COLLABORATOR COLORS (used by awareness system)
+  // ===========================================================================
+  '--collab-human': { description: 'Default color for human collaborators', category: 'collab', default: '#3b82f6' },
+  '--collab-ai': { description: 'Default color for AI collaborators', category: 'collab', default: '#8b5cf6' },
+  '--collab-runtime': { description: 'Default color for runtime collaborators', category: 'collab', default: '#10b981' },
+};
+
+// #endregion TOKEN_DEFINITIONS
+
+// #region BUILT_IN_THEMES
+
+/**
+ * Midnight Theme (Default Dark)
+ *
+ * Deep dark theme with blue accents.
+ * Designed for comfortable extended editing sessions.
+ */
+const midnightTheme = {
+  name: 'midnight',
+  description: 'Deep dark theme with blue accents. Default for dark mode.',
+
+  // Spacing (shared across themes)
+  '--widget-line-height': 'inherit',
+  '--widget-padding-x': '12px',
+  '--widget-padding-y': '8px',
+  '--widget-margin-y': '4px',
+  '--widget-border-radius': '6px',
+  '--widget-border-width': '1px',
+  '--widget-border-accent-width': '3px',
+
+  // Typography (shared across themes)
+  '--widget-font-mono': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  '--widget-font-size': '0.9em',
+  '--widget-font-size-small': '0.8em',
+  '--widget-font-size-label': '11px',
+
+  // Surfaces
+  '--widget-surface': 'rgba(0, 0, 0, 0.35)',
+  '--widget-surface-hover': 'rgba(0, 0, 0, 0.45)',
+  '--widget-surface-elevated': '#1e1e1e',
+  '--widget-surface-inset': 'rgba(0, 0, 0, 0.2)',
+
+  // Borders
+  '--widget-border': 'rgba(255, 255, 255, 0.1)',
+  '--widget-border-accent': 'rgba(100, 149, 237, 0.6)',
+  '--widget-border-focus': '#6495ed',
+
+  // Text
+  '--widget-text': '#e0e0e0',
+  '--widget-text-muted': '#888888',
+  '--widget-text-accent': '#6495ed',
+
+  // Semantic
+  '--widget-success': '#22c55e',
+  '--widget-warning': '#f59e0b',
+  '--widget-error': '#ef4444',
+  '--widget-info': '#3b82f6',
+
+  // ANSI colors (optimized for dark backgrounds)
+  '--ansi-black': '#1e1e1e',
+  '--ansi-red': '#f87171',
+  '--ansi-green': '#4ade80',
+  '--ansi-yellow': '#facc15',
+  '--ansi-blue': '#60a5fa',
+  '--ansi-magenta': '#c084fc',
+  '--ansi-cyan': '#22d3ee',
+  '--ansi-white': '#e0e0e0',
+  '--ansi-bright-black': '#6b7280',
+  '--ansi-bright-red': '#fca5a5',
+  '--ansi-bright-green': '#86efac',
+  '--ansi-bright-yellow': '#fde047',
+  '--ansi-bright-blue': '#93c5fd',
+  '--ansi-bright-magenta': '#d8b4fe',
+  '--ansi-bright-cyan': '#67e8f9',
+  '--ansi-bright-white': '#ffffff',
+
+  // Collaborator defaults
+  '--collab-human': '#3b82f6',
+  '--collab-ai': '#8b5cf6',
+  '--collab-runtime': '#10b981',
+};
+
+/**
+ * Daylight Theme (Default Light)
+ *
+ * Clean light theme for well-lit environments.
+ * Good contrast without being harsh.
+ */
+const daylightTheme = {
+  name: 'daylight',
+  description: 'Clean light theme. Default for light mode.',
+
+  // Spacing (same as midnight)
+  '--widget-line-height': 'inherit',
+  '--widget-padding-x': '12px',
+  '--widget-padding-y': '8px',
+  '--widget-margin-y': '4px',
+  '--widget-border-radius': '6px',
+  '--widget-border-width': '1px',
+  '--widget-border-accent-width': '3px',
+
+  // Typography (same as midnight)
+  '--widget-font-mono': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  '--widget-font-size': '0.9em',
+  '--widget-font-size-small': '0.8em',
+  '--widget-font-size-label': '11px',
+
+  // Surfaces (light backgrounds)
+  '--widget-surface': 'rgba(0, 0, 0, 0.04)',
+  '--widget-surface-hover': 'rgba(0, 0, 0, 0.07)',
+  '--widget-surface-elevated': '#ffffff',
+  '--widget-surface-inset': 'rgba(0, 0, 0, 0.03)',
+
+  // Borders
+  '--widget-border': 'rgba(0, 0, 0, 0.1)',
+  '--widget-border-accent': 'rgba(59, 130, 246, 0.5)',
+  '--widget-border-focus': '#3b82f6',
+
+  // Text (dark text on light backgrounds)
+  '--widget-text': '#1a1a1a',
+  '--widget-text-muted': '#666666',
+  '--widget-text-accent': '#2563eb',
+
+  // Semantic (slightly darker for light backgrounds)
+  '--widget-success': '#16a34a',
+  '--widget-warning': '#d97706',
+  '--widget-error': '#dc2626',
+  '--widget-info': '#2563eb',
+
+  // ANSI colors (darker for light backgrounds)
+  '--ansi-black': '#1e1e1e',
+  '--ansi-red': '#dc2626',
+  '--ansi-green': '#16a34a',
+  '--ansi-yellow': '#ca8a04',
+  '--ansi-blue': '#2563eb',
+  '--ansi-magenta': '#9333ea',
+  '--ansi-cyan': '#0891b2',
+  '--ansi-white': '#f5f5f5',
+  '--ansi-bright-black': '#6b7280',
+  '--ansi-bright-red': '#ef4444',
+  '--ansi-bright-green': '#22c55e',
+  '--ansi-bright-yellow': '#eab308',
+  '--ansi-bright-blue': '#3b82f6',
+  '--ansi-bright-magenta': '#a855f7',
+  '--ansi-bright-cyan': '#06b6d4',
+  '--ansi-bright-white': '#ffffff',
+
+  // Collaborator defaults (same as midnight, work well on light)
+  '--collab-human': '#3b82f6',
+  '--collab-ai': '#8b5cf6',
+  '--collab-runtime': '#10b981',
+};
+
+/**
+ * GitHub Theme
+ *
+ * GitHub-inspired styling for familiarity.
+ * Based on GitHub's code block and UI colors.
+ */
+const githubTheme = {
+  name: 'github',
+  description: 'GitHub-inspired theme. Familiar for developers.',
+
+  // Spacing
+  '--widget-line-height': 'inherit',
+  '--widget-padding-x': '16px',
+  '--widget-padding-y': '12px',
+  '--widget-margin-y': '8px',
+  '--widget-border-radius': '6px',
+  '--widget-border-width': '1px',
+  '--widget-border-accent-width': '4px',
+
+  // Typography (GitHub's font stack)
+  '--widget-font-mono': "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
+  '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif",
+  '--widget-font-size': '0.875em',
+  '--widget-font-size-small': '0.75em',
+  '--widget-font-size-label': '12px',
+
+  // Surfaces (GitHub dark default)
+  '--widget-surface': '#161b22',
+  '--widget-surface-hover': '#21262d',
+  '--widget-surface-elevated': '#0d1117',
+  '--widget-surface-inset': '#010409',
+
+  // Borders (GitHub-style)
+  '--widget-border': '#30363d',
+  '--widget-border-accent': '#238636',
+  '--widget-border-focus': '#58a6ff',
+
+  // Text (GitHub colors)
+  '--widget-text': '#c9d1d9',
+  '--widget-text-muted': '#8b949e',
+  '--widget-text-accent': '#58a6ff',
+
+  // Semantic (GitHub palette)
+  '--widget-success': '#238636',
+  '--widget-warning': '#d29922',
+  '--widget-error': '#f85149',
+  '--widget-info': '#58a6ff',
+
+  // ANSI colors (GitHub terminal colors)
+  '--ansi-black': '#0d1117',
+  '--ansi-red': '#ff7b72',
+  '--ansi-green': '#7ee787',
+  '--ansi-yellow': '#d29922',
+  '--ansi-blue': '#79c0ff',
+  '--ansi-magenta': '#d2a8ff',
+  '--ansi-cyan': '#a5d6ff',
+  '--ansi-white': '#c9d1d9',
+  '--ansi-bright-black': '#484f58',
+  '--ansi-bright-red': '#ffa198',
+  '--ansi-bright-green': '#a5d6ff',
+  '--ansi-bright-yellow': '#e3b341',
+  '--ansi-bright-blue': '#a5d6ff',
+  '--ansi-bright-magenta': '#d2a8ff',
+  '--ansi-bright-cyan': '#b6e3ff',
+  '--ansi-bright-white': '#ffffff',
+
+  // Collaborator defaults
+  '--collab-human': '#58a6ff',
+  '--collab-ai': '#d2a8ff',
+  '--collab-runtime': '#7ee787',
+};
+
+// #endregion BUILT_IN_THEMES
+
+// #region THEME_REGISTRY
+
+/**
+ * Built-in themes registry
+ * @type {Map<string, object>}
+ */
+const themeRegistry = new Map([
+  ['midnight', midnightTheme],
+  ['daylight', daylightTheme],
+  ['github', githubTheme],
+]);
+
+/**
+ * Register a custom theme
+ * @param {object} theme - Theme object with 'name' property
+ */
+function registerTheme(theme) {
+  if (!theme.name) {
+    throw new Error('Theme must have a name property');
+  }
+  themeRegistry.set(theme.name, theme);
+}
+
+/**
+ * Get a theme by name
+ * @param {string} name - Theme name
+ * @returns {object|null}
+ */
+function getTheme(name) {
+  return themeRegistry.get(name) || null;
+}
+
+/**
+ * Get all registered theme names
+ * @returns {string[]}
+ */
+function getThemeNames() {
+  return Array.from(themeRegistry.keys());
+}
+
+/**
+ * Check if a theme is registered
+ * @param {string} name
+ * @returns {boolean}
+ */
+function hasTheme(name) {
+  return themeRegistry.has(name);
+}
+
+// #endregion THEME_REGISTRY
+
+// #region THEME_CREATION
+
+/**
+ * Create a custom theme by extending a base theme.
+ *
+ * @param {Object} options
+ * @param {string} options.name - Name for the new theme
+ * @param {string} [options.base='midnight'] - Base theme to extend
+ * @param {string} [options.description] - Theme description
+ * @param {Object} options.overrides - Token overrides
+ * @returns {Object} New theme object
+ *
+ * @example
+ * const myTheme = createTheme({
+ *   name: 'my-brand',
+ *   base: 'midnight',
+ *   description: 'Custom brand theme',
+ *   overrides: {
+ *     '--widget-border-accent': '#ff6b6b',
+ *     '--widget-text-accent': '#ff6b6b',
+ *   }
+ * });
+ */
+function createTheme({ name, base = 'midnight', description, overrides = {} }) {
+  const baseTheme = getTheme(base);
+  if (!baseTheme) {
+    throw new Error(`Base theme "${base}" not found`);
+  }
+
+  return {
+    ...baseTheme,
+    ...overrides,
+    name,
+    description: description || `Custom theme based on ${base}`,
+  };
+}
+
+/**
+ * Get the default tokens (useful for creating themes from scratch)
+ * @returns {Object} Default token values
+ */
+function getDefaultTokens() {
+  const tokens = {};
+  for (const [name, def] of Object.entries(tokenDefinitions)) {
+    tokens[name] = def.default;
+  }
+  return tokens;
+}
+
+// #endregion EXPORTS
+
+/**
+ * Widget Theme Utilities
+ *
+ * Detection, injection, and management utilities for the theme system.
+ *
+ * ## Theme Detection
+ *
+ * Themes are detected in this priority:
+ * 1. Explicit config (config.appearance.widgetTheme)
+ * 2. CodeMirror theme class (.cm-theme-dark)
+ * 3. System preference (prefers-color-scheme)
+ * 4. Default: 'midnight' (dark)
+ *
+ * ## Watching for Changes
+ *
+ * The `watchTheme()` function monitors for:
+ * - System preference changes (user toggles OS dark mode)
+ * - CodeMirror theme class changes (editor.setDark())
+ *
+ * @module widgets/theme-utils
+ */
+
+
+// #region DETECTION
+
+/**
+ * Detect the appropriate theme based on context.
+ *
+ * Priority:
+ * 1. Explicit theme name passed as parameter
+ * 2. CodeMirror theme class on the editor element
+ * 3. System color scheme preference
+ * 4. Default: 'midnight'
+ *
+ * @param {Object} [options]
+ * @param {string} [options.themeName] - Explicit theme name (highest priority)
+ * @param {HTMLElement} [options.editorElement] - Editor DOM element to check for .cm-theme-dark
+ * @returns {string} Theme name ('midnight', 'daylight', etc.)
+ *
+ * @example
+ * // Detect based on CodeMirror and system preference
+ * const theme = detectTheme({ editorElement: document.querySelector('.cm-editor') });
+ *
+ * // Force a specific theme
+ * const theme = detectTheme({ themeName: 'github' });
+ */
+function detectTheme({ themeName, editorElement } = {}) {
+  // 1. Explicit theme name
+  if (themeName && getTheme(themeName)) {
+    return themeName;
+  }
+
+  // 2. CodeMirror theme class
+  if (editorElement) {
+    // Check if the editor or any ancestor has .cm-theme-dark
+    // CodeMirror adds this class when using oneDark or similar dark themes
+    const hasDarkTheme = editorElement.closest('.cm-theme-dark') !== null;
+    if (hasDarkTheme) {
+      return 'midnight';
+    }
+
+    // If there's any cm-theme class but not dark, assume light
+    const hasAnyTheme = editorElement.matches('[class*="cm-theme"]') ||
+      editorElement.closest('[class*="cm-theme"]') !== null;
+    if (hasAnyTheme) {
+      return 'daylight';
+    }
+  }
+
+  // 3. System preference
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return prefersDark ? 'midnight' : 'daylight';
+  }
+
+  // 4. Default
+  return 'midnight';
+}
+
+/**
+ * Check if the system prefers dark mode
+ * @returns {boolean}
+ */
+function systemPrefersDark() {
+  if (typeof window === 'undefined' || !window.matchMedia) {
+    return true; // Default to dark if can't detect
+  }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+// #endregion DETECTION
+
+// #region WATCHING
+
+/**
+ * Watch for theme changes and call callback when detected.
+ *
+ * Monitors:
+ * - System color scheme preference changes
+ * - CodeMirror theme class mutations on the editor element
+ *
+ * @param {Object} options
+ * @param {HTMLElement} [options.editorElement] - Editor element to watch
+ * @param {string} [options.currentTheme] - Current theme name (to detect changes)
+ * @param {function(string): void} options.onThemeChange - Callback with new theme name
+ * @returns {function(): void} Cleanup function to stop watching
+ *
+ * @example
+ * const unwatch = watchTheme({
+ *   editorElement: document.querySelector('.cm-editor'),
+ *   onThemeChange: (themeName) => {
+ *     console.log('Theme changed to:', themeName);
+ *     applyTheme(themeName);
+ *   }
+ * });
+ *
+ * // Later, stop watching
+ * unwatch();
+ */
+function watchTheme({ editorElement, currentTheme, onThemeChange }) {
+  const cleanups = [];
+
+  // Watch system preference changes
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+    const handleMediaChange = () => {
+      const newTheme = detectTheme({ editorElement });
+      if (newTheme !== currentTheme) {
+        currentTheme = newTheme;
+        onThemeChange(newTheme);
+      }
+    };
+
+    // Use addEventListener (modern) or addListener (legacy)
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleMediaChange);
+      cleanups.push(() => mediaQuery.removeEventListener('change', handleMediaChange));
+    } else if (mediaQuery.addListener) {
+      mediaQuery.addListener(handleMediaChange);
+      cleanups.push(() => mediaQuery.removeListener(handleMediaChange));
+    }
+  }
+
+  // Watch CodeMirror class changes via MutationObserver
+  if (editorElement && typeof MutationObserver !== 'undefined') {
+    const observer = new MutationObserver((mutations) => {
+      // Check if any mutation affected class attribute
+      const classChanged = mutations.some(m =>
+        m.type === 'attributes' && m.attributeName === 'class'
+      );
+
+      if (classChanged) {
+        const newTheme = detectTheme({ editorElement });
+        if (newTheme !== currentTheme) {
+          currentTheme = newTheme;
+          onThemeChange(newTheme);
+        }
+      }
+    });
+
+    // Watch the editor element and ancestors for class changes
+    // CodeMirror's theme class might be on a parent element
+    let target = editorElement;
+    while (target && target !== document.body) {
+      observer.observe(target, {
+        attributes: true,
+        attributeFilter: ['class'],
+      });
+      target = target.parentElement;
+    }
+
+    cleanups.push(() => observer.disconnect());
+  }
+
+  // Return cleanup function
+  return () => {
+    cleanups.forEach(fn => fn());
+  };
+}
+
+// #endregion WATCHING
+
+// #region INJECTION
+
+/**
+ * Style element ID for theme variables
+ */
+const THEME_STYLE_ID = 'mrmd-widget-theme';
+
+/**
+ * Apply a theme by injecting CSS custom properties.
+ *
+ * Creates or updates a <style> element with CSS variables from the theme.
+ *
+ * @param {string|Object} themeOrName - Theme name or theme object
+ * @param {Object} [options]
+ * @param {HTMLElement} [options.target] - Target element (default: document.documentElement)
+ * @param {boolean} [options.useStyleTag=true] - Use style tag injection vs inline styles
+ * @returns {void}
+ *
+ * @example
+ * // Apply by name
+ * applyTheme('midnight');
+ *
+ * // Apply custom theme object
+ * applyTheme({
+ *   name: 'custom',
+ *   '--widget-surface': '#000',
+ *   '--widget-text': '#fff',
+ * });
+ */
+function applyTheme(themeOrName, { target, useStyleTag = true } = {}) {
+  // Resolve theme object
+  const theme = typeof themeOrName === 'string'
+    ? getTheme(themeOrName)
+    : themeOrName;
+
+  if (!theme) {
+    console.warn(`Theme "${themeOrName}" not found, using midnight`);
+    return applyTheme('midnight', { target, useStyleTag });
+  }
+
+  // Get token values (exclude name, description)
+  const tokens = {};
+  for (const [key, value] of Object.entries(theme)) {
+    if (key.startsWith('--')) {
+      tokens[key] = value;
+    }
+  }
+
+  if (useStyleTag && typeof document !== 'undefined') {
+    // Inject via style tag (recommended)
+    injectThemeStyleTag(tokens);
+  } else if (target) {
+    // Apply as inline styles on target element
+    for (const [key, value] of Object.entries(tokens)) {
+      target.style.setProperty(key, value);
+    }
+  }
+}
+
+/**
+ * Inject theme tokens as a style tag
+ * @param {Object} tokens - CSS custom property key-value pairs
+ */
+function injectThemeStyleTag(tokens) {
+  // Remove existing
+  const existing = document.getElementById(THEME_STYLE_ID);
+  if (existing) {
+    existing.remove();
+  }
+
+  // Build CSS
+  const vars = Object.entries(tokens)
+    .map(([k, v]) => `  ${k}: ${v};`)
+    .join('\n');
+
+  const css = `:root {\n${vars}\n}`;
+
+  // Create and inject
+  const style = document.createElement('style');
+  style.id = THEME_STYLE_ID;
+  style.textContent = css;
+  document.head.appendChild(style);
+}
+
+/**
+ * Remove the injected theme style tag
+ */
+function removeThemeStyles() {
+  if (typeof document === 'undefined') return;
+
+  const existing = document.getElementById(THEME_STYLE_ID);
+  if (existing) {
+    existing.remove();
+  }
+}
+
+/**
+ * Generate CSS string for a theme (useful for SSR or manual injection)
+ *
+ * @param {string|Object} themeOrName - Theme name or object
+ * @returns {string} CSS string with :root variables
+ *
+ * @example
+ * const css = generateThemeCSS('midnight');
+ * // :root {
+ * //   --widget-surface: rgba(0, 0, 0, 0.35);
+ * //   ...
+ * // }
+ */
+function generateThemeCSS(themeOrName) {
+  const theme = typeof themeOrName === 'string'
+    ? getTheme(themeOrName)
+    : themeOrName;
+
+  if (!theme) {
+    return generateThemeCSS('midnight');
+  }
+
+  const vars = Object.entries(theme)
+    .filter(([k]) => k.startsWith('--'))
+    .map(([k, v]) => `  ${k}: ${v};`)
+    .join('\n');
+
+  return `:root {\n${vars}\n}`;
+}
+
+// #endregion INJECTION
+
+// #region INITIALIZATION
+
+/**
+ * Initialize the theme system.
+ *
+ * Detects the appropriate theme, applies it, and optionally
+ * watches for changes.
+ *
+ * @param {Object} options
+ * @param {string} [options.themeName] - Force a specific theme
+ * @param {HTMLElement} [options.editorElement] - Editor element for detection
+ * @param {boolean} [options.watch=true] - Watch for theme changes
+ * @param {function(string): void} [options.onThemeChange] - Callback on theme change
+ * @returns {{themeName: string, cleanup: function}} Current theme and cleanup function
+ *
+ * @example
+ * const { themeName, cleanup } = initTheme({
+ *   editorElement: document.querySelector('.cm-editor'),
+ *   watch: true,
+ *   onThemeChange: (name) => console.log('Theme changed:', name)
+ * });
+ */
+function initTheme({
+  themeName,
+  editorElement,
+  watch = true,
+  onThemeChange,
+} = {}) {
+  // Detect initial theme
+  const detectedTheme = detectTheme({ themeName, editorElement });
+
+  // Apply it
+  applyTheme(detectedTheme);
+
+  // Setup watching if requested
+  let cleanup = () => {};
+  if (watch) {
+    cleanup = watchTheme({
+      editorElement,
+      currentTheme: detectedTheme,
+      onThemeChange: (newTheme) => {
+        applyTheme(newTheme);
+        onThemeChange?.(newTheme);
+      },
+    });
+  }
+
+  return {
+    themeName: detectedTheme,
+    cleanup,
+  };
+}
+
+// #endregion EXPORTS
+
+/**
+ * Widget Theme System - Public API
+ *
+ * The theming system for MRMD widgets (output, cursors, indicators, etc.).
+ *
+ * ## Quick Start
+ *
+ * ```javascript
+ * import { widgets } from 'mrmd-editor';
+ *
+ * // Initialize with automatic theme detection
+ * const { cleanup } = widgets.initTheme({
+ *   editorElement: document.querySelector('.cm-editor'),
+ *   watch: true, // Auto-update on system preference change
+ * });
+ *
+ * // Or set a specific theme
+ * widgets.applyTheme('daylight');
+ * ```
+ *
+ * ## Built-in Themes
+ *
+ * - `midnight` - Deep dark theme (default for dark mode)
+ * - `daylight` - Clean light theme (default for light mode)
+ * - `github` - GitHub-inspired styling
+ *
+ * ## Creating Custom Themes
+ *
+ * ```javascript
+ * const myTheme = widgets.createTheme({
+ *   name: 'my-brand',
+ *   base: 'midnight', // Extend from built-in
+ *   overrides: {
+ *     '--widget-border-accent': '#ff6b6b',
+ *     '--widget-text-accent': '#ff6b6b',
+ *   }
+ * });
+ *
+ * widgets.registerTheme(myTheme);
+ * widgets.applyTheme('my-brand');
+ * ```
+ *
+ * ## CSS Variable Override
+ *
+ * You can also override CSS variables directly:
+ *
+ * ```css
+ * :root {
+ *   --widget-border-accent: #ff6b6b;
+ *   --widget-text-accent: #ff6b6b;
+ * }
+ * ```
+ *
+ * @module widgets
+ */
+
+
+/**
+ * Widget theming API
+ *
+ * All theme-related functions bundled together for convenience.
+ */
+const widgets = {
+  // Theme definitions
+  themes: {
+    midnight: midnightTheme,
+    daylight: daylightTheme,
+    github: githubTheme,
+  },
+
+  // Token schema (useful for building theme editors)
+  tokenDefinitions,
+
+  // Theme registry
+  registerTheme,
+  getTheme,
+  getThemeNames,
+  hasTheme,
+
+  // Theme creation
+  createTheme,
+  getDefaultTokens,
+
+  // Detection
+  detectTheme,
+  systemPrefersDark,
+
+  // Watching
+  watchTheme,
+
+  // Application
+  applyTheme,
+  removeThemeStyles,
+  generateThemeCSS,
+
+  // Initialization (recommended entry point)
+  initTheme,
+};
+
+/**
  * mrmd - Markdown editor with realtime collaboration
  *
  * A markdown editor where humans, code, and AI all collaborate through
@@ -69690,6 +70710,14 @@ function create(target, options = {}) {
     injectAwarenessStyles();
   }
 
+  // Initialize widget theme system
+  // Detect theme based on CodeMirror theme class and system preference
+  const initialTheme = detectTheme({
+    themeName: config.appearance?.widgetTheme,
+    editorElement: element,
+  });
+  applyTheme(initialTheme);
+
   // Prepare awareness system (created after view exists)
   let awarenessSystem = null;
   const awarenessConfig = awarenessUI === true
@@ -69717,6 +70745,17 @@ function create(target, options = {}) {
   const view = new EditorView({
     state: EditorState.create({ doc: initialContent, extensions }),
     parent: element
+  });
+
+  // Watch for theme changes (CodeMirror theme toggle, system preference)
+  let currentWidgetTheme = initialTheme;
+  const unwatchTheme = watchTheme({
+    editorElement: view.dom,
+    currentTheme: currentWidgetTheme,
+    onThemeChange: (newTheme) => {
+      currentWidgetTheme = newTheme;
+      applyTheme(newTheme);
+    },
   });
 
   // Initialize awareness system after view exists
@@ -69913,6 +70952,9 @@ function create(target, options = {}) {
     // Runtime LSP (hover, completions, variables)
     runtimeLspProviders,
     variableExplorer,
+
+    // Built-in JS runtime (for debugging)
+    jsRuntime,
 
     // ===========================================================================
     // Content
@@ -70616,6 +71658,8 @@ function create(target, options = {}) {
       if (jsRuntime && jsRuntime.destroy) {
         jsRuntime.destroy();
       }
+      // Clean up theme watcher
+      unwatchTheme();
       // Clean up undo manager
       undoManager.destroy();
       view.destroy();
@@ -71177,6 +72221,8 @@ const mrmd = {
   codemirror,
   terminal,
   awareness: awarenessExports,
+  // Widget theme system
+  widgets,
   // Config & State systems
   configUtils: configExports,
   stateUtils: stateExports,
@@ -71213,6 +72259,7 @@ exports.TerminalBuffer = TerminalBuffer;
 exports.adaptMRPClient = adaptMRPClient;
 exports.adaptMrmdJsSession = adaptMrmdJsSession;
 exports.ansiStyles = ansiStyles;
+exports.applyTheme = applyTheme;
 exports.awareness = awarenessExports;
 exports.codemirror = codemirror;
 exports.configExports = configExports;
@@ -71234,19 +72281,29 @@ exports.createRuntimeRegistry = createRuntimeRegistry;
 exports.createRuntimeState = createRuntimeState;
 exports.createStateManager = createStateManager;
 exports.createStatusBar = createStatusBar;
+exports.createTheme = createTheme;
 exports.createVariableExplorer = createVariableExplorer;
+exports.daylightTheme = daylightTheme;
 exports.default = mrmd;
 exports.defaultAwarenessConfig = defaultAwarenessConfig;
+exports.detectTheme = detectTheme;
 exports.devPanelExtension = devPanelExtension;
 exports.drive = drive;
+exports.generateThemeCSS = generateThemeCSS;
+exports.getTheme = getTheme;
+exports.getThemeNames = getThemeNames;
+exports.githubTheme = githubTheme;
 exports.hasAnsi = hasAnsi;
+exports.initTheme = initTheme;
 exports.injectAwarenessStyles = injectAwarenessStyles;
 exports.injectDevPanelStyles = injectDevPanelStyles;
 exports.injectRuntimeLspStyles = injectRuntimeLspStyles;
 exports.isFullySerializable = isFullySerializable;
+exports.midnightTheme = midnightTheme;
 exports.minimalAwarenessConfig = minimalAwarenessConfig;
 exports.normalizeOptions = normalizeOptions;
 exports.processTerminalOutput = processTerminalOutput;
+exports.registerTheme = registerTheme;
 exports.runtimeLspExports = runtimeLspExports;
 exports.serializeConfig = serializeConfig;
 exports.stateExports = stateExports;
@@ -71254,5 +72311,7 @@ exports.stripAnsi = stripAnsi;
 exports.terminal = terminal;
 exports.terminalToHtml = terminalToHtml;
 exports.toggleDevPanel = toggleDevPanel;
+exports.watchTheme = watchTheme;
+exports.widgets = widgets;
 exports.yjs = yjs;
 //# sourceMappingURL=mrmd.cjs.map

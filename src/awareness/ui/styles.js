@@ -2,7 +2,8 @@
  * Awareness UI Styles
  *
  * CSS styles for all awareness components.
- * Can be injected automatically or used as a reference.
+ * Uses CSS custom properties from the widget theme system.
+ * See widgets/theme.js for available tokens.
  *
  * @module awareness/ui/styles
  */
@@ -12,6 +13,7 @@
 export const awarenessStyles = `
 /* ==========================================================================
    MRMD Awareness Styles
+   Uses widget theme tokens (--widget-*)
    ========================================================================== */
 
 /* Hide y-codemirror.next's built-in cursor rendering.
@@ -27,25 +29,6 @@ export const awarenessStyles = `
   display: none !important;
 }
 
-/* CSS Custom Properties */
-.mrmd-awareness-root {
-  --mrmd-bg: #1e1e1e;
-  --mrmd-bg-secondary: #252525;
-  --mrmd-border: #333;
-  --mrmd-text: #e0e0e0;
-  --mrmd-text-muted: #888;
-  --mrmd-font-mono: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-}
-
-/* Light mode overrides */
-.mrmd-awareness-root--light {
-  --mrmd-bg: #ffffff;
-  --mrmd-bg-secondary: #f5f5f5;
-  --mrmd-border: #e0e0e0;
-  --mrmd-text: #1a1a1a;
-  --mrmd-text-muted: #666;
-}
-
 /* ==========================================================================
    Collaborator List
    ========================================================================== */
@@ -53,7 +36,7 @@ export const awarenessStyles = `
 .mrmd-collaborator-list {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 13px;
-  color: var(--mrmd-text, #e0e0e0);
+  color: var(--widget-text, #e0e0e0);
 }
 
 .mrmd-collaborator-list__header {
@@ -61,8 +44,8 @@ export const awarenessStyles = `
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--mrmd-border, #333);
-  background: var(--mrmd-bg-secondary, #252525);
+  border-bottom: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
+  background: var(--widget-surface-elevated, #1e1e1e);
 }
 
 .mrmd-collaborator-list__title {
@@ -70,11 +53,11 @@ export const awarenessStyles = `
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: var(--mrmd-text-muted, #888);
+  color: var(--widget-text-muted, #888888);
 }
 
 .mrmd-collaborator-list__count {
-  background: var(--mrmd-border, #333);
+  background: var(--widget-border, rgba(255, 255, 255, 0.1));
   padding: 2px 8px;
   border-radius: 10px;
   font-size: 11px;
@@ -87,20 +70,20 @@ export const awarenessStyles = `
 .mrmd-collaborator-list__separator {
   font-size: 10px;
   text-transform: uppercase;
-  color: var(--mrmd-text-muted, #666);
+  color: var(--widget-text-muted, #888888);
   padding: 8px 4px 4px;
   margin-top: 8px;
 }
 
 .mrmd-collaborator-list__separator span {
-  background: var(--mrmd-bg, #1e1e1e);
+  background: var(--widget-surface-elevated, #1e1e1e);
   padding-right: 8px;
 }
 
 .mrmd-collaborator-list__empty {
   padding: 16px;
   text-align: center;
-  color: var(--mrmd-text-muted, #666);
+  color: var(--widget-text-muted, #888888);
   font-style: italic;
 }
 
@@ -116,7 +99,7 @@ export const awarenessStyles = `
 }
 
 .mrmd-collaborator-item:hover {
-  background: var(--mrmd-bg-secondary, #252525);
+  background: var(--widget-surface-elevated, #1e1e1e);
 }
 
 .mrmd-collaborator-item--self {
@@ -145,7 +128,7 @@ export const awarenessStyles = `
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  border: 2px solid var(--mrmd-bg, #1e1e1e);
+  border: 2px solid var(--widget-surface-elevated, #1e1e1e);
   background: #888;
 }
 
@@ -224,7 +207,7 @@ export const awarenessStyles = `
 /* Activity */
 .mrmd-collaborator-item__activity {
   font-size: 12px;
-  color: var(--mrmd-text-muted, #888);
+  color: var(--widget-text-muted, #888888);
   margin-top: 4px;
   white-space: nowrap;
   overflow: hidden;
@@ -232,10 +215,10 @@ export const awarenessStyles = `
 }
 
 .mrmd-collaborator-item__activity code {
-  background: var(--mrmd-border, #333);
+  background: var(--widget-border, rgba(255, 255, 255, 0.1));
   padding: 1px 4px;
   border-radius: 3px;
-  font-family: var(--mrmd-font-mono);
+  font-family: var(--widget-font-mono, 'SF Mono', Monaco, monospace);
   font-size: 11px;
 }
 
@@ -278,7 +261,7 @@ export const awarenessStyles = `
   font-size: 11px;
   font-weight: 600;
   color: white;
-  border: 2px solid var(--mrmd-bg, #1e1e1e);
+  border: 2px solid var(--widget-surface-elevated, #1e1e1e);
   margin-left: -8px;
 }
 
@@ -303,8 +286,8 @@ export const awarenessStyles = `
   justify-content: center;
   font-size: 10px;
   font-weight: 600;
-  color: var(--mrmd-text-muted, #888);
-  background: var(--mrmd-border, #333);
+  color: var(--widget-text-muted, #888888);
+  background: var(--widget-border, rgba(255, 255, 255, 0.1));
   margin-left: -8px;
 }
 
@@ -555,7 +538,7 @@ export const awarenessStyles = `
   font-weight: 600;
   color: white;
   margin-left: -4px;
-  border: 1px solid var(--mrmd-bg, #1e1e1e);
+  border: 1px solid var(--widget-surface-elevated, #1e1e1e);
 }
 
 .mrmd-cell-presence__avatar:first-child {
@@ -564,7 +547,7 @@ export const awarenessStyles = `
 
 .mrmd-cell-presence__more {
   font-size: 9px;
-  color: var(--mrmd-text-muted, #888);
+  color: var(--widget-text-muted, #888888);
   margin-left: 2px;
 }
 
@@ -579,9 +562,9 @@ export const awarenessStyles = `
   padding: 4px 12px;
   font-size: 12px;
   font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-  color: var(--mrmd-text-muted, #888);
-  background: var(--mrmd-bg-secondary, #252525);
-  border-top: 1px solid var(--mrmd-border, #333);
+  color: var(--widget-text-muted, #888888);
+  background: var(--widget-surface-elevated, #1e1e1e);
+  border-top: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
 }
 
 .mrmd-status-bar__item {
