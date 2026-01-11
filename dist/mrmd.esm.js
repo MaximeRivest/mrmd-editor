@@ -55638,10 +55638,17 @@ class MonitorCoordination {
       event.changes.keys.forEach((change, execId) => {
         const exec = this.executions.get(execId);
 
+        // Debug logging for stdin
+        if (exec?.stdinRequest) {
+          console.log('[MonitorCoordination] Detected stdinRequest in exec:', execId, exec.stdinRequest);
+        }
+
         // Call status callback if registered
         const callback = this._statusCallbacks.get(execId);
         if (callback && exec) {
           callback(exec.status, exec);
+        } else if (exec?.stdinRequest) {
+          console.warn('[MonitorCoordination] No callback registered for execId with stdinRequest:', execId);
         }
       });
     };
@@ -55942,6 +55949,9 @@ class ExecutionManager {
     /** @type {string|null} Default runtime URL for monitor mode */
     this._defaultRuntimeUrl = null;
 
+    /** @type {string} Session name for execution isolation */
+    this._monitorSession = 'default';
+
     /** @type {Map<string, Function>} Unsubscribe functions for monitor status watchers */
     this._monitorUnsubscribes = new Map();
 
@@ -55964,8 +55974,9 @@ class ExecutionManager {
    * @param {Y.Doc} options.ydoc - Yjs document
    * @param {string} options.runtimeUrl - Default runtime URL for MRP
    * @param {import('y-protocols/awareness').Awareness} [options.awareness] - For monitor detection
+   * @param {string} [options.session] - Session name for execution isolation (defaults to 'default')
    */
-  enableMonitorMode({ ydoc, runtimeUrl, awareness }) {
+  enableMonitorMode({ ydoc, runtimeUrl, awareness, session }) {
     if (this.coordination) {
       this.coordination.destroy();
     }
@@ -55974,8 +55985,9 @@ class ExecutionManager {
     this._defaultRuntimeUrl = runtimeUrl;
     this._monitorMode = true;
     this._awareness = awareness;
+    this._monitorSession = session || 'default';
 
-    console.log('[ExecutionManager] Monitor mode enabled, runtimeUrl:', runtimeUrl);
+    console.log('[ExecutionManager] Monitor mode enabled, runtimeUrl:', runtimeUrl, 'session:', this._monitorSession);
   }
 
   /**
@@ -56019,15 +56031,25 @@ class ExecutionManager {
    * @param {string} language
    * @returns {string|null}
    */
-  _getRuntimeUrl(language) {
+  _getRuntimeUrl(language, includeFallback = true) {
     // First check if the registry has a runtime with a URL
     const runtime = this.registry.getRuntime(language);
     if (runtime?.runtimeUrl) {
       return runtime.runtimeUrl;
     }
 
-    // Fall back to default
-    return this._defaultRuntimeUrl;
+    // Fall back to default only if requested
+    // Monitor mode should NOT use fallback - only explicit runtime URLs
+    return includeFallback ? this._defaultRuntimeUrl : null;
+  }
+
+  /**
+   * Check if a language has an explicit remote runtime configured.
+   * Used to determine if monitor mode should be used for this language.
+   */
+  _hasExplicitRuntimeUrl(language) {
+    const runtime = this.registry.getRuntime(language);
+    return !!runtime?.runtimeUrl;
   }
 
   /**
@@ -56459,13 +56481,15 @@ class ExecutionManager {
 
     // Check if we should use monitor mode
     // Monitor mode routes execution through mrmd-monitor for persistence
+    // Only use monitor mode for languages with EXPLICIT runtime URLs (not default fallback)
+    // This ensures local runtimes (like mrmd-js for JavaScript) still run locally
     if (this._monitorMode && this.coordination) {
-      const runtimeUrl = this._getRuntimeUrl(language);
+      const runtimeUrl = this._getRuntimeUrl(language, false); // false = no fallback
       if (runtimeUrl) {
         return this._executeCellViaMonitor(cell, index, runtimeUrl);
       }
-      // Fall through to direct execution if no runtime URL
-      console.warn(`[ExecutionManager] No runtime URL for ${language}, falling back to direct execution`);
+      // Fall through to direct execution for languages without explicit runtime URL
+      console.log(`[ExecutionManager] No explicit runtime URL for ${language}, using local execution`);
     }
 
     // Check runtime support (for direct execution)
@@ -56785,7 +56809,7 @@ class ExecutionManager {
       code,
       language,
       runtimeUrl,
-      session: 'default',
+      session: this._monitorSession,
       cellId: cell.id || `cell-${index}`,
     });
 

@@ -5,23 +5,73 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>mrmd - Minimal Full Stack</title>
   <style>
-    body { margin: 0; height: 100vh; }
-    #editor { height: 100%; }
+    body { margin: 0; height: 100vh; font-family: system-ui; }
+    #editor { height: calc(100vh - 40px); }
+    .toolbar {
+      height: 40px;
+      background: #1a1a2e;
+      color: white;
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 20px;
+      font-size: 14px;
+    }
+    .status {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #666;
+    }
+    .status-dot.connected { background: #10b981; }
+    .status-dot.monitor { background: #8b5cf6; }
   </style>
 </head>
 <body>
+
+<div class="toolbar">
+  <div class="status">
+    <span class="status-dot" id="sync-status"></span>
+    <span id="sync-text">Connecting...</span>
+  </div>
+  <div class="status">
+    <span class="status-dot" id="monitor-status"></span>
+    <span id="monitor-text">Monitor: waiting</span>
+  </div>
+</div>
 
 <div id="editor"></div>
 
 <script src="../dist/mrmd.iife.js"></script>
 <script type="module">
-  const doc = `# Minimal Full Stack Demo
+  /**
+   * Minimal Full Stack Demo with Monitor Mode
+   *
+   * This example uses monitor mode for Python execution, where mrmd-monitor
+   * handles all code execution. Long-running code survives browser disconnects.
+   *
+   * Setup:
+   *   Terminal 1: cd mrmd-sync && node bin/cli.js ./docs
+   *   Terminal 2: cd mrmd-monitor && node bin/cli.js ws://localhost:4444
+   *   Terminal 3: cd mrmd-python && python -m mrmd_python.cli --port 8000
+   *   Terminal 4: cd mrmd-editor && npm run serve
+   *
+   * Then open this file in the browser.
+   */
 
-This is mrmd with **all defaults** - no custom styling.
+  const doc = `# Minimal Full Stack Demo (Monitor Mode)
 
-## JavaScript (with Runtime LSP!)
+This is mrmd with **monitor mode** enabled. Python executions are routed through
+mrmd-monitor, so long-running code survives browser disconnects.
 
-Run this cell first, then **hover** over \`items\` or \`data\` to see actual values:
+## JavaScript (local execution)
+
+JavaScript runs directly in the browser:
 
 \`\`\`javascript
 const items = ["apple", "banana", "cherry"];
@@ -30,9 +80,11 @@ console.log("Items:", items.join(", "));
 data
 \`\`\`
 
-After running, try typing \`data.\` to see **runtime completions** (actual properties, not guesses).
+After running, try typing \`data.\` to see **runtime completions**.
 
-## Python (if mrmd-python is running)
+## Python (via monitor)
+
+Python runs through mrmd-monitor (check the status bar above):
 
 \`\`\`python
 import math
@@ -41,88 +93,147 @@ print(f"The answer is {x}")
 math.sqrt(x)
 \`\`\`
 
+## Python with input
+
+\`\`\`python
+name = input("What is your name? ")
+print(f"Hello, {name}!")
+\`\`\`
+
+## Long-running Python
+
+Try disconnecting the browser while this runs - the monitor keeps it going:
+
+\`\`\`python
+import time
+for i in range(10):
+    print(f"Step {i+1}/10...")
+    time.sleep(1)
+print("Done!")
+\`\`\`
+
 ---
 
-**Cell Controls** (buttons next to code cells):
-- **Play button**: Click to run the cell (adds to queue)
-- **Stop button**: Cancel running/queued execution
-- **Copy button**: Copy code to clipboard
-- **Clear button**: Remove output
-
-**Queue Status**: When multiple cells are queued, you'll see position indicators like \`2/3\`.
-
-**Runtime LSP Features:**
-- **Hover**: Shows actual values (\`items = ["apple", "banana", "cherry"]\`)
-- **Completions**: Type \`data.\` after running to see real properties
-- **Variables**: Check \`editor.listVariables()\` in console
+**Monitor Mode**: Executions go through mrmd-monitor instead of directly to the runtime.
+This means long-running code survives browser disconnects.
 
 Press **Shift+Enter** to run a code cell, or click the **play button**.
 `;
 
-  // Connect to sync server (auto-fallback to local if server not running)
-  const docs = mrmd.drive('ws://localhost:4444');
+  // Configuration
+  const SYNC_URL = 'ws://localhost:4444';
+  const RUNTIME_URL = 'http://localhost:8000/mrp/v1';
+  const DOC_NAME = 'minimal-demo';
+
+  // UI elements
+  const syncDot = document.getElementById('sync-status');
+  const syncText = document.getElementById('sync-text');
+  const monitorDot = document.getElementById('monitor-status');
+  const monitorText = document.getElementById('monitor-text');
+
+  // Connect to sync server
+  const docs = mrmd.drive(SYNC_URL);
 
   // Open document with dev panel enabled
-  // JavaScript runtime is built-in automatically
-  const editor = await docs.open('minimal-demo', '#editor', {
+  const editor = await docs.open(DOC_NAME, '#editor', {
     doc,
-    dark: true,
     devPanel: {
       enabled: true,
       startOpen: true,
       maxHeight: 300
     },
-    // Cell controls: run buttons, queue status, copy buttons
-    // All enabled by default - showing explicit config for reference
     cellControls: {
       enabled: true,
-      position: 'line-start',  // 'line-start' | 'line-end' | 'gutter' | 'none'
+      position: 'line-start',
       buttons: {
-        run: true,        // Play button
-        stop: true,       // Stop/cancel button (shown when running/queued)
-        clear: true,      // Clear output button
-        copy: true,       // Copy code button
-        copyOutput: true, // Copy output button
-        copyBoth: true,   // Copy code + output (off by default, enabling for demo)
+        run: true,
+        stop: true,
+        clear: true,
+        copy: true,
+        copyOutput: true,
+        copyBoth: true,
       },
       status: {
-        show: true,              // Show status indicator
-        showQueuePosition: true, // Show "2/3" in queue
-        statusLineInOutput: true // Add [status:queued] lines to output
+        show: true,
+        showQueuePosition: true,
+        statusLineInOutput: true
       },
       queue: {
-        mode: 'sequential'  // FIFO execution like Jupyter
+        mode: 'sequential'
       }
     }
   });
 
-  // Python: connect to MRP server with full features (execution + hover + completions)
-  editor.connectRuntime('python', 'http://localhost:8000/mrp/v1');
-
-  // Keyboard shortcuts are built-in:
-  // - Shift+Enter: Run cell and advance to next
-  // - Mod+Enter: Run cell and stay
-  // - Alt+Arrow: Navigate between cells
-  // Customize with: editor.setKeymap({ 'F5': 'runAllCells' })
-
-  // Subscribe to state changes for debugging
-  editor.onStateChange((event) => {
-    if (event.path.startsWith('execution') || event.path.startsWith('history')) {
-      console.log('State:', event.path, event.value);
+  // Update sync status
+  editor.provider.on('status', ({ status }) => {
+    if (status === 'connected') {
+      syncDot.classList.add('connected');
+      syncText.textContent = 'Sync: connected';
+    } else {
+      syncDot.classList.remove('connected');
+      syncText.textContent = 'Sync: ' + status;
     }
+  });
+
+  // Register Python runtime (this sets the explicit URL in the registry)
+  // JavaScript will continue to run locally via mrmd-js
+  editor.connectRuntime('python', RUNTIME_URL);
+
+  // Enable monitor mode for Python execution
+  // Only languages with explicit runtime URLs (like Python above) will use monitor mode
+  // Use document name as session for isolation between documents
+  editor.execution.enableMonitorMode({
+    ydoc: editor.ydoc,
+    runtimeUrl: RUNTIME_URL,
+    awareness: editor.awareness,
+    session: DOC_NAME,  // Each document gets its own Python session
+  });
+
+  // Watch for monitor in awareness
+  const checkMonitor = () => {
+    let monitorFound = false;
+    for (const [clientId, state] of editor.awareness.getStates()) {
+      if (state?.user?.type === 'monitor') {
+        monitorFound = true;
+        monitorDot.classList.add('monitor');
+        monitorText.textContent = 'Monitor: ' + (state.user.name || 'connected');
+        break;
+      }
+    }
+    if (!monitorFound) {
+      monitorDot.classList.remove('monitor');
+      monitorText.textContent = 'Monitor: not connected';
+    }
+  };
+
+  editor.awareness.on('change', checkMonitor);
+  checkMonitor();
+
+  // Show execution info in console
+  editor.execution.on('cellRun', (index, cell, execId) => {
+    console.log(`Running cell ${index} via monitor (${execId})`);
+  });
+
+  editor.execution.on('cellComplete', (index, result, execId) => {
+    console.log(`Cell ${index} completed`);
+  });
+
+  editor.execution.on('cellError', (index, error, execId) => {
+    console.log(`Cell ${index} error:`, error.message || error);
   });
 
   // Expose for debugging
   window.editor = editor;
   window.mrmd = mrmd;
 
-  console.log('Editor ready! Access via window.editor');
-  console.log('Try: editor.config, editor.state, editor.commands');
-  console.log('Keymaps: editor.getKeymap(), editor.setKeymap({ "F5": "runAllCells" })');
-  console.log('Runtime LSP: editor.listVariables(), editor.getHoverInfo()');
-  console.log('Cell Controls: editor.cellControls.runCell(0), editor.cellControls.getQueueSnapshot()');
-  console.log('Shift+Enter to run and advance, Mod+Enter to run and stay');
-  console.log('Click the play button next to code cells to run them!');
+  console.log('Editor ready! Monitor mode enabled.');
+  console.log('');
+  console.log('To start the stack:');
+  console.log('  Terminal 1: cd mrmd-sync && node bin/cli.js ./docs');
+  console.log('  Terminal 2: cd mrmd-monitor && node bin/cli.js ws://localhost:4444');
+  console.log('  Terminal 3: cd mrmd-python && python -m mrmd_python.cli --port 8000');
+  console.log('');
+  console.log('Access editor via window.editor');
 </script>
 
 </body>

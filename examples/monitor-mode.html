@@ -124,11 +124,16 @@ Press **Shift+Enter** to run a cell. Watch the monitor terminal to see it claim 
       }
     });
 
+    // Register Python runtime (this sets the explicit URL in the registry)
+    editor.connectRuntime('python', RUNTIME_URL);
+
     // Enable monitor mode on the execution manager
+    // Use document name as session for isolation between documents
     editor.execution.enableMonitorMode({
       ydoc: editor.ydoc,
       runtimeUrl: RUNTIME_URL,
       awareness: editor.awareness,
+      session: DOC_NAME,  // Each document gets its own Python session
     });
 
     // Watch for monitor in awareness

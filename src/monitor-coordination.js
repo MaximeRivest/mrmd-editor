@@ -73,10 +73,17 @@ export class MonitorCoordination {
       event.changes.keys.forEach((change, execId) => {
         const exec = this.executions.get(execId);
 
+        // Debug logging for stdin
+        if (exec?.stdinRequest) {
+          console.log('[MonitorCoordination] Detected stdinRequest in exec:', execId, exec.stdinRequest);
+        }
+
         // Call status callback if registered
         const callback = this._statusCallbacks.get(execId);
         if (callback && exec) {
           callback(exec.status, exec);
+        } else if (exec?.stdinRequest) {
+          console.warn('[MonitorCoordination] No callback registered for execId with stdinRequest:', execId);
         }
       });
     };
