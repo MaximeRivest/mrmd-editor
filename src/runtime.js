@@ -166,9 +166,10 @@ export class RuntimeRegistry {
    * @param {string} language - Language identifier
    * @param {function(string, string, boolean): void} onChunk - Callback (chunk, accumulated, done)
    * @param {function(StdinRequest): Promise<string>} [onStdinRequest] - Callback for handling input() calls
+   * @param {Object} [options] - Additional options (e.g., execId for hub runtimes)
    * @returns {Promise<ExecutionResult>}
    */
-  async executeStreaming(code, language, onChunk, onStdinRequest) {
+  async executeStreaming(code, language, onChunk, onStdinRequest, options = {}) {
     const runtime = this.getRuntime(language);
     if (!runtime) {
       const error = `No runtime registered for language: ${language}`;
@@ -183,7 +184,7 @@ export class RuntimeRegistry {
 
     // Use streaming if available, otherwise wrap execute
     if (typeof runtime.executeStreaming === 'function') {
-      return runtime.executeStreaming(code, language, onChunk, onStdinRequest);
+      return runtime.executeStreaming(code, language, onChunk, onStdinRequest, options);
     } else {
       // Fallback: run execute and send all output at once
       const result = await runtime.execute(code, language);

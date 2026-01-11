@@ -28,7 +28,16 @@ export function runCell(editor) {
     // Only handle if cursor is in a cell
     if (!cell) return false;
 
-    editor.runCurrentCell();
+    // Use queue if available for proper status indicators, otherwise fall back to direct execution
+    if (editor.cellControls?.queue) {
+      const cells = findCells(content);
+      const cellIndex = cells.findIndex(c => c.start === cell.start);
+      if (cellIndex >= 0) {
+        editor.cellControls.queue.enqueue(cellIndex);
+      }
+    } else {
+      editor.runCurrentCell();
+    }
     return true;
   };
 }
@@ -50,27 +59,61 @@ export function runCellAndAdvance(editor) {
     // Only handle if cursor is in a cell
     if (!currentCell) return false;
 
-    // Run the cell
-    editor.runCurrentCell();
+    // Store the current cell's position info - this helps us find it again after content changes
+    const currentCellStart = currentCell.start;
+    const lang = currentCell.language;
 
-    // Find all cells and current index
+    // Find current cell index for queue
     const cells = findCells(content);
-    const currentIndex = cells.findIndex(c => c.start === currentCell.start);
+    const currentIndex = cells.findIndex(c => c.start === currentCellStart);
 
-    if (currentIndex < cells.length - 1) {
-      // Move to next cell
-      const nextCell = cells[currentIndex + 1];
+    // Check if there's a next cell BEFORE execution
+    const hasNextCell = currentIndex >= 0 && currentIndex < cells.length - 1;
+
+    // Run the cell using queue for proper status indicators
+    if (editor.cellControls?.queue) {
+      if (currentIndex >= 0) {
+        editor.cellControls.queue.enqueue(currentIndex);
+      }
+    } else {
+      editor.runCurrentCell();
+    }
+
+    // Re-fetch content AFTER execution was triggered (output block may have been created/modified)
+    const updatedContent = view.state.doc.toString();
+    const updatedCells = findCells(updatedContent);
+
+    // Find our current cell again - it should still be at the same start position
+    // (output blocks are inserted AFTER the cell, so cell start doesn't shift)
+    let updatedCurrentIndex = updatedCells.findIndex(c => c.start === currentCellStart);
+
+    // Fallback: if exact match fails, find by proximity (handles edge cases)
+    if (updatedCurrentIndex === -1) {
+      updatedCurrentIndex = updatedCells.findIndex(c =>
+        Math.abs(c.start - currentCellStart) < 10 && c.language === lang
+      );
+    }
+
+    // Last resort: use original index if within bounds
+    if (updatedCurrentIndex === -1 && currentIndex >= 0 && currentIndex < updatedCells.length) {
+      updatedCurrentIndex = currentIndex;
+    }
+
+    const updatedCurrentCell = updatedCells[updatedCurrentIndex];
+
+    if (hasNextCell && updatedCurrentIndex >= 0 && updatedCurrentIndex < updatedCells.length - 1) {
+      // Move to next cell - use the cell AFTER our current cell in the updated list
+      const nextCell = updatedCells[updatedCurrentIndex + 1];
       view.dispatch({
         selection: { anchor: nextCell.codeStart },
         scrollIntoView: true
       });
-    } else {
+    } else if (updatedCurrentCell) {
       // Create new cell with same language after output block (if any)
-      const outputBlock = findOutputBlock(content, currentCell.end);
-      const insertPos = outputBlock ? outputBlock.end : currentCell.end;
+      const outputBlock = findOutputBlock(updatedContent, updatedCurrentCell.end);
+      const insertPos = outputBlock ? outputBlock.end : updatedCurrentCell.end;
 
       // Template: newlines + fence + language + newline + empty line + closing fence
-      const lang = currentCell.language;
       const newCell = `\n\n\`\`\`${lang}\n\n\`\`\``;
 
       // Calculate cursor position: after opening fence + language + newline
@@ -95,7 +138,12 @@ export function runCellAndAdvance(editor) {
  */
 export function runAllCells(editor) {
   return (view) => {
-    editor.runAll();
+    // Use cellControls.runAll if available for proper queue handling
+    if (editor.cellControls?.runAll) {
+      editor.cellControls.runAll();
+    } else {
+      editor.runAll();
+    }
     return true;
   };
 }
@@ -114,7 +162,12 @@ export function runAllAbove(editor) {
 
     if (!cell) return false;
 
-    editor.runAllAbove();
+    // Use cellControls.runAllAbove if available for proper queue handling
+    if (editor.cellControls?.runAllAbove) {
+      editor.cellControls.runAllAbove();
+    } else {
+      editor.runAllAbove();
+    }
     return true;
   };
 }

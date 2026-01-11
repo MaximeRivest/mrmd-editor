@@ -710,7 +710,11 @@ export class ExecutionManager {
       };
 
       // Execute with streaming (pass onStdinRequest for input() support)
-      const result = await this.registry.executeStreaming(code, language, onChunk, onStdinRequest);
+      // Pass execId so hub runtimes can find the output block
+      const result = await this.registry.executeStreaming(code, language, onChunk, onStdinRequest, {
+        execId,
+        cellId: cell.id || `cell-${index}`,
+      });
 
       // Final update - find output block by execId for robustness
       content = this.editor.getContent();

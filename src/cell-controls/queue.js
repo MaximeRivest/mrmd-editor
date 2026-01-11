@@ -92,6 +92,19 @@ export class ExecutionQueue {
    * Set up listeners on the execution manager
    */
   _setupExecutionManagerListeners() {
+    // Listen for cell run start - output block is now created, so we can add status line
+    this.executionManager.on('cellRun', (index, cell, execId) => {
+      const entry = this._findRunningByCellIndex(index);
+      console.log('[ExecutionQueue] cellRun event, index:', index, 'execId:', execId, 'found entry:', entry?.language);
+      if (entry && this.config.statusLineInOutput) {
+        // Output block now exists - update status line
+        // Use requestAnimationFrame to ensure DOM has updated
+        requestAnimationFrame(() => {
+          this._updateStatusLine(entry.execId);
+        });
+      }
+    });
+
     // Listen for completion to process next in queue
     // Find the running entry by cellIndex across all languages
     this.executionManager.on('cellComplete', (index, result) => {
@@ -427,10 +440,8 @@ export class ExecutionQueue {
       lastRunAt: entry.startedAt
     });
 
-    // Update status line in output
-    if (this.config.statusLineInOutput) {
-      this._updateStatusLine(entry.execId);
-    }
+    // Note: Status line in output is updated via cellRun event listener
+    // after the execution manager creates the output block
 
     this._emit('started', entry);
     this._emit('queueChanged', this.getQueueSnapshot());
