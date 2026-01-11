@@ -14,6 +14,7 @@
 import { findCells, getCellAtIndex, getCellAtCursor, findOutputBlock, findOutputBlockByExecId, findStdinBlockByExecId, generateExecId } from './cells.js';
 import { TerminalBuffer } from './terminal.js';
 import { pendingStdinRequests } from './output-widget.js';
+import { MonitorCoordination, EXECUTION_STATUS } from './monitor-coordination.js';
 import * as Y from 'yjs';
 
 /**
@@ -51,8 +52,102 @@ export class ExecutionManager {
       stdinRequest: [], // Called when input() is invoked
     };
 
+    // Monitor mode state
+    /** @type {MonitorCoordination|null} */
+    this.coordination = null;
+
+    /** @type {boolean} */
+    this._monitorMode = false;
+
+    /** @type {string|null} Default runtime URL for monitor mode */
+    this._defaultRuntimeUrl = null;
+
+    /** @type {Map<string, Function>} Unsubscribe functions for monitor status watchers */
+    this._monitorUnsubscribes = new Map();
+
     // Setup terminal-like stdin handler
     this._setupStdinKeyHandler();
+  }
+
+  // ===========================================================================
+  // Monitor Mode
+  // ===========================================================================
+
+  /**
+   * Enable monitor mode for execution
+   *
+   * In monitor mode, executions are routed through mrmd-monitor instead of
+   * being handled directly by the browser. This allows long-running executions
+   * to survive browser disconnects.
+   *
+   * @param {Object} options
+   * @param {Y.Doc} options.ydoc - Yjs document
+   * @param {string} options.runtimeUrl - Default runtime URL for MRP
+   * @param {import('y-protocols/awareness').Awareness} [options.awareness] - For monitor detection
+   */
+  enableMonitorMode({ ydoc, runtimeUrl, awareness }) {
+    if (this.coordination) {
+      this.coordination.destroy();
+    }
+
+    this.coordination = new MonitorCoordination(ydoc, ydoc.clientID);
+    this._defaultRuntimeUrl = runtimeUrl;
+    this._monitorMode = true;
+    this._awareness = awareness;
+
+    console.log('[ExecutionManager] Monitor mode enabled, runtimeUrl:', runtimeUrl);
+  }
+
+  /**
+   * Disable monitor mode (use direct execution)
+   */
+  disableMonitorMode() {
+    if (this.coordination) {
+      this.coordination.destroy();
+      this.coordination = null;
+    }
+
+    // Clean up status watchers
+    for (const unsub of this._monitorUnsubscribes.values()) {
+      unsub();
+    }
+    this._monitorUnsubscribes.clear();
+
+    this._monitorMode = false;
+    this._defaultRuntimeUrl = null;
+    this._awareness = null;
+
+    console.log('[ExecutionManager] Monitor mode disabled');
+  }
+
+  /**
+   * Check if monitor mode is enabled and a monitor is available
+   *
+   * @returns {boolean}
+   */
+  isMonitorAvailable() {
+    if (!this._monitorMode || !this.coordination) {
+      return false;
+    }
+
+    return this.coordination.isMonitorAvailable(this._awareness);
+  }
+
+  /**
+   * Get runtime URL for a language
+   *
+   * @param {string} language
+   * @returns {string|null}
+   */
+  _getRuntimeUrl(language) {
+    // First check if the registry has a runtime with a URL
+    const runtime = this.registry.getRuntime(language);
+    if (runtime?.runtimeUrl) {
+      return runtime.runtimeUrl;
+    }
+
+    // Fall back to default
+    return this._defaultRuntimeUrl;
   }
 
   /**
@@ -482,7 +577,18 @@ export class ExecutionManager {
   async _executeCell(cell, index) {
     const { language, code } = cell;
 
-    // Check runtime support
+    // Check if we should use monitor mode
+    // Monitor mode routes execution through mrmd-monitor for persistence
+    if (this._monitorMode && this.coordination) {
+      const runtimeUrl = this._getRuntimeUrl(language);
+      if (runtimeUrl) {
+        return this._executeCellViaMonitor(cell, index, runtimeUrl);
+      }
+      // Fall through to direct execution if no runtime URL
+      console.warn(`[ExecutionManager] No runtime URL for ${language}, falling back to direct execution`);
+    }
+
+    // Check runtime support (for direct execution)
     if (!this.registry.supports(language)) {
       console.warn(`No runtime for language: ${language}`);
       this._emit('cellError', index, `No runtime registered for ${language}`);
@@ -770,6 +876,245 @@ export class ExecutionManager {
         this.editor.view.dispatch({ effects: [] });
       }
     }
+  }
+
+  /**
+   * Execute a cell via monitor (Y.Map coordination protocol)
+   *
+   * Instead of executing directly, we:
+   * 1. Request execution via Y.Map('executions')
+   * 2. Wait for monitor to claim it
+   * 3. Create output block and mark ready
+   * 4. Watch for status changes (output comes via Y.Text sync)
+   *
+   * @param {Object} cell - Cell info
+   * @param {number} index - Cell index
+   * @param {string} runtimeUrl - MRP runtime URL
+   * @returns {Promise<string>} The execution ID
+   */
+  async _executeCellViaMonitor(cell, index, runtimeUrl) {
+    const { language, code } = cell;
+
+    // Cancel any existing execution for this cell
+    this.cancel(index);
+
+    console.log(`[ExecutionManager] Executing via monitor: ${language}`);
+
+    // Request execution via coordination protocol
+    const execId = this.coordination.requestExecution({
+      code,
+      language,
+      runtimeUrl,
+      session: 'default',
+      cellId: cell.id || `cell-${index}`,
+    });
+
+    // Track this execution
+    this.cellExecIds.set(index, execId);
+
+    // Create a "virtual" abort controller for cancellation
+    const controller = new AbortController();
+    this.running.set(execId, controller);
+
+    // Emit start event
+    this._emit('cellRun', index, cell, execId);
+
+    try {
+      // Prepare output block
+      let content = this.editor.getContent();
+      let currentCell = getCellAtIndex(content, index);
+
+      if (!currentCell) {
+        throw new Error('Cell no longer exists');
+      }
+
+      // Wait for monitor to claim the execution (with timeout)
+      console.log(`[ExecutionManager] Waiting for monitor to claim ${execId}...`);
+
+      const claimTimeout = 10000; // 10 seconds
+      try {
+        await this.coordination.waitForStatus(execId, EXECUTION_STATUS.CLAIMED, claimTimeout);
+      } catch (err) {
+        throw new Error('No monitor available to handle execution. Is mrmd-monitor running?');
+      }
+
+      console.log(`[ExecutionManager] Monitor claimed ${execId}, creating output block`);
+
+      // Monitor claimed it - now create output block
+      const existingOutput = findOutputBlock(content, currentCell.end);
+
+      if (existingOutput) {
+        this.editor.view.dispatch({
+          changes: {
+            from: existingOutput.start,
+            to: existingOutput.end,
+            insert: `\`\`\`output:${execId}\n\`\`\``
+          },
+        });
+      } else {
+        const insertPos = currentCell.end;
+        this.editor.view.dispatch({
+          changes: { from: insertPos, insert: `\n\n\`\`\`output:${execId}\n\`\`\`` },
+        });
+      }
+
+      // Find the output block and create relative position
+      content = this.editor.getContent();
+      const outputBlock = findOutputBlockByExecId(content, execId);
+
+      if (!outputBlock) {
+        throw new Error('Failed to create output block');
+      }
+
+      // Create relative position for monitor to use
+      const yText = this.editor.getYText?.();
+      let outputPosition = null;
+      if (yText) {
+        const relPos = Y.createRelativePositionFromTypeIndex(yText, outputBlock.contentStart, -1);
+        outputPosition = Y.relativePositionToJSON(relPos);
+      }
+
+      // Mark output block as ready
+      this.coordination.setOutputBlockReady(execId, outputPosition);
+      console.log(`[ExecutionManager] Output block ready for ${execId}`);
+
+      // Set up status watcher for completion
+      const statusPromise = new Promise((resolve, reject) => {
+        const unsub = this.coordination.onStatusChange(execId, (status, exec) => {
+          console.log(`[ExecutionManager] Status change for ${execId}: ${status}`);
+
+          if (status === EXECUTION_STATUS.COMPLETED) {
+            unsub();
+            this._monitorUnsubscribes.delete(execId);
+            resolve({ success: true, result: exec.result });
+          } else if (status === EXECUTION_STATUS.ERROR) {
+            unsub();
+            this._monitorUnsubscribes.delete(execId);
+            resolve({ success: false, error: exec.error });
+          } else if (status === EXECUTION_STATUS.CANCELLED) {
+            unsub();
+            this._monitorUnsubscribes.delete(execId);
+            reject(new Error('Execution cancelled'));
+          }
+
+          // Handle stdin requests
+          if (exec.stdinRequest && !exec.stdinResponse) {
+            this._handleMonitorStdinRequest(execId, exec.stdinRequest, index);
+          }
+        });
+
+        this._monitorUnsubscribes.set(execId, unsub);
+
+        // Handle abort
+        controller.signal.addEventListener('abort', () => {
+          unsub();
+          this._monitorUnsubscribes.delete(execId);
+          this.coordination.cancelExecution(execId);
+          reject(new Error('Execution aborted'));
+        }, { once: true });
+      });
+
+      // Wait for completion
+      const result = await statusPromise;
+
+      if (result.error) {
+        this._emit('cellError', index, result.error, execId);
+      }
+
+      this._emit('cellComplete', index, result, execId);
+      return execId;
+
+    } catch (err) {
+      if (err.name !== 'AbortError' && err.message !== 'Execution aborted') {
+        console.error('[ExecutionManager] Monitor execution error:', err);
+        this._emit('cellError', index, err, execId);
+      }
+      return execId;
+
+    } finally {
+      this.running.delete(execId);
+      this._monitorUnsubscribes.delete(execId);
+
+      // Trigger view update
+      if (this.editor?.view) {
+        this.editor.view.dispatch({ effects: [] });
+      }
+    }
+  }
+
+  /**
+   * Handle stdin request from monitor (via Y.Map)
+   *
+   * @param {string} execId
+   * @param {Object} stdinRequest
+   * @param {number} cellIndex
+   */
+  _handleMonitorStdinRequest(execId, stdinRequest, cellIndex) {
+    console.log(`[ExecutionManager] Stdin request from monitor: ${execId}`, stdinRequest);
+
+    // Find output block to insert stdin block after
+    const content = this.editor.getContent();
+    const outputBlock = findOutputBlockByExecId(content, execId);
+
+    if (!outputBlock) {
+      console.warn('[ExecutionManager] Output block not found for stdin request');
+      return;
+    }
+
+    // Create stdin block
+    const stdinMarker = stdinRequest.password
+      ? `\n\n\`\`\`stdin:${execId}:password\n\n\`\`\``
+      : `\n\n\`\`\`stdin:${execId}\n\n\`\`\``;
+
+    this.editor.view.dispatch({
+      changes: { from: outputBlock.end, to: outputBlock.end, insert: stdinMarker },
+    });
+
+    // Store request for Enter key handling
+    // When user presses Enter, we'll send response via coordination
+    pendingStdinRequests.set(execId, {
+      prompt: stdinRequest.prompt,
+      password: stdinRequest.password,
+      execId,
+      cellIndex,
+      // For monitor mode, resolve sends to Y.Map instead of local promise
+      resolve: (text) => {
+        this.coordination.respondStdin(execId, text);
+        // Clean up stdin block
+        const updatedContent = this.editor.getContent();
+        const stdinBlock = findStdinBlockByExecId(updatedContent, execId);
+        if (stdinBlock) {
+          this.editor.view.dispatch({
+            changes: { from: stdinBlock.start, to: stdinBlock.end },
+          });
+        }
+      },
+      reject: () => {
+        // Cleanup on cancel
+        const updatedContent = this.editor.getContent();
+        const stdinBlock = findStdinBlockByExecId(updatedContent, execId);
+        if (stdinBlock) {
+          this.editor.view.dispatch({
+            changes: { from: stdinBlock.start, to: stdinBlock.end },
+          });
+        }
+      },
+    });
+
+    // Position cursor in stdin block
+    requestAnimationFrame(() => {
+      const updatedContent = this.editor.getContent();
+      const stdinBlock = findStdinBlockByExecId(updatedContent, execId);
+      if (stdinBlock) {
+        this.editor.view.dispatch({
+          selection: { anchor: stdinBlock.contentStart },
+          scrollIntoView: true,
+        });
+        this.editor.view.focus();
+      }
+    });
+
+    this._emit('stdinRequest', cellIndex, stdinRequest, null, null, execId);
   }
 
   /**

@@ -53607,9 +53607,10 @@ class RuntimeRegistry {
    * @param {string} language - Language identifier
    * @param {function(string, string, boolean): void} onChunk - Callback (chunk, accumulated, done)
    * @param {function(StdinRequest): Promise<string>} [onStdinRequest] - Callback for handling input() calls
+   * @param {Object} [options] - Additional options (e.g., execId for hub runtimes)
    * @returns {Promise<ExecutionResult>}
    */
-  async executeStreaming(code, language, onChunk, onStdinRequest) {
+  async executeStreaming(code, language, onChunk, onStdinRequest, options = {}) {
     const runtime = this.getRuntime(language);
     if (!runtime) {
       const error = `No runtime registered for language: ${language}`;
@@ -53624,7 +53625,7 @@ class RuntimeRegistry {
 
     // Use streaming if available, otherwise wrap execute
     if (typeof runtime.executeStreaming === 'function') {
-      return runtime.executeStreaming(code, language, onChunk, onStdinRequest);
+      return runtime.executeStreaming(code, language, onChunk, onStdinRequest, options);
     } else {
       // Fallback: run execute and send all output at once
       const result = await runtime.execute(code, language);
@@ -55568,6 +55569,325 @@ function injectOutputWidgetStyles() {
 // #endregion EXPORTS
 
 /**
+ * Monitor Coordination
+ *
+ * Browser-side coordination protocol for working with mrmd-monitor.
+ * Uses Y.Map('executions') to communicate with the monitor.
+ *
+ * @module mrmd-editor/monitor-coordination
+ */
+
+
+/**
+ * Execution status values (must match mrmd-monitor/coordination.js)
+ */
+const EXECUTION_STATUS = {
+  /** Browser has requested execution */
+  REQUESTED: 'requested',
+  /** Monitor has claimed the execution */
+  CLAIMED: 'claimed',
+  /** Browser has created output block, ready to start */
+  READY: 'ready',
+  /** Monitor is streaming output from runtime */
+  RUNNING: 'running',
+  /** Execution completed successfully */
+  COMPLETED: 'completed',
+  /** Execution failed with error */
+  ERROR: 'error',
+  /** Execution was cancelled */
+  CANCELLED: 'cancelled',
+};
+
+/**
+ * Browser-side coordination for monitor mode
+ */
+class MonitorCoordination {
+  /**
+   * @param {Y.Doc} ydoc - Yjs document
+   * @param {number} clientId - This client's ID
+   */
+  constructor(ydoc, clientId) {
+    /** @type {Y.Doc} */
+    this.ydoc = ydoc;
+
+    /** @type {number} */
+    this.clientId = clientId;
+
+    /** @type {Y.Map} */
+    this.executions = ydoc.getMap('executions');
+
+    /** @type {Map<string, Function>} */
+    this._statusCallbacks = new Map();
+
+    /** @type {Set<Function>} */
+    this._observers = new Set();
+
+    // Start observing
+    this._setupObserver();
+  }
+
+  /**
+   * Generate unique execution ID
+   * @returns {string}
+   */
+  static generateExecId() {
+    return `exec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  /**
+   * Set up Y.Map observer
+   */
+  _setupObserver() {
+    const observer = (event) => {
+      event.changes.keys.forEach((change, execId) => {
+        const exec = this.executions.get(execId);
+
+        // Call status callback if registered
+        const callback = this._statusCallbacks.get(execId);
+        if (callback && exec) {
+          callback(exec.status, exec);
+        }
+      });
+    };
+
+    this.executions.observe(observer);
+    this._observers.add(observer);
+  }
+
+  /**
+   * Request execution via monitor
+   *
+   * @param {Object} options
+   * @param {string} options.code - Code to execute
+   * @param {string} options.language - Language identifier
+   * @param {string} options.runtimeUrl - MRP runtime URL
+   * @param {string} [options.session] - MRP session ID
+   * @param {string} [options.cellId] - Cell ID for tracking
+   * @returns {string} execId
+   */
+  requestExecution({ code, language, runtimeUrl, session = 'default', cellId }) {
+    const execId = MonitorCoordination.generateExecId();
+
+    this.executions.set(execId, {
+      id: execId,
+      cellId,
+      code,
+      language,
+      runtimeUrl,
+      session,
+      status: EXECUTION_STATUS.REQUESTED,
+      requestedBy: this.clientId,
+      requestedAt: Date.now(),
+      claimedBy: null,
+      claimedAt: null,
+      outputBlockReady: false,
+      outputPosition: null,
+      startedAt: null,
+      completedAt: null,
+      stdinRequest: null,
+      stdinResponse: null,
+      result: null,
+      error: null,
+      displayData: [],
+    });
+
+    return execId;
+  }
+
+  /**
+   * Mark output block as ready (called after creating output block in Y.Text)
+   *
+   * @param {string} execId
+   * @param {Object} outputPosition - Yjs RelativePosition as JSON
+   */
+  setOutputBlockReady(execId, outputPosition) {
+    const exec = this.executions.get(execId);
+    if (!exec) return;
+
+    this.executions.set(execId, {
+      ...exec,
+      status: exec.status === EXECUTION_STATUS.CLAIMED ? EXECUTION_STATUS.READY : exec.status,
+      outputBlockReady: true,
+      outputPosition,
+    });
+  }
+
+  /**
+   * Respond to stdin request
+   *
+   * @param {string} execId
+   * @param {string} text - User input
+   */
+  respondStdin(execId, text) {
+    const exec = this.executions.get(execId);
+    if (!exec) return;
+
+    this.executions.set(execId, {
+      ...exec,
+      stdinResponse: {
+        text,
+        respondedAt: Date.now(),
+      },
+    });
+  }
+
+  /**
+   * Cancel execution
+   *
+   * @param {string} execId
+   */
+  cancelExecution(execId) {
+    const exec = this.executions.get(execId);
+    if (!exec) return;
+
+    // Only cancel if not already completed/error
+    if ([EXECUTION_STATUS.COMPLETED, EXECUTION_STATUS.ERROR, EXECUTION_STATUS.CANCELLED].includes(exec.status)) {
+      return;
+    }
+
+    this.executions.set(execId, {
+      ...exec,
+      status: EXECUTION_STATUS.CANCELLED,
+      completedAt: Date.now(),
+    });
+  }
+
+  /**
+   * Get execution by ID
+   *
+   * @param {string} execId
+   * @returns {Object|undefined}
+   */
+  getExecution(execId) {
+    return this.executions.get(execId);
+  }
+
+  /**
+   * Watch for status changes on a specific execution
+   *
+   * @param {string} execId
+   * @param {Function} callback - Called with (status, execution)
+   * @returns {Function} Unsubscribe function
+   */
+  onStatusChange(execId, callback) {
+    this._statusCallbacks.set(execId, callback);
+
+    return () => {
+      this._statusCallbacks.delete(execId);
+    };
+  }
+
+  /**
+   * Wait for a specific status
+   *
+   * @param {string} execId
+   * @param {string|string[]} targetStatus - Status or array of statuses to wait for
+   * @param {number} [timeout=30000] - Timeout in ms
+   * @returns {Promise<Object>} Execution object when status is reached
+   */
+  waitForStatus(execId, targetStatus, timeout = 30000) {
+    const statuses = Array.isArray(targetStatus) ? targetStatus : [targetStatus];
+
+    return new Promise((resolve, reject) => {
+      // Check current status first
+      const current = this.executions.get(execId);
+      if (current && statuses.includes(current.status)) {
+        resolve(current);
+        return;
+      }
+
+      let timeoutId;
+      const unsubscribe = this.onStatusChange(execId, (status, exec) => {
+        if (statuses.includes(status)) {
+          clearTimeout(timeoutId);
+          unsubscribe();
+          resolve(exec);
+        }
+      });
+
+      timeoutId = setTimeout(() => {
+        unsubscribe();
+        reject(new Error(`Timeout waiting for status ${statuses.join('/')} on ${execId}`));
+      }, timeout);
+    });
+  }
+
+  /**
+   * Check if monitor mode is available
+   *
+   * Looks for any monitor in awareness or recent activity in executions map.
+   *
+   * @param {import('y-protocols/awareness').Awareness} [awareness]
+   * @returns {boolean}
+   */
+  isMonitorAvailable(awareness) {
+    if (awareness) {
+      // Check if any peer is a monitor
+      for (const [clientId, state] of awareness.getStates()) {
+        if (state?.user?.type === 'monitor') {
+          return true;
+        }
+      }
+    }
+
+    // Fallback: check if there are any recently claimed executions
+    // (indicates a monitor is active)
+    const now = Date.now();
+    const recentThreshold = 60000; // 1 minute
+
+    for (const exec of this.executions.values()) {
+      if (exec.claimedBy && exec.claimedAt && (now - exec.claimedAt) < recentThreshold) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Clean up old executions (call periodically)
+   *
+   * @param {number} [maxAge=3600000] - Max age in ms (default: 1 hour)
+   */
+  cleanup(maxAge = 3600000) {
+    const now = Date.now();
+    const toDelete = [];
+
+    this.executions.forEach((exec, execId) => {
+      const age = now - (exec.completedAt || exec.requestedAt);
+      if (age > maxAge && [EXECUTION_STATUS.COMPLETED, EXECUTION_STATUS.ERROR, EXECUTION_STATUS.CANCELLED].includes(exec.status)) {
+        toDelete.push(execId);
+      }
+    });
+
+    for (const execId of toDelete) {
+      this.executions.delete(execId);
+    }
+  }
+
+  /**
+   * Destroy and clean up
+   */
+  destroy() {
+    for (const observer of this._observers) {
+      this.executions.unobserve(observer);
+    }
+    this._observers.clear();
+    this._statusCallbacks.clear();
+  }
+}
+
+/**
+ * Create monitor coordination instance
+ *
+ * @param {Y.Doc} ydoc
+ * @returns {MonitorCoordination}
+ */
+function createMonitorCoordination(ydoc) {
+  return new MonitorCoordination(ydoc, ydoc.clientID);
+}
+
+/**
  * Execution Manager
  *
  * Handles running code cells and streaming output into the document.
@@ -55616,8 +55936,102 @@ class ExecutionManager {
       stdinRequest: [], // Called when input() is invoked
     };
 
+    // Monitor mode state
+    /** @type {MonitorCoordination|null} */
+    this.coordination = null;
+
+    /** @type {boolean} */
+    this._monitorMode = false;
+
+    /** @type {string|null} Default runtime URL for monitor mode */
+    this._defaultRuntimeUrl = null;
+
+    /** @type {Map<string, Function>} Unsubscribe functions for monitor status watchers */
+    this._monitorUnsubscribes = new Map();
+
     // Setup terminal-like stdin handler
     this._setupStdinKeyHandler();
+  }
+
+  // ===========================================================================
+  // Monitor Mode
+  // ===========================================================================
+
+  /**
+   * Enable monitor mode for execution
+   *
+   * In monitor mode, executions are routed through mrmd-monitor instead of
+   * being handled directly by the browser. This allows long-running executions
+   * to survive browser disconnects.
+   *
+   * @param {Object} options
+   * @param {Y.Doc} options.ydoc - Yjs document
+   * @param {string} options.runtimeUrl - Default runtime URL for MRP
+   * @param {import('y-protocols/awareness').Awareness} [options.awareness] - For monitor detection
+   */
+  enableMonitorMode({ ydoc, runtimeUrl, awareness }) {
+    if (this.coordination) {
+      this.coordination.destroy();
+    }
+
+    this.coordination = new MonitorCoordination(ydoc, ydoc.clientID);
+    this._defaultRuntimeUrl = runtimeUrl;
+    this._monitorMode = true;
+    this._awareness = awareness;
+
+    console.log('[ExecutionManager] Monitor mode enabled, runtimeUrl:', runtimeUrl);
+  }
+
+  /**
+   * Disable monitor mode (use direct execution)
+   */
+  disableMonitorMode() {
+    if (this.coordination) {
+      this.coordination.destroy();
+      this.coordination = null;
+    }
+
+    // Clean up status watchers
+    for (const unsub of this._monitorUnsubscribes.values()) {
+      unsub();
+    }
+    this._monitorUnsubscribes.clear();
+
+    this._monitorMode = false;
+    this._defaultRuntimeUrl = null;
+    this._awareness = null;
+
+    console.log('[ExecutionManager] Monitor mode disabled');
+  }
+
+  /**
+   * Check if monitor mode is enabled and a monitor is available
+   *
+   * @returns {boolean}
+   */
+  isMonitorAvailable() {
+    if (!this._monitorMode || !this.coordination) {
+      return false;
+    }
+
+    return this.coordination.isMonitorAvailable(this._awareness);
+  }
+
+  /**
+   * Get runtime URL for a language
+   *
+   * @param {string} language
+   * @returns {string|null}
+   */
+  _getRuntimeUrl(language) {
+    // First check if the registry has a runtime with a URL
+    const runtime = this.registry.getRuntime(language);
+    if (runtime?.runtimeUrl) {
+      return runtime.runtimeUrl;
+    }
+
+    // Fall back to default
+    return this._defaultRuntimeUrl;
   }
 
   /**
@@ -56047,7 +56461,18 @@ class ExecutionManager {
   async _executeCell(cell, index) {
     const { language, code } = cell;
 
-    // Check runtime support
+    // Check if we should use monitor mode
+    // Monitor mode routes execution through mrmd-monitor for persistence
+    if (this._monitorMode && this.coordination) {
+      const runtimeUrl = this._getRuntimeUrl(language);
+      if (runtimeUrl) {
+        return this._executeCellViaMonitor(cell, index, runtimeUrl);
+      }
+      // Fall through to direct execution if no runtime URL
+      console.warn(`[ExecutionManager] No runtime URL for ${language}, falling back to direct execution`);
+    }
+
+    // Check runtime support (for direct execution)
     if (!this.registry.supports(language)) {
       console.warn(`No runtime for language: ${language}`);
       this._emit('cellError', index, `No runtime registered for ${language}`);
@@ -56275,7 +56700,11 @@ class ExecutionManager {
       };
 
       // Execute with streaming (pass onStdinRequest for input() support)
-      const result = await this.registry.executeStreaming(code, language, onChunk, onStdinRequest);
+      // Pass execId so hub runtimes can find the output block
+      const result = await this.registry.executeStreaming(code, language, onChunk, onStdinRequest, {
+        execId,
+        cellId: cell.id || `cell-${index}`,
+      });
 
       // Final update - find output block by execId for robustness
       content = this.editor.getContent();
@@ -56331,6 +56760,245 @@ class ExecutionManager {
         this.editor.view.dispatch({ effects: [] });
       }
     }
+  }
+
+  /**
+   * Execute a cell via monitor (Y.Map coordination protocol)
+   *
+   * Instead of executing directly, we:
+   * 1. Request execution via Y.Map('executions')
+   * 2. Wait for monitor to claim it
+   * 3. Create output block and mark ready
+   * 4. Watch for status changes (output comes via Y.Text sync)
+   *
+   * @param {Object} cell - Cell info
+   * @param {number} index - Cell index
+   * @param {string} runtimeUrl - MRP runtime URL
+   * @returns {Promise<string>} The execution ID
+   */
+  async _executeCellViaMonitor(cell, index, runtimeUrl) {
+    const { language, code } = cell;
+
+    // Cancel any existing execution for this cell
+    this.cancel(index);
+
+    console.log(`[ExecutionManager] Executing via monitor: ${language}`);
+
+    // Request execution via coordination protocol
+    const execId = this.coordination.requestExecution({
+      code,
+      language,
+      runtimeUrl,
+      session: 'default',
+      cellId: cell.id || `cell-${index}`,
+    });
+
+    // Track this execution
+    this.cellExecIds.set(index, execId);
+
+    // Create a "virtual" abort controller for cancellation
+    const controller = new AbortController();
+    this.running.set(execId, controller);
+
+    // Emit start event
+    this._emit('cellRun', index, cell, execId);
+
+    try {
+      // Prepare output block
+      let content = this.editor.getContent();
+      let currentCell = getCellAtIndex(content, index);
+
+      if (!currentCell) {
+        throw new Error('Cell no longer exists');
+      }
+
+      // Wait for monitor to claim the execution (with timeout)
+      console.log(`[ExecutionManager] Waiting for monitor to claim ${execId}...`);
+
+      const claimTimeout = 10000; // 10 seconds
+      try {
+        await this.coordination.waitForStatus(execId, EXECUTION_STATUS.CLAIMED, claimTimeout);
+      } catch (err) {
+        throw new Error('No monitor available to handle execution. Is mrmd-monitor running?');
+      }
+
+      console.log(`[ExecutionManager] Monitor claimed ${execId}, creating output block`);
+
+      // Monitor claimed it - now create output block
+      const existingOutput = findOutputBlock(content, currentCell.end);
+
+      if (existingOutput) {
+        this.editor.view.dispatch({
+          changes: {
+            from: existingOutput.start,
+            to: existingOutput.end,
+            insert: `\`\`\`output:${execId}\n\`\`\``
+          },
+        });
+      } else {
+        const insertPos = currentCell.end;
+        this.editor.view.dispatch({
+          changes: { from: insertPos, insert: `\n\n\`\`\`output:${execId}\n\`\`\`` },
+        });
+      }
+
+      // Find the output block and create relative position
+      content = this.editor.getContent();
+      const outputBlock = findOutputBlockByExecId(content, execId);
+
+      if (!outputBlock) {
+        throw new Error('Failed to create output block');
+      }
+
+      // Create relative position for monitor to use
+      const yText = this.editor.getYText?.();
+      let outputPosition = null;
+      if (yText) {
+        const relPos = createRelativePositionFromTypeIndex(yText, outputBlock.contentStart, -1);
+        outputPosition = relativePositionToJSON(relPos);
+      }
+
+      // Mark output block as ready
+      this.coordination.setOutputBlockReady(execId, outputPosition);
+      console.log(`[ExecutionManager] Output block ready for ${execId}`);
+
+      // Set up status watcher for completion
+      const statusPromise = new Promise((resolve, reject) => {
+        const unsub = this.coordination.onStatusChange(execId, (status, exec) => {
+          console.log(`[ExecutionManager] Status change for ${execId}: ${status}`);
+
+          if (status === EXECUTION_STATUS.COMPLETED) {
+            unsub();
+            this._monitorUnsubscribes.delete(execId);
+            resolve({ success: true, result: exec.result });
+          } else if (status === EXECUTION_STATUS.ERROR) {
+            unsub();
+            this._monitorUnsubscribes.delete(execId);
+            resolve({ success: false, error: exec.error });
+          } else if (status === EXECUTION_STATUS.CANCELLED) {
+            unsub();
+            this._monitorUnsubscribes.delete(execId);
+            reject(new Error('Execution cancelled'));
+          }
+
+          // Handle stdin requests
+          if (exec.stdinRequest && !exec.stdinResponse) {
+            this._handleMonitorStdinRequest(execId, exec.stdinRequest, index);
+          }
+        });
+
+        this._monitorUnsubscribes.set(execId, unsub);
+
+        // Handle abort
+        controller.signal.addEventListener('abort', () => {
+          unsub();
+          this._monitorUnsubscribes.delete(execId);
+          this.coordination.cancelExecution(execId);
+          reject(new Error('Execution aborted'));
+        }, { once: true });
+      });
+
+      // Wait for completion
+      const result = await statusPromise;
+
+      if (result.error) {
+        this._emit('cellError', index, result.error, execId);
+      }
+
+      this._emit('cellComplete', index, result, execId);
+      return execId;
+
+    } catch (err) {
+      if (err.name !== 'AbortError' && err.message !== 'Execution aborted') {
+        console.error('[ExecutionManager] Monitor execution error:', err);
+        this._emit('cellError', index, err, execId);
+      }
+      return execId;
+
+    } finally {
+      this.running.delete(execId);
+      this._monitorUnsubscribes.delete(execId);
+
+      // Trigger view update
+      if (this.editor?.view) {
+        this.editor.view.dispatch({ effects: [] });
+      }
+    }
+  }
+
+  /**
+   * Handle stdin request from monitor (via Y.Map)
+   *
+   * @param {string} execId
+   * @param {Object} stdinRequest
+   * @param {number} cellIndex
+   */
+  _handleMonitorStdinRequest(execId, stdinRequest, cellIndex) {
+    console.log(`[ExecutionManager] Stdin request from monitor: ${execId}`, stdinRequest);
+
+    // Find output block to insert stdin block after
+    const content = this.editor.getContent();
+    const outputBlock = findOutputBlockByExecId(content, execId);
+
+    if (!outputBlock) {
+      console.warn('[ExecutionManager] Output block not found for stdin request');
+      return;
+    }
+
+    // Create stdin block
+    const stdinMarker = stdinRequest.password
+      ? `\n\n\`\`\`stdin:${execId}:password\n\n\`\`\``
+      : `\n\n\`\`\`stdin:${execId}\n\n\`\`\``;
+
+    this.editor.view.dispatch({
+      changes: { from: outputBlock.end, to: outputBlock.end, insert: stdinMarker },
+    });
+
+    // Store request for Enter key handling
+    // When user presses Enter, we'll send response via coordination
+    pendingStdinRequests.set(execId, {
+      prompt: stdinRequest.prompt,
+      password: stdinRequest.password,
+      execId,
+      cellIndex,
+      // For monitor mode, resolve sends to Y.Map instead of local promise
+      resolve: (text) => {
+        this.coordination.respondStdin(execId, text);
+        // Clean up stdin block
+        const updatedContent = this.editor.getContent();
+        const stdinBlock = findStdinBlockByExecId(updatedContent, execId);
+        if (stdinBlock) {
+          this.editor.view.dispatch({
+            changes: { from: stdinBlock.start, to: stdinBlock.end },
+          });
+        }
+      },
+      reject: () => {
+        // Cleanup on cancel
+        const updatedContent = this.editor.getContent();
+        const stdinBlock = findStdinBlockByExecId(updatedContent, execId);
+        if (stdinBlock) {
+          this.editor.view.dispatch({
+            changes: { from: stdinBlock.start, to: stdinBlock.end },
+          });
+        }
+      },
+    });
+
+    // Position cursor in stdin block
+    requestAnimationFrame(() => {
+      const updatedContent = this.editor.getContent();
+      const stdinBlock = findStdinBlockByExecId(updatedContent, execId);
+      if (stdinBlock) {
+        this.editor.view.dispatch({
+          selection: { anchor: stdinBlock.contentStart },
+          scrollIntoView: true,
+        });
+        this.editor.view.focus();
+      }
+    });
+
+    this._emit('stdinRequest', cellIndex, stdinRequest, null, null, execId);
   }
 
   /**
@@ -57194,6 +57862,19 @@ class ExecutionQueue {
    * Set up listeners on the execution manager
    */
   _setupExecutionManagerListeners() {
+    // Listen for cell run start - output block is now created, so we can add status line
+    this.executionManager.on('cellRun', (index, cell, execId) => {
+      const entry = this._findRunningByCellIndex(index);
+      console.log('[ExecutionQueue] cellRun event, index:', index, 'execId:', execId, 'found entry:', entry?.language);
+      if (entry && this.config.statusLineInOutput) {
+        // Output block now exists - update status line
+        // Use requestAnimationFrame to ensure DOM has updated
+        requestAnimationFrame(() => {
+          this._updateStatusLine(entry.execId);
+        });
+      }
+    });
+
     // Listen for completion to process next in queue
     // Find the running entry by cellIndex across all languages
     this.executionManager.on('cellComplete', (index, result) => {
@@ -57529,10 +58210,8 @@ class ExecutionQueue {
       lastRunAt: entry.startedAt
     });
 
-    // Update status line in output
-    if (this.config.statusLineInOutput) {
-      this._updateStatusLine(entry.execId);
-    }
+    // Note: Status line in output is updated via cellRun event listener
+    // after the execution manager creates the output block
 
     this._emit('started', entry);
     this._emit('queueChanged', this.getQueueSnapshot());
@@ -58371,9 +59050,7 @@ class CellControlsPluginClass {
   constructor(view) {
     this.view = view;
     this.context = view.state.facet(cellControlsFacet);
-    console.log('[CellControls] Plugin constructor, context:', this.context);
     this.decorations = buildDecorations(view, this.context);
-    console.log('[CellControls] Initial decorations:', this.decorations.size);
 
     // Inject styles on first instantiation
     injectCellControlsStyles();
@@ -58406,12 +59083,9 @@ class CellControlsPluginClass {
       this.context !== newContext ||
       update.transactions.some(tr => tr.effects.some(e => e.is(rebuildCellControlsEffect)));
 
-    console.log('[CellControls] Update called, needsRebuild:', needsRebuild, 'newContext:', newContext);
-
     if (needsRebuild) {
       this.context = newContext;
       this.decorations = buildDecorations(update.view, this.context);
-      console.log('[CellControls] Rebuilt decorations:', this.decorations.size);
 
       // Re-setup subscription if context changed
       if (newContext && !this._unsubscribe) {
@@ -59474,7 +60148,16 @@ function runCell(editor) {
     // Only handle if cursor is in a cell
     if (!cell) return false;
 
-    editor.runCurrentCell();
+    // Use queue if available for proper status indicators, otherwise fall back to direct execution
+    if (editor.cellControls?.queue) {
+      const cells = findCells(content);
+      const cellIndex = cells.findIndex(c => c.start === cell.start);
+      if (cellIndex >= 0) {
+        editor.cellControls.queue.enqueue(cellIndex);
+      }
+    } else {
+      editor.runCurrentCell();
+    }
     return true;
   };
 }
@@ -59496,27 +60179,61 @@ function runCellAndAdvance(editor) {
     // Only handle if cursor is in a cell
     if (!currentCell) return false;
 
-    // Run the cell
-    editor.runCurrentCell();
+    // Store the current cell's position info - this helps us find it again after content changes
+    const currentCellStart = currentCell.start;
+    const lang = currentCell.language;
 
-    // Find all cells and current index
+    // Find current cell index for queue
     const cells = findCells(content);
-    const currentIndex = cells.findIndex(c => c.start === currentCell.start);
+    const currentIndex = cells.findIndex(c => c.start === currentCellStart);
 
-    if (currentIndex < cells.length - 1) {
-      // Move to next cell
-      const nextCell = cells[currentIndex + 1];
+    // Check if there's a next cell BEFORE execution
+    const hasNextCell = currentIndex >= 0 && currentIndex < cells.length - 1;
+
+    // Run the cell using queue for proper status indicators
+    if (editor.cellControls?.queue) {
+      if (currentIndex >= 0) {
+        editor.cellControls.queue.enqueue(currentIndex);
+      }
+    } else {
+      editor.runCurrentCell();
+    }
+
+    // Re-fetch content AFTER execution was triggered (output block may have been created/modified)
+    const updatedContent = view.state.doc.toString();
+    const updatedCells = findCells(updatedContent);
+
+    // Find our current cell again - it should still be at the same start position
+    // (output blocks are inserted AFTER the cell, so cell start doesn't shift)
+    let updatedCurrentIndex = updatedCells.findIndex(c => c.start === currentCellStart);
+
+    // Fallback: if exact match fails, find by proximity (handles edge cases)
+    if (updatedCurrentIndex === -1) {
+      updatedCurrentIndex = updatedCells.findIndex(c =>
+        Math.abs(c.start - currentCellStart) < 10 && c.language === lang
+      );
+    }
+
+    // Last resort: use original index if within bounds
+    if (updatedCurrentIndex === -1 && currentIndex >= 0 && currentIndex < updatedCells.length) {
+      updatedCurrentIndex = currentIndex;
+    }
+
+    const updatedCurrentCell = updatedCells[updatedCurrentIndex];
+
+    if (hasNextCell && updatedCurrentIndex >= 0 && updatedCurrentIndex < updatedCells.length - 1) {
+      // Move to next cell - use the cell AFTER our current cell in the updated list
+      const nextCell = updatedCells[updatedCurrentIndex + 1];
       view.dispatch({
         selection: { anchor: nextCell.codeStart },
         scrollIntoView: true
       });
-    } else {
+    } else if (updatedCurrentCell) {
       // Create new cell with same language after output block (if any)
-      const outputBlock = findOutputBlock(content, currentCell.end);
-      const insertPos = outputBlock ? outputBlock.end : currentCell.end;
+      const outputBlock = findOutputBlock(updatedContent, updatedCurrentCell.end);
+      const insertPos = outputBlock ? outputBlock.end : updatedCurrentCell.end;
 
       // Template: newlines + fence + language + newline + empty line + closing fence
-      const lang = currentCell.language;
       const newCell = `\n\n\`\`\`${lang}\n\n\`\`\``;
 
       // Calculate cursor position: after opening fence + language + newline
@@ -59541,7 +60258,12 @@ function runCellAndAdvance(editor) {
  */
 function runAllCells(editor) {
   return (view) => {
-    editor.runAll();
+    // Use cellControls.runAll if available for proper queue handling
+    if (editor.cellControls?.runAll) {
+      editor.cellControls.runAll();
+    } else {
+      editor.runAll();
+    }
     return true;
   };
 }
@@ -59560,7 +60282,12 @@ function runAllAbove(editor) {
 
     if (!cell) return false;
 
-    editor.runAllAbove();
+    // Use cellControls.runAllAbove if available for proper queue handling
+    if (editor.cellControls?.runAllAbove) {
+      editor.cellControls.runAllAbove();
+    } else {
+      editor.runAllAbove();
+    }
     return true;
   };
 }
@@ -76994,9 +77721,7 @@ function create(target, options = {}) {
 
   let cellControls = null;
 
-  console.log('[CellControls] Config:', config.cellControls);
   if (config.cellControls?.enabled !== false) {
-    console.log('[CellControls] Creating cell controls system...');
     cellControls = createCellControls({
       editor: api,
       executionManager: api.execution,
@@ -77007,18 +77732,14 @@ function create(target, options = {}) {
 
     // Add cell controls extensions to the view
     const cellControlsExtensions = cellControls.getExtensions();
-    console.log('[CellControls] Extensions to add:', cellControlsExtensions.length);
     if (cellControlsExtensions.length > 0) {
       view.dispatch({
         effects: StateEffect.appendConfig.of(cellControlsExtensions)
       });
-      console.log('[CellControls] Extensions added to view');
     }
 
     // Expose on API
     api.cellControls = cellControls;
-  } else {
-    console.log('[CellControls] Disabled by config');
   }
 
   // =========================================================================
@@ -77485,7 +78206,9 @@ const mrmd = {
 exports.AwarenessStateManager = AwarenessStateManager;
 exports.AwarenessSystem = AwarenessSystem;
 exports.CellControlsSystem = CellControlsSystem;
+exports.EXECUTION_STATUS = EXECUTION_STATUS;
 exports.MRPClient = MRPClient;
+exports.MonitorCoordination = MonitorCoordination;
 exports.RuntimeRegistry = RuntimeRegistry;
 exports.TerminalBuffer = TerminalBuffer;
 exports.adaptMRPClient = adaptMRPClient;
@@ -77508,6 +78231,7 @@ exports.createFloatingCollaboratorList = createFloatingCollaboratorList;
 exports.createHumanState = createHumanState;
 exports.createIndicatorExtensions = createIndicatorExtensions;
 exports.createJavaScriptRuntime = createJavaScriptRuntime;
+exports.createMonitorCoordination = createMonitorCoordination;
 exports.createReactiveConfig = createReactiveConfig;
 exports.createRuntimeCompletionExtension = createRuntimeCompletionExtension;
 exports.createRuntimeHoverExtension = createRuntimeHoverExtension;

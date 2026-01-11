@@ -48,8 +48,6 @@ function buildDecorations(view, context) {
   // Get queue state
   const queueState = stateManager?.getQueue() || { entries: [], running: null, runningByLanguage: {}, total: 0 };
 
-  console.log('[CellControls] Building decorations, queueState:', queueState);
-
   // Compute per-language queue totals
   const queueTotalByLanguage = {};
   for (const entry of queueState.entries) {
@@ -62,8 +60,6 @@ function buildDecorations(view, context) {
     }
   }
 
-  console.log('[CellControls] queueTotalByLanguage:', queueTotalByLanguage);
-
   for (let i = 0; i < executableBlocks.length; i++) {
     const block = executableBlocks[i];
 
@@ -75,10 +71,6 @@ function buildDecorations(view, context) {
       lastRunAt: null,
       error: null
     };
-
-    if (cellStatus.status !== 'idle') {
-      console.log('[CellControls] Cell', i, block.language, 'status:', cellStatus);
-    }
 
     // Skip if position is 'none'
     if (config.position === 'none') {
@@ -145,9 +137,7 @@ class CellControlsPluginClass {
   constructor(view) {
     this.view = view;
     this.context = view.state.facet(cellControlsFacet);
-    console.log('[CellControls] Plugin constructor, context:', this.context);
     this.decorations = buildDecorations(view, this.context);
-    console.log('[CellControls] Initial decorations:', this.decorations.size);
 
     // Inject styles on first instantiation
     injectCellControlsStyles();
@@ -180,12 +170,9 @@ class CellControlsPluginClass {
       this.context !== newContext ||
       update.transactions.some(tr => tr.effects.some(e => e.is(rebuildCellControlsEffect)));
 
-    console.log('[CellControls] Update called, needsRebuild:', needsRebuild, 'newContext:', newContext);
-
     if (needsRebuild) {
       this.context = newContext;
       this.decorations = buildDecorations(update.view, this.context);
-      console.log('[CellControls] Rebuilt decorations:', this.decorations.size);
 
       // Re-setup subscription if context changed
       if (newContext && !this._unsubscribe) {

@@ -64,6 +64,7 @@ import { WebsocketProvider } from 'y-websocket';
 import { findCells, getCellAtCursor, countCells } from './cells.js';
 import { RuntimeRegistry, createRuntimeRegistry } from './runtime.js';
 import { ExecutionManager, createExecutionManager } from './execution.js';
+import { MonitorCoordination, EXECUTION_STATUS, createMonitorCoordination } from './monitor-coordination.js';
 import { MRPClient } from './mrp-client.js';
 
 // Cell controls (run buttons, queue, status)
@@ -1889,9 +1890,7 @@ function create(target, options = {}) {
 
   let cellControls = null;
 
-  console.log('[CellControls] Config:', config.cellControls);
   if (config.cellControls?.enabled !== false) {
-    console.log('[CellControls] Creating cell controls system...');
     cellControls = createCellControls({
       editor: api,
       executionManager: api.execution,
@@ -1902,18 +1901,14 @@ function create(target, options = {}) {
 
     // Add cell controls extensions to the view
     const cellControlsExtensions = cellControls.getExtensions();
-    console.log('[CellControls] Extensions to add:', cellControlsExtensions.length);
     if (cellControlsExtensions.length > 0) {
       view.dispatch({
         effects: StateEffect.appendConfig.of(cellControlsExtensions)
       });
-      console.log('[CellControls] Extensions added to view');
     }
 
     // Expose on API
     api.cellControls = cellControls;
-  } else {
-    console.log('[CellControls] Disabled by config');
   }
 
   // =========================================================================
@@ -2449,5 +2444,9 @@ export {
   cellControlsExports,
   createCellControls,
   CellControlsSystem,
+  // Monitor coordination exports
+  MonitorCoordination,
+  EXECUTION_STATUS,
+  createMonitorCoordination,
 };
 // #endregion EXPORTS

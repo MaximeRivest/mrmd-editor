@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mrmd - Monitor Mode</title>
+  <style>
+    body { margin: 0; height: 100vh; font-family: system-ui; }
+    #editor { height: calc(100vh - 60px); }
+    .toolbar {
+      height: 60px;
+      background: #1a1a2e;
+      color: white;
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 20px;
+    }
+    .toolbar h1 { font-size: 18px; margin: 0; }
+    .status {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #666;
+    }
+    .status-dot.connected { background: #10b981; }
+    .status-dot.monitor { background: #8b5cf6; }
+    .info { font-size: 12px; color: #888; }
+  </style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h1>mrmd Monitor Mode Demo</h1>
+  <div class="status">
+    <span class="status-dot" id="sync-status"></span>
+    <span id="sync-text">Connecting...</span>
+  </div>
+  <div class="status">
+    <span class="status-dot" id="monitor-status"></span>
+    <span id="monitor-text">Monitor: waiting</span>
+  </div>
+  <div class="info" id="info"></div>
+</div>
+
+<div id="editor"></div>
+
+<script src="../dist/mrmd.iife.js"></script>
+<script>
+  /**
+   * Monitor Mode Demo
+   *
+   * This example shows how to use mrmd with monitor mode, where executions
+   * are routed through mrmd-monitor instead of being handled directly by
+   * the browser.
+   *
+   * Setup:
+   *   Terminal 1: cd mrmd-sync && node bin/cli.js ./docs
+   *   Terminal 2: cd mrmd-monitor && node bin/cli.js ws://localhost:4444
+   *   Terminal 3: cd mrmd-python && python -m mrmd_python.cli --port 8000
+   *   Terminal 4: cd mrmd-editor && npm run serve
+   *
+   * Then open this file in the browser.
+   */
+
+  const doc = `# Monitor Mode Demo
+
+This notebook uses **monitor mode** for execution. The mrmd-monitor process
+handles all code execution, so long-running code survives browser disconnects.
+
+## Python (via monitor)
+
+\`\`\`python
+print("Hello from Python!")
+import time
+for i in range(5):
+    print(f"Count: {i}")
+    time.sleep(1)
+print("Done!")
+\`\`\`
+
+## Python with input
+
+\`\`\`python
+name = input("What is your name? ")
+print(f"Hello, {name}!")
+\`\`\`
+
+Press **Shift+Enter** to run a cell. Watch the monitor terminal to see it claim and execute.
+`;
+
+  // Configuration
+  const SYNC_URL = 'ws://localhost:4444';
+  const RUNTIME_URL = 'http://localhost:8000/mrp/v1';
+  const DOC_NAME = 'monitor-demo';
+
+  // UI elements
+  const syncDot = document.getElementById('sync-status');
+  const syncText = document.getElementById('sync-text');
+  const monitorDot = document.getElementById('monitor-status');
+  const monitorText = document.getElementById('monitor-text');
+  const infoEl = document.getElementById('info');
+
+  // Create editor via drive (connects to mrmd-sync)
+  const docs = mrmd.drive(SYNC_URL);
+
+  docs.open(DOC_NAME, '#editor', {
+    doc,
+    dark: true,
+  }).then(editor => {
+    // Update sync status
+    editor.provider.on('status', ({ status }) => {
+      if (status === 'connected') {
+        syncDot.classList.add('connected');
+        syncText.textContent = 'Sync: connected';
+      } else {
+        syncDot.classList.remove('connected');
+        syncText.textContent = 'Sync: ' + status;
+      }
+    });
+
+    // Enable monitor mode on the execution manager
+    editor.execution.enableMonitorMode({
+      ydoc: editor.ydoc,
+      runtimeUrl: RUNTIME_URL,
+      awareness: editor.awareness,
+    });
+
+    // Watch for monitor in awareness
+    const checkMonitor = () => {
+      let monitorFound = false;
+      for (const [clientId, state] of editor.awareness.getStates()) {
+        if (state?.user?.type === 'monitor') {
+          monitorFound = true;
+          monitorDot.classList.add('monitor');
+          monitorText.textContent = 'Monitor: ' + (state.user.name || 'connected');
+          break;
+        }
+      }
+      if (!monitorFound) {
+        monitorDot.classList.remove('monitor');
+        monitorText.textContent = 'Monitor: not connected';
+      }
+    };
+
+    editor.awareness.on('change', checkMonitor);
+    checkMonitor();
+
+    // Show execution info
+    editor.execution.on('cellRun', (index, cell, execId) => {
+      infoEl.textContent = `Running cell ${index} via monitor (${execId})`;
+    });
+
+    editor.execution.on('cellComplete', (index, result, execId) => {
+      infoEl.textContent = `Cell ${index} completed`;
+    });
+
+    editor.execution.on('cellError', (index, error, execId) => {
+      infoEl.textContent = `Cell ${index} error: ${error.message || error}`;
+    });
+
+    // For debugging
+    window.editor = editor;
+    window.mrmd = mrmd;
+
+    console.log('Editor ready!');
+    console.log('Monitor mode enabled. Make sure mrmd-monitor is running.');
+    console.log('');
+    console.log('To start the monitor:');
+    console.log('  cd mrmd-monitor && node bin/cli.js ws://localhost:4444');
+  });
+</script>
+
+</body>
+</html>
