@@ -52,19 +52,19 @@
   /**
    * Minimal Full Stack Demo with Monitor Mode
    *
-   * This example uses monitor mode for Python execution, where mrmd-monitor
-   * handles all code execution. Long-running code survives browser disconnects.
+   * This example uses the orchestrator's session API for automatic setup:
+   * - Sync server connection
+   * - Monitor for the document
+   * - Dedicated Python runtime (each document gets its own Python process!)
    *
    * Setup:
-   *   Terminal 1: cd mrmd-sync && node bin/cli.js ./docs
-   *   Terminal 2: cd mrmd-monitor && node bin/cli.js ws://localhost:4444
-   *   Terminal 3: cd mrmd-python && python -m mrmd_python.cli --port 8000
-   *   Terminal 4: cd mrmd-editor && npm run serve
+   *   Just start the orchestrator:
+   *   cd mrmd-orchestrator && uv run mrmd
    *
    * Then open this file in the browser.
    */
 
-  const doc = `# Minimal Full Stack Demo (Monitor Mode)
+  const doc = `# Minimal Full Stack Demo (Dedicated Python)
 
 This is mrmd with **monitor mode** enabled. Python executions are routed through
 mrmd-monitor, so long-running code survives browser disconnects.
@@ -120,9 +120,8 @@ This means long-running code survives browser disconnects.
 Press **Shift+Enter** to run a code cell, or click the **play button**.
 `;
 
-  // Configuration
-  const SYNC_URL = 'ws://localhost:4444';
-  const RUNTIME_URL = 'http://localhost:8000/mrp/v1';
+  // Configuration - just need the orchestrator URL!
+  const ORCHESTRATOR_URL = 'http://localhost:8080';
   const DOC_NAME = 'minimal-demo';
 
   // UI elements
@@ -131,35 +130,37 @@ Press **Shift+Enter** to run a code cell, or click the **play button**.
   const monitorDot = document.getElementById('monitor-status');
   const monitorText = document.getElementById('monitor-text');
 
-  // Connect to sync server
-  const docs = mrmd.drive(SYNC_URL);
-
-  // Open document with dev panel enabled
-  const editor = await docs.open(DOC_NAME, '#editor', {
-    doc,
-    devPanel: {
-      enabled: true,
-      startOpen: true,
-      maxHeight: 300
-    },
-    cellControls: {
-      enabled: true,
-      position: 'line-start',
-      buttons: {
-        run: true,
-        stop: true,
-        clear: true,
-        copy: true,
-        copyOutput: true,
-        copyBoth: true,
+  // Use the new session API - handles everything automatically!
+  // Each document gets its own dedicated Python runtime
+  const editor = await mrmd.session(ORCHESTRATOR_URL, '#editor', {
+    doc: DOC_NAME,
+    python: 'dedicated',  // Each doc gets its own Python process!
+    editor: {
+      doc,
+      devPanel: {
+        enabled: true,
+        startOpen: true,
+        maxHeight: 300
       },
-      status: {
-        show: true,
-        showQueuePosition: true,
-        statusLineInOutput: true
-      },
-      queue: {
-        mode: 'sequential'
+      cellControls: {
+        enabled: true,
+        position: 'line-start',
+        buttons: {
+          run: true,
+          stop: true,
+          clear: true,
+          copy: true,
+          copyOutput: true,
+          copyBoth: true,
+        },
+        status: {
+          show: true,
+          showQueuePosition: true,
+          statusLineInOutput: true
+        },
+        queue: {
+          mode: 'sequential'
+        }
       }
     }
   });
@@ -175,34 +176,22 @@ Press **Shift+Enter** to run a code cell, or click the **play button**.
     }
   });
 
-  // Register Python runtime (this sets the explicit URL in the registry)
-  // JavaScript will continue to run locally via mrmd-js
-  editor.connectRuntime('python', RUNTIME_URL);
+  // Show session info
+  const sessionInfo = editor.getSessionInfo();
+  console.log('Session info:', sessionInfo);
 
-  // Enable monitor mode for Python execution
-  // Only languages with explicit runtime URLs (like Python above) will use monitor mode
-  // Use document name as session for isolation between documents
-  editor.execution.enableMonitorMode({
-    ydoc: editor.ydoc,
-    runtimeUrl: RUNTIME_URL,
-    awareness: editor.awareness,
-    session: DOC_NAME,  // Each document gets its own Python session
-  });
+  if (sessionInfo?.runtimes?.python?.dedicated) {
+    monitorDot.classList.add('monitor');
+    monitorText.textContent = `Python: dedicated (port ${sessionInfo.runtimes.python.port})`;
+  }
 
-  // Watch for monitor in awareness
+  // Watch for monitor in awareness (for additional status)
   const checkMonitor = () => {
-    let monitorFound = false;
     for (const [clientId, state] of editor.awareness.getStates()) {
       if (state?.user?.type === 'monitor') {
-        monitorFound = true;
-        monitorDot.classList.add('monitor');
-        monitorText.textContent = 'Monitor: ' + (state.user.name || 'connected');
-        break;
+        syncDot.classList.add('connected');
+        return;
       }
-    }
-    if (!monitorFound) {
-      monitorDot.classList.remove('monitor');
-      monitorText.textContent = 'Monitor: not connected';
     }
   };
 
@@ -226,13 +215,11 @@ Press **Shift+Enter** to run a code cell, or click the **play button**.
   window.editor = editor;
   window.mrmd = mrmd;
 
-  console.log('Editor ready! Monitor mode enabled.');
+  console.log('Editor ready! Dedicated Python runtime.');
   console.log('');
-  console.log('To start the stack:');
-  console.log('  Terminal 1: cd mrmd-sync && node bin/cli.js ./docs');
-  console.log('  Terminal 2: cd mrmd-monitor && node bin/cli.js ws://localhost:4444');
-  console.log('  Terminal 3: cd mrmd-python && python -m mrmd_python.cli --port 8000');
+  console.log('To start: cd mrmd-orchestrator && uv run mrmd');
   console.log('');
+  console.log('Session info:', sessionInfo);
   console.log('Access editor via window.editor');
 </script>
 

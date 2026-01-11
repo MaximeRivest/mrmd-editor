@@ -77904,6 +77904,136 @@ $1 $2
   }
   // #endregion CREATE
 
+  // #region SESSION
+  /**
+   * Create an editor session via orchestrator.
+   *
+   * This is the simplest way to use mrmd with full features:
+   * - Automatically creates session with orchestrator
+   * - Connects to sync server
+   * - Sets up Python runtime (shared or dedicated)
+   * - Enables monitor mode for long-running executions
+   *
+   * @param {string} orchestratorUrl - Orchestrator URL (e.g., 'http://localhost:8080')
+   * @param {string|HTMLElement} target - CSS selector or element
+   * @param {Object} options - Session options
+   * @param {string} options.doc - Document name (required)
+   * @param {string} [options.python='shared'] - 'shared' or 'dedicated'
+   * @param {Object} [options.editor] - Additional editor options
+   * @returns {Promise<Object>} Editor instance with destroySession() method
+   *
+   * @example
+   * // Basic usage
+   * const editor = await mrmd.session('http://localhost:8080', '#editor', {
+   *   doc: 'my-notebook',
+   * });
+   *
+   * // With dedicated Python runtime
+   * const editor = await mrmd.session('http://localhost:8080', '#editor', {
+   *   doc: 'my-notebook',
+   *   python: 'dedicated',
+   * });
+   *
+   * // Clean up when done
+   * await editor.destroySession();
+   */
+  async function session(orchestratorUrl, target, options = {}) {
+    const { doc, python = 'shared', editor: editorOptions = {} } = options;
+
+    if (!doc) {
+      throw new Error('mrmd.session: doc option is required');
+    }
+
+    // Normalize orchestrator URL
+    let baseUrl = orchestratorUrl;
+    if (baseUrl.endsWith('/')) {
+      baseUrl = baseUrl.slice(0, -1);
+    }
+
+    // Create session with orchestrator
+    console.log(`[mrmd.session] Creating session for '${doc}' (python=${python})`);
+
+    const response = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ doc, python }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to create session: ${error}`);
+    }
+
+    const sessionInfo = await response.json();
+    console.log('[mrmd.session] Session created:', sessionInfo);
+
+    // Extract URLs from session info
+    const syncUrl = sessionInfo.sync;
+    const runtimeUrl = sessionInfo.runtimes?.python?.url;
+
+    if (!syncUrl) {
+      throw new Error('Session response missing sync URL');
+    }
+
+    // Connect to sync server
+    const docs = drive(syncUrl);
+
+    // Open document
+    const editor = await docs.open(doc, target, {
+      ...editorOptions,
+    });
+
+    // Connect Python runtime if available
+    if (runtimeUrl) {
+      editor.connectRuntime('python', runtimeUrl);
+
+      // Enable monitor mode
+      editor.execution.enableMonitorMode({
+        ydoc: editor.ydoc,
+        runtimeUrl,
+        awareness: editor.awareness,
+        session: doc,
+      });
+    }
+
+    // Store session info on editor
+    editor._sessionInfo = sessionInfo;
+    editor._orchestratorUrl = baseUrl;
+
+    // Add destroySession method
+    editor.destroySession = async function() {
+      console.log(`[mrmd.session] Destroying session for '${doc}'`);
+
+      // Disconnect from sync
+      if (editor.disconnect) {
+        editor.disconnect();
+      }
+
+      // Call orchestrator to clean up
+      try {
+        const resp = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(doc)}`, {
+          method: 'DELETE',
+        });
+        if (!resp.ok) {
+          console.warn(`[mrmd.session] Failed to destroy session: ${resp.statusText}`);
+        }
+      } catch (err) {
+        console.warn(`[mrmd.session] Failed to destroy session:`, err);
+      }
+
+      // Destroy editor
+      editor.destroy();
+    };
+
+    // Add method to get session info
+    editor.getSessionInfo = function() {
+      return this._sessionInfo;
+    };
+
+    return editor;
+  }
+  // #endregion SESSION
+
   // #region DRIVE
   /**
    * Connect to a sync server
@@ -78190,6 +78320,7 @@ $1 $2
     version: VERSION,
     create,
     drive,
+    session,
     yjs,
     codemirror,
     terminal,
@@ -78287,6 +78418,7 @@ $1 $2
   exports.registerTheme = registerTheme;
   exports.runtimeLspExports = runtimeLspExports;
   exports.serializeConfig = serializeConfig;
+  exports.session = session;
   exports.stateExports = stateExports;
   exports.stripAnsi = stripAnsi;
   exports.terminal = terminal;

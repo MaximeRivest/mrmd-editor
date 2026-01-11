@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mrmd - Monitor Demo (Dedicated Python)</title>
+  <style>
+    body { margin: 0; height: 100vh; font-family: system-ui; }
+    #editor { height: calc(100vh - 40px); }
+    .toolbar {
+      height: 40px;
+      background: #2d1a4e;
+      color: white;
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 20px;
+      font-size: 14px;
+    }
+    .status {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #666;
+    }
+    .status-dot.connected { background: #10b981; }
+    .status-dot.monitor { background: #f59e0b; }
+  </style>
+</head>
+<body>
+
+<div class="toolbar">
+  <strong>Monitor Demo</strong>
+  <div class="status">
+    <span class="status-dot" id="sync-status"></span>
+    <span id="sync-text">Connecting...</span>
+  </div>
+  <div class="status">
+    <span class="status-dot" id="monitor-status"></span>
+    <span id="monitor-text">Python: -</span>
+  </div>
+</div>
+
+<div id="editor"></div>
+
+<script src="../dist/mrmd.iife.js"></script>
+<script type="module">
+  /**
+   * Monitor Demo - Second document with its own dedicated Python runtime
+   *
+   * Open this alongside minimal.html to see two documents each with their
+   * own isolated Python process.
+   *
+   * Setup:
+   *   Just start the orchestrator:
+   *   cd mrmd-orchestrator && uv run mrmd
+   */
+
+  const doc = `# Monitor Demo (Dedicated Python)
+
+This document has its **own dedicated Python runtime**, separate from minimal-demo.
+
+## Test isolation
+
+Define a variable here:
+
+\`\`\`python
+secret = "I am monitor-demo"
+print(f"My secret: {secret}")
+\`\`\`
+
+## Check isolation
+
+If you run this in minimal-demo, it should NOT see our secret:
+
+\`\`\`python
+# This would fail in minimal-demo because 'secret' is not defined there
+try:
+    print(f"Secret is: {secret}")
+except NameError:
+    print("secret is not defined - isolation working!")
+\`\`\`
+
+## Long-running test
+
+\`\`\`python
+import time
+for i in range(5):
+    print(f"Monitor demo step {i+1}/5")
+    time.sleep(1)
+print("Done!")
+\`\`\`
+`;
+
+  // Configuration
+  const ORCHESTRATOR_URL = 'http://localhost:8080';
+  const DOC_NAME = 'monitor-demo';
+
+  // UI elements
+  const syncDot = document.getElementById('sync-status');
+  const syncText = document.getElementById('sync-text');
+  const monitorDot = document.getElementById('monitor-status');
+  const monitorText = document.getElementById('monitor-text');
+
+  // Use the session API with dedicated Python
+  const editor = await mrmd.session(ORCHESTRATOR_URL, '#editor', {
+    doc: DOC_NAME,
+    python: 'dedicated',
+    editor: {
+      doc,
+      devPanel: { enabled: true, startOpen: false },
+      cellControls: { enabled: true },
+    }
+  });
+
+  // Update sync status
+  editor.provider.on('status', ({ status }) => {
+    if (status === 'connected') {
+      syncDot.classList.add('connected');
+      syncText.textContent = 'Sync: connected';
+    } else {
+      syncDot.classList.remove('connected');
+      syncText.textContent = 'Sync: ' + status;
+    }
+  });
+
+  // Show session info
+  const sessionInfo = editor.getSessionInfo();
+  if (sessionInfo?.runtimes?.python?.dedicated) {
+    monitorDot.classList.add('monitor');
+    monitorText.textContent = `Python: dedicated (port ${sessionInfo.runtimes.python.port})`;
+  }
+
+  // Expose for debugging
+  window.editor = editor;
+
+  console.log('Monitor Demo ready!');
+  console.log('Session info:', sessionInfo);
+  console.log('');
+  console.log('Open minimal.html in another tab to see two isolated Python runtimes.');
+</script>
+
+</body>
+</html>

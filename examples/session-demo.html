@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mrmd - Session API Demo</title>
+  <style>
+    body { margin: 0; height: 100vh; font-family: system-ui; }
+    #editor { height: calc(100vh - 80px); }
+    .toolbar {
+      height: 40px;
+      background: #1a1a2e;
+      color: white;
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 20px;
+      font-size: 14px;
+    }
+    .controls {
+      height: 40px;
+      background: #2a2a3e;
+      color: white;
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 10px;
+      font-size: 14px;
+    }
+    .status {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #666;
+    }
+    .status-dot.connected { background: #10b981; }
+    .status-dot.dedicated { background: #f59e0b; }
+    button {
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      background: #333;
+      color: white;
+      cursor: pointer;
+    }
+    button:hover { background: #444; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    select {
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      background: #333;
+      color: white;
+    }
+    input {
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      background: #333;
+      color: white;
+      width: 150px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="toolbar">
+  <div class="status">
+    <span class="status-dot" id="session-status"></span>
+    <span id="session-text">No session</span>
+  </div>
+  <div class="status">
+    <span class="status-dot" id="runtime-status"></span>
+    <span id="runtime-text">Runtime: -</span>
+  </div>
+</div>
+
+<div class="controls">
+  <label>Doc:</label>
+  <input type="text" id="doc-name" value="session-demo" />
+  <label>Python:</label>
+  <select id="python-mode">
+    <option value="shared">Shared</option>
+    <option value="dedicated">Dedicated</option>
+  </select>
+  <button id="start-btn">Start Session</button>
+  <button id="stop-btn" disabled>Stop Session</button>
+</div>
+
+<div id="editor"></div>
+
+<script src="../dist/mrmd.iife.js"></script>
+<script type="module">
+  /**
+   * Session API Demo
+   *
+   * Demonstrates the new mrmd.session() API that automatically:
+   * - Creates a session with the orchestrator
+   * - Connects to sync server
+   * - Sets up Python runtime (shared or dedicated)
+   * - Enables monitor mode
+   *
+   * Usage:
+   *   1. Start orchestrator: cd mrmd-orchestrator && uv run mrmd
+   *   2. Open this file in browser
+   *   3. Click "Start Session" to create a session
+   *   4. Toggle between "Shared" and "Dedicated" Python runtimes
+   */
+
+  const ORCHESTRATOR_URL = 'http://localhost:8080';
+
+  // UI elements
+  const sessionDot = document.getElementById('session-status');
+  const sessionText = document.getElementById('session-text');
+  const runtimeDot = document.getElementById('runtime-status');
+  const runtimeText = document.getElementById('runtime-text');
+  const docNameInput = document.getElementById('doc-name');
+  const pythonModeSelect = document.getElementById('python-mode');
+  const startBtn = document.getElementById('start-btn');
+  const stopBtn = document.getElementById('stop-btn');
+
+  let currentEditor = null;
+
+  async function startSession() {
+    const doc = docNameInput.value.trim();
+    const python = pythonModeSelect.value;
+
+    if (!doc) {
+      alert('Please enter a document name');
+      return;
+    }
+
+    // Clean up existing session
+    if (currentEditor) {
+      await currentEditor.destroySession();
+      currentEditor = null;
+    }
+
+    try {
+      sessionText.textContent = 'Connecting...';
+
+      // Use the new session API!
+      currentEditor = await mrmd.session(ORCHESTRATOR_URL, '#editor', {
+        doc,
+        python,
+        editor: {
+          devPanel: { enabled: true, startOpen: false },
+          cellControls: { enabled: true },
+        },
+      });
+
+      // Update UI
+      sessionDot.classList.add('connected');
+      sessionText.textContent = `Session: ${doc}`;
+
+      const sessionInfo = currentEditor.getSessionInfo();
+      const isDedicated = sessionInfo?.runtimes?.python?.dedicated;
+      const port = sessionInfo?.runtimes?.python?.port;
+
+      if (isDedicated) {
+        runtimeDot.classList.add('dedicated');
+        runtimeText.textContent = `Runtime: dedicated (port ${port})`;
+      } else {
+        runtimeDot.classList.remove('dedicated');
+        runtimeDot.classList.add('connected');
+        runtimeText.textContent = 'Runtime: shared';
+      }
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      docNameInput.disabled = true;
+      pythonModeSelect.disabled = true;
+
+      // Expose for debugging
+      window.editor = currentEditor;
+
+      console.log('Session started:', sessionInfo);
+
+    } catch (err) {
+      console.error('Failed to start session:', err);
+      sessionDot.classList.remove('connected');
+      sessionText.textContent = 'Error: ' + err.message;
+    }
+  }
+
+  async function stopSession() {
+    if (!currentEditor) return;
+
+    try {
+      await currentEditor.destroySession();
+      currentEditor = null;
+
+      sessionDot.classList.remove('connected');
+      sessionText.textContent = 'No session';
+      runtimeDot.classList.remove('connected', 'dedicated');
+      runtimeText.textContent = 'Runtime: -';
+
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      docNameInput.disabled = false;
+      pythonModeSelect.disabled = false;
+
+      // Clear editor container
+      document.getElementById('editor').innerHTML = '';
+
+      window.editor = null;
+      console.log('Session stopped');
+
+    } catch (err) {
+      console.error('Failed to stop session:', err);
+    }
+  }
+
+  // Wire up buttons
+  startBtn.addEventListener('click', startSession);
+  stopBtn.addEventListener('click', stopSession);
+
+  // Auto-start on load (optional)
+  // startSession();
+
+  console.log('Session Demo loaded');
+  console.log('');
+  console.log('To use:');
+  console.log('  1. Start orchestrator: cd mrmd-orchestrator && uv run mrmd');
+  console.log('  2. Click "Start Session" button');
+  console.log('');
+  console.log('API: mrmd.session(orchestratorUrl, target, { doc, python })');
+</script>
+
+</body>
+</html>

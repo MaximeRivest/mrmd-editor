@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mrmd</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --sidebar-width: 240px;
+      color-scheme: light dark;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      height: 100vh;
+      overflow: hidden;
+      background: light-dark(#ffffff, #1e1e1e);
+      color: light-dark(#1a1a1a, #e0e0e0);
+    }
+
+    /* Layout */
+    .app {
+      display: flex;
+      height: 100vh;
+    }
+
+    .sidebar {
+      width: var(--sidebar-width);
+      background: light-dark(#f8f8f8, #252526);
+      border-right: 1px solid light-dark(#e0e0e0, #3c3c3c);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* Header */
+    .header {
+      height: 44px;
+      background: light-dark(#f8f8f8, #252526);
+      border-bottom: 1px solid light-dark(#e0e0e0, #3c3c3c);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 16px;
+    }
+
+    .logo {
+      font-weight: 700;
+      font-size: 16px;
+      color: light-dark(#2563eb, #4f9eff);
+    }
+
+    .header-info {
+      margin-left: auto;
+      font-size: 13px;
+      color: light-dark(#666, #888);
+    }
+
+    /* Sidebar sections */
+    .sidebar-section {
+      border-bottom: 1px solid light-dark(#e0e0e0, #3c3c3c);
+    }
+
+    .sidebar-header {
+      padding: 10px 14px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: light-dark(#666, #888);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .sidebar-header button {
+      background: none;
+      border: none;
+      color: light-dark(#666, #888);
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    .sidebar-header button:hover {
+      background: light-dark(#e8e8e8, #3c3c3c);
+      color: light-dark(#1a1a1a, #e0e0e0);
+    }
+
+    /* File list */
+    .file-list {
+      max-height: 40vh;
+      overflow-y: auto;
+    }
+
+    .file-item {
+      padding: 8px 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      border-left: 3px solid transparent;
+    }
+
+    .file-item:hover {
+      background: light-dark(#e8e8e8, #2d2d2d);
+    }
+
+    .file-item.active {
+      background: light-dark(#e0e0e0, #37373d);
+      border-left-color: light-dark(#2563eb, #4f9eff);
+    }
+
+    .file-item .icon { font-size: 14px; }
+    .file-item .name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Session list */
+    .session-list {
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .session-item {
+      padding: 10px 14px;
+      border-bottom: 1px solid light-dark(#e8e8e8, #3c3c3c);
+    }
+
+    .session-item .session-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
+    .session-item .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+    }
+
+    .session-item .session-name {
+      font-weight: 500;
+      font-size: 13px;
+      flex: 1;
+    }
+
+    .session-item .session-info {
+      font-size: 11px;
+      color: light-dark(#666, #888);
+      margin-bottom: 8px;
+    }
+
+    .session-item .session-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .session-item .session-actions button {
+      padding: 3px 8px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: 1px solid light-dark(#d0d0d0, #4c4c4c);
+      background: light-dark(#f0f0f0, #3c3c3c);
+      color: inherit;
+      cursor: pointer;
+    }
+
+    .session-item .session-actions button:hover {
+      background: light-dark(#e0e0e0, #4c4c4c);
+    }
+
+    .session-item .session-actions button.danger:hover {
+      background: #ef4444;
+      border-color: #ef4444;
+      color: white;
+    }
+
+    /* Editor area */
+    .editor-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .editor-container #editor {
+      height: 100%;
+      overflow: auto;
+    }
+
+    .editor-container .cm-editor { height: 100%; }
+    .editor-container .cm-scroller { overflow: auto !important; }
+
+    .editor-placeholder {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: light-dark(#888, #666);
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .editor-placeholder .icon {
+      font-size: 40px;
+      opacity: 0.4;
+    }
+
+    /* Status bar */
+    .statusbar {
+      height: 24px;
+      background: light-dark(#f0f0f0, #252526);
+      border-top: 1px solid light-dark(#e0e0e0, #3c3c3c);
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      font-size: 11px;
+      color: light-dark(#666, #888);
+      gap: 14px;
+    }
+
+    .statusbar .status-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .statusbar .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: light-dark(#999, #666);
+    }
+
+    .statusbar .dot.connected { background: #10b981; }
+    .statusbar .dot.dedicated { background: #f59e0b; }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .modal {
+      background: light-dark(#fff, #2d2d2d);
+      border: 1px solid light-dark(#d0d0d0, #4c4c4c);
+      border-radius: 8px;
+      padding: 20px;
+      min-width: 300px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+
+    .modal h3 {
+      margin-bottom: 14px;
+      font-size: 16px;
+    }
+
+    .modal input {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid light-dark(#d0d0d0, #4c4c4c);
+      border-radius: 4px;
+      background: light-dark(#f8f8f8, #1e1e1e);
+      color: inherit;
+      font-size: 14px;
+      margin-bottom: 14px;
+    }
+
+    .modal input:focus {
+      outline: none;
+      border-color: light-dark(#2563eb, #4f9eff);
+    }
+
+    .modal .modal-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .modal button {
+      padding: 6px 14px;
+      border-radius: 4px;
+      border: 1px solid light-dark(#d0d0d0, #4c4c4c);
+      background: light-dark(#f0f0f0, #3c3c3c);
+      color: inherit;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .modal button:hover {
+      background: light-dark(#e0e0e0, #4c4c4c);
+    }
+
+    .modal button.primary {
+      background: light-dark(#2563eb, #4f9eff);
+      border-color: light-dark(#2563eb, #4f9eff);
+      color: white;
+    }
+
+    .modal button.primary:hover {
+      background: light-dark(#1d4ed8, #3b8bef);
+    }
+
+    /* Empty state */
+    .empty-state {
+      padding: 20px 14px;
+      text-align: center;
+      color: light-dark(#888, #666);
+      font-size: 12px;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: light-dark(#c0c0c0, #4c4c4c);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: light-dark(#a0a0a0, #5c5c5c);
+    }
+  </style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-header">
+        Files
+        <button onclick="showNewFileModal()" title="New file">+</button>
+      </div>
+      <div class="file-list" id="file-list">
+        <div class="empty-state">Loading...</div>
+      </div>
+    </div>
+
+    <div class="sidebar-section" style="flex:1; display:flex; flex-direction:column;">
+      <div class="sidebar-header">
+        Sessions
+        <button onclick="refreshSessions()" title="Refresh">&#8635;</button>
+      </div>
+      <div class="session-list" id="session-list">
+        <div class="empty-state">No active sessions</div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="header">
+      <span class="logo">mrmd</span>
+      <span id="current-file"></span>
+      <span class="header-info" id="header-info"></span>
+    </header>
+
+    <div class="editor-container">
+      <div id="editor">
+        <div class="editor-placeholder">
+          <div class="icon">&#128196;</div>
+          <div>Select a file to start editing</div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="statusbar">
+      <div class="status-item">
+        <span class="dot" id="sync-dot"></span>
+        <span id="sync-status">Disconnected</span>
+      </div>
+      <div class="status-item" id="python-status" style="display:none">
+        <span class="dot dedicated"></span>
+        <span id="python-info">Python</span>
+      </div>
+      <div style="flex:1"></div>
+      <div class="status-item" id="doc-stats"></div>
+    </footer>
+  </main>
+</div>
+
+<!-- New File Modal -->
+<div class="modal-overlay" id="new-file-modal" style="display:none">
+  <div class="modal">
+    <h3>New File</h3>
+    <input type="text" id="new-file-name" placeholder="filename" autofocus>
+    <div class="modal-actions">
+      <button onclick="hideNewFileModal()">Cancel</button>
+      <button class="primary" onclick="createNewFile()">Create</button>
+    </div>
+  </div>
+</div>
+
+<script src="../dist/mrmd.iife.js"></script>
+<script type="module">
+  const API_BASE = 'http://localhost:8080';
+
+  let currentEditor = null;
+  let currentDoc = null;
+  let files = [];
+  let sessions = {};
+
+  const fileListEl = document.getElementById('file-list');
+  const sessionListEl = document.getElementById('session-list');
+  const editorEl = document.getElementById('editor');
+  const currentFileEl = document.getElementById('current-file');
+  const syncDot = document.getElementById('sync-dot');
+  const syncStatus = document.getElementById('sync-status');
+  const pythonStatus = document.getElementById('python-status');
+  const pythonInfo = document.getElementById('python-info');
+  const docStats = document.getElementById('doc-stats');
+
+  async function fetchFiles() {
+    try {
+      const res = await fetch(`${API_BASE}/api/files`);
+      const data = await res.json();
+      files = data.files || [];
+      renderFiles();
+    } catch (err) {
+      console.error('Failed to fetch files:', err);
+      fileListEl.innerHTML = '<div class="empty-state">Failed to load files</div>';
+    }
+  }
+
+  async function fetchSessions() {
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions`);
+      const data = await res.json();
+      sessions = {};
+      for (const s of data.sessions || []) {
+        sessions[s.doc] = s;
+      }
+      renderSessions();
+      renderFiles();
+    } catch (err) {
+      console.error('Failed to fetch sessions:', err);
+    }
+  }
+
+  async function createFile(name) {
+    try {
+      const res = await fetch(`${API_BASE}/api/files`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.detail || 'Failed to create file');
+        return;
+      }
+      await fetchFiles();
+      const data = await res.json();
+      openFile(data.name);
+    } catch (err) {
+      console.error('Failed to create file:', err);
+      alert('Failed to create file');
+    }
+  }
+
+  async function stopSession(doc) {
+    try {
+      await fetch(`${API_BASE}/api/sessions/${doc}`, { method: 'DELETE' });
+      await fetchSessions();
+      if (currentDoc === doc) {
+        updateStatusBar(false);
+      }
+    } catch (err) {
+      console.error('Failed to stop session:', err);
+    }
+  }
+
+  function renderFiles() {
+    if (files.length === 0) {
+      fileListEl.innerHTML = '<div class="empty-state">No files yet</div>';
+      return;
+    }
+    fileListEl.innerHTML = files.map(f => {
+      const hasSession = sessions[f.name];
+      const isActive = currentDoc === f.name;
+      return `
+        <div class="file-item ${isActive ? 'active' : ''}" onclick="openFile('${f.name}')">
+          <span class="icon">${hasSession ? '&#9679;' : '&#128196;'}</span>
+          <span class="name">${f.name}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderSessions() {
+    const list = Object.values(sessions);
+    if (list.length === 0) {
+      sessionListEl.innerHTML = '<div class="empty-state">No active sessions</div>';
+      return;
+    }
+    sessionListEl.innerHTML = list.map(s => {
+      const py = s.runtimes?.python;
+      const info = py?.dedicated ? `Port ${py.port}` : 'Shared';
+      return `
+        <div class="session-item">
+          <div class="session-header">
+            <span class="status-dot"></span>
+            <span class="session-name">${s.doc}</span>
+          </div>
+          <div class="session-info">Python: ${info}</div>
+          <div class="session-actions">
+            <button onclick="openFile('${s.doc}')">Open</button>
+            <button class="danger" onclick="stopSession('${s.doc}')">Stop</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function updateStatusBar(connected, sessionInfo = null) {
+    syncDot.classList.toggle('connected', connected);
+    syncStatus.textContent = connected ? 'Connected' : 'Disconnected';
+    if (sessionInfo?.runtimes?.python) {
+      const py = sessionInfo.runtimes.python;
+      pythonStatus.style.display = 'flex';
+      pythonInfo.textContent = py.dedicated ? `Python :${py.port}` : 'Python (shared)';
+    } else {
+      pythonStatus.style.display = 'none';
+    }
+  }
+
+  async function openFile(name) {
+    if (currentEditor) {
+      if (currentEditor.disconnect) currentEditor.disconnect();
+      currentEditor.destroy();
+      currentEditor = null;
+    }
+
+    currentDoc = name;
+    currentFileEl.textContent = name;
+    editorEl.innerHTML = '';
+
+    try {
+      currentEditor = await mrmd.session(API_BASE, editorEl, {
+        doc: name,
+        python: 'dedicated',
+        editor: {
+          cellControls: { enabled: true },
+        }
+      });
+
+      const sessionInfo = currentEditor.getSessionInfo();
+      updateStatusBar(true, sessionInfo);
+
+      currentEditor.provider.on('status', ({ status }) => {
+        updateStatusBar(status === 'connected', sessionInfo);
+      });
+
+      if (currentEditor.onChange) {
+        currentEditor.onChange(() => {
+          const stats = currentEditor.stats?.() || {};
+          docStats.textContent = stats.lines ? `${stats.lines} lines` : '';
+        });
+      }
+
+      await fetchSessions();
+    } catch (err) {
+      console.error('Failed to open:', err);
+      editorEl.innerHTML = `<div class="editor-placeholder"><div>Error: ${err.message}</div></div>`;
+      currentDoc = null;
+      currentFileEl.textContent = '';
+    }
+
+    renderFiles();
+  }
+
+  window.showNewFileModal = () => {
+    document.getElementById('new-file-modal').style.display = 'flex';
+    const input = document.getElementById('new-file-name');
+    input.value = '';
+    input.focus();
+  };
+
+  window.hideNewFileModal = () => {
+    document.getElementById('new-file-modal').style.display = 'none';
+  };
+
+  window.createNewFile = async () => {
+    const name = document.getElementById('new-file-name').value.trim();
+    if (name) {
+      hideNewFileModal();
+      await createFile(name);
+    }
+  };
+
+  document.getElementById('new-file-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') createNewFile();
+    else if (e.key === 'Escape') hideNewFileModal();
+  });
+
+  window.openFile = openFile;
+  window.stopSession = stopSession;
+  window.refreshSessions = fetchSessions;
+
+  async function init() {
+    await fetchFiles();
+    await fetchSessions();
+    setInterval(fetchSessions, 5000);
+  }
+
+  init();
+</script>
+
+</body>
+</html>
