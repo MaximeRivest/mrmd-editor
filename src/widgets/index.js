@@ -70,6 +70,8 @@ export {
   midnightTheme,
   daylightTheme,
   githubTheme,
+  nordTheme,
+  nordOutputsTheme,
 
   // Theme registry
   registerTheme,
@@ -100,6 +102,13 @@ export {
   initTheme,
 } from './theme-utils.js';
 
+// CodeMirror theme generation
+export {
+  createCodemirrorTheme,
+  getCodemirrorTheme,
+  clearCodemirrorThemeCache,
+} from './codemirror-theme.js';
+
 // Widget development patterns (documentation)
 export {
   STABLE_LAYOUT_PATTERN,
@@ -112,6 +121,8 @@ import {
   midnightTheme,
   daylightTheme,
   githubTheme,
+  nordTheme,
+  nordOutputsTheme,
   registerTheme,
   getTheme,
   getThemeNames,
@@ -132,6 +143,12 @@ import {
 } from './theme-utils.js';
 
 import {
+  createCodemirrorTheme,
+  getCodemirrorTheme,
+  clearCodemirrorThemeCache,
+} from './codemirror-theme.js';
+
+import {
   STABLE_LAYOUT_PATTERN,
   THEME_INTEGRATION_PATTERN,
   WIDGET_EQUALITY_PATTERN,
@@ -148,6 +165,8 @@ export const widgets = {
     midnight: midnightTheme,
     daylight: daylightTheme,
     github: githubTheme,
+    nord: nordTheme,
+    'nord-outputs': nordOutputsTheme,
   },
 
   // Token schema (useful for building theme editors)
@@ -177,6 +196,11 @@ export const widgets = {
 
   // Initialization (recommended entry point)
   initTheme,
+
+  // CodeMirror theme generation
+  createCodemirrorTheme,
+  getCodemirrorTheme,
+  clearCodemirrorThemeCache,
 
   // Widget development patterns (see patterns.js for full documentation)
   patterns: {

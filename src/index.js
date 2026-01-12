@@ -32,8 +32,8 @@
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState, StateEffect, Compartment, Text, Transaction } from '@codemirror/state';
 import { keymap, Decoration, ViewPlugin, WidgetType, placeholder } from '@codemirror/view';
-import { oneDark } from '@codemirror/theme-one-dark';
 import { StreamLanguage, syntaxTree, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language';
+import { createCodemirrorTheme } from './widgets/codemirror-theme.js';
 
 // Language support
 import { javascript } from '@codemirror/lang-javascript';
@@ -661,13 +661,20 @@ function create(target, options = {}) {
     injectAwarenessStyles();
   }
 
-  // Initialize widget theme system
-  // Detect theme based on CodeMirror theme class and system preference
-  const initialTheme = detectTheme({
-    themeName: config.appearance?.widgetTheme,
-    editorElement: element,
-  });
-  applyTheme(initialTheme);
+  // Initialize unified theme system
+  // Use explicit theme if set, otherwise auto-select based on dark mode
+  const resolveThemeName = (theme, isDarkMode) => {
+    if (theme) return theme;
+    return isDarkMode ? 'midnight' : 'daylight';
+  };
+  const initialThemeName = resolveThemeName(config.appearance?.theme, isDark);
+
+  // Apply widget theme (CSS variables)
+  applyTheme(initialThemeName);
+
+  // Generate CodeMirror theme extension from our theme spec
+  const initialTheme = getTheme(initialThemeName);
+  const initialCMTheme = initialTheme ? createCodemirrorTheme(initialTheme) : [];
 
   // Prepare awareness system (created after view exists)
   let awarenessSystem = null;
@@ -682,7 +689,7 @@ function create(target, options = {}) {
     markdownWithCodeBlocks,
     ...languageSupportExtensions,
     documentTheme,
-    themeCompartment.of(isDark ? oneDark : []),
+    themeCompartment.of(initialCMTheme),
     readonlyCompartment.of(readonly ? EditorState.readOnly.of(true) : []),
     placeholderText ? placeholder(placeholderText) : [],
     // Yjs collaboration - y-codemirror.next handles sync and undo
@@ -701,14 +708,18 @@ function create(target, options = {}) {
     parent: element
   });
 
-  // Watch for theme changes (CodeMirror theme toggle, system preference)
-  let currentWidgetTheme = initialTheme;
+  // Watch for theme changes (system preference changes)
+  // Only auto-switch theme if no explicit theme is configured
+  let currentWidgetTheme = initialThemeName;
   const unwatchTheme = watchTheme({
     editorElement: view.dom,
     currentTheme: currentWidgetTheme,
     onThemeChange: (newTheme) => {
-      currentWidgetTheme = newTheme;
-      applyTheme(newTheme);
+      // Only auto-change if user hasn't set an explicit theme
+      if (!config.appearance?.theme) {
+        currentWidgetTheme = newTheme;
+        applyTheme(newTheme);
+      }
     },
   });
 
@@ -986,10 +997,30 @@ function create(target, options = {}) {
       });
     },
 
+    /**
+     * Set dark mode. Updates both CodeMirror and widget themes.
+     * @param {boolean | null} value - true=dark, false=light, null=system
+     */
     setDark(value) {
-      view.dispatch({
-        effects: themeCompartment.reconfigure(value ? oneDark : [])
-      });
+      // Use reactive config which triggers handlers
+      this.config.appearance.dark = value;
+    },
+
+    /**
+     * Set the theme. Controls widgets, output, cell controls styling.
+     * @param {string | null} theme - Theme name ('midnight', 'daylight', 'github', etc.) or null for auto
+     */
+    setTheme(theme) {
+      // Use reactive config which triggers handlers
+      this.config.appearance.theme = theme;
+    },
+
+    /**
+     * Get available theme names
+     * @returns {string[]}
+     */
+    getThemeNames() {
+      return getThemeNames();
     },
 
     focus() {
@@ -1924,6 +1955,7 @@ function create(target, options = {}) {
     registry,
     awarenessSystem,
     cellControls,
+    config: reactiveConfig,  // Pass config for reading current values in handlers
     createRuntime: (rtConfig) => {
       // Create runtime from config
       if (rtConfig.type === 'builtin') {
@@ -2362,7 +2394,8 @@ const codemirror = {
   syntaxTree,
   syntaxHighlighting,
   defaultHighlightStyle,
-  oneDark,
+  // Theme generation (replaces oneDark)
+  createCodemirrorTheme,
   javascript,
   python,
   markdown,

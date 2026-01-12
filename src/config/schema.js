@@ -49,7 +49,9 @@
 /**
  * Visual appearance configuration
  * @typedef {Object} AppearanceConfig
- * @property {boolean | null} [dark] - Theme: true=dark, false=light, null=system
+ * @property {boolean | null} [dark] - Dark mode: true=dark, false=light, null=system
+ * @property {string | null} [theme] - Theme name: 'midnight', 'daylight', 'github', or custom.
+ *   If null, auto-selects based on dark mode (midnight for dark, daylight for light).
  * @property {boolean} [readonly] - View-only mode
  * @property {string} [placeholder] - Placeholder text when empty
  */
@@ -57,6 +59,7 @@
 /** @type {AppearanceConfig} */
 export const DEFAULT_APPEARANCE = {
   dark: null,
+  theme: null,  // Auto-select based on dark mode
   readonly: false,
   placeholder: 'Start typing...'
 };
@@ -345,6 +348,9 @@ export function normalizeOptions(options = {}) {
   // Appearance
   if (options.dark !== undefined) {
     config.appearance.dark = options.dark;
+  }
+  if (options.theme !== undefined) {
+    config.appearance.theme = options.theme;
   }
   if (options.readonly !== undefined) {
     config.appearance.readonly = options.readonly;

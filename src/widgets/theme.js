@@ -79,6 +79,16 @@ export const tokenDefinitions = {
     category: 'spacing',
     default: '3px',
   },
+  '--widget-inset-left': {
+    description: 'Left inset/indent for widgets (creates visual hierarchy)',
+    category: 'spacing',
+    default: '0',
+  },
+  '--widget-offset-top': {
+    description: 'Vertical offset for widgets. Use negative values to pull widgets closer to code blocks.',
+    category: 'spacing',
+    default: '0',
+  },
 
   // ===========================================================================
   // TYPOGRAPHY
@@ -222,6 +232,59 @@ export const tokenDefinitions = {
   '--collab-human': { description: 'Default color for human collaborators', category: 'collab', default: '#3b82f6' },
   '--collab-ai': { description: 'Default color for AI collaborators', category: 'collab', default: '#8b5cf6' },
   '--collab-runtime': { description: 'Default color for runtime collaborators', category: 'collab', default: '#10b981' },
+
+  // ===========================================================================
+  // EDITOR (CodeMirror editor appearance)
+  // ===========================================================================
+  '--editor-background': { description: 'Editor background color', category: 'editor', default: '#1e1e1e' },
+  '--editor-foreground': { description: 'Default editor text color', category: 'editor', default: '#d4d4d4' },
+  '--editor-line-number': { description: 'Line number color', category: 'editor', default: '#858585' },
+  '--editor-line-number-active': { description: 'Active line number color', category: 'editor', default: '#c6c6c6' },
+  '--editor-selection': { description: 'Selection background', category: 'editor', default: '#264f78' },
+  '--editor-selection-match': { description: 'Matching selection/search highlight', category: 'editor', default: '#515c6a' },
+  '--editor-cursor': { description: 'Cursor color', category: 'editor', default: '#aeafad' },
+  '--editor-active-line': { description: 'Active line background', category: 'editor', default: 'rgba(255, 255, 255, 0.05)' },
+  '--editor-gutter': { description: 'Gutter background', category: 'editor', default: '#1e1e1e' },
+  '--editor-matching-bracket': { description: 'Matching bracket highlight', category: 'editor', default: 'rgba(255, 255, 255, 0.1)' },
+
+  // ===========================================================================
+  // SYNTAX HIGHLIGHTING (Code syntax colors)
+  // ===========================================================================
+  '--syntax-keyword': { description: 'Keywords (if, else, function, class)', category: 'syntax', default: '#569cd6' },
+  '--syntax-control': { description: 'Control flow (return, break, continue)', category: 'syntax', default: '#c586c0' },
+  '--syntax-string': { description: 'String literals', category: 'syntax', default: '#ce9178' },
+  '--syntax-number': { description: 'Number literals', category: 'syntax', default: '#b5cea8' },
+  '--syntax-comment': { description: 'Comments', category: 'syntax', default: '#6a9955' },
+  '--syntax-function': { description: 'Function names', category: 'syntax', default: '#dcdcaa' },
+  '--syntax-variable': { description: 'Variables', category: 'syntax', default: '#9cdcfe' },
+  '--syntax-variable-special': { description: 'Special variables (this, self)', category: 'syntax', default: '#569cd6' },
+  '--syntax-property': { description: 'Object properties', category: 'syntax', default: '#9cdcfe' },
+  '--syntax-operator': { description: 'Operators (+, -, =)', category: 'syntax', default: '#d4d4d4' },
+  '--syntax-punctuation': { description: 'Punctuation (brackets, commas)', category: 'syntax', default: '#d4d4d4' },
+  '--syntax-type': { description: 'Type names', category: 'syntax', default: '#4ec9b0' },
+  '--syntax-class': { description: 'Class names', category: 'syntax', default: '#4ec9b0' },
+  '--syntax-constant': { description: 'Constants (true, false, null)', category: 'syntax', default: '#569cd6' },
+  '--syntax-parameter': { description: 'Function parameters', category: 'syntax', default: '#9cdcfe' },
+  '--syntax-regexp': { description: 'Regular expressions', category: 'syntax', default: '#d16969' },
+  '--syntax-escape': { description: 'Escape characters', category: 'syntax', default: '#d7ba7d' },
+
+  // Markdown/Markup specific
+  '--syntax-tag': { description: 'HTML/XML tags', category: 'syntax', default: '#569cd6' },
+  '--syntax-attribute': { description: 'HTML/XML attributes', category: 'syntax', default: '#9cdcfe' },
+  '--syntax-attribute-value': { description: 'HTML attribute values', category: 'syntax', default: '#ce9178' },
+  '--syntax-heading': { description: 'Markdown headings', category: 'syntax', default: '#569cd6' },
+  '--syntax-link': { description: 'Links', category: 'syntax', default: '#3794ff' },
+  '--syntax-link-text': { description: 'Link text', category: 'syntax', default: '#ce9178' },
+  '--syntax-emphasis': { description: 'Italic/emphasis', category: 'syntax', default: '#569cd6' },
+  '--syntax-strong': { description: 'Bold/strong', category: 'syntax', default: '#569cd6' },
+  '--syntax-strikethrough': { description: 'Strikethrough text', category: 'syntax', default: '#858585' },
+  '--syntax-quote': { description: 'Block quotes', category: 'syntax', default: '#6a9955' },
+  '--syntax-code': { description: 'Inline code', category: 'syntax', default: '#ce9178' },
+  '--syntax-code-background': { description: 'Inline code background', category: 'syntax', default: 'rgba(110, 118, 129, 0.2)' },
+  '--syntax-meta': { description: 'Meta syntax (fences, front matter)', category: 'syntax', default: '#858585' },
+  '--syntax-inserted': { description: 'Inserted/added content (diffs)', category: 'syntax', default: '#b5cea8' },
+  '--syntax-deleted': { description: 'Deleted content (diffs)', category: 'syntax', default: '#ce9178' },
+  '--syntax-changed': { description: 'Changed content (diffs)', category: 'syntax', default: '#569cd6' },
 };
 
 // #endregion TOKEN_DEFINITIONS
@@ -237,6 +300,7 @@ export const tokenDefinitions = {
 export const midnightTheme = {
   name: 'midnight',
   description: 'Deep dark theme with blue accents. Default for dark mode.',
+  isDark: true,  // Controls CodeMirror editor theme
 
   // Spacing (shared across themes)
   '--widget-line-height': 'inherit',
@@ -298,6 +362,53 @@ export const midnightTheme = {
   '--collab-human': '#3b82f6',
   '--collab-ai': '#8b5cf6',
   '--collab-runtime': '#10b981',
+
+  // Editor (VS Code Dark inspired)
+  '--editor-background': '#1e1e1e',
+  '--editor-foreground': '#d4d4d4',
+  '--editor-line-number': '#858585',
+  '--editor-line-number-active': '#c6c6c6',
+  '--editor-selection': '#264f78',
+  '--editor-selection-match': '#515c6a',
+  '--editor-cursor': '#aeafad',
+  '--editor-active-line': 'rgba(255, 255, 255, 0.05)',
+  '--editor-gutter': '#1e1e1e',
+  '--editor-matching-bracket': 'rgba(255, 255, 255, 0.1)',
+
+  // Syntax highlighting (VS Code Dark inspired)
+  '--syntax-keyword': '#569cd6',
+  '--syntax-control': '#c586c0',
+  '--syntax-string': '#ce9178',
+  '--syntax-number': '#b5cea8',
+  '--syntax-comment': '#6a9955',
+  '--syntax-function': '#dcdcaa',
+  '--syntax-variable': '#9cdcfe',
+  '--syntax-variable-special': '#569cd6',
+  '--syntax-property': '#9cdcfe',
+  '--syntax-operator': '#d4d4d4',
+  '--syntax-punctuation': '#d4d4d4',
+  '--syntax-type': '#4ec9b0',
+  '--syntax-class': '#4ec9b0',
+  '--syntax-constant': '#569cd6',
+  '--syntax-parameter': '#9cdcfe',
+  '--syntax-regexp': '#d16969',
+  '--syntax-escape': '#d7ba7d',
+  '--syntax-tag': '#569cd6',
+  '--syntax-attribute': '#9cdcfe',
+  '--syntax-attribute-value': '#ce9178',
+  '--syntax-heading': '#569cd6',
+  '--syntax-link': '#3794ff',
+  '--syntax-link-text': '#ce9178',
+  '--syntax-emphasis': '#569cd6',
+  '--syntax-strong': '#569cd6',
+  '--syntax-strikethrough': '#858585',
+  '--syntax-quote': '#6a9955',
+  '--syntax-code': '#ce9178',
+  '--syntax-code-background': 'rgba(110, 118, 129, 0.2)',
+  '--syntax-meta': '#858585',
+  '--syntax-inserted': '#b5cea8',
+  '--syntax-deleted': '#ce9178',
+  '--syntax-changed': '#569cd6',
 };
 
 /**
@@ -309,6 +420,7 @@ export const midnightTheme = {
 export const daylightTheme = {
   name: 'daylight',
   description: 'Clean light theme. Default for light mode.',
+  isDark: false,  // Controls CodeMirror editor theme
 
   // Spacing (same as midnight)
   '--widget-line-height': 'inherit',
@@ -370,10 +482,57 @@ export const daylightTheme = {
   '--collab-human': '#3b82f6',
   '--collab-ai': '#8b5cf6',
   '--collab-runtime': '#10b981',
+
+  // Editor (VS Code Light inspired)
+  '--editor-background': '#ffffff',
+  '--editor-foreground': '#1e1e1e',
+  '--editor-line-number': '#6e7681',
+  '--editor-line-number-active': '#1e1e1e',
+  '--editor-selection': '#add6ff',
+  '--editor-selection-match': '#e8e8e8',
+  '--editor-cursor': '#1e1e1e',
+  '--editor-active-line': 'rgba(0, 0, 0, 0.04)',
+  '--editor-gutter': '#ffffff',
+  '--editor-matching-bracket': 'rgba(0, 0, 0, 0.1)',
+
+  // Syntax highlighting (VS Code Light inspired)
+  '--syntax-keyword': '#0000ff',
+  '--syntax-control': '#af00db',
+  '--syntax-string': '#a31515',
+  '--syntax-number': '#098658',
+  '--syntax-comment': '#008000',
+  '--syntax-function': '#795e26',
+  '--syntax-variable': '#001080',
+  '--syntax-variable-special': '#0000ff',
+  '--syntax-property': '#001080',
+  '--syntax-operator': '#1e1e1e',
+  '--syntax-punctuation': '#1e1e1e',
+  '--syntax-type': '#267f99',
+  '--syntax-class': '#267f99',
+  '--syntax-constant': '#0000ff',
+  '--syntax-parameter': '#001080',
+  '--syntax-regexp': '#811f3f',
+  '--syntax-escape': '#ee0000',
+  '--syntax-tag': '#800000',
+  '--syntax-attribute': '#ff0000',
+  '--syntax-attribute-value': '#0000ff',
+  '--syntax-heading': '#0000ff',
+  '--syntax-link': '#0000ff',
+  '--syntax-link-text': '#a31515',
+  '--syntax-emphasis': '#0000ff',
+  '--syntax-strong': '#0000ff',
+  '--syntax-strikethrough': '#6e7681',
+  '--syntax-quote': '#008000',
+  '--syntax-code': '#a31515',
+  '--syntax-code-background': 'rgba(175, 184, 193, 0.2)',
+  '--syntax-meta': '#6e7681',
+  '--syntax-inserted': '#098658',
+  '--syntax-deleted': '#a31515',
+  '--syntax-changed': '#0000ff',
 };
 
 /**
- * GitHub Theme
+ * GitHub Theme (Dark)
  *
  * GitHub-inspired styling for familiarity.
  * Based on GitHub's code block and UI colors.
@@ -381,6 +540,7 @@ export const daylightTheme = {
 export const githubTheme = {
   name: 'github',
   description: 'GitHub-inspired theme. Familiar for developers.',
+  isDark: true,  // GitHub dark theme - controls CodeMirror editor theme
 
   // Spacing
   '--widget-line-height': 'inherit',
@@ -442,6 +602,379 @@ export const githubTheme = {
   '--collab-human': '#58a6ff',
   '--collab-ai': '#d2a8ff',
   '--collab-runtime': '#7ee787',
+
+  // Editor (GitHub Dark)
+  '--editor-background': '#0d1117',
+  '--editor-foreground': '#c9d1d9',
+  '--editor-line-number': '#6e7681',
+  '--editor-line-number-active': '#c9d1d9',
+  '--editor-selection': '#264f78',
+  '--editor-selection-match': '#3b5070',
+  '--editor-cursor': '#c9d1d9',
+  '--editor-active-line': 'rgba(110, 118, 129, 0.1)',
+  '--editor-gutter': '#0d1117',
+  '--editor-matching-bracket': 'rgba(110, 118, 129, 0.3)',
+
+  // Syntax highlighting (GitHub Dark)
+  '--syntax-keyword': '#ff7b72',
+  '--syntax-control': '#ff7b72',
+  '--syntax-string': '#a5d6ff',
+  '--syntax-number': '#79c0ff',
+  '--syntax-comment': '#8b949e',
+  '--syntax-function': '#d2a8ff',
+  '--syntax-variable': '#ffa657',
+  '--syntax-variable-special': '#ff7b72',
+  '--syntax-property': '#c9d1d9',
+  '--syntax-operator': '#ff7b72',
+  '--syntax-punctuation': '#c9d1d9',
+  '--syntax-type': '#ffa657',
+  '--syntax-class': '#ffa657',
+  '--syntax-constant': '#79c0ff',
+  '--syntax-parameter': '#ffa657',
+  '--syntax-regexp': '#7ee787',
+  '--syntax-escape': '#79c0ff',
+  '--syntax-tag': '#7ee787',
+  '--syntax-attribute': '#79c0ff',
+  '--syntax-attribute-value': '#a5d6ff',
+  '--syntax-heading': '#79c0ff',
+  '--syntax-link': '#58a6ff',
+  '--syntax-link-text': '#a5d6ff',
+  '--syntax-emphasis': '#c9d1d9',
+  '--syntax-strong': '#c9d1d9',
+  '--syntax-strikethrough': '#8b949e',
+  '--syntax-quote': '#8b949e',
+  '--syntax-code': '#79c0ff',
+  '--syntax-code-background': 'rgba(110, 118, 129, 0.2)',
+  '--syntax-meta': '#8b949e',
+  '--syntax-inserted': '#7ee787',
+  '--syntax-deleted': '#ff7b72',
+  '--syntax-changed': '#79c0ff',
+};
+
+/**
+ * Nord Theme
+ *
+ * An arctic, north-bluish color palette inspired by the Nord design system.
+ * https://www.nordtheme.com/
+ *
+ * ## Color Philosophy
+ *
+ * Nord uses a carefully crafted palette of 16 colors organized into 4 groups:
+ *
+ * **Polar Night (dark backgrounds)**
+ * - nord0 (#2e3440) - Base background
+ * - nord1 (#3b4252) - Elevated surfaces
+ * - nord2 (#434c5e) - Selection, highlights
+ * - nord3 (#4c566a) - Comments, invisibles
+ *
+ * **Snow Storm (light text)**
+ * - nord4 (#d8dee9) - Primary text
+ * - nord5 (#e5e9f0) - Subtle highlights
+ * - nord6 (#eceff4) - Bright/emphasized text
+ *
+ * **Frost (accent colors - cold)**
+ * - nord7  (#8fbcbb) - Strings, classes (teal)
+ * - nord8  (#88c0d0) - Constants, attributes (light blue)
+ * - nord9  (#81a1c1) - Functions, keywords (medium blue)
+ * - nord10 (#5e81ac) - Types, links (dark blue)
+ *
+ * **Aurora (accent colors - warm)**
+ * - nord11 (#bf616a) - Errors, deleted (red)
+ * - nord12 (#d08770) - Warnings, changed (orange)
+ * - nord13 (#ebcb8b) - Numbers, special (yellow)
+ * - nord14 (#a3be8c) - Success, strings, inserted (green)
+ * - nord15 (#b48ead) - Keywords (purple)
+ *
+ * ## Design Decisions
+ *
+ * 1. **Low contrast by design** - Nord prioritizes eye comfort over maximum
+ *    contrast. This makes it excellent for long coding sessions.
+ *
+ * 2. **Consistent accent usage** - Each color has a semantic meaning that
+ *    stays consistent across syntax elements:
+ *    - Frost colors = structural elements (types, functions, keywords)
+ *    - Aurora colors = values and states (strings, numbers, errors)
+ *
+ * 3. **Widget integration** - Widgets use the same Polar Night backgrounds
+ *    so they blend seamlessly with the editor.
+ *
+ * ## Creating Variants
+ *
+ * To create a "Nord Light" variant, you would:
+ * 1. Swap Snow Storm ↔ Polar Night for backgrounds/foregrounds
+ * 2. Adjust Frost colors for higher contrast on light backgrounds
+ * 3. Keep Aurora colors similar (they work on both)
+ *
+ * @example
+ * // Use the built-in Nord theme
+ * editor.setTheme('nord');
+ *
+ * @example
+ * // Extend Nord with custom overrides
+ * const myNord = mrmd.widgets.createTheme({
+ *   name: 'my-nord',
+ *   base: 'nord',
+ *   overrides: {
+ *     '--widget-border-accent': '#88c0d0',  // Use frost blue for accents
+ *   }
+ * });
+ */
+export const nordTheme = {
+  name: 'nord',
+  description: 'Arctic, north-bluish theme. Optimized for eye comfort during long sessions.',
+  isDark: true,
+
+  // ===========================================================================
+  // SPACING
+  // Standard spacing values - Nord doesn't specify spacing, so we use defaults
+  // that work well with the overall aesthetic.
+  // ===========================================================================
+  '--widget-line-height': 'inherit',
+  '--widget-padding-x': '12px',
+  '--widget-padding-y': '8px',
+  '--widget-margin-y': '4px',
+  '--widget-border-radius': '4px',  // Slightly less rounded than default
+  '--widget-border-width': '1px',
+  '--widget-border-accent-width': '3px',
+
+  // ===========================================================================
+  // TYPOGRAPHY
+  // Nord works well with most monospace fonts. We use a stack that prioritizes
+  // fonts known to render well with Nord's color palette.
+  // ===========================================================================
+  '--widget-font-mono': "'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace",
+  '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  '--widget-font-size': '0.9em',
+  '--widget-font-size-small': '0.8em',
+  '--widget-font-size-label': '11px',
+
+  // ===========================================================================
+  // SURFACES (Polar Night palette)
+  //
+  // nord0 (#2e3440) - Darkest, main background
+  // nord1 (#3b4252) - Slightly elevated
+  // nord2 (#434c5e) - UI elements, selections
+  // nord3 (#4c566a) - Subtle highlights, disabled states
+  // ===========================================================================
+  '--widget-surface': '#2e3440',           // nord0 - matches editor background
+  '--widget-surface-hover': '#3b4252',     // nord1 - subtle hover state
+  '--widget-surface-elevated': '#3b4252',  // nord1 - tooltips, dropdowns
+  '--widget-surface-inset': '#242933',     // Darker than nord0 for inputs
+
+  // ===========================================================================
+  // BORDERS
+  //
+  // Borders use Polar Night colors for subtlety, with Frost accent for focus.
+  // The accent border uses nord9 (medium blue) for a calm but visible indicator.
+  // ===========================================================================
+  '--widget-border': '#3b4252',            // nord1 - subtle dividers
+  '--widget-border-accent': '#81a1c1',     // nord9 - accent bar on outputs
+  '--widget-border-focus': '#88c0d0',      // nord8 - bright focus ring
+
+  // ===========================================================================
+  // TEXT COLORS (Snow Storm palette)
+  //
+  // nord4 (#d8dee9) - Primary text
+  // nord5 (#e5e9f0) - Emphasized text
+  // nord6 (#eceff4) - Brightest, used sparingly
+  //
+  // Muted text uses nord3 from Polar Night for sufficient contrast.
+  // ===========================================================================
+  '--widget-text': '#d8dee9',              // nord4 - primary text
+  '--widget-text-muted': '#4c566a',        // nord3 - secondary text
+  '--widget-text-accent': '#88c0d0',       // nord8 - links, interactive
+
+  // ===========================================================================
+  // SEMANTIC COLORS (Aurora palette)
+  //
+  // These use the Aurora (warm) colors which stand out against the cold
+  // Polar Night backgrounds, making status indicators immediately visible.
+  // ===========================================================================
+  '--widget-success': '#a3be8c',           // nord14 - green
+  '--widget-warning': '#ebcb8b',           // nord13 - yellow
+  '--widget-error': '#bf616a',             // nord11 - red
+  '--widget-info': '#81a1c1',              // nord9 - blue
+
+  // ===========================================================================
+  // ANSI TERMINAL COLORS
+  //
+  // Maps standard ANSI colors to Nord palette. This ensures terminal output
+  // in code cells matches the overall theme aesthetic.
+  //
+  // Standard colors use Aurora, bright variants are slightly desaturated
+  // to maintain the Nord aesthetic of "calm but readable".
+  // ===========================================================================
+  '--ansi-black': '#3b4252',               // nord1 (not pure black)
+  '--ansi-red': '#bf616a',                 // nord11
+  '--ansi-green': '#a3be8c',               // nord14
+  '--ansi-yellow': '#ebcb8b',              // nord13
+  '--ansi-blue': '#81a1c1',                // nord9
+  '--ansi-magenta': '#b48ead',             // nord15
+  '--ansi-cyan': '#88c0d0',                // nord8
+  '--ansi-white': '#e5e9f0',               // nord5
+  // Bright variants
+  '--ansi-bright-black': '#4c566a',        // nord3
+  '--ansi-bright-red': '#bf616a',          // nord11 (same, already bright)
+  '--ansi-bright-green': '#a3be8c',        // nord14
+  '--ansi-bright-yellow': '#ebcb8b',       // nord13
+  '--ansi-bright-blue': '#81a1c1',         // nord9
+  '--ansi-bright-magenta': '#b48ead',      // nord15
+  '--ansi-bright-cyan': '#8fbcbb',         // nord7
+  '--ansi-bright-white': '#eceff4',        // nord6
+
+  // ===========================================================================
+  // COLLABORATOR COLORS
+  //
+  // Using Frost colors for collaborators - they're distinct from Aurora
+  // (used for status) and provide good differentiation between user types.
+  // ===========================================================================
+  '--collab-human': '#88c0d0',             // nord8 - humans are "cool"
+  '--collab-ai': '#b48ead',                // nord15 - AI uses purple
+  '--collab-runtime': '#a3be8c',           // nord14 - runtime is "alive" green
+
+  // ===========================================================================
+  // EDITOR (Polar Night + Snow Storm)
+  //
+  // The editor background is nord0, the darkest Polar Night color.
+  // This creates a calm, focused editing environment.
+  // ===========================================================================
+  '--editor-background': '#2e3440',        // nord0
+  '--editor-foreground': '#d8dee9',        // nord4
+  '--editor-line-number': '#4c566a',       // nord3 - subtle but readable
+  '--editor-line-number-active': '#d8dee9',// nord4 - matches text
+  '--editor-selection': '#434c5e',         // nord2
+  '--editor-selection-match': '#3b4252',   // nord1 - subtle match highlight
+  '--editor-cursor': '#d8dee9',            // nord4 - matches text
+  '--editor-active-line': 'rgba(67, 76, 94, 0.5)',  // nord2 at 50%
+  '--editor-gutter': '#2e3440',            // nord0 - matches background
+  '--editor-matching-bracket': 'rgba(136, 192, 208, 0.3)',  // nord8 at 30%
+
+  // ===========================================================================
+  // SYNTAX HIGHLIGHTING
+  //
+  // Nord's syntax philosophy:
+  // - Frost (cold blues/teals) = Structural elements (types, functions)
+  // - Aurora (warm colors) = Values and literals (strings, numbers)
+  // - Snow Storm (whites) = Plain text, operators
+  // - Polar Night = Comments (nord3)
+  //
+  // This creates a visual hierarchy where structure is cool/calm and
+  // data/values "pop" with warmer colors.
+  // ===========================================================================
+
+  // Keywords and control flow - nord9 (medium blue) and nord15 (purple)
+  '--syntax-keyword': '#81a1c1',           // nord9 - structural keywords
+  '--syntax-control': '#81a1c1',           // nord9 - return, if, else
+
+  // Literals - Aurora colors
+  '--syntax-string': '#a3be8c',            // nord14 - green for strings
+  '--syntax-number': '#b48ead',            // nord15 - purple for numbers
+  '--syntax-constant': '#81a1c1',          // nord9 - true, false, null
+
+  // Comments - nord3 (muted Polar Night)
+  '--syntax-comment': '#616e88',           // Slightly brighter than nord3
+
+  // Functions and variables - Frost colors
+  '--syntax-function': '#88c0d0',          // nord8 - function names pop
+  '--syntax-variable': '#d8dee9',          // nord4 - plain text color
+  '--syntax-variable-special': '#81a1c1',  // nord9 - this, self
+  '--syntax-property': '#88c0d0',          // nord8 - object properties
+  '--syntax-parameter': '#d8dee9',         // nord4 - function params
+
+  // Operators and punctuation - Snow Storm (subtle)
+  '--syntax-operator': '#81a1c1',          // nord9 - slightly colored
+  '--syntax-punctuation': '#eceff4',       // nord6 - bright but neutral
+
+  // Types and classes - nord7 (teal, distinct from functions)
+  '--syntax-type': '#8fbcbb',              // nord7
+  '--syntax-class': '#8fbcbb',             // nord7
+
+  // Special syntax
+  '--syntax-regexp': '#ebcb8b',            // nord13 - yellow stands out
+  '--syntax-escape': '#d08770',            // nord12 - orange for escapes
+
+  // HTML/XML - Frost colors
+  '--syntax-tag': '#81a1c1',               // nord9 - tags are structural
+  '--syntax-attribute': '#8fbcbb',         // nord7 - attributes
+  '--syntax-attribute-value': '#a3be8c',   // nord14 - values are strings
+
+  // Markdown - varied to distinguish heading levels
+  '--syntax-heading': '#88c0d0',           // nord8 - headings pop
+  '--syntax-link': '#88c0d0',              // nord8 - clickable
+  '--syntax-link-text': '#a3be8c',         // nord14 - link text
+  '--syntax-emphasis': '#eceff4',          // nord6 - stands out
+  '--syntax-strong': '#eceff4',            // nord6 - bold is bright
+  '--syntax-strikethrough': '#4c566a',     // nord3 - de-emphasized
+  '--syntax-quote': '#616e88',             // Like comments
+  '--syntax-code': '#a3be8c',              // nord14 - inline code
+  '--syntax-code-background': 'rgba(67, 76, 94, 0.5)',  // nord2 at 50%
+  '--syntax-meta': '#5e81ac',              // nord10 - fences, front matter
+
+  // Diff colors
+  '--syntax-inserted': '#a3be8c',          // nord14 - green = added
+  '--syntax-deleted': '#bf616a',           // nord11 - red = removed
+  '--syntax-changed': '#ebcb8b',           // nord13 - yellow = modified
+};
+
+/**
+ * Nord Outputs Theme
+ *
+ * A variant of Nord where output widgets are clearly "attached" to their
+ * code blocks rather than floating in the document.
+ *
+ * ## Key Differences from base Nord:
+ *
+ * 1. **Left indent** - Outputs are indented to show hierarchy
+ * 2. **No accent border** - Removes the left color bar for cleaner attachment
+ * 3. **Subtle background** - Slightly darker than editor to show it's "output"
+ * 4. **Tighter spacing** - Less margin to feel connected to code above
+ * 5. **Smaller text** - Outputs are secondary to the code
+ *
+ * This creates a visual hierarchy:
+ * ```
+ * [Code block - full width, editor background]
+ *    [Output - indented, darker, clearly subordinate]
+ * ```
+ */
+export const nordOutputsTheme = {
+  // Inherit all base Nord values
+  ...nordTheme,
+
+  name: 'nord-outputs',
+  description: 'Nord variant with outputs visually attached to code blocks.',
+
+  // ===========================================================================
+  // LAYOUT CHANGES - Make outputs feel "attached"
+  // ===========================================================================
+
+  // Pull widget up closer to the code block above
+  '--widget-offset-top': '-20px',        // Negative pulls it up into the code block's space
+
+  // Indent from left to show hierarchy (output belongs to code)
+  '--widget-inset-left': '24px',         // Indented from editor edge
+  '--widget-padding-x': '12px',          // Internal padding
+
+  // Remove the accent border - we're using indent instead
+  '--widget-border-accent-width': '0px',
+  '--widget-border-width': '0px',
+
+  // Rounder corners on bottom, square on top to "attach" visually
+  '--widget-border-radius': '0 0 4px 4px',
+
+  // ===========================================================================
+  // SURFACE CHANGES - Distinguish output from editor
+  // ===========================================================================
+
+  // Darker than editor to show "this is output, not code"
+  '--widget-surface': '#252b35',         // Between nord0 and a darker shade
+  '--widget-surface-hover': '#2e3440',   // Hover brings it to editor level
+
+  // ===========================================================================
+  // TYPOGRAPHY - Outputs are secondary
+  // ===========================================================================
+
+  '--widget-font-size': '0.85em',        // Slightly smaller than code
+  '--widget-font-size-small': '0.75em',
 };
 
 // #endregion BUILT_IN_THEMES
@@ -456,6 +989,8 @@ const themeRegistry = new Map([
   ['midnight', midnightTheme],
   ['daylight', daylightTheme],
   ['github', githubTheme],
+  ['nord', nordTheme],
+  ['nord-outputs', nordOutputsTheme],
 ]);
 
 /**
@@ -558,6 +1093,8 @@ export default {
   midnightTheme,
   daylightTheme,
   githubTheme,
+  nordTheme,
+  nordOutputsTheme,
 
   // Theme registry
   registerTheme,

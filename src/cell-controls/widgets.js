@@ -277,6 +277,9 @@ export class CellControlsGutterMarker extends WidgetType {
 
 /**
  * Inject CSS styles for cell controls
+ *
+ * Uses widget theme tokens (--widget-*) for consistent theming.
+ * Falls back to reasonable defaults if tokens aren't set.
  */
 export function injectCellControlsStyles() {
   if (document.getElementById('mrmd-cell-controls-styles')) {
@@ -293,10 +296,11 @@ export function injectCellControlsStyles() {
       gap: 4px;
       margin-left: 8px;
       vertical-align: middle;
-      font-size: 12px;
+      font-size: var(--widget-font-size-label, 12px);
+      font-family: var(--widget-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
     }
 
-    /* Buttons */
+    /* Buttons - use widget theme surface colors */
     .${PREFIX}-btn {
       display: inline-flex;
       align-items: center;
@@ -305,9 +309,9 @@ export function injectCellControlsStyles() {
       height: 22px;
       padding: 0;
       border: none;
-      border-radius: 4px;
-      background: var(--cell-controls-btn-bg, rgba(128, 128, 128, 0.1));
-      color: var(--cell-controls-btn-color, inherit);
+      border-radius: var(--widget-border-radius, 4px);
+      background: var(--widget-surface, rgba(128, 128, 128, 0.1));
+      color: var(--widget-text-muted, inherit);
       cursor: pointer;
       opacity: 0.7;
       transition: all 0.15s ease;
@@ -315,43 +319,43 @@ export function injectCellControlsStyles() {
 
     .${PREFIX}-btn:hover {
       opacity: 1;
-      background: var(--cell-controls-btn-hover-bg, rgba(128, 128, 128, 0.2));
+      background: var(--widget-surface-hover, rgba(128, 128, 128, 0.2));
     }
 
     .${PREFIX}-btn:active {
       transform: scale(0.95);
     }
 
-    /* Play button */
+    /* Play button - use success color */
     .${PREFIX}-btn-play {
-      color: var(--cell-controls-play-color, #22c55e);
+      color: var(--widget-success, #22c55e);
     }
 
     .${PREFIX}-btn-play:hover {
-      background: var(--cell-controls-play-hover-bg, rgba(34, 197, 94, 0.15));
+      background: color-mix(in srgb, var(--widget-success, #22c55e) 15%, transparent);
     }
 
-    /* Stop button */
+    /* Stop button - use error color */
     .${PREFIX}-btn-stop {
-      color: var(--cell-controls-stop-color, #ef4444);
+      color: var(--widget-error, #ef4444);
     }
 
     .${PREFIX}-btn-stop:hover {
-      background: var(--cell-controls-stop-hover-bg, rgba(239, 68, 68, 0.15));
+      background: color-mix(in srgb, var(--widget-error, #ef4444) 15%, transparent);
     }
 
-    /* Copy button */
+    /* Copy button - use muted text */
     .${PREFIX}-btn-copy {
-      color: var(--cell-controls-copy-color, #6b7280);
+      color: var(--widget-text-muted, #6b7280);
     }
 
     .${PREFIX}-btn-copied {
-      color: var(--cell-controls-copied-color, #22c55e);
+      color: var(--widget-success, #22c55e);
     }
 
-    /* Clear button */
+    /* Clear button - use muted text */
     .${PREFIX}-btn-clear {
-      color: var(--cell-controls-clear-color, #6b7280);
+      color: var(--widget-text-muted, #6b7280);
     }
 
     /* Status indicators */
@@ -360,19 +364,21 @@ export function injectCellControlsStyles() {
       align-items: center;
       gap: 4px;
       padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 11px;
+      border-radius: var(--widget-border-radius, 4px);
+      font-size: var(--widget-font-size-small, 11px);
       font-weight: 500;
     }
 
+    /* Running status - use info color */
     .${PREFIX}-status-running {
-      color: var(--cell-controls-running-color, #3b82f6);
-      background: var(--cell-controls-running-bg, rgba(59, 130, 246, 0.1));
+      color: var(--widget-info, #3b82f6);
+      background: color-mix(in srgb, var(--widget-info, #3b82f6) 10%, transparent);
     }
 
+    /* Queued status - use warning color */
     .${PREFIX}-status-queued {
-      color: var(--cell-controls-queued-color, #f59e0b);
-      background: var(--cell-controls-queued-bg, rgba(245, 158, 11, 0.1));
+      color: var(--widget-warning, #f59e0b);
+      background: color-mix(in srgb, var(--widget-warning, #f59e0b) 10%, transparent);
     }
 
     .${PREFIX}-spinner {
@@ -406,7 +412,7 @@ export function injectCellControlsStyles() {
     }
 
     .${PREFIX}-gutter-play {
-      color: var(--cell-controls-play-color, #22c55e);
+      color: var(--widget-success, #22c55e);
       opacity: 0.5;
       transition: opacity 0.15s;
     }
@@ -416,26 +422,17 @@ export function injectCellControlsStyles() {
     }
 
     .${PREFIX}-gutter-running {
-      color: var(--cell-controls-running-color, #3b82f6);
+      color: var(--widget-info, #3b82f6);
       animation: ${PREFIX}-pulse 1s ease-in-out infinite;
     }
 
     .${PREFIX}-gutter-queued {
-      color: var(--cell-controls-queued-color, #f59e0b);
+      color: var(--widget-warning, #f59e0b);
     }
 
     @keyframes ${PREFIX}-pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.4; }
-    }
-
-    /* Dark mode adjustments (when parent has .dark class) */
-    .dark .${PREFIX}-btn {
-      background: var(--cell-controls-btn-bg, rgba(255, 255, 255, 0.05));
-    }
-
-    .dark .${PREFIX}-btn:hover {
-      background: var(--cell-controls-btn-hover-bg, rgba(255, 255, 255, 0.1));
     }
   `;
 

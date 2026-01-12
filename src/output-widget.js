@@ -529,8 +529,9 @@ export const outputWidgetStyles = `
 /* Widget is absolutely positioned - overlays on transparent text lines, doesn't add to flow */
 .cm-output-widget {
   position: absolute;
-  left: 0;
+  left: var(--widget-inset-left, 0);
   right: 0;
+  top: var(--widget-offset-top, 0);  /* Can be negative to pull widget up closer to code block */
   z-index: 1;
   font-family: var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', monospace);
   font-size: var(--widget-font-size, 0.9em);

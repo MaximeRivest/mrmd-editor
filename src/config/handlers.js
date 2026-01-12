@@ -7,6 +7,9 @@
  */
 
 import { pathToString, matchesPattern } from './reactive.js';
+import { applyTheme } from '../widgets/theme-utils.js';
+import { getTheme } from '../widgets/theme.js';
+import { createCodemirrorTheme } from '../widgets/codemirror-theme.js';
 
 /**
  * @typedef {import('./reactive.js').ConfigChangeEvent} ConfigChangeEvent
@@ -23,6 +26,7 @@ import { pathToString, matchesPattern } from './reactive.js';
  * @property {Object} [cellControls] - CellControlsSystem
  * @property {Object} [provider] - WebsocketProvider
  * @property {Function} createRuntime - Factory to create runtime from config
+ * @property {Object} [config] - The reactive config object (for reading current values)
  */
 
 /**
@@ -35,6 +39,7 @@ export function createConfigHandler(internals) {
   const handlers = {
     // Appearance handlers
     'appearance.dark': (event) => handleDarkMode(internals, event),
+    'appearance.theme': (event) => handleTheme(internals, event),
     'appearance.readonly': (event) => handleReadonly(internals, event),
     'appearance.placeholder': (event) => handlePlaceholder(internals, event),
 
@@ -85,27 +90,92 @@ export function createConfigHandler(internals) {
 // =============================================================================
 
 /**
+ * Resolve the effective dark mode value
+ * @param {boolean | null} dark
+ * @returns {boolean}
+ */
+function resolveIsDark(dark) {
+  if (dark === null) {
+    return typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+  }
+  return dark;
+}
+
+/**
+ * Resolve the effective theme name based on config
+ * @param {string | null} theme - Explicit theme name or null for auto
+ * @param {boolean} isDark - Resolved dark mode
+ * @returns {string}
+ */
+function resolveThemeName(theme, isDark) {
+  if (theme && getTheme(theme)) {
+    return theme;
+  }
+  // Auto-select based on dark mode
+  return isDark ? 'midnight' : 'daylight';
+}
+
+/**
+ * Apply unified theme (both CodeMirror and widget CSS variables)
+ * @param {EditorInternals} internals
+ * @param {string} themeName
+ */
+function applyUnifiedTheme(internals, themeName) {
+  const { view, themeCompartment } = internals;
+
+  // Get theme object
+  const theme = getTheme(themeName);
+  if (!theme) {
+    console.warn(`Theme "${themeName}" not found`);
+    return;
+  }
+
+  // Apply widget theme (CSS variables)
+  applyTheme(themeName);
+
+  // Apply CodeMirror theme
+  const cmTheme = createCodemirrorTheme(theme);
+  view.dispatch({
+    effects: themeCompartment.reconfigure(cmTheme)
+  });
+}
+
+/**
  * Handle dark mode change
  * @param {EditorInternals} internals
  * @param {ConfigChangeEvent} event
  */
 function handleDarkMode(internals, event) {
-  const { view, themeCompartment } = internals;
+  const { config } = internals;
   const dark = event.value;
 
   // Determine actual dark mode (null = system preference)
-  let isDark = dark;
-  if (dark === null) {
-    isDark = typeof window !== 'undefined' &&
-      window.matchMedia?.('(prefers-color-scheme: dark)').matches;
-  }
+  const isDark = resolveIsDark(dark);
 
-  // Import dynamically to avoid circular deps
-  import('@codemirror/theme-one-dark').then(({ oneDark }) => {
-    view.dispatch({
-      effects: themeCompartment.reconfigure(isDark ? oneDark : [])
-    });
-  });
+  // Only update theme if no explicit theme is set (auto mode)
+  const explicitTheme = config?.appearance?.theme;
+  if (!explicitTheme) {
+    const themeName = resolveThemeName(null, isDark);
+    applyUnifiedTheme(internals, themeName);
+  }
+}
+
+/**
+ * Handle theme change
+ * @param {EditorInternals} internals
+ * @param {ConfigChangeEvent} event
+ */
+function handleTheme(internals, event) {
+  const { config } = internals;
+  const theme = event.value;
+
+  // Resolve theme name (may be null for auto)
+  const isDark = resolveIsDark(config?.appearance?.dark ?? null);
+  const themeName = resolveThemeName(theme, isDark);
+
+  // Apply unified theme (CodeMirror + widgets)
+  applyUnifiedTheme(internals, themeName);
 }
 
 /**

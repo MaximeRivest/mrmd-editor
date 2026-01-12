@@ -13,7 +13,8 @@ Creates a collaborative markdown editor instance.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `doc` | string | `''` | Initial document content |
-| `dark` | boolean\|null | `null` | Theme mode: `true`=dark, `false`=light, `null`=system preference |
+| `theme` | string\|null | `null` | Theme name: `'midnight'`, `'daylight'`, `'github'`, `'nord'`, `'nord-outputs'`, or custom. See [THEMING.md](./THEMING.md) |
+| `dark` | boolean\|null | `null` | Dark mode: `true`=dark, `false`=light, `null`=system. Auto-selects theme if `theme` is null. |
 | `placeholder` | string | `'Start typing...'` | Placeholder text when editor is empty. Pass `''` to disable. |
 | `readonly` | boolean | `false` | View-only mode |
 | `ydoc` | Y.Doc | `new Y.Doc()` | Existing Yjs document for collaboration |
@@ -53,7 +54,9 @@ Methods available on the editor instance returned by `create()`:
 
 | Method | Description |
 |--------|-------------|
-| `setDark(bool)` | Toggles dark/light theme |
+| `setTheme(name)` | Sets theme by name. See [THEMING.md](./THEMING.md) for available themes. |
+| `getThemeNames()` | Returns array of available theme names |
+| `setDark(bool)` | Sets dark mode. Auto-selects matching theme if no explicit theme set. |
 | `setReadonly(bool)` | Toggles readonly mode |
 | `focus()` | Focuses the editor |
 | `blur()` | Blurs the editor |

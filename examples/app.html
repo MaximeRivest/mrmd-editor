@@ -67,6 +67,33 @@
       color: light-dark(#666, #888);
     }
 
+    /* Theme selector */
+    .theme-selector {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+    }
+
+    .theme-selector label {
+      color: light-dark(#666, #888);
+    }
+
+    .theme-selector select {
+      padding: 4px 8px;
+      border-radius: 4px;
+      border: 1px solid light-dark(#d0d0d0, #4c4c4c);
+      background: light-dark(#f8f8f8, #2d2d2d);
+      color: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .theme-selector select:focus {
+      outline: none;
+      border-color: light-dark(#2563eb, #4f9eff);
+    }
+
     /* Sidebar sections */
     .sidebar-section {
       border-bottom: 1px solid light-dark(#e0e0e0, #3c3c3c);
@@ -374,6 +401,17 @@
     <header class="header">
       <span class="logo">mrmd</span>
       <span id="current-file"></span>
+      <div class="theme-selector">
+        <label for="theme-select">Theme:</label>
+        <select id="theme-select">
+          <option value="">Auto</option>
+          <option value="midnight">Midnight</option>
+          <option value="daylight">Daylight</option>
+          <option value="github">GitHub</option>
+          <option value="nord">Nord</option>
+          <option value="nord-outputs">Nord (Attached)</option>
+        </select>
+      </div>
       <span class="header-info" id="header-info"></span>
     </header>
 
@@ -431,6 +469,7 @@
   const pythonStatus = document.getElementById('python-status');
   const pythonInfo = document.getElementById('python-info');
   const docStats = document.getElementById('doc-stats');
+  const themeSelect = document.getElementById('theme-select');
 
   async function fetchFiles() {
     try {
@@ -558,9 +597,13 @@
     editorEl.innerHTML = '';
 
     try {
+      // Get currently selected theme from the selector
+      const selectedTheme = themeSelect.value || null;
+
       currentEditor = await mrmd.session(API_BASE, editorEl, {
         doc: name,
         python: 'dedicated',
+        theme: selectedTheme,  // Pass theme to editor
         editor: {
           cellControls: { enabled: true },
         }
@@ -579,6 +622,9 @@
           docStats.textContent = stats.lines ? `${stats.lines} lines` : '';
         });
       }
+
+      // Update theme selector to reflect current theme
+      updateThemeSelector();
 
       await fetchSessions();
     } catch (err) {
@@ -618,6 +664,27 @@
   window.openFile = openFile;
   window.stopSession = stopSession;
   window.refreshSessions = fetchSessions;
+
+  // Theme selector event listener
+  themeSelect.addEventListener('change', (e) => {
+    const theme = e.target.value || null;  // Empty string becomes null (auto)
+    if (currentEditor) {
+      currentEditor.setTheme(theme);
+    } else {
+      // If no editor, apply theme globally via mrmd.widgets
+      mrmd.widgets.applyTheme(theme || (
+        window.matchMedia('(prefers-color-scheme: dark)').matches ? 'midnight' : 'daylight'
+      ));
+    }
+  });
+
+  // Update theme selector when editor opens (to reflect current theme)
+  function updateThemeSelector() {
+    if (currentEditor && currentEditor.config) {
+      const currentTheme = currentEditor.config.appearance?.theme || '';
+      themeSelect.value = currentTheme;
+    }
+  }
 
   async function init() {
     await fetchFiles();
