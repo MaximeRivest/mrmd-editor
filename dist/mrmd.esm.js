@@ -33874,7 +33874,7 @@ const htmlNoMatch = /*@__PURE__*/html({ matchClosingTags: false });
 /**
 Markdown language support.
 */
-function markdown(config = {}) {
+function markdown$1(config = {}) {
     let { codeLanguages, defaultCodeLanguage, addKeymap = true, base: { parser } = commonmarkLanguage, completeHTMLTags = true, pasteURLAsLink: pasteURL = true, htmlTagLanguage = htmlNoMatch } = config;
     if (!(parser instanceof MarkdownParser))
         throw new RangeError("Base parser provided to `markdown` should be a Markdown parser");
@@ -54997,7 +54997,7 @@ class EmptyStdinWidget extends WidgetType {
  * @param {Object|null} awarenessSystem - Optional awareness system for collaborative focus
  * @returns {import('@codemirror/view').DecorationSet}
  */
-function buildDecorations$1(view, awarenessSystem) {
+function buildDecorations$2(view, awarenessSystem) {
   const decorations = [];
   const doc = view.state.doc;
   const cursorPos = view.state.selection.main.head;
@@ -55164,7 +55164,7 @@ const outputWidgetPlugin = ViewPlugin.fromClass(
       this.unsubscribe = null;
 
       // Build initial decorations
-      this.decorations = buildDecorations$1(view, this.awarenessSystem);
+      this.decorations = buildDecorations$2(view, this.awarenessSystem);
 
       // Setup awareness listener (following y-codemirror.next pattern)
       // The listener dispatches a transaction which triggers update()
@@ -55216,7 +55216,7 @@ const outputWidgetPlugin = ViewPlugin.fromClass(
       // ALWAYS rebuild decorations (following y-codemirror.next pattern)
       // Uses y-codemirror.next cursor positions to check remote focus
       // (no separate focusedBlock state needed - cursor positions survive edits)
-      this.decorations = buildDecorations$1(update.view, this.awarenessSystem);
+      this.decorations = buildDecorations$2(update.view, this.awarenessSystem);
     }
 
     destroy() {
@@ -59137,7 +59137,7 @@ const rebuildCellControlsEffect = StateEffect.define();
  * @param {Object} context
  * @returns {import('@codemirror/view').DecorationSet}
  */
-function buildDecorations(view, context) {
+function buildDecorations$1(view, context) {
   if (!context || !context.config?.enabled) {
     return Decoration.none;
   }
@@ -59242,7 +59242,7 @@ class CellControlsPluginClass {
   constructor(view) {
     this.view = view;
     this.context = view.state.facet(cellControlsFacet);
-    this.decorations = buildDecorations(view, this.context);
+    this.decorations = buildDecorations$1(view, this.context);
 
     // Inject styles on first instantiation
     injectCellControlsStyles();
@@ -59277,7 +59277,7 @@ class CellControlsPluginClass {
 
     if (needsRebuild) {
       this.context = newContext;
-      this.decorations = buildDecorations(update.view, this.context);
+      this.decorations = buildDecorations$1(update.view, this.context);
 
       // Re-setup subscription if context changed
       if (newContext && !this._unsubscribe) {
@@ -68272,6 +68272,2501 @@ function createRuntime(options) {
 }
 
 /**
+ * Image Widget
+ *
+ * Renders images inline in the editor.
+ *
+ * Two widgets:
+ * - ImagePlaceholder: Compact placeholder shown on blur (e.g., "🖼 alt-text")
+ * - ImageWidget: The actual rendered image
+ *
+ * @module markdown/widgets/image
+ */
+
+
+/**
+ * Compact placeholder for image syntax.
+ * Shows "🖼 alt-text" when cursor is not on the image line.
+ */
+class ImagePlaceholder extends WidgetType {
+  /**
+   * @param {string} alt - Alt text for the image
+   * @param {string} url - Image URL
+   * @param {boolean} isLinked - Whether this is a linked image [![](img)](url)
+   */
+  constructor(alt, url, isLinked = false) {
+    super();
+    this.alt = alt;
+    this.url = url;
+    this.isLinked = isLinked;
+  }
+
+  eq(other) {
+    return other.alt === this.alt && other.url === this.url && other.isLinked === this.isLinked;
+  }
+
+  toDOM() {
+    const span = document.createElement('span');
+    span.className = 'cm-image-placeholder';
+
+    // Determine icon based on URL type and link status
+    let icon = this.isLinked ? '🔗🖼' : '🖼';
+    if (this.url.startsWith('data:image/svg') || this.url.endsWith('.svg')) {
+      icon = this.isLinked ? '🔗◇' : '◇'; // SVG indicator
+    } else if (this.url.startsWith('data:')) {
+      icon = this.isLinked ? '🔗📷' : '📷'; // Embedded image
+    }
+
+    // Show icon + truncated alt text
+    const displayText = this.alt || 'image';
+    const truncated = displayText.length > 30
+      ? displayText.slice(0, 30) + '…'
+      : displayText;
+
+    span.textContent = `${icon} ${truncated}`;
+    span.title = this.isLinked
+      ? `Linked Image: ${this.alt}\nClick to edit`
+      : `Image: ${this.alt}\nClick to edit`;
+
+    return span;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+/**
+ * Widget for rendering the actual image.
+ */
+class ImageWidget extends WidgetType {
+  /**
+   * @param {string} url - Image URL
+   * @param {string} alt - Alt text for the image
+   * @param {boolean} isLinked - Whether this is a linked image
+   */
+  constructor(url, alt, isLinked = false) {
+    super();
+    this.url = url;
+    this.alt = alt;
+    this.isLinked = isLinked;
+  }
+
+  eq(other) {
+    return other.url === this.url && other.alt === this.alt && other.isLinked === this.isLinked;
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = 'cm-image-widget cm-image-loading';
+    if (this.isLinked) {
+      container.classList.add('cm-image-linked');
+    }
+    container.textContent = 'Loading image...';
+
+    const img = document.createElement('img');
+    img.alt = this.alt;
+
+    img.onload = () => {
+      container.className = 'cm-image-widget';
+      if (this.isLinked) {
+        container.classList.add('cm-image-linked');
+      }
+      container.textContent = '';
+      container.appendChild(img);
+    };
+
+    img.onerror = () => {
+      container.className = 'cm-image-widget cm-image-error';
+      container.textContent = `Failed to load: ${this.alt || 'image'}`;
+    };
+
+    img.src = this.url;
+    return container;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+/**
+ * Parse image markdown syntax.
+ *
+ * @param {string} content - Raw content that might contain image markdown
+ * @returns {{ src: string, alt: string } | null}
+ */
+function parseImageMarkdown(content) {
+  // Match ![alt](url) or ![alt](url "title")
+  const match = content.match(/!\[([^\]]*)\]\(([^)"]+)(?:\s+"[^"]*")?\)/);
+  if (match) {
+    return {
+      alt: match[1],
+      src: match[2],
+    };
+  }
+  return null;
+}
+
+/**
+ * Table Widget and Parser
+ *
+ * Renders markdown tables as HTML tables with Tufte Markdown extensions.
+ * Uses the stable layout pattern to avoid jitter.
+ *
+ * Tufte Markdown Extensions:
+ * - Column widths: |:--{30%}| in delimiter row
+ * - Colspan: | > | merges with cell to left
+ * - Rowspan: | ^ | merges with cell above
+ * - Decimal alignment: |---.| in delimiter row
+ *
+ * @module markdown/widgets/table
+ */
+
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+/** Marker for colspan (merge with cell to left) */
+const COLSPAN_MARKER = '>';
+
+/** Marker for rowspan (merge with cell above) */
+const ROWSPAN_MARKER = '^';
+
+// =============================================================================
+// Detection Functions
+// =============================================================================
+
+/**
+ * Check if a line looks like a table row (contains pipes)
+ *
+ * @param {string} line
+ * @returns {boolean}
+ */
+function isTableLine(line) {
+  if (line.startsWith('```') || line.startsWith('~~~')) {
+    return false;
+  }
+  return line.includes('|');
+}
+
+/**
+ * Check if a line is a table delimiter row.
+ * Enhanced to support Tufte extensions: |:--{30%}| and |---.|
+ *
+ * @param {string} line
+ * @returns {boolean}
+ */
+function isTableDelimiter(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') && !trimmed.includes('|')) {
+    return false;
+  }
+
+  const cells = splitTableRow(trimmed);
+  if (cells.length === 0) {
+    return false;
+  }
+
+  // Each cell must match the delimiter pattern
+  // Extended pattern allows: colons, dashes, dots, and width specs
+  const delimiterPattern = /^:?-+(?:\{[^}]+\})?\.?:?$|^:?-+\.?(?:\{[^}]+\})?:?$/;
+  return cells.every(cell => delimiterPattern.test(cell.trim()));
+}
+
+// =============================================================================
+// Parsing Functions
+// =============================================================================
+
+/**
+ * Split a table row into cells, handling escaped pipes
+ *
+ * @param {string} line
+ * @returns {string[]}
+ */
+function splitTableRow(line) {
+  const cells = [];
+  let current = '';
+  let i = 0;
+
+  const trimmed = line.trim();
+  if (trimmed.startsWith('|')) {
+    i = trimmed.indexOf('|') + 1;
+  } else {
+    i = 0;
+  }
+
+  while (i < trimmed.length) {
+    const char = trimmed[i];
+
+    if (char === '\\' && i + 1 < trimmed.length && trimmed[i + 1] === '|') {
+      // Escaped pipe - include the pipe in content
+      current += '|';
+      i += 2;
+    } else if (char === '|') {
+      // Cell boundary
+      cells.push(current);
+      current = '';
+      i++;
+    } else {
+      current += char;
+      i++;
+    }
+  }
+
+  // Don't add the last segment if it's empty (trailing pipe case)
+  if (current.trim() !== '') {
+    cells.push(current);
+  }
+
+  return cells;
+}
+
+/**
+ * Parse column alignments and widths from a delimiter row
+ *
+ * @param {string} delimiterLine
+ * @returns {{ alignments: (string|null)[], widths: (Object|null)[], decimalColumns: Set<number> }}
+ */
+function parseDelimiterRow(delimiterLine) {
+  const cells = splitTableRow(delimiterLine);
+  const alignments = [];
+  const widths = [];
+  const decimalColumns = new Set();
+
+  cells.forEach((cell, index) => {
+    const trimmed = cell.trim();
+
+    // Extract width if present: {30%}, {100px}, {2fr}, {1.5em}
+    let width = null;
+    const widthMatch = trimmed.match(/\{(\d+(?:\.\d+)?)(px|%|fr|em)\}/);
+    if (widthMatch) {
+      width = {
+        value: parseFloat(widthMatch[1]),
+        unit: widthMatch[2],
+      };
+    }
+    widths.push(width);
+
+    // Remove width specification for alignment parsing
+    const alignPart = trimmed.replace(/\{[^}]+\}/, '');
+
+    // Check for decimal alignment marker (.)
+    const hasDecimal = alignPart.includes('.');
+    if (hasDecimal) {
+      decimalColumns.add(index);
+    }
+
+    // Parse alignment from colons
+    const leftColon = alignPart.startsWith(':');
+    const rightColon = alignPart.endsWith(':');
+
+    if (hasDecimal) {
+      alignments.push('decimal');
+    } else if (leftColon && rightColon) {
+      alignments.push('center');
+    } else if (rightColon) {
+      alignments.push('right');
+    } else if (leftColon) {
+      alignments.push('left');
+    } else {
+      alignments.push(null);
+    }
+  });
+
+  return { alignments, widths, decimalColumns };
+}
+
+/**
+ * Check if cell content is a colspan marker
+ */
+function isColspanMarker(content) {
+  return content.trim() === COLSPAN_MARKER;
+}
+
+/**
+ * Check if cell content is a rowspan marker
+ */
+function isRowspanMarker(content) {
+  return content.trim() === ROWSPAN_MARKER;
+}
+
+/**
+ * Parse a table row into structured cells
+ */
+function parseTableRow(line, isHeader = false, isDelimiter = false) {
+  const rawCells = splitTableRow(line);
+
+  const cells = rawCells.map(raw => {
+    const content = raw.trim();
+    return {
+      content,
+      raw,
+      colspan: 1,
+      rowspan: 1,
+      hidden: false,
+      isColspanMarker: isColspanMarker(content),
+      isRowspanMarker: isRowspanMarker(content),
+    };
+  });
+
+  return {
+    cells,
+    isHeader,
+    isDelimiter,
+  };
+}
+
+/**
+ * Process colspan markers in a table
+ */
+function processColspans(rows) {
+  for (const row of rows) {
+    if (row.isDelimiter) continue;
+
+    for (let col = row.cells.length - 1; col >= 0; col--) {
+      const cell = row.cells[col];
+
+      if (cell.isColspanMarker && col > 0) {
+        let targetCol = col - 1;
+        while (targetCol >= 0 && row.cells[targetCol].isColspanMarker) {
+          targetCol--;
+        }
+
+        if (targetCol >= 0) {
+          row.cells[targetCol].colspan++;
+          cell.hidden = true;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Process rowspan markers in a table
+ */
+function processRowspans(rows) {
+  const dataStartIndex = rows.findIndex(r => !r.isHeader && !r.isDelimiter);
+  if (dataStartIndex === -1) return;
+
+  for (let rowIdx = rows.length - 1; rowIdx >= 0; rowIdx--) {
+    const row = rows[rowIdx];
+    if (row.isDelimiter) continue;
+
+    for (let col = 0; col < row.cells.length; col++) {
+      const cell = row.cells[col];
+
+      if (cell.isRowspanMarker) {
+        let targetRow = rowIdx - 1;
+        while (targetRow >= 0) {
+          const aboveRow = rows[targetRow];
+          if (aboveRow.isDelimiter) {
+            targetRow--;
+            continue;
+          }
+
+          if (col < aboveRow.cells.length) {
+            const aboveCell = aboveRow.cells[col];
+            if (aboveCell.isRowspanMarker) {
+              targetRow--;
+              continue;
+            }
+            aboveCell.rowspan++;
+            cell.hidden = true;
+            break;
+          }
+          break;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Parse a complete markdown table from text lines
+ *
+ * @param {string[]} lines - Array of line strings making up the table
+ * @returns {Object|null} Parsed table structure
+ */
+function parseTable(lines) {
+  if (lines.length < 2) {
+    return null;
+  }
+
+  // Find the delimiter row
+  let delimiterIndex = -1;
+  for (let i = 0; i < lines.length && i < 3; i++) {
+    if (isTableDelimiter(lines[i])) {
+      delimiterIndex = i;
+      break;
+    }
+  }
+
+  if (delimiterIndex === -1 || delimiterIndex === 0) {
+    return null;
+  }
+
+  // Parse delimiter row
+  const { alignments, widths, decimalColumns } = parseDelimiterRow(lines[delimiterIndex]);
+  const columnCount = alignments.length;
+
+  // Parse all rows
+  const rows = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (i === delimiterIndex) {
+      rows.push(parseTableRow(lines[i], false, true));
+    } else if (i < delimiterIndex) {
+      rows.push(parseTableRow(lines[i], true, false));
+    } else {
+      rows.push(parseTableRow(lines[i], false, false));
+    }
+  }
+
+  // Process colspan and rowspan markers
+  processColspans(rows);
+  processRowspans(rows);
+
+  return {
+    rows,
+    alignments,
+    columnWidths: widths,
+    columnCount,
+    decimalColumns,
+  };
+}
+
+/**
+ * Check if cell content looks like a number
+ *
+ * @param {string} content
+ * @returns {boolean}
+ */
+function isNumericContent(content) {
+  const trimmed = content.trim();
+  if (trimmed === '') return false;
+
+  const numericPattern = /^[$€£¥]?\s*-?[\d,]+(?:\.\d+)?\s*[%MKBkmb]?$/;
+  return numericPattern.test(trimmed);
+}
+
+/**
+ * Generate a stable table ID from position
+ *
+ * @param {number} from - Start position
+ * @returns {string}
+ */
+function generateTableId(from) {
+  return `table-${from}`;
+}
+
+// =============================================================================
+// Widget
+// =============================================================================
+
+/**
+ * Widget for rendering markdown tables.
+ */
+class TableWidget extends WidgetType {
+  /**
+   * @param {Object} table - Parsed table data
+   * @param {string} tableId - Unique table identifier
+   * @param {Object} options - Rendering options
+   */
+  constructor(table, tableId, options = {}) {
+    super();
+    this.table = table;
+    this.tableId = tableId;
+    this.options = options;
+  }
+
+  eq(other) {
+    if (this.tableId !== other.tableId) return false;
+    if (this.table.columnCount !== other.table.columnCount) return false;
+    if (this.table.rows.length !== other.table.rows.length) return false;
+
+    for (let i = 0; i < this.table.rows.length; i++) {
+      const a = this.table.rows[i];
+      const b = other.table.rows[i];
+
+      if (a.cells.length !== b.cells.length) return false;
+      if (a.isHeader !== b.isHeader) return false;
+      if (a.isDelimiter !== b.isDelimiter) return false;
+
+      for (let j = 0; j < a.cells.length; j++) {
+        if (a.cells[j].content !== b.cells[j].content) return false;
+        if (a.cells[j].colspan !== b.cells[j].colspan) return false;
+        if (a.cells[j].rowspan !== b.cells[j].rowspan) return false;
+        if (a.cells[j].hidden !== b.cells[j].hidden) return false;
+      }
+    }
+
+    for (let i = 0; i < this.table.alignments.length; i++) {
+      if (this.table.alignments[i] !== other.table.alignments[i]) {
+        return false;
+      }
+    }
+
+    if (this.options.caption !== other.options.caption) return false;
+    if (this.options.captionPosition !== other.options.captionPosition) return false;
+
+    return true;
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = 'cm-table-widget';
+    container.dataset.tableId = this.tableId;
+
+    const tableEl = document.createElement('table');
+    tableEl.className = 'cm-table';
+
+    // Add column widths via colgroup if specified
+    this.applyColumnWidths(tableEl);
+
+    // Add caption if present
+    if (this.options.caption) {
+      const caption = document.createElement('caption');
+      caption.className = 'cm-table-caption';
+      if (this.options.captionPosition === 'below') {
+        caption.classList.add('cm-table-caption-below');
+      }
+      caption.textContent = this.options.caption;
+      tableEl.appendChild(caption);
+    }
+
+    // Detect numeric columns for alignment
+    const numericColumns = this.detectNumericColumns();
+
+    // Compute decimal alignment info (Tufte's requirement)
+    const decimalInfo = this.computeDecimalAlignment(numericColumns);
+
+    // Render rows
+    let thead = null;
+    const tbody = document.createElement('tbody');
+
+    for (const row of this.table.rows) {
+      if (row.isDelimiter) continue;
+
+      const tr = document.createElement('tr');
+
+      for (let i = 0; i < row.cells.length; i++) {
+        const cell = row.cells[i];
+
+        // Skip hidden cells
+        if (cell.hidden) continue;
+
+        const cellEl = document.createElement(row.isHeader ? 'th' : 'td');
+
+        // Apply colspan/rowspan
+        if (cell.colspan > 1) {
+          cellEl.colSpan = cell.colspan;
+        }
+        if (cell.rowspan > 1) {
+          cellEl.rowSpan = cell.rowspan;
+        }
+
+        // Apply alignment
+        const alignment = this.getEffectiveAlignment(i, numericColumns);
+        if (alignment) {
+          cellEl.classList.add(`cm-table-align-${alignment}`);
+        }
+
+        // Render cell content
+        const isNumeric = !row.isHeader && isNumericContent(cell.content);
+        if (isNumeric) {
+          cellEl.classList.add('cm-table-cell-numeric');
+        }
+
+        // Use decimal alignment for numeric columns
+        if (isNumeric && decimalInfo.has(i)) {
+          this.renderDecimalAligned(cellEl, cell.content, decimalInfo.get(i));
+        } else {
+          cellEl.innerHTML = this.renderInlineMarkdown(cell.content);
+        }
+
+        tr.appendChild(cellEl);
+      }
+
+      if (row.isHeader) {
+        if (!thead) {
+          thead = document.createElement('thead');
+        }
+        thead.appendChild(tr);
+      } else {
+        tbody.appendChild(tr);
+      }
+    }
+
+    if (thead) {
+      tableEl.appendChild(thead);
+    }
+    tableEl.appendChild(tbody);
+
+    container.appendChild(tableEl);
+    return container;
+  }
+
+  /**
+   * Detect which columns should use decimal alignment
+   */
+  detectNumericColumns() {
+    const numericColumns = new Set();
+
+    // Include explicitly marked decimal columns
+    if (this.table.decimalColumns) {
+      for (const col of this.table.decimalColumns) {
+        numericColumns.add(col);
+      }
+    }
+
+    // Auto-detect numeric columns (>70% numeric content)
+    for (let col = 0; col < this.table.columnCount; col++) {
+      if (numericColumns.has(col)) continue;
+
+      let numericCount = 0;
+      let totalCount = 0;
+
+      for (const row of this.table.rows) {
+        if (row.isHeader || row.isDelimiter) continue;
+        const cell = row.cells[col];
+        if (cell && cell.content.trim() !== '' && !cell.hidden) {
+          totalCount++;
+          if (isNumericContent(cell.content)) {
+            numericCount++;
+          }
+        }
+      }
+
+      if (totalCount > 0 && numericCount / totalCount > 0.7) {
+        numericColumns.add(col);
+      }
+    }
+
+    return numericColumns;
+  }
+
+  /**
+   * Compute decimal alignment info for numeric columns
+   */
+  computeDecimalAlignment(numericColumns) {
+    const info = new Map();
+
+    for (const col of numericColumns) {
+      let maxIntWidth = 0;
+      let maxDecWidth = 0;
+
+      for (const row of this.table.rows) {
+        if (row.isHeader || row.isDelimiter) continue;
+        const cell = row.cells[col];
+        if (!cell || cell.hidden) continue;
+
+        const parts = this.splitDecimal(cell.content);
+        if (parts) {
+          maxIntWidth = Math.max(maxIntWidth, parts.integer.length);
+          maxDecWidth = Math.max(maxDecWidth, parts.decimal.length);
+        }
+      }
+
+      if (maxIntWidth > 0 || maxDecWidth > 0) {
+        info.set(col, { maxIntWidth, maxDecWidth });
+      }
+    }
+
+    return info;
+  }
+
+  /**
+   * Parse numeric string into parts for decimal alignment
+   * Handles: $1,234.56M, -12.5%, €100, 1.2M, 78,000, etc.
+   */
+  parseNumericParts(content) {
+    const trimmed = content.trim();
+    if (!trimmed) return null;
+
+    // Match: [currency][-][digits,digits][.digits][suffix]
+    const match = trimmed.match(/^([$€£¥]?)\s*(-?[\d,]+(?:\.\d+)?)\s*([%MKBkmb]?)$/);
+    if (!match) return null;
+
+    const [, prefix, number, suffix] = match;
+    const dotIndex = number.indexOf('.');
+
+    if (dotIndex === -1) {
+      return {
+        prefix: prefix || '',
+        integer: number,
+        decimal: '',
+        suffix: suffix || '',
+      };
+    }
+
+    return {
+      prefix: prefix || '',
+      integer: number.slice(0, dotIndex),
+      decimal: number.slice(dotIndex),
+      suffix: suffix || '',
+    };
+  }
+
+  /**
+   * Split numeric string into integer and decimal parts
+   */
+  splitDecimal(content) {
+    const parts = this.parseNumericParts(content);
+    if (!parts) return null;
+
+    return {
+      integer: parts.prefix + parts.integer,
+      decimal: parts.decimal + parts.suffix,
+    };
+  }
+
+  /**
+   * Render a number with decimal alignment (Tufte's requirement)
+   */
+  renderDecimalAligned(cellEl, content, info) {
+    const parts = this.splitDecimal(content);
+
+    if (!parts) {
+      cellEl.textContent = content;
+      return;
+    }
+
+    cellEl.classList.add('cm-table-cell-decimal-aligned');
+
+    const intSpan = document.createElement('span');
+    intSpan.className = 'cm-table-decimal-int';
+    intSpan.textContent = parts.integer;
+    intSpan.style.minWidth = `${info.maxIntWidth}ch`;
+
+    const decSpan = document.createElement('span');
+    decSpan.className = 'cm-table-decimal-frac';
+    decSpan.textContent = parts.decimal;
+    decSpan.style.minWidth = `${info.maxDecWidth}ch`;
+
+    cellEl.appendChild(intSpan);
+    cellEl.appendChild(decSpan);
+  }
+
+  /**
+   * Apply column widths using colgroup
+   */
+  applyColumnWidths(tableEl) {
+    const widths = this.table.columnWidths;
+    const hasWidths = widths && widths.some(w => w !== null);
+
+    if (!hasWidths) return;
+
+    const colgroup = document.createElement('colgroup');
+
+    for (let i = 0; i < this.table.columnCount; i++) {
+      const col = document.createElement('col');
+      const width = widths[i];
+
+      if (width) {
+        col.style.width = `${width.value}${width.unit}`;
+      }
+
+      colgroup.appendChild(col);
+    }
+
+    tableEl.appendChild(colgroup);
+  }
+
+  /**
+   * Get effective alignment for a column
+   * Priority: explicit decimal > explicit alignment > auto-detect > default
+   */
+  getEffectiveAlignment(columnIndex, numericColumns) {
+    // Check explicit decimal columns first
+    if (this.table.decimalColumns && this.table.decimalColumns.has(columnIndex)) {
+      return 'decimal';
+    }
+
+    // Check explicit alignment from delimiter row
+    const explicit = this.table.alignments[columnIndex];
+    if (explicit && explicit !== 'decimal') {
+      return explicit;
+    }
+
+    // Auto-align numeric columns to right
+    if (numericColumns && numericColumns.has(columnIndex)) {
+      return 'right';
+    }
+
+    return null;
+  }
+
+  /**
+   * Render basic inline markdown (bold, italic, code)
+   */
+  renderInlineMarkdown(content) {
+    let html = this.escapeHtml(content);
+
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    html = html.replace(/`(.+?)`/g, '<code>$1</code>');
+    html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
+
+    return html;
+  }
+
+  /**
+   * Escape HTML special characters
+   */
+  escapeHtml(text) {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+/**
+ * Task Checkbox Widget
+ *
+ * Renders interactive checkboxes for GFM task lists.
+ * - [ ] Unchecked task
+ * - [x] Checked task
+ *
+ * When clicked, updates the markdown source directly.
+ *
+ * @module markdown/widgets/checkbox
+ */
+
+
+/**
+ * Widget for rendering task list checkboxes
+ */
+class TaskCheckboxWidget extends WidgetType {
+  /**
+   * @param {boolean} checked - Whether the checkbox is checked
+   * @param {number} pos - Position of '[' in the document
+   */
+  constructor(checked, pos) {
+    super();
+    this.checked = checked;
+    this.pos = pos;
+  }
+
+  eq(other) {
+    return this.checked === other.checked && this.pos === other.pos;
+  }
+
+  toDOM(view) {
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'cm-task-checkbox';
+    checkbox.checked = this.checked;
+    checkbox.setAttribute('aria-label', this.checked ? 'Completed task' : 'Incomplete task');
+
+    // Handle click to toggle checkbox in source
+    checkbox.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const newChar = this.checked ? ' ' : 'x';
+      // Replace the character between [ and ]
+      // pos points to '[', so pos+1 is the space or x
+      view.dispatch({
+        changes: {
+          from: this.pos + 1,
+          to: this.pos + 2,
+          insert: newChar,
+        },
+      });
+    });
+
+    // Prevent focus from leaving editor
+    checkbox.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+    });
+
+    return checkbox;
+  }
+
+  ignoreEvent() {
+    return false; // Allow events to propagate for interactivity
+  }
+}
+
+/**
+ * Alert Title Widget
+ *
+ * Renders GitHub-style alert titles: [!NOTE], [!TIP], [!WARNING], etc.
+ * Replaces the raw [!TYPE] marker with a styled badge.
+ *
+ * @module markdown/widgets/alert-title
+ */
+
+
+/**
+ * Icons for each alert type (using Unicode symbols)
+ */
+const ALERT_ICONS = {
+  note: 'ℹ️',
+  tip: '💡',
+  important: '❗',
+  warning: '⚠️',
+  caution: '🛑',
+};
+
+/**
+ * Widget for rendering alert title badges.
+ */
+class AlertTitleWidget extends WidgetType {
+  /**
+   * @param {string} type - Alert type: 'note', 'tip', 'important', 'warning', 'caution'
+   */
+  constructor(type) {
+    super();
+    this.type = type.toLowerCase();
+  }
+
+  eq(other) {
+    return this.type === other.type;
+  }
+
+  toDOM() {
+    const span = document.createElement('span');
+    span.className = `cm-alert-title cm-alert-title-${this.type}`;
+
+    // Icon
+    const icon = document.createElement('span');
+    icon.className = 'cm-alert-icon';
+    icon.textContent = ALERT_ICONS[this.type] || 'ℹ️';
+    span.appendChild(icon);
+
+    // Text
+    const text = document.createElement('span');
+    text.className = 'cm-alert-text';
+    text.textContent = this.type.charAt(0).toUpperCase() + this.type.slice(1);
+    span.appendChild(text);
+
+    return span;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+/**
+ * Math Widget
+ *
+ * Renders LaTeX math expressions using KaTeX.
+ * Supports both inline ($...$) and display ($$...$$) modes.
+ *
+ * Design philosophy:
+ * - Tufte: Math should be beautiful and readable
+ * - Graceful degradation when KaTeX not available
+ * - Clear error messages for invalid LaTeX
+ *
+ * Syntax support:
+ * - Inline: $E = mc^2$ or \(E = mc^2\)
+ * - Display: $$\int_0^\infty e^{-x^2} dx$$ or \[\int_0^\infty e^{-x^2} dx\]
+ *
+ * @module markdown/widgets/math
+ */
+
+
+/**
+ * Extract inline math expressions from text
+ *
+ * @param {string} text
+ * @returns {Array<{start: number, end: number, latex: string, raw: string}>}
+ */
+function extractInlineMath(text) {
+  const matches = [];
+
+  // Match $...$ (not $$)
+  const dollarRegex = /(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)/g;
+  let match;
+  while ((match = dollarRegex.exec(text)) !== null) {
+    matches.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      latex: match[1],
+      raw: match[0],
+    });
+  }
+
+  // Match \(...\)
+  const parenRegex = /\\\((.+?)\\\)/g;
+  while ((match = parenRegex.exec(text)) !== null) {
+    matches.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      latex: match[1],
+      raw: match[0],
+    });
+  }
+
+  // Sort by position
+  matches.sort((a, b) => a.start - b.start);
+  return matches;
+}
+
+/**
+ * Generate stable ID for math widget
+ *
+ * @param {number} from
+ * @returns {string}
+ */
+function generateMathId(from) {
+  return `math-${from}`;
+}
+
+// =============================================================================
+// KaTeX Integration
+// =============================================================================
+
+/**
+ * Check if KaTeX is available
+ *
+ * @returns {boolean}
+ */
+function isKaTeXAvailable() {
+  return typeof window !== 'undefined' && typeof window.katex !== 'undefined';
+}
+
+/**
+ * Render LaTeX to HTML using KaTeX
+ *
+ * @param {string} latex
+ * @param {boolean} displayMode
+ * @returns {{html: string, error: string | null}}
+ */
+function renderLatex(latex, displayMode = false) {
+  if (!isKaTeXAvailable()) {
+    return {
+      html: null,
+      error: 'KaTeX not loaded',
+    };
+  }
+
+  try {
+    const html = window.katex.renderToString(latex, {
+      displayMode,
+      throwOnError: true,
+      errorColor: '#cc0000',
+      strict: 'warn',
+      trust: false,
+      macros: {
+        // Common macros
+        '\\R': '\\mathbb{R}',
+        '\\N': '\\mathbb{N}',
+        '\\Z': '\\mathbb{Z}',
+        '\\Q': '\\mathbb{Q}',
+        '\\C': '\\mathbb{C}',
+        '\\eps': '\\varepsilon',
+        '\\phi': '\\varphi',
+      },
+    });
+    return { html, error: null };
+  } catch (e) {
+    // Try with throwOnError: false for partial rendering
+    try {
+      const html = window.katex.renderToString(latex, {
+        displayMode,
+        throwOnError: false,
+        errorColor: '#cc0000',
+      });
+      return { html, error: e.message };
+    } catch (e2) {
+      return {
+        html: null,
+        error: e2.message || 'Invalid LaTeX',
+      };
+    }
+  }
+}
+
+// =============================================================================
+// Widgets
+// =============================================================================
+
+/**
+ * Widget for rendering inline math ($...$)
+ */
+class InlineMathWidget extends WidgetType {
+  /**
+   * @param {string} latex - LaTeX content without delimiters
+   * @param {string} raw - Original raw text including delimiters
+   */
+  constructor(latex, raw) {
+    super();
+    this.latex = latex;
+    this.raw = raw;
+  }
+
+  eq(other) {
+    return other.latex === this.latex;
+  }
+
+  toDOM() {
+    const span = document.createElement('span');
+    span.className = 'cm-math-inline';
+    span.dataset.latex = this.latex;
+
+    const { html, error } = renderLatex(this.latex, false);
+
+    if (html) {
+      span.innerHTML = html;
+      if (error) {
+        span.classList.add('cm-math-warning');
+        span.title = error;
+      }
+    } else {
+      // Fallback: show raw LaTeX in code style
+      span.classList.add('cm-math-fallback');
+      span.textContent = this.raw;
+      if (error) {
+        span.title = error;
+      }
+    }
+
+    return span;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+/**
+ * Widget for rendering display math ($$...$$)
+ */
+class DisplayMathWidget extends WidgetType {
+  /**
+   * @param {string} latex - LaTeX content without delimiters
+   * @param {string} mathId - Unique identifier
+   */
+  constructor(latex, mathId) {
+    super();
+    this.latex = latex;
+    this.mathId = mathId;
+  }
+
+  eq(other) {
+    return other.latex === this.latex && other.mathId === this.mathId;
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = 'cm-math-display';
+    container.dataset.mathId = this.mathId;
+
+    const { html, error } = renderLatex(this.latex, true);
+
+    if (html) {
+      container.innerHTML = html;
+      if (error) {
+        container.classList.add('cm-math-warning');
+        // Add error tooltip
+        const tooltip = document.createElement('div');
+        tooltip.className = 'cm-math-error-tooltip';
+        tooltip.textContent = error;
+        container.appendChild(tooltip);
+      }
+    } else {
+      // Fallback: show LaTeX in preformatted style
+      container.classList.add('cm-math-fallback');
+      const pre = document.createElement('pre');
+      pre.className = 'cm-math-fallback-code';
+      pre.textContent = this.latex;
+      container.appendChild(pre);
+
+      if (error && error !== 'KaTeX not loaded') {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'cm-math-error';
+        errorDiv.textContent = error;
+        container.appendChild(errorDiv);
+      }
+    }
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return true; // Don't capture events - let them bubble
+  }
+}
+
+/**
+ * Markdown Renderer
+ *
+ * CodeMirror ViewPlugin that renders markdown elements.
+ * Uses the syntax tree to detect elements and applies decorations.
+ *
+ * Behavior (opinionated, not configurable):
+ * - Blur = rendered (markers hidden, widgets shown)
+ * - Focus = source (markers visible, raw markdown)
+ * - Focus scope is line-based for inline, block-based for blocks
+ *
+ * @module markdown/renderer
+ */
+
+
+/**
+ * Build decorations for all markdown elements in the viewport.
+ *
+ * @param {import('@codemirror/view').EditorView} view
+ * @returns {import('@codemirror/view').DecorationSet}
+ */
+function buildDecorations(view) {
+  const decorations = [];
+  const doc = view.state.doc;
+  const cursorPos = view.state.selection.main.head;
+  const cursorLine = doc.lineAt(cursorPos).number;
+
+  // Track table ranges processed by syntax tree (for fallback scanner)
+  const processedTableRanges = [];
+
+  syntaxTree(view.state).iterate({
+    from: view.viewport.from,
+    to: view.viewport.to,
+    enter: (node) => {
+      const lineNum = doc.lineAt(node.from).number;
+      const isActiveLine = lineNum === cursorLine;
+
+      // Marker class: hidden on blur, muted on focus
+      const markerClass = isActiveLine ? 'cm-md-marker' : 'cm-md-hidden';
+
+      // =======================================================================
+      // HEADINGS
+      // =======================================================================
+      if (node.name.startsWith('ATXHeading')) {
+        const level = node.name.match(/\d/)?.[0] || '1';
+
+        // Find content start (after # markers and space)
+        let contentStart = node.from;
+        const cursor = node.node.cursor();
+        if (cursor.firstChild()) {
+          do {
+            if (cursor.name === 'HeaderMark') {
+              contentStart = cursor.to;
+              // Skip whitespace after markers
+              while (
+                contentStart < node.to &&
+                doc.sliceString(contentStart, contentStart + 1) === ' '
+              ) {
+                contentStart++;
+              }
+              break;
+            }
+          } while (cursor.nextSibling());
+        }
+
+        // Style the heading content
+        if (contentStart < node.to) {
+          decorations.push(
+            Decoration.mark({ class: `cm-md-h${level}` }).range(contentStart, node.to)
+          );
+        }
+      }
+
+      // Header markers (# ## ###)
+      if (node.name === 'HeaderMark') {
+        decorations.push(
+          Decoration.mark({ class: markerClass }).range(node.from, node.to)
+        );
+      }
+
+      // =======================================================================
+      // EMPHASIS (bold, italic)
+      // =======================================================================
+      if (node.name === 'StrongEmphasis') {
+        decorations.push(
+          Decoration.mark({ class: 'cm-md-bold' }).range(node.from, node.to)
+        );
+      }
+
+      if (node.name === 'Emphasis') {
+        decorations.push(
+          Decoration.mark({ class: 'cm-md-italic' }).range(node.from, node.to)
+        );
+      }
+
+      // Emphasis markers (* ** _ __)
+      if (node.name === 'EmphasisMark') {
+        decorations.push(
+          Decoration.mark({ class: markerClass }).range(node.from, node.to)
+        );
+      }
+
+      // =======================================================================
+      // STRIKETHROUGH
+      // =======================================================================
+      if (node.name === 'Strikethrough') {
+        decorations.push(
+          Decoration.mark({ class: 'cm-md-strikethrough' }).range(node.from, node.to)
+        );
+      }
+
+      if (node.name === 'StrikethroughMark') {
+        decorations.push(
+          Decoration.mark({ class: markerClass }).range(node.from, node.to)
+        );
+      }
+
+      // =======================================================================
+      // INLINE CODE
+      // =======================================================================
+      if (node.name === 'InlineCode') {
+        decorations.push(
+          Decoration.mark({ class: 'cm-md-inline-code' }).range(node.from, node.to)
+        );
+      }
+
+      // Code backticks (inline only, not fenced code)
+      if (node.name === 'CodeMark') {
+        const text = doc.sliceString(node.from, node.to);
+        // Only hide single/double backticks, not fenced code markers (```)
+        if (text.length < 3) {
+          decorations.push(
+            Decoration.mark({ class: markerClass }).range(node.from, node.to)
+          );
+        }
+      }
+
+      // =======================================================================
+      // LINKS
+      // =======================================================================
+      if (node.name === 'Link') {
+        // Check if this link contains an image (linked image: [![alt](img)](url))
+        const cursor = node.node.cursor();
+        let containsImage = false;
+        if (cursor.firstChild()) {
+          do {
+            if (cursor.name === 'Image') {
+              containsImage = true;
+              break;
+            }
+          } while (cursor.nextSibling());
+        }
+
+        // Skip if it's a linked image - Image handler will handle it
+        if (containsImage) {
+          return;
+        }
+
+        // Process regular links
+        cursor.moveTo(node.from);
+        if (cursor.firstChild()) {
+          do {
+            const childLine = doc.lineAt(cursor.from).number;
+            const childHidden = childLine === cursorLine ? 'cm-md-marker' : 'cm-md-hidden';
+
+            if (cursor.name === 'LinkMark') {
+              decorations.push(
+                Decoration.mark({ class: childHidden }).range(cursor.from, cursor.to)
+              );
+            }
+            if (cursor.name === 'LinkLabel') {
+              decorations.push(
+                Decoration.mark({ class: 'cm-md-link-text' }).range(cursor.from, cursor.to)
+              );
+            }
+            if (cursor.name === 'URL') {
+              decorations.push(
+                Decoration.mark({ class: childHidden }).range(cursor.from, cursor.to)
+              );
+            }
+          } while (cursor.nextSibling());
+        }
+      }
+
+      // =======================================================================
+      // BLOCKQUOTES
+      // =======================================================================
+      if (node.name === 'Blockquote') {
+        const startLine = doc.lineAt(node.from);
+        const endLine = doc.lineAt(node.to);
+
+        // Check for GitHub-style alert marker: > [!NOTE], [!TIP], etc.
+        const firstLineText = startLine.text;
+        const alertMatch = firstLineText.match(/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i);
+        const alertType = alertMatch ? alertMatch[1].toLowerCase() : null;
+
+        for (let i = startLine.number; i <= endLine.number; i++) {
+          const line = doc.line(i);
+          if (alertType) {
+            // Apply alert-specific styling
+            decorations.push(
+              Decoration.line({ class: `cm-md-alert cm-md-alert-${alertType}` }).range(line.from)
+            );
+          } else {
+            decorations.push(
+              Decoration.line({ class: 'cm-md-blockquote-line' }).range(line.from)
+            );
+          }
+        }
+
+        // Replace the alert marker [!TYPE] with widget when not on that line
+        if (alertType && startLine.number !== cursorLine) {
+          const markerStart = startLine.from + firstLineText.indexOf('[!');
+          const markerEnd = startLine.from + firstLineText.indexOf(']') + 1;
+          if (markerStart >= startLine.from && markerEnd > markerStart) {
+            decorations.push(
+              Decoration.replace({
+                widget: new AlertTitleWidget(alertType),
+              }).range(markerStart, markerEnd)
+            );
+          }
+        }
+      }
+
+      // Quote markers (>)
+      if (node.name === 'QuoteMark') {
+        decorations.push(
+          Decoration.mark({ class: markerClass }).range(node.from, node.to)
+        );
+      }
+
+      // =======================================================================
+      // LISTS
+      // =======================================================================
+      if (node.name === 'ListMark') {
+        decorations.push(
+          Decoration.mark({ class: 'cm-md-list-marker' }).range(node.from, node.to)
+        );
+      }
+
+      // Task list checkboxes: - [ ] or - [x]
+      if (node.name === 'ListItem') {
+        const itemText = doc.sliceString(node.from, Math.min(node.from + 10, node.to));
+        // Match: marker + space + [ ] or [x] or [X]
+        const taskMatch = itemText.match(/^[-*+]\s+\[([ xX])\]/);
+        if (taskMatch) {
+          const isChecked = taskMatch[1].toLowerCase() === 'x';
+          // Find the position of '[' in the document
+          const bracketOffset = itemText.indexOf('[');
+          const bracketPos = node.from + bracketOffset;
+
+          // Don't render widget if cursor is on this line
+          const itemLine = doc.lineAt(node.from);
+          if (itemLine.number !== cursorLine) {
+            // Replace [ ], [x], or [X] with checkbox widget
+            decorations.push(
+              Decoration.replace({
+                widget: new TaskCheckboxWidget(isChecked, bracketPos),
+              }).range(bracketPos, bracketPos + 3)
+            );
+          }
+        }
+      }
+
+      // =======================================================================
+      // HORIZONTAL RULES
+      // =======================================================================
+      if (node.name === 'HorizontalRule') {
+        decorations.push(
+          Decoration.mark({ class: 'cm-md-hr' }).range(node.from, node.to)
+        );
+        const line = doc.lineAt(node.from);
+        decorations.push(
+          Decoration.line({ class: 'cm-md-hr-line' }).range(line.from)
+        );
+      }
+
+      // =======================================================================
+      // IMAGES
+      // =======================================================================
+      if (node.name === 'Image') {
+        let imageUrl = '';
+        let imageAlt = '';
+
+        const cursor = node.node.cursor();
+        if (cursor.firstChild()) {
+          do {
+            if (cursor.name === 'URL') {
+              imageUrl = doc.sliceString(cursor.from, cursor.to);
+            }
+            if (cursor.name === 'LinkLabel') {
+              imageAlt = doc.sliceString(cursor.from, cursor.to);
+            }
+          } while (cursor.nextSibling());
+        }
+
+        // Check if this image is inside a link (linked image: [![alt](img)](url))
+        const parent = node.node.parent;
+        const isLinkedImage = parent?.name === 'Link';
+        const syntaxEnd = isLinkedImage ? parent.to : node.to;
+        const syntaxStart = isLinkedImage ? parent.from : node.from;
+
+        if (isActiveLine) {
+          // Show full syntax when editing
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-marker' }).range(syntaxStart, syntaxEnd)
+          );
+        } else {
+          // Replace syntax with compact placeholder
+          // (Full image preview would require block widgets which aren't supported in plugins)
+          decorations.push(
+            Decoration.replace({
+              widget: new ImagePlaceholder(imageAlt, imageUrl, isLinkedImage),
+            }).range(syntaxStart, syntaxEnd)
+          );
+        }
+      }
+
+      // =======================================================================
+      // TABLES
+      // =======================================================================
+      if (node.name === 'Table') {
+        const startLine = doc.lineAt(node.from);
+        const endLine = doc.lineAt(node.to);
+
+        // Track this table as processed (for fallback scanner)
+        processedTableRanges.push({ from: node.from, to: node.to });
+
+        // Check if cursor is inside the table
+        const cursorInTable = cursorLine >= startLine.number && cursorLine <= endLine.number;
+
+        if (cursorInTable) {
+          // Cursor in table: show raw markdown with styling
+          for (let i = startLine.number; i <= endLine.number; i++) {
+            const line = doc.line(i);
+            decorations.push(
+              Decoration.line({ class: 'cm-md-table-line-visible' }).range(line.from)
+            );
+          }
+        } else {
+          // Cursor outside: hide lines and show widget
+          // Collect table lines for parsing
+          const lines = [];
+          for (let i = startLine.number; i <= endLine.number; i++) {
+            lines.push(doc.line(i).text);
+          }
+
+          // Parse the table
+          const parsed = parseTable(lines);
+
+          if (parsed && parsed.rows.length > 0) {
+            // Hide all table lines (text transparent, same height)
+            for (let i = startLine.number; i <= endLine.number; i++) {
+              const line = doc.line(i);
+              decorations.push(
+                Decoration.line({ class: 'cm-md-table-line-hidden' }).range(line.from)
+              );
+            }
+
+            // Add table widget after first line
+            const tableId = generateTableId(node.from);
+            decorations.push(
+              Decoration.widget({
+                widget: new TableWidget(parsed, tableId),
+                side: 1,
+              }).range(startLine.to)
+            );
+          } else {
+            // Parsing failed - show styled raw markdown
+            for (let i = startLine.number; i <= endLine.number; i++) {
+              const line = doc.line(i);
+              decorations.push(
+                Decoration.line({ class: 'cm-md-table-line-visible' }).range(line.from)
+              );
+            }
+          }
+        }
+
+        return false; // Don't recurse into table children
+      }
+    },
+  });
+
+  // ==========================================================================
+  // FALLBACK TABLE SCANNER (Tufte Markdown Extensions)
+  // ==========================================================================
+  // The GFM parser only recognizes standard delimiter rows (:?-+:?)
+  // Our Tufte Markdown extensions (|:--{30%}|, |---.|) break GFM recognition.
+  // This fallback scans for tables the syntax tree missed.
+
+  const isProcessedAsTable = (from, to) => {
+    return processedTableRanges.some(r => from >= r.from && to <= r.to);
+  };
+
+  // Scan viewport for potential tables line by line
+  let lineNum = doc.lineAt(view.viewport.from).number;
+  const lastLineNum = doc.lineAt(view.viewport.to).number;
+
+  while (lineNum <= lastLineNum) {
+    const line = doc.line(lineNum);
+
+    // Check if this looks like a table header row
+    if (isTableLine(line.text) && lineNum < doc.lines) {
+      const nextLine = doc.line(lineNum + 1);
+
+      // Look for delimiter on next line (our isTableDelimiter supports Tufte syntax)
+      if (isTableDelimiter(nextLine.text)) {
+        // Found a potential table! Collect all table lines
+        const tableStartLine = lineNum;
+        let tableEndLine = lineNum + 1; // At least header + delimiter
+
+        // Continue collecting data rows
+        while (tableEndLine < doc.lines) {
+          const checkLine = doc.line(tableEndLine + 1);
+          if (isTableLine(checkLine.text)) {
+            tableEndLine++;
+          } else {
+            break;
+          }
+        }
+
+        const tableStart = doc.line(tableStartLine).from;
+        const tableEnd = doc.line(tableEndLine).to;
+
+        // Skip if already processed by syntax tree
+        if (!isProcessedAsTable(tableStart, tableEnd)) {
+          const startLine = doc.line(tableStartLine);
+          doc.line(tableEndLine);
+
+          // Check if cursor is inside the table
+          const cursorInTable = cursorLine >= tableStartLine && cursorLine <= tableEndLine;
+
+          if (cursorInTable) {
+            // Cursor in table: show raw markdown with styling
+            for (let i = tableStartLine; i <= tableEndLine; i++) {
+              const tableLine = doc.line(i);
+              decorations.push(
+                Decoration.line({ class: 'cm-md-table-line-visible' }).range(tableLine.from)
+              );
+            }
+          } else {
+            // Cursor outside: hide lines and show widget
+            const lines = [];
+            for (let i = tableStartLine; i <= tableEndLine; i++) {
+              lines.push(doc.line(i).text);
+            }
+
+            const parsed = parseTable(lines);
+
+            if (parsed && parsed.rows.length > 0) {
+              // Hide all table lines
+              for (let i = tableStartLine; i <= tableEndLine; i++) {
+                const tableLine = doc.line(i);
+                decorations.push(
+                  Decoration.line({ class: 'cm-md-table-line-hidden' }).range(tableLine.from)
+                );
+              }
+
+              // Add table widget
+              const tableId = generateTableId(tableStart);
+              decorations.push(
+                Decoration.widget({
+                  widget: new TableWidget(parsed, tableId),
+                  side: 1,
+                }).range(startLine.to)
+              );
+            } else {
+              // Parsing failed - show styled raw markdown
+              for (let i = tableStartLine; i <= tableEndLine; i++) {
+                const tableLine = doc.line(i);
+                decorations.push(
+                  Decoration.line({ class: 'cm-md-table-line-visible' }).range(tableLine.from)
+                );
+              }
+            }
+          }
+
+          // Skip to after this table
+          lineNum = tableEndLine + 1;
+          continue;
+        }
+      }
+    }
+
+    lineNum++;
+  }
+
+  // ==========================================================================
+  // MATH DETECTION (LaTeX with KaTeX)
+  // ==========================================================================
+  // Detect display math ($$...$$) and inline math ($...$)
+  // These aren't in the markdown syntax tree, so we scan manually.
+
+  const text = doc.toString();
+
+  // Display math: $$...$$ (can span multiple lines)
+  const displayMathRegex = /\$\$([\s\S]+?)\$\$/g;
+  let displayMatch;
+  while ((displayMatch = displayMathRegex.exec(text)) !== null) {
+    const from = displayMatch.index;
+    const to = from + displayMatch[0].length;
+
+    // Skip if outside viewport
+    if (to < view.viewport.from || from > view.viewport.to) continue;
+
+    const latex = displayMatch[1].trim();
+    const startLine = doc.lineAt(from);
+    const endLine = doc.lineAt(to);
+
+    // Check if cursor is inside the math block
+    const cursorInMath = cursorLine >= startLine.number && cursorLine <= endLine.number;
+
+    if (cursorInMath) {
+      // Show raw LaTeX with styling
+      for (let i = startLine.number; i <= endLine.number; i++) {
+        const line = doc.line(i);
+        decorations.push(
+          Decoration.line({ class: 'cm-md-math-line-visible' }).range(line.from)
+        );
+      }
+    } else {
+      // Hide lines and show rendered widget
+      for (let i = startLine.number; i <= endLine.number; i++) {
+        const line = doc.line(i);
+        decorations.push(
+          Decoration.line({ class: 'cm-md-math-line-hidden' }).range(line.from)
+        );
+      }
+
+      // Add math widget after first line
+      const mathId = generateMathId(from);
+      decorations.push(
+        Decoration.widget({
+          widget: new DisplayMathWidget(latex, mathId),
+          side: 1,
+        }).range(startLine.to)
+      );
+    }
+  }
+
+  // Inline math: $...$ (single line only, not $$)
+  // Process line by line in viewport
+  for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
+    const line = doc.line(i);
+    const isActiveLine = i === cursorLine;
+
+    // Skip if this line is part of a display math block
+    if (line.text.includes('$$')) continue;
+
+    const inlineMaths = extractInlineMath(line.text);
+
+    for (const math of inlineMaths) {
+      const from = line.from + math.start;
+      const to = line.from + math.end;
+
+      if (isActiveLine) {
+        // Show raw math syntax with styling
+        decorations.push(
+          Decoration.mark({ class: 'cm-md-math-syntax' }).range(from, to)
+        );
+      } else {
+        // Replace with rendered widget
+        decorations.push(
+          Decoration.replace({
+            widget: new InlineMathWidget(math.latex, math.raw),
+          }).range(from, to)
+        );
+      }
+    }
+  }
+
+  // Sort decorations by position and return
+  return Decoration.set(decorations, true);
+}
+
+/**
+ * Markdown rendering ViewPlugin
+ */
+const markdownRenderer = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = buildDecorations(view);
+    }
+
+    update(update) {
+      if (update.docChanged || update.viewportChanged || update.selectionSet) {
+        this.decorations = buildDecorations(update.view);
+      }
+    }
+  },
+  {
+    decorations: (v) => v.decorations,
+  }
+);
+
+/**
+ * Markdown Rendering Styles
+ *
+ * Base CSS for rendered markdown elements.
+ * Uses tokens from the theme system - no hardcoded colors.
+ *
+ * Structure:
+ * - Markers (syntax characters like #, **, __)
+ * - Headings (h1-h6)
+ * - Emphasis (bold, italic, strikethrough)
+ * - Links
+ * - Inline code
+ * - Blockquotes
+ * - Lists
+ * - Horizontal rules
+ * - Tables (stable layout pattern)
+ * - Images
+ * - Task checkboxes
+ * - GitHub-style alerts
+ *
+ * @module markdown/styles
+ */
+
+const markdownStyles = `
+/* ==========================================================================
+   MARKERS (the # ** __ \`\` syntax characters)
+
+   Two states:
+   - cm-md-hidden: Completely invisible (blur)
+   - cm-md-marker: Visible but muted (focus)
+   ========================================================================== */
+
+.cm-md-hidden {
+  font-size: 0 !important;
+  width: 0 !important;
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: baseline;
+}
+
+.cm-md-marker {
+  color: var(--md-marker-color);
+  font-family: var(--md-marker-font);
+  font-size: 0.85em;
+}
+
+/* ==========================================================================
+   HEADINGS
+   ========================================================================== */
+
+.cm-md-h1 {
+  font-size: var(--md-heading-1-size);
+  font-weight: var(--md-heading-weight);
+  line-height: var(--md-heading-line-height);
+}
+
+.cm-md-h2 {
+  font-size: var(--md-heading-2-size);
+  font-weight: var(--md-heading-weight);
+  line-height: var(--md-heading-line-height);
+}
+
+.cm-md-h3 {
+  font-size: var(--md-heading-3-size);
+  font-weight: var(--md-heading-weight);
+  line-height: var(--md-heading-line-height);
+}
+
+.cm-md-h4 {
+  font-size: var(--md-heading-4-size);
+  font-weight: var(--md-heading-weight);
+  line-height: var(--md-heading-line-height);
+}
+
+.cm-md-h5 {
+  font-size: var(--md-heading-5-size);
+  font-weight: var(--md-heading-weight);
+  line-height: var(--md-heading-line-height);
+}
+
+.cm-md-h6 {
+  font-size: var(--md-heading-6-size);
+  font-weight: var(--md-heading-weight);
+  line-height: var(--md-heading-line-height);
+}
+
+/* ==========================================================================
+   EMPHASIS (bold, italic, strikethrough)
+   ========================================================================== */
+
+.cm-md-bold {
+  font-weight: 600;
+}
+
+.cm-md-italic {
+  font-style: italic;
+}
+
+.cm-md-strikethrough {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+/* ==========================================================================
+   LINKS
+   ========================================================================== */
+
+.cm-md-link-text {
+  color: var(--md-link-color);
+  text-decoration: var(--md-link-decoration);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cm-md-link-text:hover {
+  opacity: 0.8;
+}
+
+/* ==========================================================================
+   INLINE CODE
+   ========================================================================== */
+
+.cm-md-inline-code {
+  font-family: var(--widget-font-mono);
+  font-size: 0.9em;
+  background: var(--md-code-background);
+  color: var(--md-code-color);
+  padding: var(--md-code-padding);
+  border-radius: var(--md-code-radius);
+}
+
+/* ==========================================================================
+   BLOCKQUOTES
+   ========================================================================== */
+
+.cm-md-blockquote-line {
+  border-left: var(--md-blockquote-border-width) solid var(--md-blockquote-border);
+  padding-left: var(--md-blockquote-padding);
+  color: var(--md-blockquote-color);
+}
+
+/* GitHub-style alerts */
+.cm-md-alert {
+  border-left-width: var(--md-blockquote-border-width);
+  border-left-style: solid;
+  padding-left: var(--md-blockquote-padding);
+}
+
+.cm-md-alert-note {
+  border-left-color: var(--md-alert-note-color);
+}
+
+.cm-md-alert-tip {
+  border-left-color: var(--md-alert-tip-color);
+}
+
+.cm-md-alert-important {
+  border-left-color: var(--md-alert-important-color);
+}
+
+.cm-md-alert-warning {
+  border-left-color: var(--md-alert-warning-color);
+}
+
+.cm-md-alert-caution {
+  border-left-color: var(--md-alert-caution-color);
+}
+
+/* ==========================================================================
+   LISTS
+   ========================================================================== */
+
+.cm-md-list-marker {
+  color: var(--md-list-marker-color);
+}
+
+/* ==========================================================================
+   HORIZONTAL RULES
+   ========================================================================== */
+
+.cm-md-hr {
+  color: var(--md-hr-color);
+}
+
+.cm-md-hr-line {
+  position: relative;
+}
+
+.cm-md-hr-line::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: var(--md-hr-height);
+  background: var(--md-hr-color);
+}
+
+/* ==========================================================================
+   TABLES (Stable Layout Pattern)
+
+   Tables use the same pattern as output widgets:
+   - Lines ALWAYS take space (text transparent when viewing)
+   - Widget overlays using position: absolute
+   - No jitter when cursor enters/leaves
+   ========================================================================== */
+
+/* Both states: lines always take same space */
+.cm-md-table-line-hidden,
+.cm-md-table-line-visible {
+  position: relative;
+}
+
+/* Hidden: text invisible but same space */
+.cm-md-table-line-hidden {
+  color: transparent !important;
+  user-select: none;
+}
+
+.cm-md-table-line-hidden > span {
+  visibility: hidden !important;
+}
+
+/* Visible: text shown for editing - must cover widget underneath */
+.cm-md-table-line-visible {
+  color: var(--widget-text);
+  position: relative;
+  z-index: 2;
+  background: var(--widget-surface-elevated);
+}
+
+/* ==========================================================================
+   TABLES (Tufte-inspired: maximize data-ink ratio)
+
+   Design philosophy:
+   - Tufte: Maximize data-ink ratio, no chartjunk
+   - Rams: Less but better, honest materials
+   - Minimal borders: only bottom borders for separation
+   ========================================================================== */
+
+/* Container - absolutely positioned to overlay hidden markdown lines */
+.cm-table-widget {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  background: var(--md-table-bg, var(--widget-surface));
+  padding: 0.5em 0;
+}
+
+/* The table element */
+.cm-table {
+  display: table;
+  border-collapse: collapse;
+  width: auto;
+  min-width: 200px;
+  font-size: 0.95em;
+  font-family: inherit;
+  line-height: 1.5;
+  color: var(--widget-text);
+}
+
+/* Ensure proper table display (required inside CM widgets) */
+.cm-table thead { display: table-header-group; }
+.cm-table tbody { display: table-row-group; }
+.cm-table tr { display: table-row; }
+.cm-table th, .cm-table td { display: table-cell; }
+
+/* Header cells - subtle weight, strong bottom border (Tufte) */
+.cm-table th {
+  padding: var(--md-table-cell-padding, 0.5em 1em);
+  text-align: left;
+  font-weight: var(--md-table-header-weight, 600);
+  color: var(--widget-text);
+  border-bottom: 2px solid var(--md-table-header-border, var(--widget-text-muted));
+  white-space: nowrap;
+}
+
+/* Data cells - minimal styling (Rams: less but better) */
+.cm-table td {
+  padding: var(--md-table-cell-padding, 0.5em 1em);
+  text-align: left;
+  color: var(--widget-text);
+  border-bottom: 1px solid var(--md-table-row-border, var(--widget-border));
+}
+
+/* Last row has no border (cleaner look) */
+.cm-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Hover effect - subtle highlight */
+.cm-table tbody tr:hover td {
+  background: var(--md-table-hover-bg, var(--widget-surface-hover));
+}
+
+/* Caption (Tufte: every table needs context) */
+.cm-table-caption {
+  caption-side: top;
+  font-size: 0.875em;
+  font-style: italic;
+  color: var(--widget-text-muted);
+  text-align: left;
+  padding: 0.5em 0;
+  line-height: 1.4;
+}
+
+.cm-table-caption-below {
+  caption-side: bottom;
+  padding-top: 0.75em;
+  padding-bottom: 0;
+}
+
+/* Alignment classes */
+.cm-table-align-left { text-align: left; }
+.cm-table-align-center { text-align: center; }
+.cm-table-align-right { text-align: right; }
+.cm-table-align-decimal { text-align: right; }
+
+/* Numeric cells - tabular numbers for alignment (Tufte would approve) */
+.cm-table-cell-numeric {
+  font-feature-settings: "tnum" 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Decimal alignment (Tufte's true requirement: align on decimal point) */
+.cm-table-cell-decimal-aligned {
+  text-align: right;
+  font-family: var(--widget-font-mono);
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+.cm-table-decimal-int {
+  display: inline-block;
+  text-align: right;
+}
+
+.cm-table-decimal-frac {
+  display: inline-block;
+  text-align: left;
+}
+
+/* Spanning cells (colspan/rowspan) */
+.cm-table-cell-spanning {
+  vertical-align: middle;
+}
+
+/* Inline formatting within cells */
+.cm-table td code,
+.cm-table th code {
+  font-family: var(--widget-font-mono);
+  font-size: 0.85em;
+  padding: 0.1em 0.3em;
+  background: var(--widget-surface);
+  border-radius: 3px;
+}
+
+.cm-table td strong,
+.cm-table th strong {
+  font-weight: 600;
+}
+
+.cm-table td em,
+.cm-table th em {
+  font-style: italic;
+}
+
+.cm-table td s,
+.cm-table th s {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+/* ==========================================================================
+   IMAGES (Stable Layout Pattern)
+   ========================================================================== */
+
+/* Image syntax placeholder (shown when blurred) */
+.cm-image-placeholder {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.15em 0.4em;
+  background: var(--widget-surface);
+  border-radius: var(--widget-border-radius);
+  font-size: 0.85em;
+  color: var(--widget-text-muted);
+  cursor: pointer;
+}
+
+.cm-image-placeholder:hover {
+  background: var(--widget-surface-hover);
+}
+
+/* Image widget */
+.cm-image-widget {
+  display: block;
+  margin: 0.5em 0;
+}
+
+.cm-image-widget img {
+  max-width: var(--md-image-max-width);
+  height: auto;
+  border-radius: var(--md-image-border-radius);
+}
+
+.cm-image-widget.cm-image-loading {
+  color: var(--widget-text-muted);
+  font-style: italic;
+  padding: 1em;
+}
+
+.cm-image-widget.cm-image-error {
+  color: var(--widget-error);
+  padding: 0.5em;
+  background: rgba(239, 68, 68, 0.1);
+  border-radius: var(--widget-border-radius);
+}
+
+/* ==========================================================================
+   MATH (LaTeX with KaTeX)
+
+   Design philosophy:
+   - Tufte: Math should be beautiful and readable
+   - Inline math flows with text
+   - Display math is centered and prominent
+   ========================================================================== */
+
+/* Display math - uses same stable layout pattern as tables */
+.cm-md-math-line-hidden,
+.cm-md-math-line-visible {
+  position: relative;
+}
+
+.cm-md-math-line-hidden {
+  color: transparent !important;
+  user-select: none;
+}
+
+.cm-md-math-line-hidden > span {
+  visibility: hidden !important;
+}
+
+.cm-md-math-line-visible {
+  color: var(--md-math-syntax-color, var(--widget-text-muted));
+  font-family: var(--widget-font-mono);
+  font-size: 0.9em;
+}
+
+/* Display math widget container */
+.cm-math-display {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 0;
+  margin-top: -0.5em;  /* Pull up to align with source position */
+  background: transparent !important;  /* Override KaTeX defaults */
+}
+
+.cm-math-display .katex-display {
+  margin: 0;
+  background: transparent !important;  /* Override KaTeX defaults */
+}
+
+.cm-math-display .katex {
+  font-size: var(--md-math-display-size, 1.2em);
+  color: var(--widget-text) !important;  /* Explicit color - can't inherit from hidden line */
+  background: transparent !important;
+}
+
+/* Override any KaTeX background colors */
+.cm-math-display .katex-html,
+.cm-math-display .base {
+  background: transparent !important;
+}
+
+/* Inline math widget */
+.cm-math-inline {
+  display: inline;
+  vertical-align: baseline;
+}
+
+.cm-math-inline .katex {
+  font-size: var(--md-math-inline-size, 1em);
+  color: inherit;  /* Use surrounding text color */
+}
+
+/* Math syntax when editing (cursor on line) */
+.cm-md-math-syntax {
+  color: var(--md-math-syntax-color, var(--widget-text-muted));
+  font-family: var(--widget-font-mono);
+  font-size: 0.9em;
+}
+
+/* Fallback when KaTeX not loaded */
+.cm-math-fallback {
+  font-family: var(--widget-font-mono);
+  font-size: 0.9em;
+  color: var(--md-math-fallback-color, var(--widget-text-muted));
+  background: var(--md-math-fallback-bg, var(--widget-surface));
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+
+.cm-math-display.cm-math-fallback {
+  padding: 1em;
+}
+
+.cm-math-fallback-code {
+  margin: 0;
+  padding: 0.5em 1em;
+  background: var(--widget-surface);
+  border-radius: var(--widget-border-radius);
+  overflow-x: auto;
+}
+
+/* Math errors */
+.cm-math-error {
+  color: var(--widget-error);
+  font-size: 0.85em;
+  margin-top: 0.5em;
+}
+
+.cm-math-warning {
+  position: relative;
+}
+
+.cm-math-error-tooltip {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--widget-surface-elevated);
+  color: var(--widget-warning);
+  padding: 0.25em 0.5em;
+  border-radius: 4px;
+  font-size: 0.75em;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+
+.cm-math-warning:hover .cm-math-error-tooltip {
+  opacity: 1;
+}
+
+/* Math placeholder (shown when editing) */
+.cm-math-placeholder {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1em 0.4em;
+  background: var(--widget-surface);
+  border-radius: var(--widget-border-radius);
+  font-size: 0.85em;
+  color: var(--widget-text-muted);
+  font-style: italic;
+}
+
+/* ==========================================================================
+   TASK CHECKBOXES
+   ========================================================================== */
+
+.cm-task-checkbox {
+  width: var(--md-checkbox-size);
+  height: var(--md-checkbox-size);
+  margin: 0;
+  margin-right: 0.4em;
+  vertical-align: middle;
+  cursor: pointer;
+  accent-color: var(--md-checkbox-color);
+}
+
+/* ==========================================================================
+   ALERT TITLE WIDGETS (GitHub-style [!NOTE], [!WARNING], etc.)
+   ========================================================================== */
+
+.cm-alert-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  font-weight: 600;
+  margin-bottom: 0.25em;
+}
+
+.cm-alert-title-note {
+  color: var(--md-alert-note-color);
+}
+
+.cm-alert-title-tip {
+  color: var(--md-alert-tip-color);
+}
+
+.cm-alert-title-important {
+  color: var(--md-alert-important-color);
+}
+
+.cm-alert-title-warning {
+  color: var(--md-alert-warning-color);
+}
+
+.cm-alert-title-caution {
+  color: var(--md-alert-caution-color);
+}
+
+/* Alert icons */
+.cm-alert-icon {
+  font-size: 1.1em;
+}
+`;
+
+/**
+ * Inject markdown styles into the document
+ */
+function injectMarkdownStyles() {
+  if (typeof document === 'undefined') return;
+  if (document.getElementById('mrmd-markdown-styles')) return;
+
+  const style = document.createElement('style');
+  style.id = 'mrmd-markdown-styles';
+  style.textContent = markdownStyles;
+  document.head.appendChild(style);
+}
+
+/**
+ * Markdown Rendering Extension
+ *
+ * Provides blur→render / focus→source markdown rendering for CodeMirror.
+ *
+ * Usage:
+ * ```javascript
+ * import { markdown } from 'mrmd-editor/markdown';
+ *
+ * const view = new EditorView({
+ *   extensions: [
+ *     markdown(),
+ *     // ... other extensions
+ *   ],
+ * });
+ * ```
+ *
+ * The rendering is opinionated and follows MRMD's design:
+ * - Markers (# ** __) hidden on blur, muted on focus
+ * - Block elements (tables, images) use stable layout pattern
+ * - No jitter when cursor moves
+ *
+ * Theming is done via CSS variables (--md-*) from the theme system.
+ * See widgets/theme.js for available tokens.
+ *
+ * @module markdown
+ */
+
+
+/**
+ * Create the markdown rendering extension.
+ *
+ * @returns {import('@codemirror/state').Extension}
+ */
+function markdown() {
+  // Inject styles on first use
+  injectMarkdownStyles();
+
+  return [
+    markdownRenderer,
+  ];
+}
+
+/**
  * Awareness State Schema and Helpers
  *
  * Defines the rich awareness state model for mrmd collaboration.
@@ -73323,6 +75818,81 @@ const tokenDefinitions = {
   '--syntax-inserted': { description: 'Inserted/added content (diffs)', category: 'syntax', default: '#b5cea8' },
   '--syntax-deleted': { description: 'Deleted content (diffs)', category: 'syntax', default: '#ce9178' },
   '--syntax-changed': { description: 'Changed content (diffs)', category: 'syntax', default: '#569cd6' },
+
+  // ===========================================================================
+  // MARKDOWN RENDERING (blur/focus rendered view)
+  // ===========================================================================
+  // These tokens control how markdown appears when rendered (cursor not on element).
+  // When the cursor IS on an element, it shows as raw markdown syntax.
+
+  // Headings
+  '--md-heading-1-size': { description: 'H1 font size', category: 'markdown', default: '1.75em' },
+  '--md-heading-2-size': { description: 'H2 font size', category: 'markdown', default: '1.4em' },
+  '--md-heading-3-size': { description: 'H3 font size', category: 'markdown', default: '1.2em' },
+  '--md-heading-4-size': { description: 'H4 font size', category: 'markdown', default: '1.1em' },
+  '--md-heading-5-size': { description: 'H5 font size', category: 'markdown', default: '1.05em' },
+  '--md-heading-6-size': { description: 'H6 font size', category: 'markdown', default: '1em' },
+  '--md-heading-weight': { description: 'Heading font weight', category: 'markdown', default: '600' },
+  '--md-heading-line-height': { description: 'Heading line height', category: 'markdown', default: '1.3' },
+  '--md-heading-margin-top': { description: 'Space above headings', category: 'markdown', default: '0.5em' },
+
+  // Markers (the #, **, __, ``` syntax characters)
+  '--md-marker-color': { description: 'Color of visible markdown syntax markers', category: 'markdown', default: 'var(--widget-text-muted)' },
+  '--md-marker-font': { description: 'Font for markdown markers', category: 'markdown', default: 'var(--widget-font-mono)' },
+
+  // Links
+  '--md-link-color': { description: 'Link text color', category: 'markdown', default: 'var(--syntax-link)' },
+  '--md-link-decoration': { description: 'Link text decoration', category: 'markdown', default: 'underline' },
+
+  // Inline code
+  '--md-code-background': { description: 'Inline code background', category: 'markdown', default: 'var(--syntax-code-background)' },
+  '--md-code-color': { description: 'Inline code text color', category: 'markdown', default: 'var(--syntax-code)' },
+  '--md-code-padding': { description: 'Inline code padding', category: 'markdown', default: '0.15em 0.35em' },
+  '--md-code-radius': { description: 'Inline code border radius', category: 'markdown', default: '3px' },
+
+  // Blockquotes
+  '--md-blockquote-border': { description: 'Blockquote left border color', category: 'markdown', default: 'var(--widget-border-accent)' },
+  '--md-blockquote-border-width': { description: 'Blockquote left border width', category: 'markdown', default: '3px' },
+  '--md-blockquote-color': { description: 'Blockquote text color', category: 'markdown', default: 'var(--widget-text-muted)' },
+  '--md-blockquote-padding': { description: 'Blockquote left padding', category: 'markdown', default: '1em' },
+
+  // Lists
+  '--md-list-marker-color': { description: 'List bullet/number color', category: 'markdown', default: 'var(--widget-text-muted)' },
+
+  // Horizontal rules
+  '--md-hr-color': { description: 'Horizontal rule color', category: 'markdown', default: 'var(--widget-border)' },
+  '--md-hr-height': { description: 'Horizontal rule thickness', category: 'markdown', default: '1px' },
+  '--md-hr-margin': { description: 'Horizontal rule vertical margin', category: 'markdown', default: '1.5em 0' },
+
+  // Tables (Tufte-inspired: maximize data-ink ratio)
+  '--md-table-bg': { description: 'Table background', category: 'markdown', default: 'var(--widget-surface)' },
+  '--md-table-header-weight': { description: 'Table header font weight', category: 'markdown', default: '600' },
+  '--md-table-header-border': { description: 'Table header bottom border color', category: 'markdown', default: 'var(--widget-text-muted)' },
+  '--md-table-row-border': { description: 'Table row separator color', category: 'markdown', default: 'var(--widget-border)' },
+  '--md-table-cell-padding': { description: 'Table cell padding', category: 'markdown', default: '0.5em 1em' },
+  '--md-table-hover-bg': { description: 'Table row hover background', category: 'markdown', default: 'var(--widget-surface-hover)' },
+
+  // Images
+  '--md-image-max-width': { description: 'Maximum image width', category: 'markdown', default: '100%' },
+  '--md-image-border-radius': { description: 'Image border radius', category: 'markdown', default: 'var(--widget-border-radius)' },
+
+  // Math (LaTeX with KaTeX)
+  '--md-math-display-size': { description: 'Display math font size', category: 'markdown', default: '1.2em' },
+  '--md-math-inline-size': { description: 'Inline math font size', category: 'markdown', default: '1em' },
+  '--md-math-syntax-color': { description: 'Math syntax color (when editing)', category: 'markdown', default: 'var(--widget-text-muted)' },
+  '--md-math-fallback-color': { description: 'Math fallback text color', category: 'markdown', default: 'var(--widget-text-muted)' },
+  '--md-math-fallback-bg': { description: 'Math fallback background', category: 'markdown', default: 'var(--widget-surface)' },
+
+  // Task checkboxes
+  '--md-checkbox-size': { description: 'Checkbox size', category: 'markdown', default: '1em' },
+  '--md-checkbox-color': { description: 'Checkbox accent color', category: 'markdown', default: 'var(--widget-text-accent)' },
+
+  // GitHub-style alerts [!NOTE], [!WARNING], etc.
+  '--md-alert-note-color': { description: 'Note alert accent color', category: 'markdown', default: 'var(--widget-info)' },
+  '--md-alert-tip-color': { description: 'Tip alert accent color', category: 'markdown', default: 'var(--widget-success)' },
+  '--md-alert-important-color': { description: 'Important alert accent color', category: 'markdown', default: 'var(--syntax-keyword)' },
+  '--md-alert-warning-color': { description: 'Warning alert accent color', category: 'markdown', default: 'var(--widget-warning)' },
+  '--md-alert-caution-color': { description: 'Caution alert accent color', category: 'markdown', default: 'var(--widget-error)' },
 };
 
 // #endregion TOKEN_DEFINITIONS
@@ -73447,6 +76017,47 @@ const midnightTheme = {
   '--syntax-inserted': '#b5cea8',
   '--syntax-deleted': '#ce9178',
   '--syntax-changed': '#569cd6',
+
+  // Markdown rendering
+  '--md-heading-1-size': '1.75em',
+  '--md-heading-2-size': '1.4em',
+  '--md-heading-3-size': '1.2em',
+  '--md-heading-4-size': '1.1em',
+  '--md-heading-5-size': '1.05em',
+  '--md-heading-6-size': '1em',
+  '--md-heading-weight': '600',
+  '--md-heading-line-height': '1.3',
+  '--md-heading-margin-top': '0.5em',
+  '--md-marker-color': '#6b7280',
+  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--md-link-color': '#6495ed',
+  '--md-link-decoration': 'underline',
+  '--md-code-background': 'rgba(110, 118, 129, 0.2)',
+  '--md-code-color': '#ce9178',
+  '--md-code-padding': '0.15em 0.35em',
+  '--md-code-radius': '3px',
+  '--md-blockquote-border': 'rgba(100, 149, 237, 0.5)',
+  '--md-blockquote-border-width': '3px',
+  '--md-blockquote-color': '#888888',
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#888888',
+  '--md-hr-color': 'rgba(255, 255, 255, 0.1)',
+  '--md-hr-height': '1px',
+  '--md-hr-margin': '1.5em 0',
+  '--md-table-border': 'rgba(255, 255, 255, 0.1)',
+  '--md-table-header-bg': 'rgba(0, 0, 0, 0.2)',
+  '--md-table-header-weight': '600',
+  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-table-stripe-bg': 'transparent',
+  '--md-image-max-width': '100%',
+  '--md-image-border-radius': '6px',
+  '--md-checkbox-size': '1em',
+  '--md-checkbox-color': '#6495ed',
+  '--md-alert-note-color': '#3b82f6',
+  '--md-alert-tip-color': '#22c55e',
+  '--md-alert-important-color': '#569cd6',
+  '--md-alert-warning-color': '#f59e0b',
+  '--md-alert-caution-color': '#ef4444',
 };
 
 /**
@@ -73567,6 +76178,47 @@ const daylightTheme = {
   '--syntax-inserted': '#098658',
   '--syntax-deleted': '#a31515',
   '--syntax-changed': '#0000ff',
+
+  // Markdown rendering
+  '--md-heading-1-size': '1.75em',
+  '--md-heading-2-size': '1.4em',
+  '--md-heading-3-size': '1.2em',
+  '--md-heading-4-size': '1.1em',
+  '--md-heading-5-size': '1.05em',
+  '--md-heading-6-size': '1em',
+  '--md-heading-weight': '600',
+  '--md-heading-line-height': '1.3',
+  '--md-heading-margin-top': '0.5em',
+  '--md-marker-color': '#9ca3af',
+  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--md-link-color': '#2563eb',
+  '--md-link-decoration': 'underline',
+  '--md-code-background': 'rgba(175, 184, 193, 0.2)',
+  '--md-code-color': '#a31515',
+  '--md-code-padding': '0.15em 0.35em',
+  '--md-code-radius': '3px',
+  '--md-blockquote-border': 'rgba(59, 130, 246, 0.4)',
+  '--md-blockquote-border-width': '3px',
+  '--md-blockquote-color': '#666666',
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#666666',
+  '--md-hr-color': 'rgba(0, 0, 0, 0.1)',
+  '--md-hr-height': '1px',
+  '--md-hr-margin': '1.5em 0',
+  '--md-table-border': 'rgba(0, 0, 0, 0.1)',
+  '--md-table-header-bg': 'rgba(0, 0, 0, 0.04)',
+  '--md-table-header-weight': '600',
+  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-table-stripe-bg': 'transparent',
+  '--md-image-max-width': '100%',
+  '--md-image-border-radius': '6px',
+  '--md-checkbox-size': '1em',
+  '--md-checkbox-color': '#2563eb',
+  '--md-alert-note-color': '#2563eb',
+  '--md-alert-tip-color': '#16a34a',
+  '--md-alert-important-color': '#0000ff',
+  '--md-alert-warning-color': '#d97706',
+  '--md-alert-caution-color': '#dc2626',
 };
 
 /**
@@ -73687,6 +76339,47 @@ const githubTheme = {
   '--syntax-inserted': '#7ee787',
   '--syntax-deleted': '#ff7b72',
   '--syntax-changed': '#79c0ff',
+
+  // Markdown rendering
+  '--md-heading-1-size': '1.75em',
+  '--md-heading-2-size': '1.4em',
+  '--md-heading-3-size': '1.2em',
+  '--md-heading-4-size': '1.1em',
+  '--md-heading-5-size': '1.05em',
+  '--md-heading-6-size': '1em',
+  '--md-heading-weight': '600',
+  '--md-heading-line-height': '1.3',
+  '--md-heading-margin-top': '0.5em',
+  '--md-marker-color': '#6e7681',
+  '--md-marker-font': "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
+  '--md-link-color': '#58a6ff',
+  '--md-link-decoration': 'underline',
+  '--md-code-background': 'rgba(110, 118, 129, 0.2)',
+  '--md-code-color': '#79c0ff',
+  '--md-code-padding': '0.15em 0.35em',
+  '--md-code-radius': '6px',
+  '--md-blockquote-border': '#30363d',
+  '--md-blockquote-border-width': '4px',
+  '--md-blockquote-color': '#8b949e',
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#8b949e',
+  '--md-hr-color': '#30363d',
+  '--md-hr-height': '1px',
+  '--md-hr-margin': '1.5em 0',
+  '--md-table-border': '#30363d',
+  '--md-table-header-bg': '#161b22',
+  '--md-table-header-weight': '600',
+  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-table-stripe-bg': 'transparent',
+  '--md-image-max-width': '100%',
+  '--md-image-border-radius': '6px',
+  '--md-checkbox-size': '1em',
+  '--md-checkbox-color': '#58a6ff',
+  '--md-alert-note-color': '#58a6ff',
+  '--md-alert-tip-color': '#238636',
+  '--md-alert-important-color': '#a371f7',
+  '--md-alert-warning-color': '#d29922',
+  '--md-alert-caution-color': '#f85149',
 };
 
 /**
@@ -73952,6 +76645,50 @@ const nordTheme = {
   '--syntax-inserted': '#a3be8c',          // nord14 - green = added
   '--syntax-deleted': '#bf616a',           // nord11 - red = removed
   '--syntax-changed': '#ebcb8b',           // nord13 - yellow = modified
+
+  // ===========================================================================
+  // MARKDOWN RENDERING
+  // Using Nord palette for rendered markdown elements
+  // ===========================================================================
+  '--md-heading-1-size': '1.75em',
+  '--md-heading-2-size': '1.4em',
+  '--md-heading-3-size': '1.2em',
+  '--md-heading-4-size': '1.1em',
+  '--md-heading-5-size': '1.05em',
+  '--md-heading-6-size': '1em',
+  '--md-heading-weight': '600',
+  '--md-heading-line-height': '1.3',
+  '--md-heading-margin-top': '0.5em',
+  '--md-marker-color': '#4c566a',          // nord3
+  '--md-marker-font': "'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace",
+  '--md-link-color': '#88c0d0',            // nord8
+  '--md-link-decoration': 'underline',
+  '--md-code-background': 'rgba(67, 76, 94, 0.5)',  // nord2 at 50%
+  '--md-code-color': '#a3be8c',            // nord14
+  '--md-code-padding': '0.15em 0.35em',
+  '--md-code-radius': '3px',
+  '--md-blockquote-border': '#81a1c1',     // nord9
+  '--md-blockquote-border-width': '3px',
+  '--md-blockquote-color': '#616e88',      // Brighter than nord3
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#4c566a',     // nord3
+  '--md-hr-color': '#3b4252',              // nord1
+  '--md-hr-height': '1px',
+  '--md-hr-margin': '1.5em 0',
+  '--md-table-border': '#3b4252',          // nord1
+  '--md-table-header-bg': '#3b4252',       // nord1
+  '--md-table-header-weight': '600',
+  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-table-stripe-bg': 'transparent',
+  '--md-image-max-width': '100%',
+  '--md-image-border-radius': '4px',
+  '--md-checkbox-size': '1em',
+  '--md-checkbox-color': '#88c0d0',        // nord8
+  '--md-alert-note-color': '#81a1c1',      // nord9
+  '--md-alert-tip-color': '#a3be8c',       // nord14
+  '--md-alert-important-color': '#b48ead', // nord15
+  '--md-alert-warning-color': '#ebcb8b',   // nord13
+  '--md-alert-caution-color': '#bf616a',   // nord11
 };
 
 /**
@@ -77280,7 +80017,8 @@ function create(target, options = {}) {
   // We create it ourselves so we can listen to stack changes
   const undoManager = new UndoManager(yText);
 
-  const markdownWithCodeBlocks = markdown({
+  const markdownWithCodeBlocks = markdown$1({
+    base: markdownLanguage,  // GFM support (tables, task lists, strikethrough)
     codeLanguages: codeBlockLanguage
   });
 
@@ -77343,7 +80081,11 @@ function create(target, options = {}) {
     // Initially empty, configured after api is created
     keymapCompartment.of([]),
     outputWidgetPlugin, // ANSI output rendering
+    markdownRenderer, // Markdown blur→render / focus→source
   ];
+
+  // Inject markdown styles
+  injectMarkdownStyles();
 
   const view = new EditorView({
     state: EditorState.create({ doc: initialContent, extensions }),
@@ -79036,7 +81778,7 @@ const codemirror = {
   createCodemirrorTheme,
   javascript,
   python,
-  markdown,
+  markdown: markdown$1,
 };
 // #endregion EXPOSED_LIBS
 
@@ -79132,6 +81874,30 @@ const runtimeLspExports = {
 };
 // #endregion RUNTIME_LSP_EXPORTS
 
+// #region MARKDOWN_EXPORTS
+const markdownExports = {
+  // Main extension
+  markdown: markdown,
+  markdownRenderer,
+
+  // Styles
+  markdownStyles,
+  injectMarkdownStyles,
+
+  // Widgets
+  TaskCheckboxWidget,
+  ImageWidget,
+  ImagePlaceholder,
+  parseImageMarkdown,
+  TableWidget,
+  parseTable,
+  isTableLine,
+  isTableDelimiter,
+  generateTableId,
+  AlertTitleWidget,
+};
+// #endregion MARKDOWN_EXPORTS
+
 // #region EXPORTS
 const mrmd = {
   version: VERSION,
@@ -79151,6 +81917,8 @@ const mrmd = {
   cellControls: cellControlsExports,
   // Runtime LSP (hover, completions, variables)
   runtimeLsp: runtimeLspExports,
+  // Markdown rendering (blur→render, focus→source)
+  markdown: markdownExports,
   // Utilities for runtime authors
   RuntimeRegistry,
   createRuntimeRegistry,
@@ -79174,5 +81942,5 @@ const mrmd = {
 };
 // #endregion EXPORTS
 
-export { AwarenessStateManager, AwarenessSystem, CellControlsSystem, EXECUTION_STATUS, MRPClient, MonitorCoordination, RuntimeRegistry, TerminalBuffer, adaptMRPClient, adaptMrmdJsSession, ansiStyles, applyTheme, awarenessExports as awareness, cellControlsExports, codemirror, configExports, create, createAIState, createAvatarRow, createAwareness, createCellControls, createCollaboratorList, createConfigHandler, createCursorExtensions, createFloatingCollaboratorList, createHumanState, createIndicatorExtensions, createJavaScriptRuntime, createMonitorCoordination, createReactiveConfig, createRuntimeCompletionExtension, createRuntimeHoverExtension, createRuntimeRegistry, createRuntimeState, createStateManager, createStatusBar, createTheme, createVariableExplorer, daylightTheme, mrmd as default, defaultAwarenessConfig, detectTheme, devPanelExtension, drive, generateThemeCSS, getTheme, getThemeNames, githubTheme, hasAnsi, initTheme, injectAwarenessStyles, injectDevPanelStyles, injectRuntimeLspStyles, isFullySerializable, midnightTheme, minimalAwarenessConfig, normalizeOptions, processTerminalOutput, registerTheme, runtimeLspExports, serializeConfig, session, stateExports, stripAnsi, terminal, terminalToHtml, toggleDevPanel, watchTheme, widgets, yjs };
+export { AlertTitleWidget, AwarenessStateManager, AwarenessSystem, CellControlsSystem, EXECUTION_STATUS, ImagePlaceholder, ImageWidget, MRPClient, MonitorCoordination, RuntimeRegistry, TableWidget, TaskCheckboxWidget, TerminalBuffer, adaptMRPClient, adaptMrmdJsSession, ansiStyles, applyTheme, awarenessExports as awareness, cellControlsExports, codemirror, configExports, create, createAIState, createAvatarRow, createAwareness, createCellControls, createCollaboratorList, createConfigHandler, createCursorExtensions, createFloatingCollaboratorList, createHumanState, createIndicatorExtensions, createJavaScriptRuntime, createMonitorCoordination, createReactiveConfig, createRuntimeCompletionExtension, createRuntimeHoverExtension, createRuntimeRegistry, createRuntimeState, createStateManager, createStatusBar, createTheme, createVariableExplorer, daylightTheme, mrmd as default, defaultAwarenessConfig, detectTheme, devPanelExtension, drive, generateTableId, generateThemeCSS, getTheme, getThemeNames, githubTheme, hasAnsi, initTheme, injectAwarenessStyles, injectDevPanelStyles, injectMarkdownStyles, injectRuntimeLspStyles, isFullySerializable, isTableDelimiter, isTableLine, markdown, markdownExports, markdownRenderer, markdownStyles, midnightTheme, minimalAwarenessConfig, normalizeOptions, parseImageMarkdown, parseTable, processTerminalOutput, registerTheme, runtimeLspExports, serializeConfig, session, stateExports, stripAnsi, terminal, terminalToHtml, toggleDevPanel, watchTheme, widgets, yjs };
 //# sourceMappingURL=mrmd.esm.js.map

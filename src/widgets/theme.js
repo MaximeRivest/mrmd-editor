@@ -285,6 +285,81 @@ export const tokenDefinitions = {
   '--syntax-inserted': { description: 'Inserted/added content (diffs)', category: 'syntax', default: '#b5cea8' },
   '--syntax-deleted': { description: 'Deleted content (diffs)', category: 'syntax', default: '#ce9178' },
   '--syntax-changed': { description: 'Changed content (diffs)', category: 'syntax', default: '#569cd6' },
+
+  // ===========================================================================
+  // MARKDOWN RENDERING (blur/focus rendered view)
+  // ===========================================================================
+  // These tokens control how markdown appears when rendered (cursor not on element).
+  // When the cursor IS on an element, it shows as raw markdown syntax.
+
+  // Headings
+  '--md-heading-1-size': { description: 'H1 font size', category: 'markdown', default: '1.75em' },
+  '--md-heading-2-size': { description: 'H2 font size', category: 'markdown', default: '1.4em' },
+  '--md-heading-3-size': { description: 'H3 font size', category: 'markdown', default: '1.2em' },
+  '--md-heading-4-size': { description: 'H4 font size', category: 'markdown', default: '1.1em' },
+  '--md-heading-5-size': { description: 'H5 font size', category: 'markdown', default: '1.05em' },
+  '--md-heading-6-size': { description: 'H6 font size', category: 'markdown', default: '1em' },
+  '--md-heading-weight': { description: 'Heading font weight', category: 'markdown', default: '600' },
+  '--md-heading-line-height': { description: 'Heading line height', category: 'markdown', default: '1.3' },
+  '--md-heading-margin-top': { description: 'Space above headings', category: 'markdown', default: '0.5em' },
+
+  // Markers (the #, **, __, ``` syntax characters)
+  '--md-marker-color': { description: 'Color of visible markdown syntax markers', category: 'markdown', default: 'var(--widget-text-muted)' },
+  '--md-marker-font': { description: 'Font for markdown markers', category: 'markdown', default: 'var(--widget-font-mono)' },
+
+  // Links
+  '--md-link-color': { description: 'Link text color', category: 'markdown', default: 'var(--syntax-link)' },
+  '--md-link-decoration': { description: 'Link text decoration', category: 'markdown', default: 'underline' },
+
+  // Inline code
+  '--md-code-background': { description: 'Inline code background', category: 'markdown', default: 'var(--syntax-code-background)' },
+  '--md-code-color': { description: 'Inline code text color', category: 'markdown', default: 'var(--syntax-code)' },
+  '--md-code-padding': { description: 'Inline code padding', category: 'markdown', default: '0.15em 0.35em' },
+  '--md-code-radius': { description: 'Inline code border radius', category: 'markdown', default: '3px' },
+
+  // Blockquotes
+  '--md-blockquote-border': { description: 'Blockquote left border color', category: 'markdown', default: 'var(--widget-border-accent)' },
+  '--md-blockquote-border-width': { description: 'Blockquote left border width', category: 'markdown', default: '3px' },
+  '--md-blockquote-color': { description: 'Blockquote text color', category: 'markdown', default: 'var(--widget-text-muted)' },
+  '--md-blockquote-padding': { description: 'Blockquote left padding', category: 'markdown', default: '1em' },
+
+  // Lists
+  '--md-list-marker-color': { description: 'List bullet/number color', category: 'markdown', default: 'var(--widget-text-muted)' },
+
+  // Horizontal rules
+  '--md-hr-color': { description: 'Horizontal rule color', category: 'markdown', default: 'var(--widget-border)' },
+  '--md-hr-height': { description: 'Horizontal rule thickness', category: 'markdown', default: '1px' },
+  '--md-hr-margin': { description: 'Horizontal rule vertical margin', category: 'markdown', default: '1.5em 0' },
+
+  // Tables (Tufte-inspired: maximize data-ink ratio)
+  '--md-table-bg': { description: 'Table background', category: 'markdown', default: 'var(--widget-surface)' },
+  '--md-table-header-weight': { description: 'Table header font weight', category: 'markdown', default: '600' },
+  '--md-table-header-border': { description: 'Table header bottom border color', category: 'markdown', default: 'var(--widget-text-muted)' },
+  '--md-table-row-border': { description: 'Table row separator color', category: 'markdown', default: 'var(--widget-border)' },
+  '--md-table-cell-padding': { description: 'Table cell padding', category: 'markdown', default: '0.5em 1em' },
+  '--md-table-hover-bg': { description: 'Table row hover background', category: 'markdown', default: 'var(--widget-surface-hover)' },
+
+  // Images
+  '--md-image-max-width': { description: 'Maximum image width', category: 'markdown', default: '100%' },
+  '--md-image-border-radius': { description: 'Image border radius', category: 'markdown', default: 'var(--widget-border-radius)' },
+
+  // Math (LaTeX with KaTeX)
+  '--md-math-display-size': { description: 'Display math font size', category: 'markdown', default: '1.2em' },
+  '--md-math-inline-size': { description: 'Inline math font size', category: 'markdown', default: '1em' },
+  '--md-math-syntax-color': { description: 'Math syntax color (when editing)', category: 'markdown', default: 'var(--widget-text-muted)' },
+  '--md-math-fallback-color': { description: 'Math fallback text color', category: 'markdown', default: 'var(--widget-text-muted)' },
+  '--md-math-fallback-bg': { description: 'Math fallback background', category: 'markdown', default: 'var(--widget-surface)' },
+
+  // Task checkboxes
+  '--md-checkbox-size': { description: 'Checkbox size', category: 'markdown', default: '1em' },
+  '--md-checkbox-color': { description: 'Checkbox accent color', category: 'markdown', default: 'var(--widget-text-accent)' },
+
+  // GitHub-style alerts [!NOTE], [!WARNING], etc.
+  '--md-alert-note-color': { description: 'Note alert accent color', category: 'markdown', default: 'var(--widget-info)' },
+  '--md-alert-tip-color': { description: 'Tip alert accent color', category: 'markdown', default: 'var(--widget-success)' },
+  '--md-alert-important-color': { description: 'Important alert accent color', category: 'markdown', default: 'var(--syntax-keyword)' },
+  '--md-alert-warning-color': { description: 'Warning alert accent color', category: 'markdown', default: 'var(--widget-warning)' },
+  '--md-alert-caution-color': { description: 'Caution alert accent color', category: 'markdown', default: 'var(--widget-error)' },
 };
 
 // #endregion TOKEN_DEFINITIONS
@@ -409,6 +484,47 @@ export const midnightTheme = {
   '--syntax-inserted': '#b5cea8',
   '--syntax-deleted': '#ce9178',
   '--syntax-changed': '#569cd6',
+
+  // Markdown rendering
+  '--md-heading-1-size': '1.75em',
+  '--md-heading-2-size': '1.4em',
+  '--md-heading-3-size': '1.2em',
+  '--md-heading-4-size': '1.1em',
+  '--md-heading-5-size': '1.05em',
+  '--md-heading-6-size': '1em',
+  '--md-heading-weight': '600',
+  '--md-heading-line-height': '1.3',
+  '--md-heading-margin-top': '0.5em',
+  '--md-marker-color': '#6b7280',
+  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--md-link-color': '#6495ed',
+  '--md-link-decoration': 'underline',
+  '--md-code-background': 'rgba(110, 118, 129, 0.2)',
+  '--md-code-color': '#ce9178',
+  '--md-code-padding': '0.15em 0.35em',
+  '--md-code-radius': '3px',
+  '--md-blockquote-border': 'rgba(100, 149, 237, 0.5)',
+  '--md-blockquote-border-width': '3px',
+  '--md-blockquote-color': '#888888',
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#888888',
+  '--md-hr-color': 'rgba(255, 255, 255, 0.1)',
+  '--md-hr-height': '1px',
+  '--md-hr-margin': '1.5em 0',
+  '--md-table-border': 'rgba(255, 255, 255, 0.1)',
+  '--md-table-header-bg': 'rgba(0, 0, 0, 0.2)',
+  '--md-table-header-weight': '600',
+  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-table-stripe-bg': 'transparent',
+  '--md-image-max-width': '100%',
+  '--md-image-border-radius': '6px',
+  '--md-checkbox-size': '1em',
+  '--md-checkbox-color': '#6495ed',
+  '--md-alert-note-color': '#3b82f6',
+  '--md-alert-tip-color': '#22c55e',
+  '--md-alert-important-color': '#569cd6',
+  '--md-alert-warning-color': '#f59e0b',
+  '--md-alert-caution-color': '#ef4444',
 };
 
 /**
@@ -529,6 +645,47 @@ export const daylightTheme = {
   '--syntax-inserted': '#098658',
   '--syntax-deleted': '#a31515',
   '--syntax-changed': '#0000ff',
+
+  // Markdown rendering
+  '--md-heading-1-size': '1.75em',
+  '--md-heading-2-size': '1.4em',
+  '--md-heading-3-size': '1.2em',
+  '--md-heading-4-size': '1.1em',
+  '--md-heading-5-size': '1.05em',
+  '--md-heading-6-size': '1em',
+  '--md-heading-weight': '600',
+  '--md-heading-line-height': '1.3',
+  '--md-heading-margin-top': '0.5em',
+  '--md-marker-color': '#9ca3af',
+  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--md-link-color': '#2563eb',
+  '--md-link-decoration': 'underline',
+  '--md-code-background': 'rgba(175, 184, 193, 0.2)',
+  '--md-code-color': '#a31515',
+  '--md-code-padding': '0.15em 0.35em',
+  '--md-code-radius': '3px',
+  '--md-blockquote-border': 'rgba(59, 130, 246, 0.4)',
+  '--md-blockquote-border-width': '3px',
+  '--md-blockquote-color': '#666666',
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#666666',
+  '--md-hr-color': 'rgba(0, 0, 0, 0.1)',
+  '--md-hr-height': '1px',
+  '--md-hr-margin': '1.5em 0',
+  '--md-table-border': 'rgba(0, 0, 0, 0.1)',
+  '--md-table-header-bg': 'rgba(0, 0, 0, 0.04)',
+  '--md-table-header-weight': '600',
+  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-table-stripe-bg': 'transparent',
+  '--md-image-max-width': '100%',
+  '--md-image-border-radius': '6px',
+  '--md-checkbox-size': '1em',
+  '--md-checkbox-color': '#2563eb',
+  '--md-alert-note-color': '#2563eb',
+  '--md-alert-tip-color': '#16a34a',
+  '--md-alert-important-color': '#0000ff',
+  '--md-alert-warning-color': '#d97706',
+  '--md-alert-caution-color': '#dc2626',
 };
 
 /**
@@ -649,6 +806,47 @@ export const githubTheme = {
   '--syntax-inserted': '#7ee787',
   '--syntax-deleted': '#ff7b72',
   '--syntax-changed': '#79c0ff',
+
+  // Markdown rendering
+  '--md-heading-1-size': '1.75em',
+  '--md-heading-2-size': '1.4em',
+  '--md-heading-3-size': '1.2em',
+  '--md-heading-4-size': '1.1em',
+  '--md-heading-5-size': '1.05em',
+  '--md-heading-6-size': '1em',
+  '--md-heading-weight': '600',
+  '--md-heading-line-height': '1.3',
+  '--md-heading-margin-top': '0.5em',
+  '--md-marker-color': '#6e7681',
+  '--md-marker-font': "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
+  '--md-link-color': '#58a6ff',
+  '--md-link-decoration': 'underline',
+  '--md-code-background': 'rgba(110, 118, 129, 0.2)',
+  '--md-code-color': '#79c0ff',
+  '--md-code-padding': '0.15em 0.35em',
+  '--md-code-radius': '6px',
+  '--md-blockquote-border': '#30363d',
+  '--md-blockquote-border-width': '4px',
+  '--md-blockquote-color': '#8b949e',
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#8b949e',
+  '--md-hr-color': '#30363d',
+  '--md-hr-height': '1px',
+  '--md-hr-margin': '1.5em 0',
+  '--md-table-border': '#30363d',
+  '--md-table-header-bg': '#161b22',
+  '--md-table-header-weight': '600',
+  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-table-stripe-bg': 'transparent',
+  '--md-image-max-width': '100%',
+  '--md-image-border-radius': '6px',
+  '--md-checkbox-size': '1em',
+  '--md-checkbox-color': '#58a6ff',
+  '--md-alert-note-color': '#58a6ff',
+  '--md-alert-tip-color': '#238636',
+  '--md-alert-important-color': '#a371f7',
+  '--md-alert-warning-color': '#d29922',
+  '--md-alert-caution-color': '#f85149',
 };
 
 /**
@@ -914,6 +1112,50 @@ export const nordTheme = {
   '--syntax-inserted': '#a3be8c',          // nord14 - green = added
   '--syntax-deleted': '#bf616a',           // nord11 - red = removed
   '--syntax-changed': '#ebcb8b',           // nord13 - yellow = modified
+
+  // ===========================================================================
+  // MARKDOWN RENDERING
+  // Using Nord palette for rendered markdown elements
+  // ===========================================================================
+  '--md-heading-1-size': '1.75em',
+  '--md-heading-2-size': '1.4em',
+  '--md-heading-3-size': '1.2em',
+  '--md-heading-4-size': '1.1em',
+  '--md-heading-5-size': '1.05em',
+  '--md-heading-6-size': '1em',
+  '--md-heading-weight': '600',
+  '--md-heading-line-height': '1.3',
+  '--md-heading-margin-top': '0.5em',
+  '--md-marker-color': '#4c566a',          // nord3
+  '--md-marker-font': "'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace",
+  '--md-link-color': '#88c0d0',            // nord8
+  '--md-link-decoration': 'underline',
+  '--md-code-background': 'rgba(67, 76, 94, 0.5)',  // nord2 at 50%
+  '--md-code-color': '#a3be8c',            // nord14
+  '--md-code-padding': '0.15em 0.35em',
+  '--md-code-radius': '3px',
+  '--md-blockquote-border': '#81a1c1',     // nord9
+  '--md-blockquote-border-width': '3px',
+  '--md-blockquote-color': '#616e88',      // Brighter than nord3
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#4c566a',     // nord3
+  '--md-hr-color': '#3b4252',              // nord1
+  '--md-hr-height': '1px',
+  '--md-hr-margin': '1.5em 0',
+  '--md-table-border': '#3b4252',          // nord1
+  '--md-table-header-bg': '#3b4252',       // nord1
+  '--md-table-header-weight': '600',
+  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-table-stripe-bg': 'transparent',
+  '--md-image-max-width': '100%',
+  '--md-image-border-radius': '4px',
+  '--md-checkbox-size': '1em',
+  '--md-checkbox-color': '#88c0d0',        // nord8
+  '--md-alert-note-color': '#81a1c1',      // nord9
+  '--md-alert-tip-color': '#a3be8c',       // nord14
+  '--md-alert-important-color': '#b48ead', // nord15
+  '--md-alert-warning-color': '#ebcb8b',   // nord13
+  '--md-alert-caution-color': '#bf616a',   // nord11
 };
 
 /**

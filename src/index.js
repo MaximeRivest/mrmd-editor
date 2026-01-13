@@ -38,7 +38,7 @@ import { createCodemirrorTheme } from './widgets/codemirror-theme.js';
 // Language support
 import { javascript } from '@codemirror/lang-javascript';
 import { python } from '@codemirror/lang-python';
-import { markdown } from '@codemirror/lang-markdown';
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { html } from '@codemirror/lang-html';
 import { css } from '@codemirror/lang-css';
 import { json } from '@codemirror/lang-json';
@@ -101,6 +101,25 @@ import {
   injectOutputWidgetStyles,
   outputWidgetStyles,
 } from './output-widget.js';
+
+// Markdown rendering (blur→render, focus→source)
+import {
+  markdown as markdownRendering,
+  markdownRenderer,
+  markdownStyles,
+  injectMarkdownStyles,
+  // Widgets
+  TaskCheckboxWidget,
+  ImageWidget,
+  ImagePlaceholder,
+  parseImageMarkdown,
+  TableWidget,
+  parseTable,
+  isTableLine,
+  isTableDelimiter,
+  generateTableId,
+  AlertTitleWidget,
+} from './markdown/index.js';
 
 // Awareness system
 import {
@@ -639,6 +658,7 @@ function create(target, options = {}) {
   const undoManager = new Y.UndoManager(yText);
 
   const markdownWithCodeBlocks = markdown({
+    base: markdownLanguage,  // GFM support (tables, task lists, strikethrough)
     codeLanguages: codeBlockLanguage
   });
 
@@ -701,7 +721,11 @@ function create(target, options = {}) {
     // Initially empty, configured after api is created
     keymapCompartment.of([]),
     outputWidgetPlugin, // ANSI output rendering
+    markdownRenderer, // Markdown blur→render / focus→source
   ];
+
+  // Inject markdown styles
+  injectMarkdownStyles();
 
   const view = new EditorView({
     state: EditorState.create({ doc: initialContent, extensions }),
@@ -2494,6 +2518,30 @@ const runtimeLspExports = {
 };
 // #endregion RUNTIME_LSP_EXPORTS
 
+// #region MARKDOWN_EXPORTS
+const markdownExports = {
+  // Main extension
+  markdown: markdownRendering,
+  markdownRenderer,
+
+  // Styles
+  markdownStyles,
+  injectMarkdownStyles,
+
+  // Widgets
+  TaskCheckboxWidget,
+  ImageWidget,
+  ImagePlaceholder,
+  parseImageMarkdown,
+  TableWidget,
+  parseTable,
+  isTableLine,
+  isTableDelimiter,
+  generateTableId,
+  AlertTitleWidget,
+};
+// #endregion MARKDOWN_EXPORTS
+
 // #region EXPORTS
 const mrmd = {
   version: VERSION,
@@ -2513,6 +2561,8 @@ const mrmd = {
   cellControls: cellControlsExports,
   // Runtime LSP (hover, completions, variables)
   runtimeLsp: runtimeLspExports,
+  // Markdown rendering (blur→render, focus→source)
+  markdown: markdownExports,
   // Utilities for runtime authors
   RuntimeRegistry,
   createRuntimeRegistry,
@@ -2613,5 +2663,21 @@ export {
   MonitorCoordination,
   EXECUTION_STATUS,
   createMonitorCoordination,
+  // Markdown rendering exports
+  markdownExports,
+  markdownRendering as markdown,
+  markdownRenderer,
+  markdownStyles,
+  injectMarkdownStyles,
+  TaskCheckboxWidget,
+  ImageWidget,
+  ImagePlaceholder,
+  parseImageMarkdown,
+  TableWidget,
+  parseTable,
+  isTableLine,
+  isTableDelimiter,
+  generateTableId,
+  AlertTitleWidget,
 };
 // #endregion EXPORTS
