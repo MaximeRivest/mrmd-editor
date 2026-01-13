@@ -58,13 +58,28 @@ function getInitialState() {
   return {
     projectRoot: '',
     file: null,
-    runtimes: {},
+    theme: null, // null = auto, or theme name
+    runtimes: {
+      // Legacy: single Python runtime info (for backward compat)
+      python: null,
+      // New: multiple runtime sessions
+      sessions: {
+        // 'shared': { id, url, status, venv, cwd, ... }
+        // 'python-8001': { id, url, status, venv, cwd, dedicated: true, port: 8001 }
+      },
+      // Document → session attachment
+      attachments: {
+        // 'my-notebook': 'shared'
+        // 'data-analysis': 'python-8001'
+      },
+    },
     orchestrator: {
       status: 'disconnected',
       url: '',
       error: null,
       services: {},
     },
+    ai: null, // AI assistant state
   };
 }
 
@@ -434,6 +449,117 @@ export class ShellStateManager {
       });
       throw error;
     }
+  }
+
+  // ===========================================================================
+  // Runtime Session Management
+  // ===========================================================================
+
+  /**
+   * Get the session attached to a document
+   * @param {string} docName - Document name
+   * @returns {string} Session ID (defaults to 'shared')
+   */
+  getDocumentSession(docName) {
+    return this.get(`runtimes.attachments.${docName}`) || 'shared';
+  }
+
+  /**
+   * Get session info
+   * @param {string} sessionId - Session ID
+   * @returns {Object|null}
+   */
+  getSession(sessionId) {
+    return this.get(`runtimes.sessions.${sessionId}`) || null;
+  }
+
+  /**
+   * Get all available sessions
+   * @returns {Array<{id: string, info: Object}>}
+   */
+  getSessions() {
+    const sessions = this.get('runtimes.sessions') || {};
+    return Object.entries(sessions).map(([id, info]) => ({ id, info }));
+  }
+
+  /**
+   * Attach a document to a session
+   * @param {string} docName - Document name
+   * @param {string} sessionId - Session ID to attach to
+   */
+  attachDocument(docName, sessionId) {
+    this._set(`runtimes.attachments.${docName}`, sessionId);
+  }
+
+  /**
+   * Register a runtime session
+   * @param {string} sessionId - Session ID
+   * @param {Object} info - Session info (url, status, venv, cwd, etc.)
+   */
+  registerSession(sessionId, info) {
+    this._set(`runtimes.sessions.${sessionId}`, info);
+
+    // Also update legacy python state if this is the shared session
+    if (sessionId === 'shared' && info.language === 'python') {
+      this._set('runtimes.python', {
+        language: 'python',
+        version: info.version,
+        venv: info.venv,
+        venvName: info.venvName,
+        cwd: info.cwd,
+        executable: info.executable,
+        status: info.status,
+        error: null,
+      });
+    }
+  }
+
+  /**
+   * Create a new dedicated runtime session
+   * @param {string} docName - Document to attach the session to
+   * @param {'shared'|'dedicated'} mode - Runtime mode
+   * @param {string} [venv] - Path to virtual environment (for dedicated runtimes)
+   * @returns {Promise<Object>} Session info
+   */
+  async createSession(docName, mode = 'dedicated', venv = null) {
+    try {
+      const result = await this._client.createSession(docName, mode, venv);
+
+      const sessionId = result.id || (mode === 'dedicated' ? `python-${result.runtimes?.python?.port || Date.now()}` : 'shared');
+
+      const sessionInfo = {
+        id: sessionId,
+        url: result.runtimes?.python?.url || result.sync,
+        status: 'ready',
+        dedicated: mode === 'dedicated',
+        port: result.runtimes?.python?.port,
+        venv: result.runtimes?.python?.venv || venv,
+        language: 'python',
+        docName,
+      };
+
+      // Register the session
+      this.registerSession(sessionId, sessionInfo);
+
+      // Attach the document to this session
+      this.attachDocument(docName, sessionId);
+
+      return sessionInfo;
+    } catch (error) {
+      console.error('Failed to create session:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the runtime URL for a document
+   * @param {string} docName - Document name
+   * @returns {string|null} Runtime URL
+   */
+  getRuntimeUrl(docName) {
+    const sessionId = this.getDocumentSession(docName);
+    const session = this.getSession(sessionId);
+    return session?.url || null;
   }
 
   // ===========================================================================

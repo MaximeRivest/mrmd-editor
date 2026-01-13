@@ -54750,6 +54750,32 @@ const ansiStyles = `
  */
 
 
+// =============================================================================
+// Height Cache for Stable Layout (prevents jitter when editing output blocks)
+// =============================================================================
+
+/**
+ * Cache of output widget heights, keyed by block start position.
+ * Used to pad raw markdown to prevent layout shift.
+ */
+const outputHeightCache = new Map();
+
+/**
+ * Cache the height of an output widget
+ */
+function cacheOutputHeight(blockStart, height) {
+  if (height > 0) {
+    outputHeightCache.set(blockStart, height);
+  }
+}
+
+/**
+ * Get cached height for an output block
+ */
+function getCachedOutputHeight(blockStart) {
+  return outputHeightCache.get(blockStart);
+}
+
 // Facet to provide awareness system to the output widget
 const outputWidgetAwarenessFacet = Facet.define({
   combine: values => values[values.length - 1] || null
@@ -54799,6 +54825,18 @@ class OutputWidget extends WidgetType {
     // Render with ANSI colors
     const html = terminalToHtml(this.content);
     container.innerHTML = `<pre class="cm-output-content">${html}</pre>`;
+
+    // Cache height for stable layout (prevents jitter when editing)
+    // Only cache when not hidden (widget is visible and has real height)
+    if (!this.hidden) {
+      const blockStart = this.blockStart;
+      requestAnimationFrame(() => {
+        // Cache the widget's container height
+        if (container.offsetHeight > 0) {
+          cacheOutputHeight(blockStart, container.offsetHeight);
+        }
+      });
+    }
 
     // Copy on click
     container.title = 'Click to copy output';
@@ -55001,7 +55039,7 @@ class EmptyStdinWidget extends WidgetType {
  * @param {Object|null} awarenessSystem - Optional awareness system for collaborative focus
  * @returns {import('@codemirror/view').DecorationSet}
  */
-function buildDecorations$2(view, awarenessSystem) {
+function buildDecorations$3(view, awarenessSystem) {
   const decorations = [];
   const doc = view.state.doc;
   const cursorPos = view.state.selection.main.head;
@@ -55057,6 +55095,30 @@ function buildDecorations$2(view, awarenessSystem) {
           class: anyCollaboratorFocused ? 'cm-output-line-visible' : 'cm-output-line-hidden',
         }).range(line.from)
       );
+    }
+
+    // Stable layout: when editing, add spacer to prevent layout shift
+    if (anyCollaboratorFocused) {
+      const cachedHeight = getCachedOutputHeight(blockStart);
+      if (cachedHeight) {
+        // Calculate raw content height
+        const lineCount = endLine.number - startLine.number + 1;
+        const lineHeight = view.defaultLineHeight;
+        const rawHeight = lineCount * lineHeight;
+        const padding = cachedHeight - rawHeight;
+
+        if (padding > 0) {
+          // Add padding to the last line (closing fence)
+          decorations.push(
+            Decoration.line({
+              attributes: {
+                class: 'cm-output-spacer-line',
+                style: `padding-bottom: ${padding}px`
+              }
+            }).range(endLine.from)
+          );
+        }
+      }
     }
 
     // Check if output is empty (just whitespace)
@@ -55168,7 +55230,7 @@ const outputWidgetPlugin = ViewPlugin.fromClass(
       this.unsubscribe = null;
 
       // Build initial decorations
-      this.decorations = buildDecorations$2(view, this.awarenessSystem);
+      this.decorations = buildDecorations$3(view, this.awarenessSystem);
 
       // Setup awareness listener (following y-codemirror.next pattern)
       // The listener dispatches a transaction which triggers update()
@@ -55220,7 +55282,7 @@ const outputWidgetPlugin = ViewPlugin.fromClass(
       // ALWAYS rebuild decorations (following y-codemirror.next pattern)
       // Uses y-codemirror.next cursor positions to check remote focus
       // (no separate focusedBlock state needed - cursor positions survive edits)
-      this.decorations = buildDecorations$2(update.view, this.awarenessSystem);
+      this.decorations = buildDecorations$3(update.view, this.awarenessSystem);
     }
 
     destroy() {
@@ -58257,12 +58319,17 @@ let OrchestratorClient$1 = class OrchestratorClient {
    * Create a session for a document
    * @param {string} doc - Document name
    * @param {'shared'|'dedicated'} python - Python runtime mode
+   * @param {string} [venv] - Path to virtual environment (for dedicated runtimes)
    * @returns {Promise<Object>}
    */
-  async createSession(doc, python = 'shared') {
+  async createSession(doc, python = 'shared', venv = null) {
+    const body = { doc, python };
+    if (venv) {
+      body.venv = venv;
+    }
     return this._fetch('/api/sessions', {
       method: 'POST',
-      body: JSON.stringify({ doc, python }),
+      body: JSON.stringify(body),
     });
   }
 
@@ -58432,13 +58499,28 @@ function getInitialState$1() {
   return {
     projectRoot: '',
     file: null,
-    runtimes: {},
+    theme: null, // null = auto, or theme name
+    runtimes: {
+      // Legacy: single Python runtime info (for backward compat)
+      python: null,
+      // New: multiple runtime sessions
+      sessions: {
+        // 'shared': { id, url, status, venv, cwd, ... }
+        // 'python-8001': { id, url, status, venv, cwd, dedicated: true, port: 8001 }
+      },
+      // Document → session attachment
+      attachments: {
+        // 'my-notebook': 'shared'
+        // 'data-analysis': 'python-8001'
+      },
+    },
     orchestrator: {
       status: 'disconnected',
       url: '',
       error: null,
       services: {},
     },
+    ai: null, // AI assistant state
   };
 }
 
@@ -58811,6 +58893,117 @@ let ShellStateManager$1 = class ShellStateManager {
   }
 
   // ===========================================================================
+  // Runtime Session Management
+  // ===========================================================================
+
+  /**
+   * Get the session attached to a document
+   * @param {string} docName - Document name
+   * @returns {string} Session ID (defaults to 'shared')
+   */
+  getDocumentSession(docName) {
+    return this.get(`runtimes.attachments.${docName}`) || 'shared';
+  }
+
+  /**
+   * Get session info
+   * @param {string} sessionId - Session ID
+   * @returns {Object|null}
+   */
+  getSession(sessionId) {
+    return this.get(`runtimes.sessions.${sessionId}`) || null;
+  }
+
+  /**
+   * Get all available sessions
+   * @returns {Array<{id: string, info: Object}>}
+   */
+  getSessions() {
+    const sessions = this.get('runtimes.sessions') || {};
+    return Object.entries(sessions).map(([id, info]) => ({ id, info }));
+  }
+
+  /**
+   * Attach a document to a session
+   * @param {string} docName - Document name
+   * @param {string} sessionId - Session ID to attach to
+   */
+  attachDocument(docName, sessionId) {
+    this._set(`runtimes.attachments.${docName}`, sessionId);
+  }
+
+  /**
+   * Register a runtime session
+   * @param {string} sessionId - Session ID
+   * @param {Object} info - Session info (url, status, venv, cwd, etc.)
+   */
+  registerSession(sessionId, info) {
+    this._set(`runtimes.sessions.${sessionId}`, info);
+
+    // Also update legacy python state if this is the shared session
+    if (sessionId === 'shared' && info.language === 'python') {
+      this._set('runtimes.python', {
+        language: 'python',
+        version: info.version,
+        venv: info.venv,
+        venvName: info.venvName,
+        cwd: info.cwd,
+        executable: info.executable,
+        status: info.status,
+        error: null,
+      });
+    }
+  }
+
+  /**
+   * Create a new dedicated runtime session
+   * @param {string} docName - Document to attach the session to
+   * @param {'shared'|'dedicated'} mode - Runtime mode
+   * @param {string} [venv] - Path to virtual environment (for dedicated runtimes)
+   * @returns {Promise<Object>} Session info
+   */
+  async createSession(docName, mode = 'dedicated', venv = null) {
+    try {
+      const result = await this._client.createSession(docName, mode, venv);
+
+      const sessionId = result.id || (mode === 'dedicated' ? `python-${result.runtimes?.python?.port || Date.now()}` : 'shared');
+
+      const sessionInfo = {
+        id: sessionId,
+        url: result.runtimes?.python?.url || result.sync,
+        status: 'ready',
+        dedicated: mode === 'dedicated',
+        port: result.runtimes?.python?.port,
+        venv: result.runtimes?.python?.venv || venv,
+        language: 'python',
+        docName,
+      };
+
+      // Register the session
+      this.registerSession(sessionId, sessionInfo);
+
+      // Attach the document to this session
+      this.attachDocument(docName, sessionId);
+
+      return sessionInfo;
+    } catch (error) {
+      console.error('Failed to create session:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the runtime URL for a document
+   * @param {string} docName - Document name
+   * @returns {string|null} Runtime URL
+   */
+  getRuntimeUrl(docName) {
+    const sessionId = this.getDocumentSession(docName);
+    const session = this.getSession(sessionId);
+    return session?.url || null;
+  }
+
+  // ===========================================================================
   // Cleanup
   // ===========================================================================
 
@@ -59053,7 +59246,7 @@ function createMenuItem(item, closeMenu) {
  * @param {HTMLElement} options.anchor
  * @param {() => void} [options.onClose]
  */
-function createFileMenu(options) {
+function createFileMenu$1(options) {
   const {
     files,
     currentPath,
@@ -59122,7 +59315,7 @@ function createFileMenu(options) {
  * @property {Object} editor - mrmd editor instance
  * @property {import('../state.js').ShellStateManager} shellState - Shell state manager
  * @property {import('../orchestrator-client.js').OrchestratorClient} orchestratorClient
- * @property {string[]} [segments=['file', 'location', 'sync', 'runtime']]
+ * @property {string[]} [segments=['files', 'sync', 'runtime']] - Segment types to display
  * @property {'top'|'bottom'} [position='bottom']
  * @property {Object} [handlers] - Event handlers
  */
@@ -59138,7 +59331,7 @@ function createStatusBar$1(options) {
     editor: initialEditor,
     shellState,
     orchestratorClient,
-    segments = ['file', 'location', 'sync', 'runtime'],
+    segments = ['files', 'sync', 'runtime'],
     position = 'bottom',
     handlers = {},
   } = options;
@@ -59203,6 +59396,9 @@ function createStatusBar$1(options) {
  */
 function createSegment(type, context) {
   switch (type) {
+    case 'files':
+      return createFilesSegment(context);
+    // Legacy segments (kept for backward compat, prefer 'files')
     case 'file':
       return createFileSegment(context);
     case 'location':
@@ -59211,6 +59407,10 @@ function createSegment(type, context) {
       return createSyncSegment(context);
     case 'runtime':
       return createRuntimeSegment(context);
+    case 'ai':
+      return createAiSegment(context);
+    case 'theme':
+      return createThemeSegment(context);
     default:
       console.warn(`Unknown segment type: ${type}`);
       return null;
@@ -59218,7 +59418,218 @@ function createSegment(type, context) {
 }
 
 // =============================================================================
-// FILE SEGMENT
+// UNIFIED FILES SEGMENT
+// =============================================================================
+
+/**
+ * Unified file segment - combines file listing with file operations.
+ * This is the recommended segment for file management.
+ */
+function createFilesSegment({ shellState, orchestratorClient, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment mrmd-statusbar__segment--files';
+  segment.setAttribute('data-segment', 'files');
+
+  let currentMenu = null;
+  let cachedFiles = [];
+  let lastFetchTime = 0;
+  const CACHE_TTL = 5000; // 5 seconds
+
+  function render() {
+    const file = shellState.get('file');
+    const projectRoot = shellState.get('projectRoot');
+
+    // Build display
+    let fileName = 'No file';
+    let pathDisplay = '';
+    let dirtyIndicator = '';
+    let isExternalFile = false;
+
+    if (file) {
+      fileName = file.name || 'untitled';
+      dirtyIndicator = file.dirty ? ' •' : '';
+
+      // Check if this is an external file (absolute path)
+      if (file.path && file.path.startsWith('/')) {
+        isExternalFile = true;
+        // Show shortened directory path for external files
+        const dir = file.path.split('/').slice(0, -1).join('/');
+        pathDisplay = shortenPath(dir, 20) + '/';
+      } else if (file.path && file.path.includes('/')) {
+        // Show relative path if in a subdirectory
+        const dir = file.path.split('/').slice(0, -1).join('/');
+        pathDisplay = dir + '/';
+      }
+    }
+
+    // Shorten project root for display (only show for project files)
+    let projectDisplay = '';
+    if (projectRoot && !isExternalFile) {
+      projectDisplay = projectRoot;
+      if (projectDisplay.length > 25) {
+        projectDisplay = '...' + projectDisplay.slice(-22);
+      }
+    } else if (isExternalFile) {
+      projectDisplay = '(external)';
+    }
+
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__icon">📄</span>
+      <span class="mrmd-statusbar__label">${pathDisplay}${fileName}${dirtyIndicator}</span>
+      <span class="mrmd-statusbar__secondary">${projectDisplay}</span>
+      <span class="mrmd-statusbar__chevron">▾</span>
+    `;
+
+    if (!file) {
+      segment.classList.add('mrmd-statusbar__segment--disabled');
+    } else {
+      segment.classList.remove('mrmd-statusbar__segment--disabled');
+    }
+  }
+
+  async function fetchFiles() {
+    const now = Date.now();
+    if (now - lastFetchTime < CACHE_TTL && cachedFiles.length > 0) {
+      return cachedFiles;
+    }
+
+    try {
+      const result = await orchestratorClient.listFiles();
+      cachedFiles = result.files || [];
+      lastFetchTime = now;
+      return cachedFiles;
+    } catch (error) {
+      console.error('Failed to list files:', error);
+      return cachedFiles; // Return cached on error
+    }
+  }
+
+  async function openMenu() {
+    if (currentMenu) {
+      currentMenu.close();
+      return;
+    }
+
+    const file = shellState.get('file');
+    const projectRoot = shellState.get('projectRoot');
+    const files = await fetchFiles();
+    const currentPath = file?.path;
+
+    const items = [];
+
+    // Project files section
+    if (files.length > 0) {
+      items.push({
+        type: 'header',
+        label: 'Project Files',
+      });
+
+      // Filter to markdown files and sort
+      const mdFiles = files
+        .filter(f => f.type === 'file' && (f.name.endsWith('.md') || !f.name.includes('.')))
+        .slice(0, 10); // Limit to 10 files
+
+      for (const f of mdFiles) {
+        const displayName = f.name.replace(/\.md$/, '');
+        const isCurrent = f.path === currentPath;
+
+        items.push({
+          icon: isCurrent ? '●' : '○',
+          label: displayName,
+          active: isCurrent,
+          onClick: () => handlers.onOpenFile?.(f.path),
+        });
+      }
+
+      if (files.length > 10) {
+        items.push({
+          type: 'info',
+          label: '',
+          value: `+${files.length - 10} more files`,
+        });
+      }
+    } else {
+      items.push({
+        type: 'info',
+        label: 'No files',
+        value: 'Create one below',
+      });
+    }
+
+    // File actions section
+    items.push({ type: 'divider' });
+
+    items.push({
+      icon: '📂',
+      label: 'Browse...',
+      onClick: () => handlers.onOpenFilePicker?.(),
+    });
+
+    items.push({
+      icon: '➕',
+      label: 'New File...',
+      onClick: () => handlers.onNewFile?.(),
+    });
+
+    // Current file operations (only if file is open)
+    if (file) {
+      items.push({ type: 'divider' });
+
+      items.push({
+        icon: '✏️',
+        label: 'Rename...',
+        onClick: () => handlers.onRename?.(),
+      });
+
+      items.push({
+        icon: '💾',
+        label: 'Save As...',
+        onClick: () => handlers.onSaveAs?.(),
+      });
+    }
+
+    // Info section
+    items.push({ type: 'divider' });
+
+    if (file?.path) {
+      items.push({
+        type: 'info',
+        label: 'File',
+        value: file.path,
+      });
+    }
+
+    if (projectRoot) {
+      items.push({
+        type: 'info',
+        label: 'Project',
+        value: shortenPath(projectRoot, 30),
+      });
+    }
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment,
+      position: 'bottom-left',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to state changes
+  const unsubscribe1 = shellState.onPath('file', render);
+  const unsubscribe2 = shellState.onPath('projectRoot', render);
+  onCleanup(unsubscribe1);
+  onCleanup(unsubscribe2);
+  onCleanup(() => currentMenu?.close());
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// FILE SEGMENT (Legacy)
 // =============================================================================
 
 function createFileSegment({ shellState, handlers, onCleanup }) {
@@ -59264,30 +59675,49 @@ function createFileSegment({ shellState, handlers, onCleanup }) {
     }
 
     const file = shellState.get('file');
-    if (!file) return;
 
-    const items = [
+    const items = [];
+
+    // File operations (always available)
+    items.push(
       {
-        type: 'header',
-        label: file.name + '.md',
+        icon: '📂',
+        label: 'Open...',
+        onClick: () => handlers.onOpenFilePicker?.(),
       },
       {
-        icon: '✏️',
-        label: 'Rename...',
-        onClick: () => handlers.onRename?.(),
+        icon: '➕',
+        label: 'New File...',
+        onClick: () => handlers.onNewFile?.(),
       },
-      {
-        icon: '💾',
-        label: 'Save As...',
-        onClick: () => handlers.onSaveAs?.(),
-      },
-      { type: 'divider' },
-      {
-        type: 'info',
-        label: 'Path',
-        value: file.path,
-      },
-    ];
+    );
+
+    // Current file operations (only if file is open)
+    if (file) {
+      items.push(
+        { type: 'divider' },
+        {
+          type: 'header',
+          label: file.name + '.md',
+        },
+        {
+          icon: '✏️',
+          label: 'Rename...',
+          onClick: () => handlers.onRename?.(),
+        },
+        {
+          icon: '💾',
+          label: 'Save As...',
+          onClick: () => handlers.onSaveAs?.(),
+        },
+        { type: 'divider' },
+        {
+          type: 'info',
+          label: 'Path',
+          value: file.path,
+        },
+      );
+    }
 
     currentMenu = createMenu({
       items,
@@ -59490,10 +59920,23 @@ function createRuntimeSegment({ shellState, handlers, onCleanup }) {
 
   let currentMenu = null;
 
+  function getCurrentDocName() {
+    const file = shellState.get('file');
+    return file?.name || 'untitled';
+  }
+
+  function getCurrentSession() {
+    const docName = getCurrentDocName();
+    const sessionId = shellState.getDocumentSession(docName);
+    const session = shellState.getSession(sessionId);
+    return { sessionId, session };
+  }
+
   function render() {
     const python = shellState.get('runtimes.python');
+    const { session } = getCurrentSession();
 
-    if (!python) {
+    if (!python && !session) {
       segment.innerHTML = `
         <span class="mrmd-statusbar__icon">🐍</span>
         <span class="mrmd-statusbar__secondary">No Python</span>
@@ -59504,13 +59947,21 @@ function createRuntimeSegment({ shellState, handlers, onCleanup }) {
 
     segment.classList.remove('mrmd-statusbar__segment--disabled');
 
-    const dotClass = python.status || 'stopped';
-    const venvDisplay = python.venvName ? ` (${python.venvName})` : '';
+    // Use session info if available, otherwise fall back to legacy python info
+    const status = session?.status || python?.status || 'stopped';
+    const version = python?.version || '?';
+    const venvName = python?.venvName;
+    const isDedicated = session?.dedicated;
+
+    const dotClass = status === 'ready' ? 'connected' : status;
+    const venvDisplay = venvName ? ` (${venvName})` : '';
+    const sessionBadge = isDedicated ? '<span class="mrmd-statusbar__badge">dedicated</span>' : '';
 
     segment.innerHTML = `
       <span class="mrmd-statusbar__dot mrmd-statusbar__dot--${dotClass}"></span>
       <span class="mrmd-statusbar__icon">🐍</span>
-      <span class="mrmd-statusbar__label">Python ${python.version || '?'}${venvDisplay}</span>
+      <span class="mrmd-statusbar__label">Python ${version}${venvDisplay}</span>
+      ${sessionBadge}
       <span class="mrmd-statusbar__chevron">▾</span>
     `;
   }
@@ -59522,39 +59973,224 @@ function createRuntimeSegment({ shellState, handlers, onCleanup }) {
     }
 
     const python = shellState.get('runtimes.python');
-    if (!python) return;
+    const { sessionId, session } = getCurrentSession();
+    const sessions = shellState.getSessions();
+    const docName = getCurrentDocName();
+
+    const items = [];
+
+    // Header showing current document's runtime
+    items.push({
+      type: 'header',
+      label: `Runtime for "${docName}"`,
+    });
+
+    // Show attached session info
+    if (session) {
+      items.push({
+        type: 'info',
+        label: 'Session',
+        value: session.dedicated ? `Dedicated (${sessionId})` : 'Shared',
+      });
+    }
+
+    // Available sessions to attach to
+    if (sessions.length > 0) {
+      items.push({ type: 'divider' });
+      items.push({
+        type: 'header',
+        label: 'Attach to Runtime',
+      });
+
+      for (const { id, info } of sessions) {
+        const isCurrent = id === sessionId;
+        const label = info.dedicated
+          ? `Dedicated: ${id}`
+          : 'Shared Runtime';
+
+        items.push({
+          icon: isCurrent ? '✓' : ' ',
+          label,
+          selected: isCurrent,
+          onClick: () => {
+            shellState.attachDocument(docName, id);
+            handlers.onRuntimeAttached?.(docName, id);
+            render();
+          },
+        });
+      }
+    }
+
+    // Create new dedicated runtime
+    items.push({ type: 'divider' });
+    items.push({
+      icon: '➕',
+      label: 'Create dedicated runtime...',
+      onClick: () => handlers.onCreateDedicatedRuntime?.(docName),
+    });
+
+    // Environment settings (for current session)
+    if (python) {
+      items.push({ type: 'divider' });
+      items.push({
+        type: 'header',
+        label: 'Environment',
+      });
+      items.push({
+        type: 'info',
+        label: 'Virtual Env',
+        value: python.venv || 'System Python',
+      });
+      items.push({
+        type: 'info',
+        label: 'Working Dir',
+        value: python.cwd || 'N/A',
+      });
+      items.push({ type: 'divider' });
+      items.push({
+        icon: '📦',
+        label: 'Change venv...',
+        onClick: () => handlers.onChangeVenv?.(),
+      });
+      items.push({
+        icon: '📂',
+        label: 'Set working dir...',
+        onClick: () => handlers.onChangeCwd?.(),
+      });
+      items.push({ type: 'divider' });
+      items.push({
+        icon: '🔄',
+        label: 'Restart runtime',
+        onClick: () => handlers.onRestartRuntime?.('python'),
+      });
+    }
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment,
+      position: 'bottom-right',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to state changes
+  const unsubscribe1 = shellState.onPath('runtimes', render);
+  const unsubscribe2 = shellState.onPath('file', render);
+  onCleanup(unsubscribe1);
+  onCleanup(unsubscribe2);
+  onCleanup(() => currentMenu?.close());
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// AI SEGMENT
+// =============================================================================
+
+const JUICE_NAMES$1 = ['Quick', 'Balanced', 'Deep', 'Maximum', 'Ultimate'];
+
+function createAiSegment({ shellState, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment';
+  segment.setAttribute('data-segment', 'ai');
+
+  let currentMenu = null;
+
+  function render() {
+    const ai = shellState.get('ai');
+
+    if (!ai || !ai.running) {
+      segment.innerHTML = `
+        <span class="mrmd-statusbar__icon">✦</span>
+        <span class="mrmd-statusbar__secondary">AI Offline</span>
+      `;
+      segment.classList.add('mrmd-statusbar__segment--disabled');
+      return;
+    }
+
+    segment.classList.remove('mrmd-statusbar__segment--disabled');
+
+    const juiceName = JUICE_NAMES$1[ai.juiceLevel || 0] || 'Quick';
+    const activeClass = ai.active ? 'mrmd-statusbar__segment--active' : '';
+
+    segment.className = `mrmd-statusbar__segment ${activeClass}`;
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__dot mrmd-statusbar__dot--connected"></span>
+      <span class="mrmd-statusbar__icon">✦</span>
+      <span class="mrmd-statusbar__label">AI</span>
+      <span class="mrmd-statusbar__badge">${juiceName}</span>
+      <span class="mrmd-statusbar__chevron">▾</span>
+    `;
+  }
+
+  function openMenu() {
+    if (currentMenu) {
+      currentMenu.close();
+      return;
+    }
+
+    const ai = shellState.get('ai') || {};
 
     const items = [
       {
         type: 'header',
-        label: `Python ${python.version || ''}`,
+        label: 'AI Assistant',
       },
       {
         type: 'info',
-        label: 'Virtual Env',
-        value: python.venvName || 'System',
-      },
-      {
-        type: 'info',
-        label: 'Working Dir',
-        value: shortenPath(python.cwd),
+        label: 'Status',
+        value: ai.running ? 'Running' : 'Offline',
       },
       { type: 'divider' },
       {
-        icon: '📦',
-        label: 'Change venv...',
-        onClick: () => handlers.onChangeVenv?.(),
+        icon: '⚡',
+        label: 'Quick (Fastest)',
+        selected: ai.juiceLevel === 0,
+        onClick: () => handlers.onSetJuiceLevel?.(0),
       },
       {
-        icon: '📂',
-        label: 'Set working dir...',
-        onClick: () => handlers.onChangeCwd?.(),
+        icon: '⚖️',
+        label: 'Balanced',
+        selected: ai.juiceLevel === 1,
+        onClick: () => handlers.onSetJuiceLevel?.(1),
+      },
+      {
+        icon: '🔍',
+        label: 'Deep',
+        selected: ai.juiceLevel === 2,
+        onClick: () => handlers.onSetJuiceLevel?.(2),
+      },
+      {
+        icon: '💪',
+        label: 'Maximum',
+        selected: ai.juiceLevel === 3,
+        onClick: () => handlers.onSetJuiceLevel?.(3),
+      },
+      {
+        icon: '🚀',
+        label: 'Ultimate (Multi-Model)',
+        selected: ai.juiceLevel === 4,
+        onClick: () => handlers.onSetJuiceLevel?.(4),
       },
       { type: 'divider' },
       {
-        icon: '🔄',
-        label: 'Restart runtime',
-        onClick: () => handlers.onRestartRuntime?.('python'),
+        icon: '📝',
+        label: 'Continue Document',
+        onClick: () => handlers.onContinueDocument?.(),
+        description: 'AI writes at the end of document',
+      },
+      {
+        icon: '📋',
+        label: 'Summarize Document',
+        onClick: () => handlers.onSummarizeDocument?.(),
+      },
+      {
+        icon: '📛',
+        label: 'Suggest Filename',
+        onClick: () => handlers.onSuggestFilename?.(),
       },
     ];
 
@@ -59569,7 +60205,111 @@ function createRuntimeSegment({ shellState, handlers, onCleanup }) {
   segment.addEventListener('click', openMenu);
 
   // Subscribe to state changes
-  const unsubscribe = shellState.onPath('runtimes.python', render);
+  const unsubscribe = shellState.onPath('ai', render);
+  onCleanup(unsubscribe);
+  onCleanup(() => currentMenu?.close());
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// THEME SEGMENT
+// =============================================================================
+
+function createThemeSegment({ editorRef, shellState, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment';
+  segment.setAttribute('data-segment', 'theme');
+
+  let currentMenu = null;
+  let currentTheme = null;
+
+  function getThemeName() {
+    const editor = editorRef.current;
+    // Try to get theme from editor config
+    if (editor?.config?.appearance?.theme) {
+      return editor.config.appearance.theme;
+    }
+    // Fall back to shell state
+    return shellState.get('theme') || 'auto';
+  }
+
+  function getAvailableThemes() {
+    const editor = editorRef.current;
+    if (editor?.getThemeNames) {
+      return editor.getThemeNames();
+    }
+    // Fallback to known themes
+    return ['midnight', 'daylight', 'github', 'nord', 'nord-outputs'];
+  }
+
+  function render() {
+    currentTheme = getThemeName();
+    const displayName = currentTheme === 'auto' ? 'Auto' : currentTheme;
+
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__icon">🎨</span>
+      <span class="mrmd-statusbar__label">${displayName}</span>
+      <span class="mrmd-statusbar__chevron">▾</span>
+    `;
+  }
+
+  function openMenu() {
+    if (currentMenu) {
+      currentMenu.close();
+      return;
+    }
+
+    const themes = getAvailableThemes();
+    currentTheme = getThemeName();
+
+    const items = [
+      {
+        type: 'header',
+        label: 'Theme',
+      },
+      {
+        icon: '🌗',
+        label: 'Auto (System)',
+        selected: currentTheme === 'auto' || currentTheme === null,
+        onClick: () => {
+          handlers.onSetTheme?.(null);
+          render();
+        },
+      },
+      { type: 'divider' },
+    ];
+
+    // Add available themes
+    for (const theme of themes) {
+      const icon = theme.includes('dark') || theme === 'midnight' || theme === 'nord' || theme === 'nord-outputs'
+        ? '🌙'
+        : '☀️';
+
+      items.push({
+        icon,
+        label: theme.charAt(0).toUpperCase() + theme.slice(1).replace('-', ' '),
+        selected: currentTheme === theme,
+        onClick: () => {
+          handlers.onSetTheme?.(theme);
+          render();
+        },
+      });
+    }
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment,
+      position: 'bottom-right',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to theme changes in shell state
+  const unsubscribe = shellState.onPath('theme', render);
   onCleanup(unsubscribe);
   onCleanup(() => currentMenu?.close());
 
@@ -59732,6 +60472,32 @@ const statusBarStyles = `
   border-radius: 3px;
   font-size: 10px;
   font-weight: bold;
+}
+
+/* Generic badge (e.g., "dedicated" for runtime) */
+.mrmd-statusbar__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  background: var(--mrmd-accent, #007acc);
+  color: #fff;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-left: 4px;
+}
+
+/* Unified files segment - takes more space */
+.mrmd-statusbar__segment--files {
+  min-width: 120px;
+  flex-shrink: 1;
+}
+
+.mrmd-statusbar__segment--files .mrmd-statusbar__secondary {
+  margin-left: auto;
+  font-size: 10px;
 }
 `;
 
@@ -60841,6 +61607,7 @@ function showFilePicker(options) {
  * @param {string} options.title
  * @param {import('../orchestrator-client.js').OrchestratorClient} options.orchestratorClient
  * @param {string} [options.initialPath='~']
+ * @param {boolean} [options.showHidden=false] - Show hidden folders (e.g., .venv)
  * @param {(path: string) => void} options.onSelect
  * @param {() => void} [options.onCancel]
  */
@@ -60849,6 +61616,7 @@ function showFolderPicker(options) {
     title,
     orchestratorClient,
     initialPath = '~',
+    showHidden = false,
     onSelect,
     onCancel,
   } = options;
@@ -60967,7 +61735,7 @@ function showFolderPicker(options) {
     renderFolderList();
 
     try {
-      const result = await orchestratorClient.browse({ path, type: 'dir' });
+      const result = await orchestratorClient.browse({ path, type: 'dir', showHidden });
       currentPath = result.path;
       entries = result.entries;
     } catch (error) {
@@ -61357,6 +62125,828 @@ function createDrive$1(syncUrl, options) {
 }
 
 /**
+ * AI Client
+ *
+ * HTTP client for communicating with the mrmd-ai server through the orchestrator.
+ */
+
+/**
+ * Juice levels for AI quality/cost tradeoff
+ */
+const JUICE_LEVELS = {
+  QUICK: 0,      // Fast & cheap
+  BALANCED: 1,   // Good quality
+  DEEP: 2,       // Deep reasoning
+  MAXIMUM: 3,    // Best single model
+  ULTIMATE: 4,   // Multi-model synthesis
+};
+
+const JUICE_NAMES = ['Quick', 'Balanced', 'Deep', 'Maximum', 'Ultimate'];
+
+/**
+ * AI program categories
+ */
+const AI_CATEGORIES = {
+  FINISH: ['FinishSentencePredict', 'FinishParagraphPredict', 'FinishCodeLinePredict', 'FinishCodeSectionPredict'],
+  FIX: ['FixGrammarPredict', 'FixTranscriptionPredict'],
+  CORRECT: ['CorrectAndFinishLinePredict', 'CorrectAndFinishSectionPredict'],
+  CODE: ['DocumentCodePredict', 'CompleteCodePredict', 'AddTypeHintsPredict', 'ImproveNamesPredict', 'ExplainCodePredict', 'RefactorCodePredict', 'FormatCodePredict', 'ProgramCodePredict'],
+  TEXT: ['GetSynonymsPredict', 'GetPhraseSynonymsPredict', 'ReformatMarkdownPredict', 'IdentifyReplacementPredict'],
+  DOCUMENT: ['DocumentResponsePredict', 'DocumentSummaryPredict', 'DocumentAnalysisPredict'],
+  NOTEBOOK: ['NotebookNamePredict'],
+};
+
+/**
+ * AI Client for mrmd-ai server
+ */
+class AiClient {
+  /**
+   * @param {string} baseUrl - Orchestrator base URL (e.g., http://localhost:8080)
+   */
+  constructor(baseUrl) {
+    this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.juiceLevel = JUICE_LEVELS.QUICK;
+    this._abortControllers = new Map(); // requestId -> AbortController
+  }
+
+  /**
+   * Set default juice level
+   * @param {number} level - 0-4
+   */
+  setJuiceLevel(level) {
+    this.juiceLevel = Math.max(0, Math.min(4, level));
+  }
+
+  /**
+   * Get AI server status
+   * @returns {Promise<{url: string, managed: boolean, running: boolean, default_juice_level: number}>}
+   */
+  async getStatus() {
+    const response = await fetch(`${this.baseUrl}/api/ai/status`);
+    if (!response.ok) {
+      throw new Error(`Failed to get AI status: ${response.status}`);
+    }
+    return response.json();
+  }
+
+  /**
+   * Get list of available AI programs
+   * @returns {Promise<{programs: Array<{name: string, endpoint: string}>}>}
+   */
+  async getPrograms() {
+    const response = await fetch(`${this.baseUrl}/api/ai/programs`);
+    if (!response.ok) {
+      throw new Error(`Failed to get AI programs: ${response.status}`);
+    }
+    return response.json();
+  }
+
+  /**
+   * Execute an AI program
+   *
+   * @param {string} program - Program name (e.g., 'FinishSentencePredict')
+   * @param {Object} params - Program parameters
+   * @param {Object} [options] - Options
+   * @param {number} [options.juiceLevel] - Override default juice level
+   * @param {string} [options.requestId] - Request ID for cancellation
+   * @returns {Promise<Object>} - Program result
+   */
+  async execute(program, params, options = {}) {
+    const juiceLevel = options.juiceLevel ?? this.juiceLevel;
+    const requestId = options.requestId || `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const controller = new AbortController();
+    this._abortControllers.set(requestId, controller);
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/ai/${program}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Juice-Level': String(juiceLevel),
+        },
+        body: JSON.stringify(params),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || `AI request failed: ${response.status}`);
+      }
+
+      return response.json();
+    } finally {
+      this._abortControllers.delete(requestId);
+    }
+  }
+
+  /**
+   * Execute an AI program with streaming progress
+   *
+   * @param {string} program - Program name
+   * @param {Object} params - Program parameters
+   * @param {Object} callbacks - Callbacks for progress events
+   * @param {function} [callbacks.onStatus] - Called with status updates
+   * @param {function} [callbacks.onModelStart] - Called when a model starts
+   * @param {function} [callbacks.onModelComplete] - Called when a model completes
+   * @param {function} [callbacks.onResult] - Called with final result
+   * @param {function} [callbacks.onError] - Called on error
+   * @param {Object} [options] - Options
+   * @param {number} [options.juiceLevel] - Override default juice level
+   * @param {string} [options.requestId] - Request ID for cancellation
+   * @returns {Promise<Object>} - Final result
+   */
+  async executeStream(program, params, callbacks = {}, options = {}) {
+    const juiceLevel = options.juiceLevel ?? this.juiceLevel;
+    const requestId = options.requestId || `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const controller = new AbortController();
+    this._abortControllers.set(requestId, controller);
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/ai/${program}/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Juice-Level': String(juiceLevel),
+          'Accept': 'text/event-stream',
+        },
+        body: JSON.stringify(params),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || `AI stream request failed: ${response.status}`);
+      }
+
+      // Parse SSE stream
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let result = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            // Parse event type
+            const eventType = line.slice(7).trim();
+            continue;
+          }
+
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              // Handle different event types
+              if (data.status) {
+                callbacks.onStatus?.(data.status, data);
+              }
+              if (data.model_start) {
+                callbacks.onModelStart?.(data.model_start, data);
+              }
+              if (data.model_complete) {
+                callbacks.onModelComplete?.(data.model_complete, data);
+              }
+              if (data.result || data.completion || data.fixed_text) {
+                result = data;
+                callbacks.onResult?.(data);
+              }
+              if (data.error) {
+                callbacks.onError?.(new Error(data.error));
+              }
+            } catch (e) {
+              // Skip invalid JSON
+            }
+          }
+        }
+      }
+
+      return result;
+    } finally {
+      this._abortControllers.delete(requestId);
+    }
+  }
+
+  /**
+   * Cancel a pending request
+   * @param {string} requestId - Request ID to cancel
+   */
+  cancel(requestId) {
+    const controller = this._abortControllers.get(requestId);
+    if (controller) {
+      controller.abort();
+      this._abortControllers.delete(requestId);
+    }
+  }
+
+  /**
+   * Cancel all pending requests
+   */
+  cancelAll() {
+    for (const controller of this._abortControllers.values()) {
+      controller.abort();
+    }
+    this._abortControllers.clear();
+  }
+
+  // ===========================================================================
+  // Convenience methods for common operations
+  // ===========================================================================
+
+  /**
+   * Complete current sentence
+   * @param {string} textBeforeCursor - Text before cursor
+   * @param {string} localContext - Surrounding context
+   * @param {string} [documentContext] - Full document (optional)
+   * @param {Object} [options] - Options
+   */
+  async finishSentence(textBeforeCursor, localContext, documentContext, options = {}) {
+    return this.execute('FinishSentencePredict', {
+      text_before_cursor: textBeforeCursor,
+      local_context: localContext,
+      document_context: documentContext,
+    }, options);
+  }
+
+  /**
+   * Complete current paragraph
+   */
+  async finishParagraph(textBeforeCursor, localContext, documentContext, options = {}) {
+    return this.execute('FinishParagraphPredict', {
+      text_before_cursor: textBeforeCursor,
+      local_context: localContext,
+      document_context: documentContext,
+    }, options);
+  }
+
+  /**
+   * Fix grammar and spelling
+   * @param {string} textToFix - Text to fix
+   * @param {string} localContext - Surrounding context
+   * @param {string} [documentContext] - Full document (optional)
+   */
+  async fixGrammar(textToFix, localContext, documentContext, options = {}) {
+    return this.execute('FixGrammarPredict', {
+      text_to_fix: textToFix,
+      local_context: localContext,
+      document_context: documentContext,
+    }, options);
+  }
+
+  /**
+   * Fix transcription errors (speech-to-text)
+   */
+  async fixTranscription(textToFix, localContext, documentContext, options = {}) {
+    return this.execute('FixTranscriptionPredict', {
+      text_to_fix: textToFix,
+      local_context: localContext,
+      document_context: documentContext,
+    }, options);
+  }
+
+  /**
+   * Add documentation to code
+   * @param {string} code - Code to document
+   * @param {string} language - Programming language
+   * @param {string} localContext - Surrounding context
+   */
+  async documentCode(code, language, localContext, documentContext, options = {}) {
+    return this.execute('DocumentCodePredict', {
+      code,
+      language,
+      local_context: localContext,
+      document_context: documentContext,
+    }, options);
+  }
+
+  /**
+   * Add type hints to code
+   */
+  async addTypeHints(code, language, localContext, documentContext, options = {}) {
+    return this.execute('AddTypeHintsPredict', {
+      code,
+      language,
+      local_context: localContext,
+      document_context: documentContext,
+    }, options);
+  }
+
+  /**
+   * Improve variable/function names
+   */
+  async improveNames(code, language, localContext, documentContext, options = {}) {
+    return this.execute('ImproveNamesPredict', {
+      code,
+      language,
+      local_context: localContext,
+      document_context: documentContext,
+    }, options);
+  }
+
+  /**
+   * Refactor code
+   */
+  async refactorCode(code, language, localContext, documentContext, options = {}) {
+    return this.execute('RefactorCodePredict', {
+      code,
+      language,
+      local_context: localContext,
+      document_context: documentContext,
+    }, options);
+  }
+
+  /**
+   * Get synonyms for a word
+   * @param {string} text - Word to find synonyms for
+   * @param {string} localContext - Surrounding context
+   */
+  async getSynonyms(text, localContext, options = {}) {
+    return this.execute('GetSynonymsPredict', {
+      text,
+      local_context: localContext,
+    }, options);
+  }
+
+  /**
+   * Continue the document (generate content at end)
+   * @param {string} document - Full document content
+   */
+  async continueDocument(document, options = {}) {
+    return this.execute('DocumentResponsePredict', {
+      document,
+    }, options);
+  }
+
+  /**
+   * Summarize document
+   * @param {string} document - Full document content
+   */
+  async summarizeDocument(document, options = {}) {
+    return this.execute('DocumentSummaryPredict', {
+      document,
+    }, options);
+  }
+
+  /**
+   * Generate notebook filename
+   * @param {string} document - Document content
+   * @param {string} [currentName] - Current filename
+   */
+  async suggestNotebookName(document, currentName, options = {}) {
+    return this.execute('NotebookNamePredict', {
+      document,
+      current_name: currentName,
+    }, options);
+  }
+}
+
+/**
+ * Create an AI client
+ * @param {string} baseUrl - Orchestrator base URL
+ * @returns {AiClient}
+ */
+function createAiClient(baseUrl) {
+  return new AiClient(baseUrl);
+}
+
+/**
+ * AI Commands Menu
+ *
+ * A popup menu showing available AI commands based on context (selection, code cell, etc.)
+ */
+
+
+/**
+ * AI command definitions
+ */
+const AI_COMMANDS = {
+  // Text completion
+  FINISH_SENTENCE: {
+    id: 'finish-sentence',
+    label: 'Complete Sentence',
+    icon: '→',
+    program: 'FinishSentencePredict',
+    type: 'insert',
+    resultField: 'completion',
+    requiresSelection: false,
+    description: 'Continue writing from cursor',
+  },
+  FINISH_PARAGRAPH: {
+    id: 'finish-paragraph',
+    label: 'Complete Paragraph',
+    icon: '¶',
+    program: 'FinishParagraphPredict',
+    type: 'insert',
+    resultField: 'completion',
+    requiresSelection: false,
+    description: 'Complete the current paragraph',
+  },
+
+  // Text fixes
+  FIX_GRAMMAR: {
+    id: 'fix-grammar',
+    label: 'Fix Grammar',
+    icon: '✓',
+    program: 'FixGrammarPredict',
+    type: 'replace',
+    resultField: 'fixed_text',
+    requiresSelection: true,
+    description: 'Fix grammar, spelling, and punctuation',
+  },
+  FIX_TRANSCRIPTION: {
+    id: 'fix-transcription',
+    label: 'Fix Transcription',
+    icon: '🎤',
+    program: 'FixTranscriptionPredict',
+    type: 'replace',
+    resultField: 'fixed_text',
+    requiresSelection: true,
+    description: 'Fix speech-to-text errors',
+  },
+
+  // Code operations
+  DOCUMENT_CODE: {
+    id: 'document-code',
+    label: 'Add Documentation',
+    icon: '📝',
+    program: 'DocumentCodePredict',
+    type: 'replace',
+    resultField: 'documented_code',
+    requiresSelection: true,
+    codeOnly: true,
+    description: 'Add docstrings and comments',
+  },
+  ADD_TYPES: {
+    id: 'add-types',
+    label: 'Add Type Hints',
+    icon: 'T',
+    program: 'AddTypeHintsPredict',
+    type: 'replace',
+    resultField: 'typed_code',
+    requiresSelection: true,
+    codeOnly: true,
+    description: 'Add type annotations',
+  },
+  IMPROVE_NAMES: {
+    id: 'improve-names',
+    label: 'Improve Names',
+    icon: 'N',
+    program: 'ImproveNamesPredict',
+    type: 'replace',
+    resultField: 'improved_code',
+    requiresSelection: true,
+    codeOnly: true,
+    description: 'Improve variable and function names',
+  },
+  REFACTOR: {
+    id: 'refactor',
+    label: 'Refactor',
+    icon: '♻',
+    program: 'RefactorCodePredict',
+    type: 'replace',
+    resultField: 'refactored_code',
+    requiresSelection: true,
+    codeOnly: true,
+    description: 'Clean up and refactor code',
+  },
+  EXPLAIN_CODE: {
+    id: 'explain-code',
+    label: 'Explain Code',
+    icon: '💡',
+    program: 'ExplainCodePredict',
+    type: 'replace',
+    resultField: 'explained_code',
+    requiresSelection: true,
+    codeOnly: true,
+    description: 'Add inline comments explaining code',
+  },
+
+  // Text transforms
+  GET_SYNONYMS: {
+    id: 'get-synonyms',
+    label: 'Find Synonyms',
+    icon: '≈',
+    program: 'GetSynonymsPredict',
+    type: 'menu', // Special: shows submenu of synonyms
+    resultField: 'synonyms',
+    requiresSelection: true,
+    description: 'Find alternative words',
+  },
+  REFORMAT_MARKDOWN: {
+    id: 'reformat-markdown',
+    label: 'Reformat Markdown',
+    icon: 'M↓',
+    program: 'ReformatMarkdownPredict',
+    type: 'replace',
+    resultField: 'reformatted_text',
+    requiresSelection: true,
+    description: 'Clean up markdown formatting',
+  },
+};
+
+/**
+ * Get commands applicable to current context
+ *
+ * @param {Object} context
+ * @param {boolean} context.hasSelection - Whether there's a selection
+ * @param {boolean} context.inCodeCell - Whether cursor is in a code cell
+ * @param {string} [context.language] - Code language if in code cell
+ * @returns {Object[]} Applicable commands
+ */
+function getApplicableCommands(context) {
+  const commands = [];
+
+  for (const cmd of Object.values(AI_COMMANDS)) {
+    // Check if selection is required
+    if (cmd.requiresSelection && !context.hasSelection) {
+      continue;
+    }
+
+    // Check if code-only
+    if (cmd.codeOnly && !context.inCodeCell) {
+      continue;
+    }
+
+    commands.push(cmd);
+  }
+
+  return commands;
+}
+
+/**
+ * Create AI menu element
+ *
+ * @param {Object} options
+ * @param {Object} options.context - Editor context
+ * @param {function} options.onCommand - Called when command is selected
+ * @param {function} options.onClose - Called when menu should close
+ * @param {number} options.juiceLevel - Current juice level
+ * @param {function} options.onJuiceLevelChange - Called when juice level changes
+ * @returns {HTMLElement}
+ */
+function createAiMenu(options) {
+  const { context, onCommand, onClose, juiceLevel, onJuiceLevelChange } = options;
+
+  const menu = document.createElement('div');
+  menu.className = 'ai-menu';
+
+  // Header with juice level selector
+  const header = document.createElement('div');
+  header.className = 'ai-menu-header';
+
+  const title = document.createElement('span');
+  title.className = 'ai-menu-title';
+  title.textContent = 'AI';
+
+  const juiceSelector = document.createElement('select');
+  juiceSelector.className = 'ai-menu-juice';
+  juiceSelector.title = 'Quality/Speed tradeoff';
+  for (let i = 0; i <= 4; i++) {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = JUICE_NAMES[i];
+    if (i === juiceLevel) opt.selected = true;
+    juiceSelector.appendChild(opt);
+  }
+  juiceSelector.onchange = () => {
+    onJuiceLevelChange?.(parseInt(juiceSelector.value, 10));
+  };
+
+  header.appendChild(title);
+  header.appendChild(juiceSelector);
+  menu.appendChild(header);
+
+  // Divider
+  const divider = document.createElement('div');
+  divider.className = 'ai-menu-divider';
+  menu.appendChild(divider);
+
+  // Commands
+  const commands = getApplicableCommands(context);
+
+  if (commands.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'ai-menu-empty';
+    empty.textContent = 'No commands available';
+    menu.appendChild(empty);
+  } else {
+    const commandsContainer = document.createElement('div');
+    commandsContainer.className = 'ai-menu-commands';
+
+    for (const cmd of commands) {
+      const item = document.createElement('div');
+      item.className = 'ai-menu-item';
+      item.setAttribute('data-command', cmd.id);
+
+      const icon = document.createElement('span');
+      icon.className = 'ai-menu-item-icon';
+      icon.textContent = cmd.icon;
+
+      const label = document.createElement('span');
+      label.className = 'ai-menu-item-label';
+      label.textContent = cmd.label;
+
+      item.appendChild(icon);
+      item.appendChild(label);
+
+      item.onclick = () => {
+        onCommand?.(cmd);
+        onClose?.();
+      };
+
+      item.title = cmd.description;
+      commandsContainer.appendChild(item);
+    }
+
+    menu.appendChild(commandsContainer);
+  }
+
+  // Close when clicking outside
+  const handleOutsideClick = (e) => {
+    if (!menu.contains(e.target)) {
+      onClose?.();
+      document.removeEventListener('click', handleOutsideClick, true);
+    }
+  };
+  setTimeout(() => {
+    document.addEventListener('click', handleOutsideClick, true);
+  }, 0);
+
+  // Close on escape
+  const handleKeydown = (e) => {
+    if (e.key === 'Escape') {
+      onClose?.();
+      document.removeEventListener('keydown', handleKeydown, true);
+    }
+  };
+  document.addEventListener('keydown', handleKeydown, true);
+
+  return menu;
+}
+
+/**
+ * Show AI menu at position
+ *
+ * @param {Object} options
+ * @param {number} options.x - X position
+ * @param {number} options.y - Y position
+ * @param {Object} options.context - Editor context
+ * @param {function} options.onCommand - Called when command is selected
+ * @param {number} options.juiceLevel - Current juice level
+ * @param {function} options.onJuiceLevelChange - Called when juice level changes
+ * @returns {function} Close function
+ */
+function showAiMenu(options) {
+  const { x, y, context, onCommand, juiceLevel, onJuiceLevelChange } = options;
+
+  // Remove any existing menu
+  const existing = document.querySelector('.ai-menu');
+  if (existing) existing.remove();
+
+  let isOpen = true;
+  const close = () => {
+    if (isOpen) {
+      isOpen = false;
+      menu.remove();
+    }
+  };
+
+  const menu = createAiMenu({
+    context,
+    onCommand,
+    onClose: close,
+    juiceLevel,
+    onJuiceLevelChange,
+  });
+
+  // Position the menu
+  menu.style.position = 'fixed';
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.style.zIndex = '10000';
+
+  document.body.appendChild(menu);
+
+  // Adjust if off screen
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) {
+    menu.style.left = `${window.innerWidth - rect.width - 10}px`;
+  }
+  if (rect.bottom > window.innerHeight) {
+    menu.style.top = `${window.innerHeight - rect.height - 10}px`;
+  }
+
+  return close;
+}
+
+/**
+ * CSS styles for AI menu
+ */
+const AI_MENU_STYLES = `
+.ai-menu {
+  background: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  min-width: 200px;
+  max-width: 280px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  color: #cccccc;
+  overflow: hidden;
+}
+
+.ai-menu-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #252526;
+}
+
+.ai-menu-title {
+  font-weight: 600;
+  color: #6495ed;
+}
+
+.ai-menu-juice {
+  background: #3c3c3c;
+  border: 1px solid #4c4c4c;
+  border-radius: 4px;
+  color: #cccccc;
+  font-size: 11px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.ai-menu-juice:focus {
+  outline: none;
+  border-color: #6495ed;
+}
+
+.ai-menu-divider {
+  height: 1px;
+  background: #3c3c3c;
+}
+
+.ai-menu-commands {
+  padding: 4px 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.ai-menu-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.ai-menu-item:hover {
+  background: #2a2d2e;
+}
+
+.ai-menu-item-icon {
+  width: 24px;
+  text-align: center;
+  margin-right: 8px;
+  color: #6495ed;
+}
+
+.ai-menu-item-label {
+  flex: 1;
+}
+
+.ai-menu-empty {
+  padding: 16px;
+  text-align: center;
+  color: #808080;
+  font-style: italic;
+}
+`;
+
+/**
+ * Inject AI menu styles into document
+ */
+function injectAiMenuStyles() {
+  if (document.querySelector('#ai-menu-styles')) return;
+
+  const style = document.createElement('style');
+  style.id = 'ai-menu-styles';
+  style.textContent = AI_MENU_STYLES;
+  document.head.appendChild(style);
+}
+
+/**
  * @fileoverview Studio Layout
  *
  * A complete layout with editor and status bar, wired together.
@@ -61492,12 +63082,40 @@ async function createStudio$1(target, options = {}) {
   // Get service URLs from orchestrator
   let syncUrl;
   let runtimeUrls = {};
+  let aiUrl = null;
+  let aiClient = null;
   try {
     const urls = await orchestratorClient.getUrls();
     syncUrl = urls.sync;
     runtimeUrls = urls.runtimes || {};
+    aiUrl = urls.ai || null;
     if (!syncUrl) {
       throw new Error('No sync URL returned from orchestrator');
+    }
+
+    // Register the shared session in shell state
+    if (runtimeUrls.python) {
+      shellState.registerSession('shared', {
+        id: 'shared',
+        url: runtimeUrls.python,
+        status: 'ready',
+        dedicated: false,
+        language: 'python',
+      });
+    }
+
+    // Initialize AI client if AI server is available
+    if (aiUrl) {
+      aiClient = new AiClient(orchestratorUrl); // Use orchestrator proxy
+      injectAiMenuStyles();
+
+      // Set AI state for status bar
+      shellState._set('ai', {
+        running: true,
+        url: aiUrl,
+        juiceLevel: 0,
+        active: false,
+      });
     }
   } catch (e) {
     console.error('Failed to get service URLs:', e);
@@ -61537,9 +63155,10 @@ async function createStudio$1(target, options = {}) {
   /**
    * Create editor for a document handle and connect runtimes
    * @param {import('../drive.js').DocumentHandle} handle
+   * @param {string} docName - Document name (for runtime attachment lookup)
    * @returns {Object} Editor instance
    */
-  function createEditorForDocument(handle) {
+  function createEditorForDocument(handle, docName) {
     const mergedOptions = {
       ...editorOptions,
       // Yjs state from Drive
@@ -61557,8 +63176,23 @@ async function createStudio$1(target, options = {}) {
 
     const newEditor = mrmd.default.create(editorContainer, mergedOptions);
 
-    // Connect available runtimes (Python, etc.)
+    // Get the runtime URL for this document (uses attachment or defaults to shared)
+    const attachedRuntimeUrl = shellState.getRuntimeUrl(docName);
+
+    // Connect to the attached runtime first (if different from default)
+    if (attachedRuntimeUrl && newEditor.connectRuntime) {
+      try {
+        newEditor.connectRuntime('python', attachedRuntimeUrl);
+      } catch (e) {
+        console.warn(`[Studio] Failed to connect attached runtime:`, e.message);
+      }
+    }
+
+    // Connect any other available runtimes that aren't already connected
     for (const [language, url] of Object.entries(runtimeUrls)) {
+      // Skip if already connected (Python may already be connected via attachment)
+      if (language === 'python' && attachedRuntimeUrl) continue;
+
       if (url && newEditor.connectRuntime) {
         try {
           newEditor.connectRuntime(language, url);
@@ -61576,7 +63210,100 @@ async function createStudio$1(target, options = {}) {
       });
     }
 
+    // Add AI integration if available
+    if (aiClient && mrmd.default.ai?.aiIntegration) {
+      const aiExtensions = mrmd.default.ai.aiIntegration({
+        onSparkClick: (e, view) => {
+          const context = mrmd.default.ai.getAiContext(view);
+          showAiMenu({
+            x: e.clientX,
+            y: e.clientY,
+            context: {
+              hasSelection: context.selectedText.length > 0,
+              inCodeCell: false, // TODO: detect code cell
+            },
+            onCommand: (cmd) => executeAiCommand(cmd, newEditor),
+            juiceLevel: shellState.get('ai')?.juiceLevel || 0,
+            onJuiceLevelChange: (level) => {
+              shellState._set('ai.juiceLevel', level);
+              aiClient.setJuiceLevel(level);
+            },
+          });
+        },
+      });
+
+      // Add AI extensions to editor
+      newEditor.view.dispatch({
+        effects: mrmd.codemirror.StateEffect.appendConfig.of(aiExtensions),
+      });
+    }
+
     return newEditor;
+  }
+
+  /**
+   * Execute an AI command on the editor
+   */
+  async function executeAiCommand(cmd, targetEditor) {
+    if (!aiClient || !mrmd.default.ai) return;
+
+    const view = targetEditor.view;
+    const context = mrmd.default.ai.getAiContext(view);
+    const juiceLevel = shellState.get('ai')?.juiceLevel || 0;
+
+    // Mark AI as active
+    shellState._set('ai.active', true);
+
+    try {
+      // Build params based on command type
+      let params = {};
+      let resultField = cmd.resultField;
+
+      if (cmd.program.includes('Finish')) {
+        params = {
+          text_before_cursor: context.textBeforeCursor,
+          local_context: context.localContext,
+          document_context: context.documentContext,
+        };
+      } else if (cmd.program.includes('Fix') || cmd.program.includes('Correct')) {
+        params = {
+          text_to_fix: context.selectedText,
+          local_context: context.localContext,
+          document_context: context.documentContext,
+        };
+      } else if (cmd.program.includes('Code')) {
+        params = {
+          code: context.selectedText,
+          language: 'python', // TODO: detect
+          local_context: context.localContext,
+          document_context: context.documentContext,
+        };
+      } else if (cmd.program.includes('Synonym')) {
+        params = {
+          text: context.selectedText,
+          local_context: context.localContext,
+        };
+      } else if (cmd.program.includes('Document')) {
+        params = { document: context.documentContext };
+      }
+
+      await mrmd.default.ai.executeAiOperation(view, aiClient, {
+        program: cmd.program,
+        params,
+        type: cmd.type === 'insert' ? 'insert' : 'replace',
+        from: cmd.type === 'insert' ? context.cursorPos : context.selectionFrom,
+        to: cmd.type === 'insert' ? context.cursorPos : context.selectionTo,
+        resultField,
+        juiceLevel,
+      });
+
+      emit('aiCommandExecuted', { command: cmd.id, program: cmd.program });
+    } catch (error) {
+      console.error('[Studio] AI command failed:', error);
+      emit('aiCommandError', { command: cmd.id, error: error.message });
+    } finally {
+      shellState._set('ai.active', false);
+    }
   }
 
   /**
@@ -61612,8 +63339,8 @@ async function createStudio$1(target, options = {}) {
       // Open new document via Drive
       const handle = await drive.open(normalizedName);
 
-      // Create new editor with the new Yjs state
-      editor = createEditorForDocument(handle);
+      // Create new editor with the new Yjs state (pass docName for runtime attachment lookup)
+      editor = createEditorForDocument(handle, normalizedName);
       currentDocName = normalizedName;
 
       // Update shell state
@@ -61645,7 +63372,7 @@ async function createStudio$1(target, options = {}) {
   const docToOpen = initialDocument || 'untitled';
   try {
     const handle = await drive.open(docToOpen);
-    editor = createEditorForDocument(handle);
+    editor = createEditorForDocument(handle, docToOpen);
     currentDocName = docToOpen;
   } catch (e) {
     console.error('Failed to open initial document:', e);
@@ -61703,11 +63430,29 @@ async function createStudio$1(target, options = {}) {
         title: 'Open File',
         orchestratorClient,
         initialPath: projectRoot || '~',
-        allowOutsideProject: false, // Only allow project files for now (synced via mrmd-sync)
+        allowOutsideProject: true, // Allow browsing whole filesystem
         onSelect: async (path) => {
-          // Extract document name from path
-          // Path format from file picker: "subdir/filename.md" or just "filename.md"
-          const docName = path.replace(/\.md$/, '');
+          // Get the actual docs directory from the API
+          const filesResult = await orchestratorClient.listFiles();
+          const docsRoot = filesResult.root?.replace(/\/$/, '') || '';
+
+          // Check if path is within the docs directory (not just project root)
+          const isInDocsDir = docsRoot && (
+            path.startsWith(docsRoot + '/') || path === docsRoot
+          );
+
+          let docName;
+          if (isInDocsDir) {
+            // Extract relative path for docs files
+            docName = path.slice(docsRoot.length).replace(/^\//, '');
+            // Remove .md extension for document name
+            docName = docName.replace(/\.md$/, '');
+          } else {
+            // File is outside docs directory - use absolute path
+            // The sync server supports absolute paths for external files
+            docName = path.replace(/\.md$/, '');
+          }
+
           await switchDocument(docName);
         },
       });
@@ -61715,19 +63460,33 @@ async function createStudio$1(target, options = {}) {
 
     async onChangeVenv() {
       const python = shellState.get('runtimes.python');
+      const docName = currentDocName;
 
       showFolderPicker({
         title: 'Select Virtual Environment',
         orchestratorClient,
         initialPath: python?.venv || '~',
+        showHidden: true, // Show hidden folders like .venv
         onSelect: async (path) => {
           try {
-            await shellState.setVenv(path);
-            emit('runtimeChanged', { language: 'python', venv: path });
+            // Create a dedicated runtime for this document with the selected venv
+            const sessionInfo = await shellState.createSession(docName, 'dedicated', path);
+
+            // Reconnect the editor to the new runtime
+            if (editor?.connectRuntime && sessionInfo.url) {
+              editor.connectRuntime('python', sessionInfo.url);
+            }
+
+            // Update the legacy python state for status bar display
+            shellState._set('runtimes.python.venv', path);
+            shellState._set('runtimes.python.venvName', path.split('/').pop());
+            shellState._set('runtimes.python.status', 'ready');
+
+            emit('runtimeChanged', { language: 'python', venv: path, dedicated: true });
           } catch (error) {
             await confirm({
               title: 'Error',
-              message: `Failed to change venv: ${error.message}`,
+              message: `Failed to create dedicated runtime: ${error.message}`,
               confirmLabel: 'OK',
               cancelLabel: '',
             });
@@ -61763,17 +63522,201 @@ async function createStudio$1(target, options = {}) {
       // TODO: Implement runtime restart via orchestrator
       console.log('Restart runtime:', language);
     },
+
+    async onNewFile() {
+      const newName = await prompt({
+        title: 'New File',
+        message: 'Enter a name for the new file:',
+        defaultValue: '',
+        placeholder: 'my-notebook',
+        validate: (value) => {
+          if (!value) return 'Name is required';
+          if (value.includes('/') || value.includes('\\')) return 'Name cannot contain path separators';
+          return null;
+        },
+      });
+
+      if (newName) {
+        try {
+          // Create the file via orchestrator
+          await orchestratorClient.createFile(newName);
+          // Open the new file
+          await switchDocument(newName);
+          emit('fileCreated', { doc: newName });
+        } catch (error) {
+          await confirm({
+            title: 'Error',
+            message: `Failed to create file: ${error.message}`,
+            confirmLabel: 'OK',
+            cancelLabel: '',
+          });
+        }
+      }
+    },
+
+    onSetTheme(theme) {
+      // Update editor theme
+      if (editor?.setTheme) {
+        editor.setTheme(theme);
+      }
+      // Store in shell state for persistence
+      shellState._set('theme', theme);
+      emit('themeChanged', { theme });
+    },
+
+    async onCreateDedicatedRuntime(docName) {
+      try {
+        // Create a dedicated session via orchestrator
+        const sessionInfo = await shellState.createSession(docName, 'dedicated');
+
+        // Reconnect the editor to the new runtime
+        if (editor?.connectRuntime && sessionInfo.url) {
+          editor.connectRuntime('python', sessionInfo.url);
+        }
+
+        emit('runtimeCreated', { docName, session: sessionInfo });
+      } catch (error) {
+        await confirm({
+          title: 'Error',
+          message: `Failed to create dedicated runtime: ${error.message}`,
+          confirmLabel: 'OK',
+          cancelLabel: '',
+        });
+      }
+    },
+
+    onRuntimeAttached(docName, sessionId) {
+      // When user attaches a document to a different runtime,
+      // we need to reconnect the editor if this is the current document
+      if (docName === currentDocName) {
+        const session = shellState.getSession(sessionId);
+        if (session?.url && editor?.connectRuntime) {
+          editor.connectRuntime('python', session.url);
+        }
+      }
+      emit('runtimeAttached', { docName, sessionId });
+    },
+
+    // AI Handlers
+    onSetJuiceLevel(level) {
+      if (aiClient) {
+        aiClient.setJuiceLevel(level);
+        shellState._set('ai.juiceLevel', level);
+        emit('aiJuiceLevelChanged', { level });
+      }
+    },
+
+    async onContinueDocument() {
+      if (!aiClient || !editor || !mrmd.default.ai) return;
+
+      const view = editor.view;
+      const docEnd = view.state.doc.length;
+      const content = view.state.doc.toString();
+      const juiceLevel = shellState.get('ai')?.juiceLevel || 0;
+
+      shellState._set('ai.active', true);
+      try {
+        await mrmd.default.ai.executeAiOperation(view, aiClient, {
+          program: 'DocumentResponsePredict',
+          params: { document: content },
+          type: 'insert',
+          from: docEnd,
+          to: docEnd,
+          resultField: 'response',
+          juiceLevel,
+        });
+        emit('aiContinueDocument', { success: true });
+      } catch (error) {
+        console.error('[Studio] Continue document failed:', error);
+        emit('aiContinueDocument', { success: false, error: error.message });
+      } finally {
+        shellState._set('ai.active', false);
+      }
+    },
+
+    async onSummarizeDocument() {
+      if (!aiClient || !editor) return;
+
+      const content = editor.view.state.doc.toString();
+      const juiceLevel = shellState.get('ai')?.juiceLevel || 0;
+
+      shellState._set('ai.active', true);
+      try {
+        const result = await aiClient.summarizeDocument(content, { juiceLevel });
+        const summary = result.summary || result.response || 'No summary generated';
+        await confirm({
+          title: 'Document Summary',
+          message: summary,
+          confirmLabel: 'OK',
+          cancelLabel: '',
+        });
+        emit('aiSummarizeDocument', { success: true });
+      } catch (error) {
+        console.error('[Studio] Summarize failed:', error);
+        await confirm({
+          title: 'Error',
+          message: `Failed to summarize: ${error.message}`,
+          confirmLabel: 'OK',
+          cancelLabel: '',
+        });
+      } finally {
+        shellState._set('ai.active', false);
+      }
+    },
+
+    async onSuggestFilename() {
+      if (!aiClient || !editor) return;
+
+      const content = editor.view.state.doc.toString();
+      const currentName = currentDocName;
+      const juiceLevel = shellState.get('ai')?.juiceLevel || 0;
+
+      shellState._set('ai.active', true);
+      try {
+        const result = await aiClient.suggestNotebookName(content, currentName, { juiceLevel });
+        const suggestedName = result.name;
+
+        if (suggestedName && suggestedName !== currentName) {
+          const confirmed = await confirm({
+            title: 'Rename File?',
+            message: `AI suggests: "${suggestedName}"\n\nRename "${currentName}" to "${suggestedName}"?`,
+            confirmLabel: 'Rename',
+            cancelLabel: 'Cancel',
+          });
+
+          if (confirmed) {
+            await studio.rename(suggestedName);
+          }
+        } else {
+          await confirm({
+            title: 'Filename Suggestion',
+            message: 'The current filename seems appropriate.',
+            confirmLabel: 'OK',
+            cancelLabel: '',
+          });
+        }
+      } catch (error) {
+        console.error('[Studio] Suggest filename failed:', error);
+      } finally {
+        shellState._set('ai.active', false);
+      }
+    },
   };
 
   // Create status bar
   let statusBarComponent = null;
   if (statusBarConfig.enabled !== false) {
+    // Default segments - include 'ai' if AI is available
+    const defaultSegments = aiClient
+      ? ['files', 'sync', 'runtime', 'ai']
+      : ['files', 'sync', 'runtime'];
+
     statusBarComponent = createStatusBar$1({
       container: statusBarContainer,
       editor,
       shellState,
       orchestratorClient,
-      segments: statusBarConfig.segments || ['file', 'location', 'sync', 'runtime'],
+      segments: statusBarConfig.segments || defaultSegments,
       position: statusBarConfig.position || 'bottom',
       handlers,
     });
@@ -61809,6 +63752,9 @@ async function createStudio$1(target, options = {}) {
 
     /** Orchestrator API client */
     orchestratorClient,
+
+    /** AI client (null if AI not available) */
+    aiClient,
 
     /** Studio container element */
     element: studioEl,
@@ -61978,13 +63924,21 @@ async function createStudio$1(target, options = {}) {
 
 var shellModule = /*#__PURE__*/Object.freeze({
   __proto__: null,
+  AI_CATEGORIES: AI_CATEGORIES,
+  AI_COMMANDS: AI_COMMANDS,
+  AI_MENU_STYLES: AI_MENU_STYLES,
+  AiClient: AiClient,
   Drive: Drive$1,
+  JUICE_LEVELS: JUICE_LEVELS,
+  JUICE_NAMES: JUICE_NAMES,
   OrchestratorClient: OrchestratorClient$1,
   ShellStateManager: ShellStateManager$1,
   confirm: confirm,
+  createAiClient: createAiClient,
+  createAiMenu: createAiMenu,
   createDialog: createDialog,
   createDrive: createDrive$1,
-  createFileMenu: createFileMenu,
+  createFileMenu: createFileMenu$1,
   createMenu: createMenu,
   createOrchestratorClient: createOrchestratorClient,
   createShellState: createShellState,
@@ -61992,14 +63946,832 @@ var shellModule = /*#__PURE__*/Object.freeze({
   createStudio: createStudio$1,
   dialogStyles: dialogStyles,
   filePickerStyles: filePickerStyles,
+  getApplicableCommands: getApplicableCommands,
+  injectAiMenuStyles: injectAiMenuStyles,
   injectShellStyles: injectShellStyles$1,
   menuStyles: menuStyles,
   prompt: prompt,
   shellStyles: shellStyles,
+  showAiMenu: showAiMenu,
   showFilePicker: showFilePicker,
   showFolderPicker: showFolderPicker,
   statusBarStyles: statusBarStyles,
   studioStyles: studioStyles
+});
+
+/**
+ * AI Integration for CodeMirror
+ *
+ * Provides:
+ * - StateField for tracking pending AI operations
+ * - Loading placeholder decorations (shimmer while AI works)
+ * - Pending change decorations (shimmer on new text)
+ * - Accept/reject flow for AI suggestions
+ * - Spark widget for cursor-based AI menu
+ */
+
+
+// ===========================================================================
+// State Effects
+// ===========================================================================
+
+/**
+ * Start an AI operation (shows loading placeholder)
+ */
+const startAiOperation = StateEffect.define();
+
+/**
+ * Complete an AI operation with result (shows pending change)
+ */
+const completeAiOperation = StateEffect.define();
+
+/**
+ * Cancel an AI operation
+ */
+const cancelAiOperation = StateEffect.define();
+
+/**
+ * Accept a pending AI change
+ */
+const acceptAiChange = StateEffect.define();
+
+/**
+ * Reject a pending AI change
+ */
+const rejectAiChange = StateEffect.define();
+
+/**
+ * Accept all pending AI changes
+ */
+const acceptAllAiChanges = StateEffect.define();
+
+/**
+ * Reject all pending AI changes
+ */
+const rejectAllAiChanges = StateEffect.define();
+
+// ===========================================================================
+// AI Operation Types
+// ===========================================================================
+
+/**
+ * @typedef {Object} AiOperation
+ * @property {string} id - Unique operation ID
+ * @property {string} type - Operation type: 'insert', 'replace'
+ * @property {number} from - Start position
+ * @property {number} to - End position (same as from for inserts)
+ * @property {string} [originalText] - Original text being replaced
+ * @property {string} [newText] - AI-generated text (when complete)
+ * @property {string} status - 'loading', 'pending', 'accepted', 'rejected'
+ * @property {number} startTime - When operation started
+ * @property {function} [onCancel] - Callback when cancelled
+ */
+
+// ===========================================================================
+// State Field
+// ===========================================================================
+
+/**
+ * StateField for AI operations
+ */
+const aiState = StateField.define({
+  create() {
+    return {
+      operations: new Map(), // id -> AiOperation
+      juiceLevel: 0,
+    };
+  },
+
+  update(state, tr) {
+    let newState = state;
+
+    for (const effect of tr.effects) {
+      if (effect.is(startAiOperation)) {
+        const op = effect.value;
+        const operations = new Map(state.operations);
+        operations.set(op.id, {
+          ...op,
+          status: 'loading',
+          startTime: Date.now(),
+        });
+        newState = { ...state, operations };
+      }
+
+      if (effect.is(completeAiOperation)) {
+        const { id, newText } = effect.value;
+        const operations = new Map(state.operations);
+        const op = operations.get(id);
+        if (op) {
+          operations.set(id, {
+            ...op,
+            newText,
+            status: 'pending',
+          });
+          newState = { ...state, operations };
+        }
+      }
+
+      if (effect.is(cancelAiOperation)) {
+        const { id } = effect.value;
+        const operations = new Map(state.operations);
+        const op = operations.get(id);
+        if (op) {
+          op.onCancel?.();
+          operations.delete(id);
+          newState = { ...state, operations };
+        }
+      }
+
+      if (effect.is(acceptAiChange)) {
+        const { id } = effect.value;
+        const operations = new Map(state.operations);
+        operations.delete(id);
+        newState = { ...state, operations };
+      }
+
+      if (effect.is(rejectAiChange)) {
+        const { id } = effect.value;
+        const operations = new Map(state.operations);
+        operations.delete(id);
+        newState = { ...state, operations };
+      }
+
+      if (effect.is(acceptAllAiChanges)) {
+        newState = { ...state, operations: new Map() };
+      }
+
+      if (effect.is(rejectAllAiChanges)) {
+        newState = { ...state, operations: new Map() };
+      }
+    }
+
+    // Adjust positions for document changes
+    if (tr.docChanged && newState.operations.size > 0) {
+      const operations = new Map();
+      for (const [id, op] of newState.operations) {
+        const newFrom = tr.changes.mapPos(op.from, 1);
+        const newTo = tr.changes.mapPos(op.to, -1);
+        operations.set(id, { ...op, from: newFrom, to: newTo });
+      }
+      newState = { ...newState, operations };
+    }
+
+    return newState;
+  },
+});
+
+// ===========================================================================
+// Loading Placeholder Widget
+// ===========================================================================
+
+class LoadingPlaceholderWidget extends WidgetType {
+  constructor(operationId, onCancel) {
+    super();
+    this.operationId = operationId;
+    this.onCancel = onCancel;
+  }
+
+  toDOM(view) {
+    const wrapper = document.createElement('span');
+    wrapper.className = 'cm-ai-loading';
+    wrapper.setAttribute('data-operation-id', this.operationId);
+
+    // Shimmer dots
+    const dots = document.createElement('span');
+    dots.className = 'cm-ai-loading-dots';
+    dots.textContent = '...';
+    wrapper.appendChild(dots);
+
+    // Cancel button (shows on hover)
+    const cancelBtn = document.createElement('span');
+    cancelBtn.className = 'cm-ai-loading-cancel';
+    cancelBtn.textContent = '×';
+    cancelBtn.title = 'Cancel';
+    cancelBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onCancel?.();
+    };
+    wrapper.appendChild(cancelBtn);
+
+    return wrapper;
+  }
+
+  eq(other) {
+    return other.operationId === this.operationId;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+// ===========================================================================
+// Pending Change Widget (for inline actions)
+// ===========================================================================
+
+class PendingChangeActionsWidget extends WidgetType {
+  constructor(operationId, onAccept, onReject) {
+    super();
+    this.operationId = operationId;
+    this.onAccept = onAccept;
+    this.onReject = onReject;
+  }
+
+  toDOM(view) {
+    const wrapper = document.createElement('span');
+    wrapper.className = 'cm-ai-pending-actions';
+    wrapper.setAttribute('data-operation-id', this.operationId);
+
+    const acceptBtn = document.createElement('span');
+    acceptBtn.className = 'cm-ai-accept-btn';
+    acceptBtn.textContent = '✓';
+    acceptBtn.title = 'Accept (Enter)';
+    acceptBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onAccept?.();
+    };
+    wrapper.appendChild(acceptBtn);
+
+    const rejectBtn = document.createElement('span');
+    rejectBtn.className = 'cm-ai-reject-btn';
+    rejectBtn.textContent = '×';
+    rejectBtn.title = 'Reject (Escape)';
+    rejectBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onReject?.();
+    };
+    wrapper.appendChild(rejectBtn);
+
+    return wrapper;
+  }
+
+  eq(other) {
+    return other.operationId === this.operationId;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+// ===========================================================================
+// Spark Cursor Widget
+// ===========================================================================
+
+class SparkWidget extends WidgetType {
+  constructor(onClick) {
+    super();
+    this.onClick = onClick;
+  }
+
+  toDOM(view) {
+    const spark = document.createElement('span');
+    spark.className = 'cm-ai-spark';
+    spark.textContent = '✦';
+    spark.title = 'AI Commands';
+    spark.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onClick?.(e);
+    };
+    return spark;
+  }
+
+  eq(other) {
+    return true; // Always equal since it's just a trigger
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+// ===========================================================================
+// Decorations
+// ===========================================================================
+
+const loadingDecoration = (opId, onCancel) => Decoration.widget({
+  widget: new LoadingPlaceholderWidget(opId, onCancel),
+  side: 1,
+});
+
+const pendingMarkDecoration = Decoration.mark({
+  class: 'cm-ai-pending-change',
+});
+
+const pendingActionsDecoration = (opId, onAccept, onReject) => Decoration.widget({
+  widget: new PendingChangeActionsWidget(opId, onAccept, onReject),
+  side: 1,
+});
+
+const replacedMarkDecoration = Decoration.mark({
+  class: 'cm-ai-replaced',
+});
+
+// ===========================================================================
+// Decoration Plugin
+// ===========================================================================
+
+function buildDecorations$2(view) {
+  const state = view.state.field(aiState);
+  const decorations = [];
+
+  for (const [id, op] of state.operations) {
+    if (op.status === 'loading') {
+      // Show loading placeholder
+      decorations.push(loadingDecoration(id, () => {
+        view.dispatch({ effects: cancelAiOperation.of({ id }) });
+      }).range(op.from));
+
+      // If replacing, dim the original text
+      if (op.type === 'replace' && op.to > op.from) {
+        decorations.push(replacedMarkDecoration.range(op.from, op.to));
+      }
+    }
+
+    if (op.status === 'pending' && op.newText) {
+      // Show shimmer on the new text
+      // Note: The text has already been inserted, so we mark from where it was inserted
+      const textEnd = op.from + op.newText.length;
+      if (textEnd > op.from) {
+        decorations.push(pendingMarkDecoration.range(op.from, textEnd));
+        decorations.push(pendingActionsDecoration(
+          id,
+          () => view.dispatch({ effects: acceptAiChange.of({ id }) }),
+          () => {
+            // Reject: remove the inserted text and restore original
+            const currentText = view.state.doc.sliceString(op.from, textEnd);
+            if (currentText === op.newText) {
+              view.dispatch({
+                changes: { from: op.from, to: textEnd, insert: op.originalText || '' },
+                effects: rejectAiChange.of({ id }),
+              });
+            } else {
+              // Text was modified, just remove the operation
+              view.dispatch({ effects: rejectAiChange.of({ id }) });
+            }
+          }
+        ).range(textEnd));
+      }
+    }
+  }
+
+  // Sort by position
+  decorations.sort((a, b) => a.from - b.from);
+
+  return Decoration.set(decorations);
+}
+
+const aiDecorations = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = buildDecorations$2(view);
+    }
+
+    update(update) {
+      if (update.docChanged || update.state.field(aiState) !== update.startState.field(aiState)) {
+        this.decorations = buildDecorations$2(update.view);
+      }
+    }
+  },
+  {
+    decorations: v => v.decorations,
+  }
+);
+
+// ===========================================================================
+// Spark Plugin (cursor follower)
+// ===========================================================================
+
+function createSparkPlugin(onSparkClick) {
+  return ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.decorations = this.buildSpark(view);
+        this.onSparkClick = onSparkClick;
+      }
+
+      buildSpark(view) {
+        const sel = view.state.selection.main;
+        if (sel.empty) {
+          return Decoration.set([
+            Decoration.widget({
+              widget: new SparkWidget((e) => this.onSparkClick?.(e, view)),
+              side: 1,
+            }).range(sel.head),
+          ]);
+        }
+        return Decoration.set([]);
+      }
+
+      update(update) {
+        if (update.selectionSet || update.docChanged) {
+          this.decorations = this.buildSpark(update.view);
+        }
+      }
+    },
+    {
+      decorations: v => v.decorations,
+    }
+  );
+}
+
+// ===========================================================================
+// Keybindings
+// ===========================================================================
+
+const aiKeymap = keymap.of([
+  {
+    key: 'Enter',
+    run(view) {
+      const state = view.state.field(aiState);
+      // Find pending operation at cursor
+      const cursor = view.state.selection.main.head;
+      for (const [id, op] of state.operations) {
+        if (op.status === 'pending' && op.newText) {
+          const textEnd = op.from + op.newText.length;
+          if (cursor >= op.from && cursor <= textEnd) {
+            view.dispatch({ effects: acceptAiChange.of({ id }) });
+            return true;
+          }
+        }
+      }
+      return false;
+    },
+  },
+  {
+    key: 'Escape',
+    run(view) {
+      const state = view.state.field(aiState);
+      // Find pending or loading operation at cursor
+      const cursor = view.state.selection.main.head;
+      for (const [id, op] of state.operations) {
+        if (op.status === 'loading') {
+          if (cursor >= op.from && cursor <= op.to + 10) { // Near loading indicator
+            view.dispatch({ effects: cancelAiOperation.of({ id }) });
+            return true;
+          }
+        }
+        if (op.status === 'pending' && op.newText) {
+          const textEnd = op.from + op.newText.length;
+          if (cursor >= op.from && cursor <= textEnd) {
+            // Reject and restore
+            const currentText = view.state.doc.sliceString(op.from, textEnd);
+            if (currentText === op.newText) {
+              view.dispatch({
+                changes: { from: op.from, to: textEnd, insert: op.originalText || '' },
+                effects: rejectAiChange.of({ id }),
+              });
+            } else {
+              view.dispatch({ effects: rejectAiChange.of({ id }) });
+            }
+            return true;
+          }
+        }
+      }
+      return false;
+    },
+  },
+  {
+    key: 'Mod-Shift-Enter',
+    run(view) {
+      // Accept all pending changes
+      const state = view.state.field(aiState);
+      if (state.operations.size > 0) {
+        view.dispatch({ effects: acceptAllAiChanges.of(null) });
+        return true;
+      }
+      return false;
+    },
+  },
+  {
+    key: 'Mod-Shift-Escape',
+    run(view) {
+      // Reject all pending changes
+      const state = view.state.field(aiState);
+      const changes = [];
+
+      for (const [id, op] of state.operations) {
+        if (op.status === 'pending' && op.newText) {
+          const textEnd = op.from + op.newText.length;
+          const currentText = view.state.doc.sliceString(op.from, textEnd);
+          if (currentText === op.newText) {
+            changes.push({ from: op.from, to: textEnd, insert: op.originalText || '' });
+          }
+        }
+        if (op.status === 'loading') {
+          op.onCancel?.();
+        }
+      }
+
+      if (state.operations.size > 0) {
+        view.dispatch({
+          changes,
+          effects: rejectAllAiChanges.of(null),
+        });
+        return true;
+      }
+      return false;
+    },
+  },
+]);
+
+// ===========================================================================
+// CSS Styles
+// ===========================================================================
+
+const aiStyles = EditorView.baseTheme({
+  // Loading placeholder
+  '.cm-ai-loading': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '0 4px',
+    margin: '0 2px',
+    borderRadius: '3px',
+    background: 'linear-gradient(90deg, transparent, rgba(100, 149, 237, 0.2), transparent)',
+    backgroundSize: '200% 100%',
+    animation: 'cm-ai-shimmer 1.5s infinite',
+    verticalAlign: 'baseline',
+  },
+  '.cm-ai-loading-dots': {
+    color: 'rgba(100, 149, 237, 0.8)',
+    fontWeight: 'bold',
+    animation: 'cm-ai-pulse 1s infinite',
+  },
+  '.cm-ai-loading-cancel': {
+    marginLeft: '4px',
+    cursor: 'pointer',
+    color: 'rgba(100, 100, 100, 0.5)',
+    fontWeight: 'bold',
+    opacity: '0',
+    transition: 'opacity 0.15s',
+    '&:hover': {
+      color: '#e74c3c',
+    },
+  },
+  '.cm-ai-loading:hover .cm-ai-loading-cancel': {
+    opacity: '1',
+  },
+
+  // Replaced text (dimmed during replace operation)
+  '.cm-ai-replaced': {
+    opacity: '0.4',
+    textDecoration: 'line-through',
+    textDecorationColor: 'rgba(100, 100, 100, 0.3)',
+  },
+
+  // Pending change (shimmer)
+  '.cm-ai-pending-change': {
+    background: 'linear-gradient(90deg, transparent, rgba(100, 149, 237, 0.15), transparent)',
+    backgroundSize: '200% 100%',
+    animation: 'cm-ai-shimmer 2s infinite',
+    borderRadius: '2px',
+  },
+
+  // Pending actions
+  '.cm-ai-pending-actions': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    marginLeft: '4px',
+    fontSize: '0.85em',
+    verticalAlign: 'baseline',
+  },
+  '.cm-ai-accept-btn, .cm-ai-reject-btn': {
+    cursor: 'pointer',
+    padding: '0 3px',
+    borderRadius: '3px',
+    transition: 'background 0.15s, color 0.15s',
+  },
+  '.cm-ai-accept-btn': {
+    color: '#27ae60',
+    '&:hover': {
+      background: 'rgba(39, 174, 96, 0.15)',
+    },
+  },
+  '.cm-ai-reject-btn': {
+    color: '#e74c3c',
+    '&:hover': {
+      background: 'rgba(231, 76, 60, 0.15)',
+    },
+  },
+
+  // Spark cursor widget
+  '.cm-ai-spark': {
+    cursor: 'pointer',
+    marginLeft: '2px',
+    color: 'rgba(100, 149, 237, 0.6)',
+    fontSize: '0.9em',
+    transition: 'color 0.15s, transform 0.15s',
+    display: 'inline-block',
+    '&:hover': {
+      color: 'rgba(100, 149, 237, 1)',
+      transform: 'scale(1.2)',
+    },
+  },
+
+  // Animations
+  '@keyframes cm-ai-shimmer': {
+    '0%': { backgroundPosition: '200% 0' },
+    '100%': { backgroundPosition: '-200% 0' },
+  },
+  '@keyframes cm-ai-pulse': {
+    '0%, 100%': { opacity: '0.4' },
+    '50%': { opacity: '1' },
+  },
+});
+
+// ===========================================================================
+// Extension Bundle
+// ===========================================================================
+
+/**
+ * Create AI integration extension
+ * @param {Object} [options]
+ * @param {function} [options.onSparkClick] - Called when spark is clicked
+ * @returns {Extension[]}
+ */
+function aiIntegration(options = {}) {
+  const extensions = [
+    aiState,
+    aiDecorations,
+    aiKeymap,
+    aiStyles,
+  ];
+
+  if (options.onSparkClick) {
+    extensions.push(createSparkPlugin(options.onSparkClick));
+  }
+
+  return extensions;
+}
+
+// ===========================================================================
+// Helper Functions
+// ===========================================================================
+
+/**
+ * Generate unique operation ID
+ * @returns {string}
+ */
+function generateOperationId() {
+  return `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Get context around cursor for AI operations
+ *
+ * @param {EditorView} view - CodeMirror view
+ * @param {number} [contextSize=500] - Characters of context to include
+ * @returns {{
+ *   textBeforeCursor: string,
+ *   textAfterCursor: string,
+ *   localContext: string,
+ *   selectedText: string,
+ *   cursorPos: number,
+ *   selectionFrom: number,
+ *   selectionTo: number,
+ *   documentContext: string,
+ * }}
+ */
+function getAiContext(view, contextSize = 500) {
+  const doc = view.state.doc;
+  const sel = view.state.selection.main;
+  const content = doc.toString();
+
+  const cursorPos = sel.head;
+  const selectionFrom = sel.from;
+  const selectionTo = sel.to;
+
+  // Text before and after cursor
+  const textBeforeCursor = content.slice(Math.max(0, cursorPos - contextSize), cursorPos);
+  const textAfterCursor = content.slice(cursorPos, Math.min(content.length, cursorPos + contextSize));
+
+  // Local context (around selection or cursor)
+  const contextStart = Math.max(0, selectionFrom - contextSize);
+  const contextEnd = Math.min(content.length, selectionTo + contextSize);
+  const localContext = content.slice(contextStart, contextEnd);
+
+  // Selected text
+  const selectedText = content.slice(selectionFrom, selectionTo);
+
+  return {
+    textBeforeCursor,
+    textAfterCursor,
+    localContext,
+    selectedText,
+    cursorPos,
+    selectionFrom,
+    selectionTo,
+    documentContext: content, // Full document for AI context
+  };
+}
+
+/**
+ * Execute an AI operation with loading/pending states
+ *
+ * @param {EditorView} view - CodeMirror view
+ * @param {import('./shell/ai-client.js').AiClient} aiClient - AI client
+ * @param {Object} options
+ * @param {string} options.program - AI program to execute
+ * @param {Object} options.params - Program parameters
+ * @param {'insert'|'replace'} options.type - Operation type
+ * @param {number} options.from - Start position
+ * @param {number} options.to - End position
+ * @param {string} options.resultField - Field name in response containing result
+ * @param {number} [options.juiceLevel] - Override juice level
+ * @returns {Promise<void>}
+ */
+async function executeAiOperation(view, aiClient, options) {
+  const {
+    program,
+    params,
+    type,
+    from,
+    to,
+    resultField,
+    juiceLevel,
+  } = options;
+
+  const opId = generateOperationId();
+  const originalText = type === 'replace' ? view.state.doc.sliceString(from, to) : '';
+
+  // Create abort controller for cancellation
+  let cancelled = false;
+  const onCancel = () => {
+    cancelled = true;
+    aiClient.cancel(opId);
+  };
+
+  // Start operation (show loading)
+  view.dispatch({
+    effects: startAiOperation.of({
+      id: opId,
+      type,
+      from,
+      to,
+      originalText,
+      onCancel,
+    }),
+  });
+
+  try {
+    const result = await aiClient.execute(program, params, {
+      juiceLevel,
+      requestId: opId,
+    });
+
+    if (cancelled) return;
+
+    const newText = result[resultField] || result.completion || result.fixed_text || '';
+
+    if (!newText) {
+      // No result, cancel the operation
+      view.dispatch({ effects: cancelAiOperation.of({ id: opId }) });
+      return;
+    }
+
+    // Insert the new text and mark as pending
+    if (type === 'insert') {
+      view.dispatch({
+        changes: { from, insert: newText },
+        effects: completeAiOperation.of({ id: opId, newText }),
+      });
+    } else {
+      // Replace
+      view.dispatch({
+        changes: { from, to, insert: newText },
+        effects: completeAiOperation.of({ id: opId, newText }),
+      });
+    }
+  } catch (err) {
+    if (!cancelled) {
+      console.error('[AI] Operation failed:', err);
+      view.dispatch({ effects: cancelAiOperation.of({ id: opId }) });
+    }
+  }
+}
+
+var aiIntegrationModule = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  acceptAiChange: acceptAiChange,
+  acceptAllAiChanges: acceptAllAiChanges,
+  aiDecorations: aiDecorations,
+  aiIntegration: aiIntegration,
+  aiKeymap: aiKeymap,
+  aiState: aiState,
+  aiStyles: aiStyles,
+  cancelAiOperation: cancelAiOperation,
+  completeAiOperation: completeAiOperation,
+  createSparkPlugin: createSparkPlugin,
+  executeAiOperation: executeAiOperation,
+  generateOperationId: generateOperationId,
+  getAiContext: getAiContext,
+  rejectAiChange: rejectAiChange,
+  rejectAllAiChanges: rejectAllAiChanges,
+  startAiOperation: startAiOperation
 });
 
 /**
@@ -72312,24 +75084,102 @@ function createRuntime(options) {
 /**
  * Image Widget
  *
- * Renders images inline in the editor.
+ * Renders images in the editor with support for:
+ * - Inline images (embedded in text)
+ * - Block images (standalone on a line) - uses stable layout pattern
+ * - Reference-style images (![alt][ref] with [ref]: url definitions)
  *
- * Two widgets:
- * - ImagePlaceholder: Compact placeholder shown on blur (e.g., "🖼 alt-text")
- * - ImageWidget: The actual rendered image
+ * Widgets:
+ * - ImagePlaceholder: Compact placeholder shown when URL is missing/invalid
+ * - ImageWidget: Inline image rendering
+ * - BlockImageWidget: Block image with stable layout pattern (no jitter)
  *
  * @module markdown/widgets/image
  */
 
 
+// =============================================================================
+// Link Definition Cache
+// =============================================================================
+
+/**
+ * Cache for link definitions parsed from document.
+ * Key: reference name (lowercase), Value: { url, title }
+ * @type {Map<string, { url: string, title?: string }>}
+ */
+let linkDefinitionCache = new Map();
+
+/**
+ * Document content hash for cache invalidation
+ * @type {string}
+ */
+let lastDocumentHash = '';
+
+/**
+ * Parse all link definitions from document content.
+ * Format: [ref]: url "optional title"
+ *
+ * @param {string} content - Full document content
+ * @returns {Map<string, { url: string, title?: string }>}
+ */
+function parseLinkDefinitions(content) {
+  const definitions = new Map();
+
+  // Match: [ref]: url or [ref]: url "title" or [ref]: <url> "title"
+  // Can span multiple lines if URL is on next line
+  const regex = /^\[([^\]]+)\]:\s*<?([^\s>"]+)>?(?:\s+["'(]([^"')]+)["')])?/gm;
+
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const refName = match[1].toLowerCase();
+    const url = match[2];
+    const title = match[3];
+
+    definitions.set(refName, { url, title });
+  }
+
+  return definitions;
+}
+
+/**
+ * Update link definition cache if document changed.
+ *
+ * @param {string} content - Full document content
+ */
+function updateLinkDefinitionCache(content) {
+  // Simple hash based on length and sample characters
+  const hash = `${content.length}-${content.charCodeAt(0) || 0}-${content.charCodeAt(Math.floor(content.length / 2)) || 0}`;
+
+  if (hash !== lastDocumentHash) {
+    linkDefinitionCache = parseLinkDefinitions(content);
+    lastDocumentHash = hash;
+  }
+}
+
+/**
+ * Resolve a reference name to its URL.
+ *
+ * @param {string} refName - Reference name (case-insensitive)
+ * @returns {{ url: string, title?: string } | null}
+ */
+function resolveLinkReference(refName) {
+  return linkDefinitionCache.get(refName.toLowerCase()) || null;
+}
+
+// =============================================================================
+// Placeholder Widget (for missing URLs or editing state)
+// =============================================================================
+
 /**
  * Compact placeholder for image syntax.
- * Shows "🖼 alt-text" when cursor is not on the image line.
+ * Shows "🖼 alt-text" when:
+ * - Cursor is on the image line (editing mode)
+ * - URL is missing or invalid
  */
 class ImagePlaceholder extends WidgetType {
   /**
    * @param {string} alt - Alt text for the image
-   * @param {string} url - Image URL
+   * @param {string} url - Image URL (may be empty for reference-style)
    * @param {boolean} isLinked - Whether this is a linked image [![](img)](url)
    */
   constructor(alt, url, isLinked = false) {
@@ -72349,9 +75199,9 @@ class ImagePlaceholder extends WidgetType {
 
     // Determine icon based on URL type and link status
     let icon = this.isLinked ? '🔗🖼' : '🖼';
-    if (this.url.startsWith('data:image/svg') || this.url.endsWith('.svg')) {
+    if (this.url && this.url.startsWith('data:image/svg') || this.url?.endsWith('.svg')) {
       icon = this.isLinked ? '🔗◇' : '◇'; // SVG indicator
-    } else if (this.url.startsWith('data:')) {
+    } else if (this.url && this.url.startsWith('data:')) {
       icon = this.isLinked ? '🔗📷' : '📷'; // Embedded image
     }
 
@@ -72374,52 +75224,72 @@ class ImagePlaceholder extends WidgetType {
   }
 }
 
+// =============================================================================
+// Inline Image Widget
+// =============================================================================
+
 /**
- * Widget for rendering the actual image.
+ * Widget for rendering images inline (within text).
+ * Used for images embedded in paragraphs, lists, etc.
  */
 class ImageWidget extends WidgetType {
   /**
    * @param {string} url - Image URL
    * @param {string} alt - Alt text for the image
    * @param {boolean} isLinked - Whether this is a linked image
+   * @param {string} linkUrl - URL to link to (if isLinked)
    */
-  constructor(url, alt, isLinked = false) {
+  constructor(url, alt, isLinked = false, linkUrl = '') {
     super();
     this.url = url;
     this.alt = alt;
     this.isLinked = isLinked;
+    this.linkUrl = linkUrl;
   }
 
   eq(other) {
-    return other.url === this.url && other.alt === this.alt && other.isLinked === this.isLinked;
+    return (
+      other.url === this.url &&
+      other.alt === this.alt &&
+      other.isLinked === this.isLinked &&
+      other.linkUrl === this.linkUrl
+    );
   }
 
   toDOM() {
-    const container = document.createElement('div');
-    container.className = 'cm-image-widget cm-image-loading';
-    if (this.isLinked) {
-      container.classList.add('cm-image-linked');
-    }
-    container.textContent = 'Loading image...';
+    const container = document.createElement('span');
+    container.className = 'cm-image-inline cm-image-loading';
 
     const img = document.createElement('img');
     img.alt = this.alt;
+    img.className = 'cm-image-inline-img';
 
     img.onload = () => {
-      container.className = 'cm-image-widget';
-      if (this.isLinked) {
-        container.classList.add('cm-image-linked');
-      }
-      container.textContent = '';
-      container.appendChild(img);
+      container.classList.remove('cm-image-loading');
+      container.classList.add('cm-image-loaded');
     };
 
     img.onerror = () => {
-      container.className = 'cm-image-widget cm-image-error';
-      container.textContent = `Failed to load: ${this.alt || 'image'}`;
+      container.classList.remove('cm-image-loading');
+      container.classList.add('cm-image-error');
+      container.title = `Failed to load: ${this.url}`;
     };
 
     img.src = this.url;
+
+    // Wrap in link if this is a linked image
+    if (this.isLinked && this.linkUrl) {
+      const link = document.createElement('a');
+      link.href = this.linkUrl;
+      link.className = 'cm-image-link';
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.appendChild(img);
+      container.appendChild(link);
+    } else {
+      container.appendChild(img);
+    }
+
     return container;
   }
 
@@ -72428,742 +75298,252 @@ class ImageWidget extends WidgetType {
   }
 }
 
+// =============================================================================
+// Block Image Widget (Stable Layout Pattern)
+// =============================================================================
+
+/**
+ * Widget for rendering block images (standalone on a line).
+ * Uses the stable layout pattern to prevent jitter:
+ * - Text line is hidden (transparent) but takes space
+ * - Widget overlays with position: absolute
+ *
+ * Supports position modifiers:
+ * - 'block' (default): centered, normal width
+ * - 'right': float right, text wraps left
+ * - 'left': float left, text wraps right
+ * - 'wide': full-bleed, breaks out of content column
+ * - 'small': thumbnail size
+ *
+ * This widget is placed AFTER the line that contains the image syntax.
+ */
+class BlockImageWidget extends WidgetType {
+  /**
+   * @param {string} url - Image URL
+   * @param {string} alt - Alt text for the image
+   * @param {boolean} isLinked - Whether this is a linked image
+   * @param {string} linkUrl - URL to link to (if isLinked)
+   * @param {string} imageId - Unique identifier for the image (for eq comparison)
+   * @param {string} position - Position modifier: 'block', 'right', 'left', 'wide', 'small'
+   * @param {string} caption - Optional caption (from title attribute)
+   */
+  constructor(url, alt, isLinked = false, linkUrl = '', imageId = '', position = 'block', caption = '') {
+    super();
+    this.url = url;
+    this.alt = alt;
+    this.isLinked = isLinked;
+    this.linkUrl = linkUrl;
+    this.imageId = imageId;
+    this.position = position;
+    this.caption = caption;
+  }
+
+  eq(other) {
+    // Compare by content, not by hidden state (following widget equality pattern)
+    return (
+      other.url === this.url &&
+      other.alt === this.alt &&
+      other.isLinked === this.isLinked &&
+      other.linkUrl === this.linkUrl &&
+      other.imageId === this.imageId &&
+      other.position === this.position &&
+      other.caption === this.caption
+    );
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = `cm-image-block cm-image-pos-${this.position}`;
+    container.dataset.imageId = this.imageId;
+    container.dataset.position = this.position;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'cm-image-block-wrapper cm-image-loading';
+
+    const img = document.createElement('img');
+    img.alt = this.alt;
+    img.className = 'cm-image-block-img';
+
+    img.onload = () => {
+      wrapper.classList.remove('cm-image-loading');
+      wrapper.classList.add('cm-image-loaded');
+      wrapper.innerHTML = '';
+
+      // Wrap in link if this is a linked image
+      if (this.isLinked && this.linkUrl) {
+        const link = document.createElement('a');
+        link.href = this.linkUrl;
+        link.className = 'cm-image-link';
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.appendChild(img);
+        wrapper.appendChild(link);
+      } else {
+        wrapper.appendChild(img);
+      }
+
+      // Add caption if provided (from title) or fall back to alt text
+      const captionText = this.caption || this.alt;
+      if (captionText) {
+        const caption = document.createElement('div');
+        caption.className = 'cm-image-caption';
+        caption.textContent = captionText;
+        container.appendChild(caption);
+      }
+    };
+
+    img.onerror = () => {
+      wrapper.classList.remove('cm-image-loading');
+      wrapper.classList.add('cm-image-error');
+      wrapper.innerHTML = `<span class="cm-image-error-text">Failed to load image: ${this.alt || this.url}</span>`;
+    };
+
+    // Set loading text
+    wrapper.textContent = 'Loading...';
+
+    img.src = this.url;
+    container.appendChild(wrapper);
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return true; // Don't capture events - allow clicking through to edit
+  }
+}
+
+// =============================================================================
+// Position Modifiers
+// =============================================================================
+
+/**
+ * Image position types.
+ * @typedef {'block' | 'right' | 'left' | 'wide' | 'small'} ImagePosition
+ */
+
+/**
+ * Position modifier characters (placed after closing parenthesis).
+ * Syntax: ![alt](url)> for float-right, etc.
+ *
+ * >  → float right (text wraps on left)
+ * <  → float left (text wraps on right)
+ * ^  → wide/full-bleed (breaks out of content column)
+ * _  → small/inline (thumbnail size)
+ */
+const POSITION_MODIFIERS = {
+  '>': 'right',
+  '<': 'left',
+  '^': 'wide',
+  '_': 'small',
+};
+
+/**
+ * Parse position modifier from character.
+ *
+ * @param {string} char - The character after the image syntax
+ * @returns {ImagePosition}
+ */
+function parsePositionModifier(char) {
+  return POSITION_MODIFIERS[char] || 'block';
+}
+
+/**
+ * Check if a character is a position modifier.
+ *
+ * @param {string} char - Character to check
+ * @returns {boolean}
+ */
+function isPositionModifier(char) {
+  return char in POSITION_MODIFIERS;
+}
+
+// =============================================================================
+// Parsing Utilities
+// =============================================================================
+
 /**
  * Parse image markdown syntax.
  *
  * @param {string} content - Raw content that might contain image markdown
- * @returns {{ src: string, alt: string } | null}
+ * @returns {{ src: string, alt: string, title?: string } | null}
  */
 function parseImageMarkdown(content) {
   // Match ![alt](url) or ![alt](url "title")
-  const match = content.match(/!\[([^\]]*)\]\(([^)"]+)(?:\s+"[^"]*")?\)/);
+  const match = content.match(/!\[([^\]]*)\]\(([^)"]+)(?:\s+"([^"]*)")?\)/);
   if (match) {
     return {
       alt: match[1],
       src: match[2],
+      title: match[3],
     };
   }
   return null;
 }
 
 /**
- * Table Widget and Parser
+ * Check if a line contains only an image (block image).
+ * Allows leading/trailing whitespace, optional link wrapper, and position modifier.
  *
- * Renders markdown tables as HTML tables with Tufte Markdown extensions.
- * Uses the stable layout pattern to avoid jitter.
- *
- * Tufte Markdown Extensions:
- * - Column widths: |:--{30%}| in delimiter row
- * - Colspan: | > | merges with cell to left
- * - Rowspan: | ^ | merges with cell above
- * - Decimal alignment: |---.| in delimiter row
- *
- * @module markdown/widgets/table
- */
-
-
-// =============================================================================
-// Constants
-// =============================================================================
-
-/** Marker for colspan (merge with cell to left) */
-const COLSPAN_MARKER = '>';
-
-/** Marker for rowspan (merge with cell above) */
-const ROWSPAN_MARKER = '^';
-
-// =============================================================================
-// Detection Functions
-// =============================================================================
-
-/**
- * Check if a line looks like a table row (contains pipes)
- *
- * @param {string} line
+ * @param {string} lineText - The text of the line
  * @returns {boolean}
  */
-function isTableLine(line) {
-  if (line.startsWith('```') || line.startsWith('~~~')) {
-    return false;
+function isBlockImage(lineText) {
+  const trimmed = lineText.trim();
+
+  // Check for standalone image with optional position modifier: ![alt](url) or ![alt](url)>
+  if (/^!\[[^\]]*\]\([^)]+\)[><^_]?$/.test(trimmed)) {
+    return true;
   }
-  return line.includes('|');
+
+  // Check for image with title and optional modifier: ![alt](url "title")>
+  if (/^!\[[^\]]*\]\([^)]+\s+"[^"]*"\)[><^_]?$/.test(trimmed)) {
+    return true;
+  }
+
+  // Check for linked image with optional modifier: [![alt](img)](url)>
+  if (/^\[!\[[^\]]*\]\([^)]+\)\]\([^)]+\)[><^_]?$/.test(trimmed)) {
+    return true;
+  }
+
+  // Check for reference-style image with optional modifier: ![alt][ref]>
+  if (/^!\[[^\]]*\]\[[^\]]*\][><^_]?$/.test(trimmed)) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
- * Check if a line is a table delimiter row.
- * Enhanced to support Tufte extensions: |:--{30%}| and |---.|
+ * Extract position modifier from end of line if present.
  *
- * @param {string} line
- * @returns {boolean}
+ * @param {string} lineText - The text of the line
+ * @returns {{ position: ImagePosition, hasModifier: boolean }}
  */
-function isTableDelimiter(line) {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith('|') && !trimmed.includes('|')) {
-    return false;
-  }
+function extractPositionFromLine(lineText) {
+  const trimmed = lineText.trim();
+  const lastChar = trimmed[trimmed.length - 1];
 
-  const cells = splitTableRow(trimmed);
-  if (cells.length === 0) {
-    return false;
-  }
-
-  // Each cell must match the delimiter pattern
-  // Extended pattern allows: colons, dashes, dots, and width specs
-  const delimiterPattern = /^:?-+(?:\{[^}]+\})?\.?:?$|^:?-+\.?(?:\{[^}]+\})?:?$/;
-  return cells.every(cell => delimiterPattern.test(cell.trim()));
-}
-
-// =============================================================================
-// Parsing Functions
-// =============================================================================
-
-/**
- * Split a table row into cells, handling escaped pipes
- *
- * @param {string} line
- * @returns {string[]}
- */
-function splitTableRow(line) {
-  const cells = [];
-  let current = '';
-  let i = 0;
-
-  const trimmed = line.trim();
-  if (trimmed.startsWith('|')) {
-    i = trimmed.indexOf('|') + 1;
-  } else {
-    i = 0;
-  }
-
-  while (i < trimmed.length) {
-    const char = trimmed[i];
-
-    if (char === '\\' && i + 1 < trimmed.length && trimmed[i + 1] === '|') {
-      // Escaped pipe - include the pipe in content
-      current += '|';
-      i += 2;
-    } else if (char === '|') {
-      // Cell boundary
-      cells.push(current);
-      current = '';
-      i++;
-    } else {
-      current += char;
-      i++;
-    }
-  }
-
-  // Don't add the last segment if it's empty (trailing pipe case)
-  if (current.trim() !== '') {
-    cells.push(current);
-  }
-
-  return cells;
-}
-
-/**
- * Parse column alignments and widths from a delimiter row
- *
- * @param {string} delimiterLine
- * @returns {{ alignments: (string|null)[], widths: (Object|null)[], decimalColumns: Set<number> }}
- */
-function parseDelimiterRow(delimiterLine) {
-  const cells = splitTableRow(delimiterLine);
-  const alignments = [];
-  const widths = [];
-  const decimalColumns = new Set();
-
-  cells.forEach((cell, index) => {
-    const trimmed = cell.trim();
-
-    // Extract width if present: {30%}, {100px}, {2fr}, {1.5em}
-    let width = null;
-    const widthMatch = trimmed.match(/\{(\d+(?:\.\d+)?)(px|%|fr|em)\}/);
-    if (widthMatch) {
-      width = {
-        value: parseFloat(widthMatch[1]),
-        unit: widthMatch[2],
-      };
-    }
-    widths.push(width);
-
-    // Remove width specification for alignment parsing
-    const alignPart = trimmed.replace(/\{[^}]+\}/, '');
-
-    // Check for decimal alignment marker (.)
-    const hasDecimal = alignPart.includes('.');
-    if (hasDecimal) {
-      decimalColumns.add(index);
-    }
-
-    // Parse alignment from colons
-    const leftColon = alignPart.startsWith(':');
-    const rightColon = alignPart.endsWith(':');
-
-    if (hasDecimal) {
-      alignments.push('decimal');
-    } else if (leftColon && rightColon) {
-      alignments.push('center');
-    } else if (rightColon) {
-      alignments.push('right');
-    } else if (leftColon) {
-      alignments.push('left');
-    } else {
-      alignments.push(null);
-    }
-  });
-
-  return { alignments, widths, decimalColumns };
-}
-
-/**
- * Check if cell content is a colspan marker
- */
-function isColspanMarker(content) {
-  return content.trim() === COLSPAN_MARKER;
-}
-
-/**
- * Check if cell content is a rowspan marker
- */
-function isRowspanMarker(content) {
-  return content.trim() === ROWSPAN_MARKER;
-}
-
-/**
- * Parse a table row into structured cells
- */
-function parseTableRow(line, isHeader = false, isDelimiter = false) {
-  const rawCells = splitTableRow(line);
-
-  const cells = rawCells.map(raw => {
-    const content = raw.trim();
+  if (isPositionModifier(lastChar)) {
     return {
-      content,
-      raw,
-      colspan: 1,
-      rowspan: 1,
-      hidden: false,
-      isColspanMarker: isColspanMarker(content),
-      isRowspanMarker: isRowspanMarker(content),
+      position: parsePositionModifier(lastChar),
+      hasModifier: true,
     };
-  });
+  }
 
   return {
-    cells,
-    isHeader,
-    isDelimiter,
+    position: 'block',
+    hasModifier: false,
   };
 }
 
 /**
- * Process colspan markers in a table
- */
-function processColspans(rows) {
-  for (const row of rows) {
-    if (row.isDelimiter) continue;
-
-    for (let col = row.cells.length - 1; col >= 0; col--) {
-      const cell = row.cells[col];
-
-      if (cell.isColspanMarker && col > 0) {
-        let targetCol = col - 1;
-        while (targetCol >= 0 && row.cells[targetCol].isColspanMarker) {
-          targetCol--;
-        }
-
-        if (targetCol >= 0) {
-          row.cells[targetCol].colspan++;
-          cell.hidden = true;
-        }
-      }
-    }
-  }
-}
-
-/**
- * Process rowspan markers in a table
- */
-function processRowspans(rows) {
-  const dataStartIndex = rows.findIndex(r => !r.isHeader && !r.isDelimiter);
-  if (dataStartIndex === -1) return;
-
-  for (let rowIdx = rows.length - 1; rowIdx >= 0; rowIdx--) {
-    const row = rows[rowIdx];
-    if (row.isDelimiter) continue;
-
-    for (let col = 0; col < row.cells.length; col++) {
-      const cell = row.cells[col];
-
-      if (cell.isRowspanMarker) {
-        let targetRow = rowIdx - 1;
-        while (targetRow >= 0) {
-          const aboveRow = rows[targetRow];
-          if (aboveRow.isDelimiter) {
-            targetRow--;
-            continue;
-          }
-
-          if (col < aboveRow.cells.length) {
-            const aboveCell = aboveRow.cells[col];
-            if (aboveCell.isRowspanMarker) {
-              targetRow--;
-              continue;
-            }
-            aboveCell.rowspan++;
-            cell.hidden = true;
-            break;
-          }
-          break;
-        }
-      }
-    }
-  }
-}
-
-/**
- * Parse a complete markdown table from text lines
- *
- * @param {string[]} lines - Array of line strings making up the table
- * @returns {Object|null} Parsed table structure
- */
-function parseTable(lines) {
-  if (lines.length < 2) {
-    return null;
-  }
-
-  // Find the delimiter row
-  let delimiterIndex = -1;
-  for (let i = 0; i < lines.length && i < 3; i++) {
-    if (isTableDelimiter(lines[i])) {
-      delimiterIndex = i;
-      break;
-    }
-  }
-
-  if (delimiterIndex === -1 || delimiterIndex === 0) {
-    return null;
-  }
-
-  // Parse delimiter row
-  const { alignments, widths, decimalColumns } = parseDelimiterRow(lines[delimiterIndex]);
-  const columnCount = alignments.length;
-
-  // Parse all rows
-  const rows = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    if (i === delimiterIndex) {
-      rows.push(parseTableRow(lines[i], false, true));
-    } else if (i < delimiterIndex) {
-      rows.push(parseTableRow(lines[i], true, false));
-    } else {
-      rows.push(parseTableRow(lines[i], false, false));
-    }
-  }
-
-  // Process colspan and rowspan markers
-  processColspans(rows);
-  processRowspans(rows);
-
-  return {
-    rows,
-    alignments,
-    columnWidths: widths,
-    columnCount,
-    decimalColumns,
-  };
-}
-
-/**
- * Check if cell content looks like a number
- *
- * @param {string} content
- * @returns {boolean}
- */
-function isNumericContent(content) {
-  const trimmed = content.trim();
-  if (trimmed === '') return false;
-
-  const numericPattern = /^[$€£¥]?\s*-?[\d,]+(?:\.\d+)?\s*[%MKBkmb]?$/;
-  return numericPattern.test(trimmed);
-}
-
-/**
- * Generate a stable table ID from position
+ * Generate a unique image ID from position.
  *
  * @param {number} from - Start position
  * @returns {string}
  */
-function generateTableId(from) {
-  return `table-${from}`;
-}
-
-// =============================================================================
-// Widget
-// =============================================================================
-
-/**
- * Widget for rendering markdown tables.
- */
-class TableWidget extends WidgetType {
-  /**
-   * @param {Object} table - Parsed table data
-   * @param {string} tableId - Unique table identifier
-   * @param {Object} options - Rendering options
-   */
-  constructor(table, tableId, options = {}) {
-    super();
-    this.table = table;
-    this.tableId = tableId;
-    this.options = options;
-  }
-
-  eq(other) {
-    if (this.tableId !== other.tableId) return false;
-    if (this.table.columnCount !== other.table.columnCount) return false;
-    if (this.table.rows.length !== other.table.rows.length) return false;
-
-    for (let i = 0; i < this.table.rows.length; i++) {
-      const a = this.table.rows[i];
-      const b = other.table.rows[i];
-
-      if (a.cells.length !== b.cells.length) return false;
-      if (a.isHeader !== b.isHeader) return false;
-      if (a.isDelimiter !== b.isDelimiter) return false;
-
-      for (let j = 0; j < a.cells.length; j++) {
-        if (a.cells[j].content !== b.cells[j].content) return false;
-        if (a.cells[j].colspan !== b.cells[j].colspan) return false;
-        if (a.cells[j].rowspan !== b.cells[j].rowspan) return false;
-        if (a.cells[j].hidden !== b.cells[j].hidden) return false;
-      }
-    }
-
-    for (let i = 0; i < this.table.alignments.length; i++) {
-      if (this.table.alignments[i] !== other.table.alignments[i]) {
-        return false;
-      }
-    }
-
-    if (this.options.caption !== other.options.caption) return false;
-    if (this.options.captionPosition !== other.options.captionPosition) return false;
-
-    return true;
-  }
-
-  toDOM() {
-    const container = document.createElement('div');
-    container.className = 'cm-table-widget';
-    container.dataset.tableId = this.tableId;
-
-    const tableEl = document.createElement('table');
-    tableEl.className = 'cm-table';
-
-    // Add column widths via colgroup if specified
-    this.applyColumnWidths(tableEl);
-
-    // Add caption if present
-    if (this.options.caption) {
-      const caption = document.createElement('caption');
-      caption.className = 'cm-table-caption';
-      if (this.options.captionPosition === 'below') {
-        caption.classList.add('cm-table-caption-below');
-      }
-      caption.textContent = this.options.caption;
-      tableEl.appendChild(caption);
-    }
-
-    // Detect numeric columns for alignment
-    const numericColumns = this.detectNumericColumns();
-
-    // Compute decimal alignment info (Tufte's requirement)
-    const decimalInfo = this.computeDecimalAlignment(numericColumns);
-
-    // Render rows
-    let thead = null;
-    const tbody = document.createElement('tbody');
-
-    for (const row of this.table.rows) {
-      if (row.isDelimiter) continue;
-
-      const tr = document.createElement('tr');
-
-      for (let i = 0; i < row.cells.length; i++) {
-        const cell = row.cells[i];
-
-        // Skip hidden cells
-        if (cell.hidden) continue;
-
-        const cellEl = document.createElement(row.isHeader ? 'th' : 'td');
-
-        // Apply colspan/rowspan
-        if (cell.colspan > 1) {
-          cellEl.colSpan = cell.colspan;
-        }
-        if (cell.rowspan > 1) {
-          cellEl.rowSpan = cell.rowspan;
-        }
-
-        // Apply alignment
-        const alignment = this.getEffectiveAlignment(i, numericColumns);
-        if (alignment) {
-          cellEl.classList.add(`cm-table-align-${alignment}`);
-        }
-
-        // Render cell content
-        const isNumeric = !row.isHeader && isNumericContent(cell.content);
-        if (isNumeric) {
-          cellEl.classList.add('cm-table-cell-numeric');
-        }
-
-        // Use decimal alignment for numeric columns
-        if (isNumeric && decimalInfo.has(i)) {
-          this.renderDecimalAligned(cellEl, cell.content, decimalInfo.get(i));
-        } else {
-          cellEl.innerHTML = this.renderInlineMarkdown(cell.content);
-        }
-
-        tr.appendChild(cellEl);
-      }
-
-      if (row.isHeader) {
-        if (!thead) {
-          thead = document.createElement('thead');
-        }
-        thead.appendChild(tr);
-      } else {
-        tbody.appendChild(tr);
-      }
-    }
-
-    if (thead) {
-      tableEl.appendChild(thead);
-    }
-    tableEl.appendChild(tbody);
-
-    container.appendChild(tableEl);
-    return container;
-  }
-
-  /**
-   * Detect which columns should use decimal alignment
-   */
-  detectNumericColumns() {
-    const numericColumns = new Set();
-
-    // Include explicitly marked decimal columns
-    if (this.table.decimalColumns) {
-      for (const col of this.table.decimalColumns) {
-        numericColumns.add(col);
-      }
-    }
-
-    // Auto-detect numeric columns (>70% numeric content)
-    for (let col = 0; col < this.table.columnCount; col++) {
-      if (numericColumns.has(col)) continue;
-
-      let numericCount = 0;
-      let totalCount = 0;
-
-      for (const row of this.table.rows) {
-        if (row.isHeader || row.isDelimiter) continue;
-        const cell = row.cells[col];
-        if (cell && cell.content.trim() !== '' && !cell.hidden) {
-          totalCount++;
-          if (isNumericContent(cell.content)) {
-            numericCount++;
-          }
-        }
-      }
-
-      if (totalCount > 0 && numericCount / totalCount > 0.7) {
-        numericColumns.add(col);
-      }
-    }
-
-    return numericColumns;
-  }
-
-  /**
-   * Compute decimal alignment info for numeric columns
-   */
-  computeDecimalAlignment(numericColumns) {
-    const info = new Map();
-
-    for (const col of numericColumns) {
-      let maxIntWidth = 0;
-      let maxDecWidth = 0;
-
-      for (const row of this.table.rows) {
-        if (row.isHeader || row.isDelimiter) continue;
-        const cell = row.cells[col];
-        if (!cell || cell.hidden) continue;
-
-        const parts = this.splitDecimal(cell.content);
-        if (parts) {
-          maxIntWidth = Math.max(maxIntWidth, parts.integer.length);
-          maxDecWidth = Math.max(maxDecWidth, parts.decimal.length);
-        }
-      }
-
-      if (maxIntWidth > 0 || maxDecWidth > 0) {
-        info.set(col, { maxIntWidth, maxDecWidth });
-      }
-    }
-
-    return info;
-  }
-
-  /**
-   * Parse numeric string into parts for decimal alignment
-   * Handles: $1,234.56M, -12.5%, €100, 1.2M, 78,000, etc.
-   */
-  parseNumericParts(content) {
-    const trimmed = content.trim();
-    if (!trimmed) return null;
-
-    // Match: [currency][-][digits,digits][.digits][suffix]
-    const match = trimmed.match(/^([$€£¥]?)\s*(-?[\d,]+(?:\.\d+)?)\s*([%MKBkmb]?)$/);
-    if (!match) return null;
-
-    const [, prefix, number, suffix] = match;
-    const dotIndex = number.indexOf('.');
-
-    if (dotIndex === -1) {
-      return {
-        prefix: prefix || '',
-        integer: number,
-        decimal: '',
-        suffix: suffix || '',
-      };
-    }
-
-    return {
-      prefix: prefix || '',
-      integer: number.slice(0, dotIndex),
-      decimal: number.slice(dotIndex),
-      suffix: suffix || '',
-    };
-  }
-
-  /**
-   * Split numeric string into integer and decimal parts
-   */
-  splitDecimal(content) {
-    const parts = this.parseNumericParts(content);
-    if (!parts) return null;
-
-    return {
-      integer: parts.prefix + parts.integer,
-      decimal: parts.decimal + parts.suffix,
-    };
-  }
-
-  /**
-   * Render a number with decimal alignment (Tufte's requirement)
-   */
-  renderDecimalAligned(cellEl, content, info) {
-    const parts = this.splitDecimal(content);
-
-    if (!parts) {
-      cellEl.textContent = content;
-      return;
-    }
-
-    cellEl.classList.add('cm-table-cell-decimal-aligned');
-
-    const intSpan = document.createElement('span');
-    intSpan.className = 'cm-table-decimal-int';
-    intSpan.textContent = parts.integer;
-    intSpan.style.minWidth = `${info.maxIntWidth}ch`;
-
-    const decSpan = document.createElement('span');
-    decSpan.className = 'cm-table-decimal-frac';
-    decSpan.textContent = parts.decimal;
-    decSpan.style.minWidth = `${info.maxDecWidth}ch`;
-
-    cellEl.appendChild(intSpan);
-    cellEl.appendChild(decSpan);
-  }
-
-  /**
-   * Apply column widths using colgroup
-   */
-  applyColumnWidths(tableEl) {
-    const widths = this.table.columnWidths;
-    const hasWidths = widths && widths.some(w => w !== null);
-
-    if (!hasWidths) return;
-
-    const colgroup = document.createElement('colgroup');
-
-    for (let i = 0; i < this.table.columnCount; i++) {
-      const col = document.createElement('col');
-      const width = widths[i];
-
-      if (width) {
-        col.style.width = `${width.value}${width.unit}`;
-      }
-
-      colgroup.appendChild(col);
-    }
-
-    tableEl.appendChild(colgroup);
-  }
-
-  /**
-   * Get effective alignment for a column
-   * Priority: explicit decimal > explicit alignment > auto-detect > default
-   */
-  getEffectiveAlignment(columnIndex, numericColumns) {
-    // Check explicit decimal columns first
-    if (this.table.decimalColumns && this.table.decimalColumns.has(columnIndex)) {
-      return 'decimal';
-    }
-
-    // Check explicit alignment from delimiter row
-    const explicit = this.table.alignments[columnIndex];
-    if (explicit && explicit !== 'decimal') {
-      return explicit;
-    }
-
-    // Auto-align numeric columns to right
-    if (numericColumns && numericColumns.has(columnIndex)) {
-      return 'right';
-    }
-
-    return null;
-  }
-
-  /**
-   * Render basic inline markdown (bold, italic, code)
-   */
-  renderInlineMarkdown(content) {
-    let html = this.escapeHtml(content);
-
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    html = html.replace(/`(.+?)`/g, '<code>$1</code>');
-    html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
-
-    return html;
-  }
-
-  /**
-   * Escape HTML special characters
-   */
-  escapeHtml(text) {
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-
-  ignoreEvent() {
-    return true;
-  }
+function generateImageId(from) {
+  return `img-${from}`;
 }
 
 /**
@@ -92125,6 +94505,1228 @@ class DisplayMathWidget extends WidgetType {
 }
 
 /**
+ * Table Widget and Parser
+ *
+ * Renders markdown tables as HTML tables with Tufte Markdown extensions.
+ * Uses the stable layout pattern to avoid jitter.
+ *
+ * Tufte Markdown Extensions:
+ * - Column widths: |:--{30%}| in delimiter row
+ * - Colspan: | > | merges with cell to left
+ * - Rowspan: | ^ | merges with cell above
+ * - Decimal alignment: |---.| in delimiter row
+ *
+ * @module markdown/widgets/table
+ */
+
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+/** Marker for colspan (merge with cell to left) */
+const COLSPAN_MARKER = '>';
+
+/** Marker for rowspan (merge with cell above) */
+const ROWSPAN_MARKER = '^';
+
+// =============================================================================
+// Detection Functions
+// =============================================================================
+
+/**
+ * Check if a line looks like a table row (contains pipes)
+ *
+ * @param {string} line
+ * @returns {boolean}
+ */
+function isTableLine(line) {
+  if (line.startsWith('```') || line.startsWith('~~~')) {
+    return false;
+  }
+  return line.includes('|');
+}
+
+/**
+ * Check if a line is a table delimiter row.
+ * Enhanced to support Tufte extensions: |:--{30%}| and |---.|
+ *
+ * @param {string} line
+ * @returns {boolean}
+ */
+function isTableDelimiter(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') && !trimmed.includes('|')) {
+    return false;
+  }
+
+  const cells = splitTableRow(trimmed);
+  if (cells.length === 0) {
+    return false;
+  }
+
+  // Each cell must match the delimiter pattern
+  // Extended pattern allows: colons, dashes, dots, and width specs
+  const delimiterPattern = /^:?-+(?:\{[^}]+\})?\.?:?$|^:?-+\.?(?:\{[^}]+\})?:?$/;
+  return cells.every(cell => delimiterPattern.test(cell.trim()));
+}
+
+// =============================================================================
+// Parsing Functions
+// =============================================================================
+
+/**
+ * Split a table row into cells, handling escaped pipes
+ *
+ * @param {string} line
+ * @returns {string[]}
+ */
+function splitTableRow(line) {
+  const cells = [];
+  let current = '';
+  let i = 0;
+
+  const trimmed = line.trim();
+  if (trimmed.startsWith('|')) {
+    i = trimmed.indexOf('|') + 1;
+  } else {
+    i = 0;
+  }
+
+  while (i < trimmed.length) {
+    const char = trimmed[i];
+
+    if (char === '\\' && i + 1 < trimmed.length && trimmed[i + 1] === '|') {
+      // Escaped pipe - include the pipe in content
+      current += '|';
+      i += 2;
+    } else if (char === '|') {
+      // Cell boundary
+      cells.push(current);
+      current = '';
+      i++;
+    } else {
+      current += char;
+      i++;
+    }
+  }
+
+  // Don't add the last segment if it's empty (trailing pipe case)
+  if (current.trim() !== '') {
+    cells.push(current);
+  }
+
+  return cells;
+}
+
+/**
+ * Parse column alignments and widths from a delimiter row
+ *
+ * @param {string} delimiterLine
+ * @returns {{ alignments: (string|null)[], widths: (Object|null)[], decimalColumns: Set<number> }}
+ */
+function parseDelimiterRow(delimiterLine) {
+  const cells = splitTableRow(delimiterLine);
+  const alignments = [];
+  const widths = [];
+  const decimalColumns = new Set();
+
+  cells.forEach((cell, index) => {
+    const trimmed = cell.trim();
+
+    // Extract width if present: {30%}, {100px}, {2fr}, {1.5em}
+    let width = null;
+    const widthMatch = trimmed.match(/\{(\d+(?:\.\d+)?)(px|%|fr|em)\}/);
+    if (widthMatch) {
+      width = {
+        value: parseFloat(widthMatch[1]),
+        unit: widthMatch[2],
+      };
+    }
+    widths.push(width);
+
+    // Remove width specification for alignment parsing
+    const alignPart = trimmed.replace(/\{[^}]+\}/, '');
+
+    // Check for decimal alignment marker (.)
+    const hasDecimal = alignPart.includes('.');
+    if (hasDecimal) {
+      decimalColumns.add(index);
+    }
+
+    // Parse alignment from colons
+    const leftColon = alignPart.startsWith(':');
+    const rightColon = alignPart.endsWith(':');
+
+    if (hasDecimal) {
+      alignments.push('decimal');
+    } else if (leftColon && rightColon) {
+      alignments.push('center');
+    } else if (rightColon) {
+      alignments.push('right');
+    } else if (leftColon) {
+      alignments.push('left');
+    } else {
+      alignments.push(null);
+    }
+  });
+
+  return { alignments, widths, decimalColumns };
+}
+
+/**
+ * Check if cell content is a colspan marker
+ */
+function isColspanMarker(content) {
+  return content.trim() === COLSPAN_MARKER;
+}
+
+/**
+ * Check if cell content is a rowspan marker
+ */
+function isRowspanMarker(content) {
+  return content.trim() === ROWSPAN_MARKER;
+}
+
+/**
+ * Parse a table row into structured cells
+ */
+function parseTableRow(line, isHeader = false, isDelimiter = false) {
+  const rawCells = splitTableRow(line);
+
+  const cells = rawCells.map(raw => {
+    const content = raw.trim();
+    return {
+      content,
+      raw,
+      colspan: 1,
+      rowspan: 1,
+      hidden: false,
+      isColspanMarker: isColspanMarker(content),
+      isRowspanMarker: isRowspanMarker(content),
+    };
+  });
+
+  return {
+    cells,
+    isHeader,
+    isDelimiter,
+  };
+}
+
+/**
+ * Process colspan markers in a table
+ */
+function processColspans(rows) {
+  for (const row of rows) {
+    if (row.isDelimiter) continue;
+
+    for (let col = row.cells.length - 1; col >= 0; col--) {
+      const cell = row.cells[col];
+
+      if (cell.isColspanMarker && col > 0) {
+        let targetCol = col - 1;
+        while (targetCol >= 0 && row.cells[targetCol].isColspanMarker) {
+          targetCol--;
+        }
+
+        if (targetCol >= 0) {
+          row.cells[targetCol].colspan++;
+          cell.hidden = true;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Process rowspan markers in a table
+ */
+function processRowspans(rows) {
+  const dataStartIndex = rows.findIndex(r => !r.isHeader && !r.isDelimiter);
+  if (dataStartIndex === -1) return;
+
+  for (let rowIdx = rows.length - 1; rowIdx >= 0; rowIdx--) {
+    const row = rows[rowIdx];
+    if (row.isDelimiter) continue;
+
+    for (let col = 0; col < row.cells.length; col++) {
+      const cell = row.cells[col];
+
+      if (cell.isRowspanMarker) {
+        let targetRow = rowIdx - 1;
+        while (targetRow >= 0) {
+          const aboveRow = rows[targetRow];
+          if (aboveRow.isDelimiter) {
+            targetRow--;
+            continue;
+          }
+
+          if (col < aboveRow.cells.length) {
+            const aboveCell = aboveRow.cells[col];
+            if (aboveCell.isRowspanMarker) {
+              targetRow--;
+              continue;
+            }
+            aboveCell.rowspan++;
+            cell.hidden = true;
+            break;
+          }
+          break;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Parse a complete markdown table from text lines
+ *
+ * @param {string[]} lines - Array of line strings making up the table
+ * @returns {Object|null} Parsed table structure
+ */
+function parseTable(lines) {
+  if (lines.length < 2) {
+    return null;
+  }
+
+  // Find the delimiter row
+  let delimiterIndex = -1;
+  for (let i = 0; i < lines.length && i < 3; i++) {
+    if (isTableDelimiter(lines[i])) {
+      delimiterIndex = i;
+      break;
+    }
+  }
+
+  if (delimiterIndex === -1 || delimiterIndex === 0) {
+    return null;
+  }
+
+  // Parse delimiter row
+  const { alignments, widths, decimalColumns } = parseDelimiterRow(lines[delimiterIndex]);
+  const columnCount = alignments.length;
+
+  // Parse all rows
+  const rows = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (i === delimiterIndex) {
+      rows.push(parseTableRow(lines[i], false, true));
+    } else if (i < delimiterIndex) {
+      rows.push(parseTableRow(lines[i], true, false));
+    } else {
+      rows.push(parseTableRow(lines[i], false, false));
+    }
+  }
+
+  // Process colspan and rowspan markers
+  processColspans(rows);
+  processRowspans(rows);
+
+  return {
+    rows,
+    alignments,
+    columnWidths: widths,
+    columnCount,
+    decimalColumns,
+  };
+}
+
+/**
+ * Check if cell content looks like a number
+ *
+ * @param {string} content
+ * @returns {boolean}
+ */
+function isNumericContent(content) {
+  const trimmed = content.trim();
+  if (trimmed === '') return false;
+
+  const numericPattern = /^[$€£¥]?\s*-?[\d,]+(?:\.\d+)?\s*[%MKBkmb]?$/;
+  return numericPattern.test(trimmed);
+}
+
+/**
+ * Generate a stable table ID from position
+ *
+ * @param {number} from - Start position
+ * @returns {string}
+ */
+function generateTableId(from) {
+  return `table-${from}`;
+}
+
+// =============================================================================
+// Widget
+// =============================================================================
+
+/**
+ * Widget for rendering markdown tables.
+ */
+class TableWidget extends WidgetType {
+  /**
+   * @param {Object} table - Parsed table data
+   * @param {string} tableId - Unique table identifier
+   * @param {Object} options - Rendering options
+   */
+  constructor(table, tableId, options = {}) {
+    super();
+    this.table = table;
+    this.tableId = tableId;
+    this.options = options;
+  }
+
+  eq(other) {
+    if (this.tableId !== other.tableId) return false;
+    if (this.table.columnCount !== other.table.columnCount) return false;
+    if (this.table.rows.length !== other.table.rows.length) return false;
+
+    for (let i = 0; i < this.table.rows.length; i++) {
+      const a = this.table.rows[i];
+      const b = other.table.rows[i];
+
+      if (a.cells.length !== b.cells.length) return false;
+      if (a.isHeader !== b.isHeader) return false;
+      if (a.isDelimiter !== b.isDelimiter) return false;
+
+      for (let j = 0; j < a.cells.length; j++) {
+        if (a.cells[j].content !== b.cells[j].content) return false;
+        if (a.cells[j].colspan !== b.cells[j].colspan) return false;
+        if (a.cells[j].rowspan !== b.cells[j].rowspan) return false;
+        if (a.cells[j].hidden !== b.cells[j].hidden) return false;
+      }
+    }
+
+    for (let i = 0; i < this.table.alignments.length; i++) {
+      if (this.table.alignments[i] !== other.table.alignments[i]) {
+        return false;
+      }
+    }
+
+    if (this.options.caption !== other.options.caption) return false;
+    if (this.options.captionPosition !== other.options.captionPosition) return false;
+
+    return true;
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = 'cm-table-widget';
+    container.dataset.tableId = this.tableId;
+
+    const tableEl = document.createElement('table');
+    tableEl.className = 'cm-table';
+
+    // Add column widths via colgroup if specified
+    this.applyColumnWidths(tableEl);
+
+    // Add caption if present
+    if (this.options.caption) {
+      const caption = document.createElement('caption');
+      caption.className = 'cm-table-caption';
+      if (this.options.captionPosition === 'below') {
+        caption.classList.add('cm-table-caption-below');
+      }
+      caption.textContent = this.options.caption;
+      tableEl.appendChild(caption);
+    }
+
+    // Detect numeric columns for alignment
+    const numericColumns = this.detectNumericColumns();
+
+    // Compute decimal alignment info (Tufte's requirement)
+    const decimalInfo = this.computeDecimalAlignment(numericColumns);
+
+    // Render rows
+    let thead = null;
+    const tbody = document.createElement('tbody');
+
+    for (const row of this.table.rows) {
+      if (row.isDelimiter) continue;
+
+      const tr = document.createElement('tr');
+
+      for (let i = 0; i < row.cells.length; i++) {
+        const cell = row.cells[i];
+
+        // Skip hidden cells
+        if (cell.hidden) continue;
+
+        const cellEl = document.createElement(row.isHeader ? 'th' : 'td');
+
+        // Apply colspan/rowspan
+        if (cell.colspan > 1) {
+          cellEl.colSpan = cell.colspan;
+        }
+        if (cell.rowspan > 1) {
+          cellEl.rowSpan = cell.rowspan;
+        }
+
+        // Apply alignment
+        const alignment = this.getEffectiveAlignment(i, numericColumns);
+        if (alignment) {
+          cellEl.classList.add(`cm-table-align-${alignment}`);
+        }
+
+        // Render cell content
+        const isNumeric = !row.isHeader && isNumericContent(cell.content);
+        if (isNumeric) {
+          cellEl.classList.add('cm-table-cell-numeric');
+        }
+
+        // Use decimal alignment for numeric columns
+        if (isNumeric && decimalInfo.has(i)) {
+          this.renderDecimalAligned(cellEl, cell.content, decimalInfo.get(i));
+        } else {
+          cellEl.innerHTML = this.renderInlineMarkdown(cell.content);
+        }
+
+        tr.appendChild(cellEl);
+      }
+
+      if (row.isHeader) {
+        if (!thead) {
+          thead = document.createElement('thead');
+        }
+        thead.appendChild(tr);
+      } else {
+        tbody.appendChild(tr);
+      }
+    }
+
+    if (thead) {
+      tableEl.appendChild(thead);
+    }
+    tableEl.appendChild(tbody);
+
+    container.appendChild(tableEl);
+    return container;
+  }
+
+  /**
+   * Detect which columns should use decimal alignment
+   */
+  detectNumericColumns() {
+    const numericColumns = new Set();
+
+    // Include explicitly marked decimal columns
+    if (this.table.decimalColumns) {
+      for (const col of this.table.decimalColumns) {
+        numericColumns.add(col);
+      }
+    }
+
+    // Auto-detect numeric columns (>70% numeric content)
+    for (let col = 0; col < this.table.columnCount; col++) {
+      if (numericColumns.has(col)) continue;
+
+      let numericCount = 0;
+      let totalCount = 0;
+
+      for (const row of this.table.rows) {
+        if (row.isHeader || row.isDelimiter) continue;
+        const cell = row.cells[col];
+        if (cell && cell.content.trim() !== '' && !cell.hidden) {
+          totalCount++;
+          if (isNumericContent(cell.content)) {
+            numericCount++;
+          }
+        }
+      }
+
+      if (totalCount > 0 && numericCount / totalCount > 0.7) {
+        numericColumns.add(col);
+      }
+    }
+
+    return numericColumns;
+  }
+
+  /**
+   * Compute decimal alignment info for numeric columns
+   */
+  computeDecimalAlignment(numericColumns) {
+    const info = new Map();
+
+    for (const col of numericColumns) {
+      let maxIntWidth = 0;
+      let maxDecWidth = 0;
+
+      for (const row of this.table.rows) {
+        if (row.isHeader || row.isDelimiter) continue;
+        const cell = row.cells[col];
+        if (!cell || cell.hidden) continue;
+
+        const parts = this.splitDecimal(cell.content);
+        if (parts) {
+          maxIntWidth = Math.max(maxIntWidth, parts.integer.length);
+          maxDecWidth = Math.max(maxDecWidth, parts.decimal.length);
+        }
+      }
+
+      if (maxIntWidth > 0 || maxDecWidth > 0) {
+        info.set(col, { maxIntWidth, maxDecWidth });
+      }
+    }
+
+    return info;
+  }
+
+  /**
+   * Parse numeric string into parts for decimal alignment
+   * Handles: $1,234.56M, -12.5%, €100, 1.2M, 78,000, etc.
+   */
+  parseNumericParts(content) {
+    const trimmed = content.trim();
+    if (!trimmed) return null;
+
+    // Match: [currency][-][digits,digits][.digits][suffix]
+    const match = trimmed.match(/^([$€£¥]?)\s*(-?[\d,]+(?:\.\d+)?)\s*([%MKBkmb]?)$/);
+    if (!match) return null;
+
+    const [, prefix, number, suffix] = match;
+    const dotIndex = number.indexOf('.');
+
+    if (dotIndex === -1) {
+      return {
+        prefix: prefix || '',
+        integer: number,
+        decimal: '',
+        suffix: suffix || '',
+      };
+    }
+
+    return {
+      prefix: prefix || '',
+      integer: number.slice(0, dotIndex),
+      decimal: number.slice(dotIndex),
+      suffix: suffix || '',
+    };
+  }
+
+  /**
+   * Split numeric string into integer and decimal parts
+   */
+  splitDecimal(content) {
+    const parts = this.parseNumericParts(content);
+    if (!parts) return null;
+
+    return {
+      integer: parts.prefix + parts.integer,
+      decimal: parts.decimal + parts.suffix,
+    };
+  }
+
+  /**
+   * Render a number with decimal alignment (Tufte's requirement)
+   */
+  renderDecimalAligned(cellEl, content, info) {
+    const parts = this.splitDecimal(content);
+
+    if (!parts) {
+      cellEl.textContent = content;
+      return;
+    }
+
+    cellEl.classList.add('cm-table-cell-decimal-aligned');
+
+    const intSpan = document.createElement('span');
+    intSpan.className = 'cm-table-decimal-int';
+    intSpan.textContent = parts.integer;
+    intSpan.style.minWidth = `${info.maxIntWidth}ch`;
+
+    const decSpan = document.createElement('span');
+    decSpan.className = 'cm-table-decimal-frac';
+    decSpan.textContent = parts.decimal;
+    decSpan.style.minWidth = `${info.maxDecWidth}ch`;
+
+    cellEl.appendChild(intSpan);
+    cellEl.appendChild(decSpan);
+  }
+
+  /**
+   * Apply column widths using colgroup
+   */
+  applyColumnWidths(tableEl) {
+    const widths = this.table.columnWidths;
+    const hasWidths = widths && widths.some(w => w !== null);
+
+    if (!hasWidths) return;
+
+    const colgroup = document.createElement('colgroup');
+
+    for (let i = 0; i < this.table.columnCount; i++) {
+      const col = document.createElement('col');
+      const width = widths[i];
+
+      if (width) {
+        col.style.width = `${width.value}${width.unit}`;
+      }
+
+      colgroup.appendChild(col);
+    }
+
+    tableEl.appendChild(colgroup);
+  }
+
+  /**
+   * Get effective alignment for a column
+   * Priority: explicit decimal > explicit alignment > auto-detect > default
+   */
+  getEffectiveAlignment(columnIndex, numericColumns) {
+    // Check explicit decimal columns first
+    if (this.table.decimalColumns && this.table.decimalColumns.has(columnIndex)) {
+      return 'decimal';
+    }
+
+    // Check explicit alignment from delimiter row
+    const explicit = this.table.alignments[columnIndex];
+    if (explicit && explicit !== 'decimal') {
+      return explicit;
+    }
+
+    // Auto-align numeric columns to right
+    if (numericColumns && numericColumns.has(columnIndex)) {
+      return 'right';
+    }
+
+    return null;
+  }
+
+  /**
+   * Render basic inline markdown (bold, italic, code, images)
+   */
+  renderInlineMarkdown(content) {
+    // Process images BEFORE escaping HTML (they contain special chars)
+    // Match: ![alt](url) or ![alt](url "title")
+    let html = content.replace(
+      /!\[([^\]]*)\]\(([^)"]+)(?:\s+"([^"]*)")?\)/g,
+      (match, alt, url, title) => {
+        const escapedAlt = this.escapeHtml(alt);
+        const escapedUrl = this.escapeHtml(url);
+        const titleAttr = title ? ` title="${this.escapeHtml(title)}"` : '';
+        return `<img src="${escapedUrl}" alt="${escapedAlt}"${titleAttr} class="cm-table-cell-img">`;
+      }
+    );
+
+    // Now escape remaining HTML
+    // But preserve our img tags - extract them first
+    const imgTags = [];
+    html = html.replace(/<img [^>]+>/g, (match) => {
+      imgTags.push(match);
+      return `__IMG_${imgTags.length - 1}__`;
+    });
+
+    html = this.escapeHtml(html);
+
+    // Restore img tags
+    html = html.replace(/__IMG_(\d+)__/g, (match, index) => imgTags[parseInt(index)]);
+
+    // Process other inline markdown
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    html = html.replace(/`(.+?)`/g, '<code>$1</code>');
+    html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
+
+    return html;
+  }
+
+  /**
+   * Escape HTML special characters
+   */
+  escapeHtml(text) {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+/**
+ * Block Decorations StateField
+ *
+ * Handles multi-line decorations that require Decoration.replace across line breaks.
+ * CodeMirror 6 only allows these from StateFields, not ViewPlugins.
+ *
+ * This handles:
+ * - Tables (multi-line)
+ * - Display math (multi-line)
+ *
+ * Also implements "stable height" feature to prevent layout shift when
+ * switching between rendered widgets and raw markdown.
+ *
+ * @module markdown/block-decorations
+ */
+
+
+// =============================================================================
+// Line Height Tracking for Accurate Spacing
+// =============================================================================
+
+/**
+ * Module-level cache for line height.
+ * Updated by ViewPlugin, read by StateField.
+ * This is simpler and more reliable than StateEffect-based approach.
+ */
+let cachedLineHeight = 22; // Default fallback
+
+/**
+ * Get the current line height
+ */
+function getLineHeight() {
+  return cachedLineHeight;
+}
+
+/**
+ * Update the cached line height (called by ViewPlugin)
+ * Invalidates widget height cache if line height changed significantly
+ * (indicates font/zoom change)
+ */
+function setLineHeight(height) {
+  if (height > 0 && height !== cachedLineHeight) {
+    // If line height changed significantly (>1px), cached widget heights are stale
+    if (cacheLineHeight > 0 && Math.abs(height - cacheLineHeight) > 1) {
+      clearHeightCache();
+    }
+    cacheLineHeight = height;
+    cachedLineHeight = height;
+  }
+}
+
+// =============================================================================
+// Height Cache for Stable Layout
+// =============================================================================
+
+/**
+ * Cache of rendered widget heights, keyed by content hash.
+ * Used to pad raw markdown to prevent layout shift.
+ *
+ * Cache is invalidated when line height changes (font/zoom change).
+ */
+const widgetHeightCache = new Map();
+
+/**
+ * Track the line height when cache was populated.
+ * If line height changes significantly, cache is invalidated.
+ */
+let cacheLineHeight = 0;
+
+/**
+ * Clear the height cache (called when font/zoom changes)
+ */
+function clearHeightCache() {
+  widgetHeightCache.clear();
+}
+
+/**
+ * Simple hash function for content-based caching
+ */
+function hashContent$1(content) {
+  let hash = 0;
+  for (let i = 0; i < content.length; i++) {
+    const char = content.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return hash.toString(36);
+}
+
+/**
+ * Store widget height in cache
+ */
+function cacheWidgetHeight(contentHash, height) {
+  widgetHeightCache.set(contentHash, height);
+}
+
+/**
+ * Get cached widget height
+ */
+function getCachedHeight(contentHash) {
+  return widgetHeightCache.get(contentHash);
+}
+
+/**
+ * TableWidget wrapper that caches its rendered height for stable layout.
+ */
+class TableWidgetWithHeightCache extends TableWidget {
+  constructor(table, tableId, contentHash) {
+    super(table, tableId);
+    this.contentHash = contentHash;
+  }
+
+  eq(other) {
+    return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  toDOM() {
+    const dom = super.toDOM();
+    const contentHash = this.contentHash;
+
+    // Cache the LINE height (not widget height) after render
+    // The line includes widget buffers and other CM overhead
+    requestAnimationFrame(() => {
+      // Find the parent .cm-line element
+      const line = dom.closest('.cm-line');
+      const height = line ? line.offsetHeight : dom.offsetHeight;
+      if (height > 0) {
+        cacheWidgetHeight(contentHash, height);
+      }
+    });
+
+    return dom;
+  }
+}
+
+/**
+ * DisplayMathWidget wrapper that caches its rendered height for stable layout.
+ */
+class DisplayMathWidgetWithHeightCache extends DisplayMathWidget {
+  constructor(latex, mathId, contentHash) {
+    super(latex, mathId);
+    this.contentHash = contentHash;
+  }
+
+  eq(other) {
+    return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  toDOM() {
+    const dom = super.toDOM();
+    const contentHash = this.contentHash;
+
+    // Cache the LINE height (not widget height) after render
+    // The line includes widget buffers and other CM overhead
+    requestAnimationFrame(() => {
+      const line = dom.closest('.cm-line');
+      const height = line ? line.offsetHeight : dom.offsetHeight;
+      if (height > 0) {
+        cacheWidgetHeight(contentHash, height);
+      }
+    });
+
+    return dom;
+  }
+}
+
+/**
+ * Find all table ranges in the document using syntax tree + fallback scanner
+ */
+function findTableRanges(state) {
+  const doc = state.doc;
+  const ranges = [];
+  const processedStarts = new Set();
+
+  // First pass: use syntax tree
+  syntaxTree(state).iterate({
+    enter: (node) => {
+      if (node.name === 'Table') {
+        const startLine = doc.lineAt(node.from);
+        const endLine = doc.lineAt(node.to);
+
+        if (!processedStarts.has(startLine.number)) {
+          processedStarts.add(startLine.number);
+          ranges.push({
+            type: 'table',
+            from: node.from,
+            to: node.to,
+            startLine: startLine.number,
+            endLine: endLine.number,
+          });
+        }
+        return false; // Don't recurse
+      }
+    },
+  });
+
+  // Second pass: fallback scanner for tables not in syntax tree
+  // (GFM tables sometimes parsed as paragraphs)
+  let inTable = false;
+  let tableStart = -1;
+  let tableStartLine = -1;
+  let hasDelimiter = false;
+
+  for (let i = 1; i <= doc.lines; i++) {
+    const line = doc.line(i);
+    const text = line.text;
+    const isTable = isTableLine(text);
+    const isDelim = isTableDelimiter(text);
+
+    if (isTable && !inTable) {
+      // Check if already processed
+      if (!processedStarts.has(i)) {
+        inTable = true;
+        tableStart = line.from;
+        tableStartLine = i;
+        hasDelimiter = isDelim;
+      }
+    } else if (isTable && inTable) {
+      if (isDelim) hasDelimiter = true;
+    } else if (!isTable && inTable) {
+      // End of table
+      if (hasDelimiter && tableStartLine > 0) {
+        const prevLine = doc.line(i - 1);
+        ranges.push({
+          type: 'table',
+          from: tableStart,
+          to: prevLine.to,
+          startLine: tableStartLine,
+          endLine: i - 1,
+        });
+      }
+      inTable = false;
+      tableStart = -1;
+      tableStartLine = -1;
+      hasDelimiter = false;
+    }
+  }
+
+  // Handle table at end of document
+  if (inTable && hasDelimiter && tableStartLine > 0) {
+    const lastLine = doc.line(doc.lines);
+    ranges.push({
+      type: 'table',
+      from: tableStart,
+      to: lastLine.to,
+      startLine: tableStartLine,
+      endLine: doc.lines,
+    });
+  }
+
+  return ranges;
+}
+
+/**
+ * Find all display math ranges in the document
+ */
+function findDisplayMathRanges(state) {
+  const doc = state.doc;
+  const text = doc.toString();
+  const ranges = [];
+
+  // Match $$ ... $$ (multi-line)
+  const dollarPattern = /\$\$([\s\S]*?)\$\$/g;
+  let match;
+
+  while ((match = dollarPattern.exec(text)) !== null) {
+    const from = match.index;
+    const to = match.index + match[0].length;
+    const content = match[1];
+
+    // Only include if it spans multiple lines or is a block
+    const startLine = doc.lineAt(from);
+    const endLine = doc.lineAt(to);
+
+    // Check if it's on its own line (block display math)
+    const lineText = startLine.text.trim();
+    const isBlock = lineText.startsWith('$$');
+
+    if (isBlock) {
+      ranges.push({
+        type: 'displayMath',
+        from,
+        to,
+        startLine: startLine.number,
+        endLine: endLine.number,
+        content: content.trim(),
+      });
+    }
+  }
+
+  // Match \[ ... \] (LaTeX display math)
+  const bracketPattern = /\\\[([\s\S]*?)\\\]/g;
+
+  while ((match = bracketPattern.exec(text)) !== null) {
+    const from = match.index;
+    const to = match.index + match[0].length;
+    const content = match[1];
+    const startLine = doc.lineAt(from);
+    const endLine = doc.lineAt(to);
+
+    ranges.push({
+      type: 'displayMath',
+      from,
+      to,
+      startLine: startLine.number,
+      endLine: endLine.number,
+      content: content.trim(),
+    });
+  }
+
+  return ranges;
+}
+
+/**
+ * Build decorations for all block elements
+ */
+function buildBlockDecorations(state) {
+  const doc = state.doc;
+  const cursorPos = state.selection.main.head;
+  const cursorLine = doc.lineAt(cursorPos).number;
+  const decorations = [];
+
+  // Find and process tables
+  const tableRanges = findTableRanges(state);
+
+  for (const range of tableRanges) {
+    const cursorInTable = cursorLine >= range.startLine && cursorLine <= range.endLine;
+
+    // Collect lines for both rendering and height calculation
+    const lines = [];
+    for (let i = range.startLine; i <= range.endLine; i++) {
+      lines.push(doc.line(i).text);
+    }
+    const contentHash = 'table-' + hashContent$1(lines.join('\n'));
+
+    if (!cursorInTable) {
+      // Cursor outside: replace entire table with widget
+      const parsed = parseTable(lines);
+
+      if (parsed && parsed.rows.length > 0) {
+        const tableId = generateTableId(range.from);
+        decorations.push(
+          Decoration.replace({
+            widget: new TableWidgetWithHeightCache(parsed, tableId, contentHash),
+          }).range(range.from, range.to)
+        );
+      }
+    } else {
+      // Cursor inside: show raw markdown, but add spacer to prevent layout shift
+
+      const cachedHeight = getCachedHeight(contentHash);
+      if (cachedHeight) {
+        // Calculate raw content height using actual line height
+        const lineCount = range.endLine - range.startLine + 1;
+        const lineHeight = getLineHeight();
+        const rawHeight = lineCount * lineHeight;
+        const padding = cachedHeight - rawHeight;
+
+        if (padding > 0) {
+          // Use line decoration with padding-bottom (doesn't block navigation)
+          const lastLine = doc.line(range.endLine);
+          decorations.push(
+            Decoration.line({
+              attributes: {
+                class: 'cm-block-spacer-line',
+                style: `padding-bottom: ${padding}px`
+              }
+            }).range(lastLine.from)
+          );
+        }
+      }
+    }
+  }
+
+  // Find and process display math
+  const mathRanges = findDisplayMathRanges(state);
+
+  for (const range of mathRanges) {
+    const cursorInMath = cursorLine >= range.startLine && cursorLine <= range.endLine;
+    const contentHash = 'math-' + hashContent$1(range.content);
+
+    if (!cursorInMath) {
+      // Cursor outside: replace entire math block with widget
+      const mathId = generateMathId(range.from);
+      decorations.push(
+        Decoration.replace({
+          widget: new DisplayMathWidgetWithHeightCache(range.content, mathId, contentHash),
+        }).range(range.from, range.to)
+      );
+    } else {
+      // Cursor inside: show raw LaTeX, but add spacer to prevent layout shift
+      const cachedHeight = getCachedHeight(contentHash);
+      if (cachedHeight) {
+        const lineCount = range.endLine - range.startLine + 1;
+        const lineHeight = getLineHeight();
+        const rawHeight = lineCount * lineHeight;
+        const padding = cachedHeight - rawHeight;
+
+        if (padding > 0) {
+          // Use line decoration with padding-bottom (doesn't block navigation)
+          const lastLine = doc.line(range.endLine);
+          decorations.push(
+            Decoration.line({
+              attributes: {
+                class: 'cm-block-spacer-line',
+                style: `padding-bottom: ${padding}px`
+              }
+            }).range(lastLine.from)
+          );
+        }
+      }
+    }
+  }
+
+  return Decoration.set(decorations, true);
+}
+
+/**
+ * StateField for block decorations (tables, display math)
+ *
+ * This MUST be a StateField (not ViewPlugin) because it uses
+ * Decoration.replace across line breaks.
+ */
+const blockDecorations = StateField.define({
+  create(state) {
+    return buildBlockDecorations(state);
+  },
+
+  update(decorations, tr) {
+    // Rebuild on any change that could affect block elements
+    // For efficiency, we could map positions and only rebuild affected ranges,
+    // but for now, full rebuild is acceptable
+    if (tr.docChanged || tr.selection) {
+      return buildBlockDecorations(tr.state);
+    }
+    return decorations;
+  },
+
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+/**
+ * ViewPlugin to track and update the actual line height from the editor.
+ * This ensures spacer calculations use the real line height, not estimates.
+ *
+ * Note: StateFields run before ViewPlugins, so we need to trigger a
+ * re-render after updating the line height cache.
+ */
+const lineHeightTracker = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.view = view;
+      const oldHeight = cachedLineHeight;
+      setLineHeight(view.defaultLineHeight);
+
+      // If line height changed, trigger a re-render so StateField uses correct value
+      if (oldHeight !== cachedLineHeight) {
+        // Use requestAnimationFrame to avoid dispatching during construction
+        requestAnimationFrame(() => {
+          // Dispatch empty transaction to trigger StateField rebuild
+          view.dispatch({});
+        });
+      }
+    }
+
+    update(update) {
+      // Check if line height changed (e.g., due to font loading or resize)
+      const oldHeight = cachedLineHeight;
+      setLineHeight(this.view.defaultLineHeight);
+
+      // If height changed mid-session (font load, resize), trigger rebuild
+      if (oldHeight !== cachedLineHeight) {
+        this.view.dispatch({});
+      }
+    }
+  }
+);
+
+/**
  * Markdown Renderer
  *
  * CodeMirror ViewPlugin that renders markdown elements.
@@ -92139,6 +95741,79 @@ class DisplayMathWidget extends WidgetType {
  */
 
 
+// =============================================================================
+// Height Caching for Stable Layout
+// =============================================================================
+
+/**
+ * Simple hash function for content-based caching
+ */
+function hashContent(content) {
+  let hash = 0;
+  for (let i = 0; i < content.length; i++) {
+    const char = content.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return hash.toString(36);
+}
+
+/**
+ * BlockImageWidget wrapper that caches its rendered height for stable layout.
+ */
+class BlockImageWidgetWithHeightCache extends BlockImageWidget {
+  constructor(url, alt, isLinked, linkUrl, imageId, position, title, contentHash) {
+    super(url, alt, isLinked, linkUrl, imageId, position, title);
+    this.contentHash = contentHash;
+  }
+
+  eq(other) {
+    return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  toDOM() {
+    const dom = super.toDOM();
+    const contentHash = this.contentHash;
+
+    // Cache the LINE height (not widget height) after image loads
+    // The line includes widget buffers and other CM overhead
+    const cacheHeight = () => {
+      const line = dom.closest('.cm-line');
+      const height = line ? line.offsetHeight : dom.offsetHeight;
+      if (height > 0) {
+        cacheWidgetHeight(contentHash, height);
+      }
+    };
+
+    // Use MutationObserver to detect when img is added to DOM
+    // Note: BlockImageWidget adds img to DOM only in onload callback
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'childList') {
+          const img = dom.querySelector('img');
+          if (img) {
+            // Image added - wait for it to have dimensions
+            if (img.complete) {
+              cacheHeight();
+            } else {
+              img.addEventListener('load', cacheHeight);
+            }
+            observer.disconnect();
+            return;
+          }
+        }
+      }
+    });
+
+    observer.observe(dom, { childList: true, subtree: true });
+
+    // Also try after a delay as fallback
+    setTimeout(cacheHeight, 500);
+
+    return dom;
+  }
+}
+
 /**
  * Build decorations for all markdown elements in the viewport.
  *
@@ -92151,8 +95826,11 @@ function buildDecorations(view) {
   const cursorPos = view.state.selection.main.head;
   const cursorLine = doc.lineAt(cursorPos).number;
 
-  // Track table ranges processed by syntax tree (for fallback scanner)
-  const processedTableRanges = [];
+  // Update link definition cache for reference-style images/links
+  updateLinkDefinitionCache(doc.toString());
+
+  // Note: Tables and display math are handled by StateField (block-decorations.js)
+  // ViewPlugin can only handle single-line decorations
 
   syntaxTree(view.state).iterate({
     from: view.viewport.from,
@@ -92407,6 +96085,8 @@ function buildDecorations(view) {
       if (node.name === 'Image') {
         let imageUrl = '';
         let imageAlt = '';
+        let imageTitle = ''; // Title/caption from ![alt](url "title")
+        let linkLabel = ''; // For reference-style images: ![alt][ref]
 
         const cursor = node.node.cursor();
         if (cursor.firstChild()) {
@@ -92414,257 +96094,163 @@ function buildDecorations(view) {
             if (cursor.name === 'URL') {
               imageUrl = doc.sliceString(cursor.from, cursor.to);
             }
+            if (cursor.name === 'LinkTitle') {
+              // Title is the text inside quotes: "caption text"
+              const titleWithQuotes = doc.sliceString(cursor.from, cursor.to);
+              // Remove surrounding quotes
+              imageTitle = titleWithQuotes.slice(1, -1);
+            }
+            // First LinkLabel is the alt text, second is the reference
             if (cursor.name === 'LinkLabel') {
-              imageAlt = doc.sliceString(cursor.from, cursor.to);
+              const labelText = doc.sliceString(cursor.from, cursor.to);
+              if (!imageAlt) {
+                imageAlt = labelText;
+              } else {
+                // This is a reference label (![alt][ref])
+                linkLabel = labelText;
+              }
             }
           } while (cursor.nextSibling());
+        }
+
+        // Resolve reference-style images: ![alt][ref] -> look up [ref]: url
+        if (!imageUrl && linkLabel) {
+          const resolved = resolveLinkReference(linkLabel);
+          if (resolved) {
+            imageUrl = resolved.url;
+            if (!imageTitle && resolved.title) {
+              imageTitle = resolved.title;
+            }
+          }
+        }
+        // Also handle shortcut reference: ![alt][] where ref = alt
+        if (!imageUrl && !linkLabel && imageAlt) {
+          const resolved = resolveLinkReference(imageAlt);
+          if (resolved) {
+            imageUrl = resolved.url;
+            if (!imageTitle && resolved.title) {
+              imageTitle = resolved.title;
+            }
+          }
         }
 
         // Check if this image is inside a link (linked image: [![alt](img)](url))
         const parent = node.node.parent;
         const isLinkedImage = parent?.name === 'Link';
-        const syntaxEnd = isLinkedImage ? parent.to : node.to;
+        let syntaxEnd = isLinkedImage ? parent.to : node.to;
         const syntaxStart = isLinkedImage ? parent.from : node.from;
 
+        // Get link URL if this is a linked image
+        let linkUrl = '';
+        if (isLinkedImage) {
+          const linkCursor = parent.cursor();
+          if (linkCursor.firstChild()) {
+            do {
+              if (linkCursor.name === 'URL') {
+                linkUrl = doc.sliceString(linkCursor.from, linkCursor.to);
+              }
+            } while (linkCursor.nextSibling());
+          }
+        }
+
+        // Determine if this is a block image (alone on a line)
+        const line = doc.lineAt(node.from);
+        const isBlock = isBlockImage(line.text);
+        const imageId = generateImageId(node.from);
+
+        // Extract position modifier from end of line: ![alt](url)> → 'right'
+        const { position, hasModifier } = extractPositionFromLine(line.text);
+
+        // Adjust syntaxEnd to include the position modifier character
+        if (hasModifier && syntaxEnd < line.to) {
+          const charAfterSyntax = doc.sliceString(syntaxEnd, syntaxEnd + 1);
+          if (isPositionModifier(charAfterSyntax)) {
+            syntaxEnd = syntaxEnd + 1;
+          }
+        }
+
+        // Content hash for stable layout caching
+        const contentHash = isBlock ? 'img-' + hashContent(line.text) : null;
+
         if (isActiveLine) {
-          // Show full syntax when editing
+          // Show full syntax when editing (including position modifier)
           decorations.push(
-            Decoration.mark({ class: 'cm-md-marker' }).range(syntaxStart, syntaxEnd)
+            Decoration.mark({ class: 'cm-md-image-syntax' }).range(syntaxStart, syntaxEnd)
           );
-        } else {
-          // Replace syntax with compact placeholder
-          // (Full image preview would require block widgets which aren't supported in plugins)
+
+          // For block images, add spacer to prevent layout shift
+          if (isBlock && contentHash) {
+            const cachedHeight = getCachedHeight(contentHash);
+            if (cachedHeight) {
+              // Use actual line height from view for accurate spacing
+              const lineHeight = view.defaultLineHeight;
+              const rawHeight = lineHeight; // Images are single line
+              const padding = cachedHeight - rawHeight;
+              if (padding > 0) {
+                // Use line decoration with padding-bottom (doesn't block navigation)
+                decorations.push(
+                  Decoration.line({
+                    attributes: {
+                      class: 'cm-block-spacer-line',
+                      style: `padding-bottom: ${padding}px`
+                    }
+                  }).range(line.from)
+                );
+              }
+            }
+          }
+        } else if (!imageUrl) {
+          // No URL (unresolved reference) - show placeholder
           decorations.push(
             Decoration.replace({
-              widget: new ImagePlaceholder(imageAlt, imageUrl, isLinkedImage),
+              widget: new ImagePlaceholder(imageAlt, '', isLinkedImage),
+            }).range(syntaxStart, syntaxEnd)
+          );
+        } else if (isBlock) {
+          // Block image: replace ENTIRE line content with image widget
+          // Uses height-caching wrapper for stable layout
+          decorations.push(
+            Decoration.replace({
+              widget: new BlockImageWidgetWithHeightCache(
+                imageUrl,
+                imageAlt,
+                isLinkedImage,
+                linkUrl,
+                imageId,
+                position,    // Position modifier: 'block', 'right', 'left', 'wide', 'small'
+                imageTitle,  // Caption from title attribute
+                contentHash  // For height caching
+              ),
+            }).range(line.from, line.to)
+          );
+        } else {
+          // Inline image: replace with inline image widget
+          decorations.push(
+            Decoration.replace({
+              widget: new ImageWidget(imageUrl, imageAlt, isLinkedImage, linkUrl),
             }).range(syntaxStart, syntaxEnd)
           );
         }
       }
 
-      // =======================================================================
-      // TABLES
-      // =======================================================================
+      // TABLES: Handled by StateField (block-decorations.js)
+      // Skip table nodes - they use multi-line Decoration.replace which requires StateField
       if (node.name === 'Table') {
-        const startLine = doc.lineAt(node.from);
-        const endLine = doc.lineAt(node.to);
-
-        // Track this table as processed (for fallback scanner)
-        processedTableRanges.push({ from: node.from, to: node.to });
-
-        // Check if cursor is inside the table
-        const cursorInTable = cursorLine >= startLine.number && cursorLine <= endLine.number;
-
-        if (cursorInTable) {
-          // Cursor in table: show raw markdown with styling
-          for (let i = startLine.number; i <= endLine.number; i++) {
-            const line = doc.line(i);
-            decorations.push(
-              Decoration.line({ class: 'cm-md-table-line-visible' }).range(line.from)
-            );
-          }
-        } else {
-          // Cursor outside: hide lines and show widget
-          // Collect table lines for parsing
-          const lines = [];
-          for (let i = startLine.number; i <= endLine.number; i++) {
-            lines.push(doc.line(i).text);
-          }
-
-          // Parse the table
-          const parsed = parseTable(lines);
-
-          if (parsed && parsed.rows.length > 0) {
-            // Hide all table lines (text transparent, same height)
-            for (let i = startLine.number; i <= endLine.number; i++) {
-              const line = doc.line(i);
-              decorations.push(
-                Decoration.line({ class: 'cm-md-table-line-hidden' }).range(line.from)
-              );
-            }
-
-            // Add table widget after first line
-            const tableId = generateTableId(node.from);
-            decorations.push(
-              Decoration.widget({
-                widget: new TableWidget(parsed, tableId),
-                side: 1,
-              }).range(startLine.to)
-            );
-          } else {
-            // Parsing failed - show styled raw markdown
-            for (let i = startLine.number; i <= endLine.number; i++) {
-              const line = doc.line(i);
-              decorations.push(
-                Decoration.line({ class: 'cm-md-table-line-visible' }).range(line.from)
-              );
-            }
-          }
-        }
-
         return false; // Don't recurse into table children
       }
     },
   });
 
   // ==========================================================================
-  // FALLBACK TABLE SCANNER (Tufte Markdown Extensions)
+  // TABLES & DISPLAY MATH: Handled by StateField (block-decorations.js)
   // ==========================================================================
-  // The GFM parser only recognizes standard delimiter rows (:?-+:?)
-  // Our Tufte Markdown extensions (|:--{30%}|, |---.|) break GFM recognition.
-  // This fallback scans for tables the syntax tree missed.
-
-  const isProcessedAsTable = (from, to) => {
-    return processedTableRanges.some(r => from >= r.from && to <= r.to);
-  };
-
-  // Scan viewport for potential tables line by line
-  let lineNum = doc.lineAt(view.viewport.from).number;
-  const lastLineNum = doc.lineAt(view.viewport.to).number;
-
-  while (lineNum <= lastLineNum) {
-    const line = doc.line(lineNum);
-
-    // Check if this looks like a table header row
-    if (isTableLine(line.text) && lineNum < doc.lines) {
-      const nextLine = doc.line(lineNum + 1);
-
-      // Look for delimiter on next line (our isTableDelimiter supports Tufte syntax)
-      if (isTableDelimiter(nextLine.text)) {
-        // Found a potential table! Collect all table lines
-        const tableStartLine = lineNum;
-        let tableEndLine = lineNum + 1; // At least header + delimiter
-
-        // Continue collecting data rows
-        while (tableEndLine < doc.lines) {
-          const checkLine = doc.line(tableEndLine + 1);
-          if (isTableLine(checkLine.text)) {
-            tableEndLine++;
-          } else {
-            break;
-          }
-        }
-
-        const tableStart = doc.line(tableStartLine).from;
-        const tableEnd = doc.line(tableEndLine).to;
-
-        // Skip if already processed by syntax tree
-        if (!isProcessedAsTable(tableStart, tableEnd)) {
-          const startLine = doc.line(tableStartLine);
-          doc.line(tableEndLine);
-
-          // Check if cursor is inside the table
-          const cursorInTable = cursorLine >= tableStartLine && cursorLine <= tableEndLine;
-
-          if (cursorInTable) {
-            // Cursor in table: show raw markdown with styling
-            for (let i = tableStartLine; i <= tableEndLine; i++) {
-              const tableLine = doc.line(i);
-              decorations.push(
-                Decoration.line({ class: 'cm-md-table-line-visible' }).range(tableLine.from)
-              );
-            }
-          } else {
-            // Cursor outside: hide lines and show widget
-            const lines = [];
-            for (let i = tableStartLine; i <= tableEndLine; i++) {
-              lines.push(doc.line(i).text);
-            }
-
-            const parsed = parseTable(lines);
-
-            if (parsed && parsed.rows.length > 0) {
-              // Hide all table lines
-              for (let i = tableStartLine; i <= tableEndLine; i++) {
-                const tableLine = doc.line(i);
-                decorations.push(
-                  Decoration.line({ class: 'cm-md-table-line-hidden' }).range(tableLine.from)
-                );
-              }
-
-              // Add table widget
-              const tableId = generateTableId(tableStart);
-              decorations.push(
-                Decoration.widget({
-                  widget: new TableWidget(parsed, tableId),
-                  side: 1,
-                }).range(startLine.to)
-              );
-            } else {
-              // Parsing failed - show styled raw markdown
-              for (let i = tableStartLine; i <= tableEndLine; i++) {
-                const tableLine = doc.line(i);
-                decorations.push(
-                  Decoration.line({ class: 'cm-md-table-line-visible' }).range(tableLine.from)
-                );
-              }
-            }
-          }
-
-          // Skip to after this table
-          lineNum = tableEndLine + 1;
-          continue;
-        }
-      }
-    }
-
-    lineNum++;
-  }
+  // These multi-line elements require Decoration.replace across line breaks,
+  // which is only allowed from StateField, not ViewPlugin.
 
   // ==========================================================================
-  // MATH DETECTION (LaTeX with KaTeX)
+  // INLINE MATH: $...$ (single line only)
   // ==========================================================================
-  // Detect display math ($$...$$) and inline math ($...$)
-  // These aren't in the markdown syntax tree, so we scan manually.
-
-  const text = doc.toString();
-
-  // Display math: $$...$$ (can span multiple lines)
-  const displayMathRegex = /\$\$([\s\S]+?)\$\$/g;
-  let displayMatch;
-  while ((displayMatch = displayMathRegex.exec(text)) !== null) {
-    const from = displayMatch.index;
-    const to = from + displayMatch[0].length;
-
-    // Skip if outside viewport
-    if (to < view.viewport.from || from > view.viewport.to) continue;
-
-    const latex = displayMatch[1].trim();
-    const startLine = doc.lineAt(from);
-    const endLine = doc.lineAt(to);
-
-    // Check if cursor is inside the math block
-    const cursorInMath = cursorLine >= startLine.number && cursorLine <= endLine.number;
-
-    if (cursorInMath) {
-      // Show raw LaTeX with styling
-      for (let i = startLine.number; i <= endLine.number; i++) {
-        const line = doc.line(i);
-        decorations.push(
-          Decoration.line({ class: 'cm-md-math-line-visible' }).range(line.from)
-        );
-      }
-    } else {
-      // Hide lines and show rendered widget
-      for (let i = startLine.number; i <= endLine.number; i++) {
-        const line = doc.line(i);
-        decorations.push(
-          Decoration.line({ class: 'cm-md-math-line-hidden' }).range(line.from)
-        );
-      }
-
-      // Add math widget after first line
-      const mathId = generateMathId(from);
-      decorations.push(
-        Decoration.widget({
-          widget: new DisplayMathWidget(latex, mathId),
-          side: 1,
-        }).range(startLine.to)
-      );
-    }
-  }
-
-  // Inline math: $...$ (single line only, not $$)
+  // Inline math can be handled here since it's single-line
   // Process line by line in viewport
   for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
     const line = doc.line(i);
@@ -92918,37 +96504,45 @@ const markdownStyles = `
 }
 
 /* ==========================================================================
-   TABLES (Stable Layout Pattern)
+   BLOCK SPACER (Stable Layout)
 
-   Tables use the same pattern as output widgets:
-   - Lines ALWAYS take space (text transparent when viewing)
-   - Widget overlays using position: absolute
-   - No jitter when cursor enters/leaves
+   When editing raw markdown that will render to a taller widget (tables,
+   images, display math), this spacer prevents layout shift by filling
+   the height difference. Provides visual feedback that space is reserved.
    ========================================================================== */
 
-/* Both states: lines always take same space */
-.cm-md-table-line-hidden,
-.cm-md-table-line-visible {
+/* Line-based spacer (uses padding-bottom, doesn't block navigation) */
+.cm-block-spacer-line {
   position: relative;
 }
 
-/* Hidden: text invisible but same space */
-.cm-md-table-line-hidden {
-  color: transparent !important;
-  user-select: none;
+/* Visual indicator for the padding area */
+.cm-block-spacer-line::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(100% - 1.5em); /* Everything below the text line */
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--md-spacer-color, rgba(128, 128, 128, 0.03)) 30%,
+    var(--md-spacer-color, rgba(128, 128, 128, 0.05)) 70%,
+    transparent 100%
+  );
+  border-left: 2px dotted var(--md-spacer-border, rgba(128, 128, 128, 0.15));
+  margin-left: 0.5em;
+  pointer-events: none;
 }
 
-.cm-md-table-line-hidden > span {
-  visibility: hidden !important;
-}
+/* ==========================================================================
+   TABLES (StateField + Decoration.replace)
 
-/* Visible: text shown for editing - must cover widget underneath */
-.cm-md-table-line-visible {
-  color: var(--widget-text);
-  position: relative;
-  z-index: 2;
-  background: var(--widget-surface-elevated);
-}
+   Tables use Decoration.replace from a StateField (not ViewPlugin) because
+   they span multiple lines. The widget replaces the entire table source.
+   When cursor enters, the StateField removes the decoration, showing source.
+   ========================================================================== */
 
 /* ==========================================================================
    TABLES (Tufte-inspired: maximize data-ink ratio)
@@ -92959,12 +96553,9 @@ const markdownStyles = `
    - Minimal borders: only bottom borders for separation
    ========================================================================== */
 
-/* Container - absolutely positioned to overlay hidden markdown lines */
+/* Container - replaces entire table source, flows naturally */
 .cm-table-widget {
-  position: absolute;
-  left: 0;
-  right: 0;
-  z-index: 1;
+  display: block;
   background: var(--md-table-bg, var(--widget-surface));
   padding: 0.5em 0;
 }
@@ -93093,11 +96684,38 @@ const markdownStyles = `
   opacity: 0.7;
 }
 
+/* Images in table cells (Tufte: sparklines, icons, thumbnails) */
+.cm-table-cell-img {
+  max-width: var(--md-table-img-max-width, 120px);
+  max-height: var(--md-table-img-max-height, 80px);
+  height: auto;
+  vertical-align: middle;
+  border-radius: 3px;
+}
+
+/* Multiple images in a cell */
+.cm-table td img + img,
+.cm-table th img + img {
+  margin-left: 0.5em;
+}
+
 /* ==========================================================================
    IMAGES (Stable Layout Pattern)
+
+   Two modes:
+   - Inline images: Embedded in text flow, replaced with <img> element
+   - Block images: Standalone on a line, uses stable layout pattern
+     (text line hidden but takes space, widget overlays)
    ========================================================================== */
 
-/* Image syntax placeholder (shown when blurred) */
+/* Image syntax (shown when editing/cursor on line) */
+.cm-md-image-syntax {
+  color: var(--md-marker-color);
+  font-family: var(--md-marker-font);
+  font-size: 0.95em;
+}
+
+/* Image syntax placeholder (for unresolved references) */
 .cm-image-placeholder {
   display: inline-flex;
   align-items: center;
@@ -93114,29 +96732,223 @@ const markdownStyles = `
   background: var(--widget-surface-hover);
 }
 
-/* Image widget */
-.cm-image-widget {
-  display: block;
-  margin: 0.5em 0;
+/* --------------------------------------------------------------------------
+   INLINE IMAGES (embedded in text)
+   -------------------------------------------------------------------------- */
+
+.cm-image-inline {
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 0; /* Prevent extra space from line-height */
 }
 
-.cm-image-widget img {
-  max-width: var(--md-image-max-width);
+.cm-image-inline-img {
+  max-width: var(--md-image-inline-max-width, 300px);
+  max-height: var(--md-image-inline-max-height, 200px);
   height: auto;
-  border-radius: var(--md-image-border-radius);
+  border-radius: var(--md-image-border-radius, 4px);
+  vertical-align: middle;
 }
 
-.cm-image-widget.cm-image-loading {
+.cm-image-inline.cm-image-loading {
+  background: var(--widget-surface);
+  padding: 0.25em 0.5em;
+  border-radius: var(--md-image-border-radius, 4px);
+  color: var(--widget-text-muted);
+  font-size: 0.85em;
+  font-style: italic;
+  line-height: 1.2;
+}
+
+.cm-image-inline.cm-image-loading::before {
+  content: '🖼 ';
+}
+
+.cm-image-inline.cm-image-error {
+  background: rgba(239, 68, 68, 0.1);
+  padding: 0.25em 0.5em;
+  border-radius: var(--md-image-border-radius, 4px);
+  color: var(--widget-error, #ef4444);
+  font-size: 0.85em;
+  line-height: 1.2;
+}
+
+.cm-image-inline.cm-image-error::before {
+  content: '⚠️ ';
+}
+
+/* Link wrapper for clickable images */
+.cm-image-link {
+  display: inline-block;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.cm-image-link:hover img {
+  opacity: 0.9;
+  outline: 2px solid var(--md-link-color, #3b82f6);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   BLOCK IMAGES (Replace Decoration)
+
+   Design:
+   - Uses Decoration.replace to replace entire line with image widget
+   - Widget is display:block, takes natural height
+   - No hidden lines or absolute positioning needed
+   - Image pushes content down naturally
+   -------------------------------------------------------------------------- */
+
+/* Block image widget container - replaces entire line */
+.cm-image-block {
+  display: block;
+  padding: 0.75em 0;
+  text-align: center; /* Default: centered */
+}
+
+.cm-image-block-wrapper {
+  display: inline-block;
+  max-width: 100%;
+  text-align: center;
+}
+
+.cm-image-block-img {
+  max-width: var(--md-image-max-width, 100%);
+  max-height: var(--md-image-max-height, 500px);
+  height: auto;
+  border-radius: var(--md-image-border-radius, 4px);
+  box-shadow: var(--md-image-shadow, 0 2px 8px rgba(0, 0, 0, 0.1));
+}
+
+.cm-image-block-wrapper.cm-image-loading {
+  background: var(--widget-surface);
+  padding: 1em 1.5em;
+  border-radius: var(--md-image-border-radius, 4px);
   color: var(--widget-text-muted);
   font-style: italic;
-  padding: 1em;
+  min-width: 150px;
+  min-height: 80px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.cm-image-widget.cm-image-error {
-  color: var(--widget-error);
-  padding: 0.5em;
+.cm-image-block-wrapper.cm-image-error {
   background: rgba(239, 68, 68, 0.1);
-  border-radius: var(--widget-border-radius);
+  padding: 1em 1.5em;
+  border-radius: var(--md-image-border-radius, 4px);
+  color: var(--widget-error, #ef4444);
+}
+
+.cm-image-error-text {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.cm-image-error-text::before {
+  content: '⚠️';
+}
+
+/* Image caption - inherits alignment from parent position modifier */
+.cm-image-caption {
+  font-size: 0.85em;
+  color: var(--widget-text-muted);
+  font-style: italic;
+  margin-top: 0.5em;
+  /* text-align inherited from .cm-image-pos-* parent */
+}
+
+/* Linked block images */
+.cm-image-block .cm-image-link {
+  display: inline-block;
+}
+
+.cm-image-block .cm-image-link:hover img {
+  opacity: 0.95;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+/* --------------------------------------------------------------------------
+   POSITION MODIFIERS
+
+   Syntax: ![alt](url)> for right-align, etc.
+
+   Note: True CSS floats don't work well in line-based editors.
+   Instead, we use alignment for block widgets.
+
+   >  → align right
+   <  → align left
+   ^  → wide/full-bleed
+   _  → small/thumbnail
+   -------------------------------------------------------------------------- */
+
+/* Default: block (centered) */
+.cm-image-pos-block {
+  text-align: center;
+}
+
+/* Align right - image and caption align to the right */
+.cm-image-pos-right {
+  text-align: right;
+  padding-right: 1em;
+}
+
+.cm-image-pos-right .cm-image-block-img {
+  max-width: var(--md-image-align-max-width, 50%);
+}
+
+.cm-image-pos-right .cm-image-block-wrapper {
+  text-align: right;  /* Caption follows image alignment */
+}
+
+/* Align left - image and caption align to the left */
+.cm-image-pos-left {
+  text-align: left;
+  padding-left: 1em;
+}
+
+.cm-image-pos-left .cm-image-block-img {
+  max-width: var(--md-image-align-max-width, 50%);
+}
+
+.cm-image-pos-left .cm-image-block-wrapper {
+  text-align: left;  /* Caption follows image alignment */
+}
+
+/* Wide: full-bleed, breaks out of content column */
+.cm-image-pos-wide {
+  width: 100vw;
+  max-width: none;
+  margin-left: calc(-50vw + 50%);
+  margin-right: calc(-50vw + 50%);
+  text-align: center;
+  padding: 1em 0;
+}
+
+.cm-image-pos-wide .cm-image-block-img {
+  max-width: var(--md-image-wide-max-width, 90vw);
+  max-height: var(--md-image-wide-max-height, 70vh);
+}
+
+.cm-image-pos-wide .cm-image-caption {
+  max-width: var(--md-content-width, 65ch);
+  margin: 0.5em auto 0;
+}
+
+/* Small: thumbnail size, centered */
+.cm-image-pos-small {
+  text-align: center;
+}
+
+.cm-image-pos-small .cm-image-block-img {
+  max-width: var(--md-image-small-max-width, 200px);
+  max-height: var(--md-image-small-max-height, 150px);
+}
+
+.cm-image-pos-small .cm-image-caption {
+  font-size: 0.8em;
 }
 
 /* ==========================================================================
@@ -93146,58 +96958,34 @@ const markdownStyles = `
    - Tufte: Math should be beautiful and readable
    - Inline math flows with text
    - Display math is centered and prominent
+
+   Display math uses StateField + Decoration.replace (same as tables)
+   because it can span multiple lines.
    ========================================================================== */
 
-/* Display math - uses same stable layout pattern as tables */
-.cm-md-math-line-hidden,
-.cm-md-math-line-visible {
-  position: relative;
-}
-
-.cm-md-math-line-hidden {
-  color: transparent !important;
-  user-select: none;
-}
-
-.cm-md-math-line-hidden > span {
-  visibility: hidden !important;
-}
-
-.cm-md-math-line-visible {
-  color: var(--md-math-syntax-color, var(--widget-text-muted));
-  font-family: var(--widget-font-mono);
-  font-size: 0.9em;
-}
-
-/* Display math widget container */
+/* Display math widget container - replaces entire math source */
 .cm-math-display {
-  position: absolute;
-  left: 0;
-  right: 0;
-  z-index: 1;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 0;
-  margin-top: -0.5em;  /* Pull up to align with source position */
-  background: transparent !important;  /* Override KaTeX defaults */
+  display: block;
+  text-align: center;
+  padding: 0.75em 0;
+  background: transparent;
 }
 
 .cm-math-display .katex-display {
   margin: 0;
-  background: transparent !important;  /* Override KaTeX defaults */
+  background: transparent;
 }
 
 .cm-math-display .katex {
   font-size: var(--md-math-display-size, 1.2em);
-  color: var(--widget-text) !important;  /* Explicit color - can't inherit from hidden line */
-  background: transparent !important;
+  color: var(--widget-text);
+  background: transparent;
 }
 
 /* Override any KaTeX background colors */
 .cm-math-display .katex-html,
 .cm-math-display .base {
-  background: transparent !important;
+  background: transparent;
 }
 
 /* Inline math widget */
@@ -93380,14 +97168,25 @@ function injectMarkdownStyles() {
 /**
  * Create the markdown rendering extension.
  *
+ * Architecture:
+ * - blockDecorations (StateField): Tables, display math - multi-line Decoration.replace
+ * - markdownRenderer (ViewPlugin): Everything else - single-line decorations
+ *
+ * This split is required because CodeMirror only allows multi-line replacing
+ * decorations from StateFields, not ViewPlugins.
+ *
  * @returns {import('@codemirror/state').Extension}
  */
 function markdown() {
   // Inject styles on first use
   injectMarkdownStyles();
 
+  console.log('[Markdown] Creating extensions, blockDecorations:', blockDecorations, 'markdownRenderer:', markdownRenderer);
+
   return [
-    markdownRenderer,
+    lineHeightTracker,   // ViewPlugin: updates line height cache (must come first!)
+    blockDecorations,    // StateField: tables, display math
+    markdownRenderer,    // ViewPlugin: everything else
   ];
 }
 
@@ -102823,6 +106622,7 @@ function create(target, options = {}) {
     markdownWithCodeBlocks,
     ...languageSupportExtensions,
     documentTheme,
+    EditorView.lineWrapping, // Always wrap markdown text
     themeCompartment.of(initialCMTheme),
     readonlyCompartment.of(readonly ? EditorState.readOnly.of(true) : []),
     placeholderText ? placeholder(placeholderText) : [],
@@ -102835,7 +106635,9 @@ function create(target, options = {}) {
     // Initially empty, configured after api is created
     keymapCompartment.of([]),
     outputWidgetPlugin, // ANSI output rendering
-    markdownRenderer, // Markdown blur→render / focus→source
+    lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
+    blockDecorations,   // StateField for tables, display math (multi-line)
+    markdownRenderer,   // ViewPlugin for everything else (inline)
   ];
 
   // Inject markdown styles
@@ -104675,6 +108477,8 @@ const mrmd = {
   markdown: markdownExports,
   // Shell (status bar, file management, studio layout)
   shell: shellModule,
+  // AI Integration (decorations, state, widgets)
+  ai: aiIntegrationModule,
   // Utilities for runtime authors
   RuntimeRegistry,
   createRuntimeRegistry,

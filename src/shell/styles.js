@@ -144,6 +144,32 @@ export const statusBarStyles = `
   font-size: 10px;
   font-weight: bold;
 }
+
+/* Generic badge (e.g., "dedicated" for runtime) */
+.mrmd-statusbar__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  background: var(--mrmd-accent, #007acc);
+  color: #fff;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-left: 4px;
+}
+
+/* Unified files segment - takes more space */
+.mrmd-statusbar__segment--files {
+  min-width: 120px;
+  flex-shrink: 1;
+}
+
+.mrmd-statusbar__segment--files .mrmd-statusbar__secondary {
+  margin-left: auto;
+  font-size: 10px;
+}
 `;
 
 // =============================================================================

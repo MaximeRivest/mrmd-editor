@@ -27,10 +27,18 @@
  */
 
 import { markdownRenderer } from './renderer.js';
+import { blockDecorations, lineHeightTracker } from './block-decorations.js';
 import { markdownStyles, injectMarkdownStyles } from './styles.js';
 
 /**
  * Create the markdown rendering extension.
+ *
+ * Architecture:
+ * - blockDecorations (StateField): Tables, display math - multi-line Decoration.replace
+ * - markdownRenderer (ViewPlugin): Everything else - single-line decorations
+ *
+ * This split is required because CodeMirror only allows multi-line replacing
+ * decorations from StateFields, not ViewPlugins.
  *
  * @returns {import('@codemirror/state').Extension}
  */
@@ -38,13 +46,18 @@ export function markdown() {
   // Inject styles on first use
   injectMarkdownStyles();
 
+  console.log('[Markdown] Creating extensions, blockDecorations:', blockDecorations, 'markdownRenderer:', markdownRenderer);
+
   return [
-    markdownRenderer,
+    lineHeightTracker,   // ViewPlugin: updates line height cache (must come first!)
+    blockDecorations,    // StateField: tables, display math
+    markdownRenderer,    // ViewPlugin: everything else
   ];
 }
 
 // Export individual pieces for advanced use
 export { markdownRenderer } from './renderer.js';
+export { blockDecorations, lineHeightTracker, cacheWidgetHeight, getCachedHeight, clearHeightCache } from './block-decorations.js';
 export { markdownStyles, injectMarkdownStyles } from './styles.js';
 
 // Widget exports

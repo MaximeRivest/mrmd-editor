@@ -70,6 +70,9 @@ import { MRPClient } from './mrp-client.js';
 // Shell (status bar, file management, studio layout)
 import * as shellModule from './shell/index.js';
 
+// AI Integration (decorations, state, widgets)
+import * as aiIntegrationModule from './ai-integration.js';
+
 // Cell controls (run buttons, queue, status)
 import { createCellControls, CellControlsSystem } from './cell-controls/index.js';
 
@@ -109,6 +112,8 @@ import {
 import {
   markdown as markdownRendering,
   markdownRenderer,
+  blockDecorations,  // StateField for tables, display math (multi-line replace)
+  lineHeightTracker, // ViewPlugin for accurate line height tracking
   markdownStyles,
   injectMarkdownStyles,
   // Widgets
@@ -712,6 +717,7 @@ function create(target, options = {}) {
     markdownWithCodeBlocks,
     ...languageSupportExtensions,
     documentTheme,
+    EditorView.lineWrapping, // Always wrap markdown text
     themeCompartment.of(initialCMTheme),
     readonlyCompartment.of(readonly ? EditorState.readOnly.of(true) : []),
     placeholderText ? placeholder(placeholderText) : [],
@@ -724,7 +730,9 @@ function create(target, options = {}) {
     // Initially empty, configured after api is created
     keymapCompartment.of([]),
     outputWidgetPlugin, // ANSI output rendering
-    markdownRenderer, // Markdown blur→render / focus→source
+    lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
+    blockDecorations,   // StateField for tables, display math (multi-line)
+    markdownRenderer,   // ViewPlugin for everything else (inline)
   ];
 
   // Inject markdown styles
@@ -2568,6 +2576,8 @@ const mrmd = {
   markdown: markdownExports,
   // Shell (status bar, file management, studio layout)
   shell: shellModule,
+  // AI Integration (decorations, state, widgets)
+  ai: aiIntegrationModule,
   // Utilities for runtime authors
   RuntimeRegistry,
   createRuntimeRegistry,

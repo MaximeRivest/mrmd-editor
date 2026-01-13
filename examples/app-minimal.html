@@ -58,7 +58,7 @@
 
   // That's it. createStudio handles EVERYTHING:
   // - Yjs connection via Drive
-  // - File management (status bar → location segment → click to browse)
+  // - File management (unified 'files' segment)
   // - Sync status display
   // - Python runtime connection
   // - File switching with safe destroy+recreate
@@ -73,19 +73,18 @@
       cellControls: { enabled: true },
     },
 
-    // Status bar shows: file info, file browser, sync status, runtime info
-    statusBar: {
-      segments: ['file', 'location', 'sync', 'runtime'],
-      position: 'bottom',
-    },
+    // Status bar shows: unified file menu, sync status, runtime info
+    // statusBar: {
+    //   segments: ['files', 'sync', 'runtime'], // default
+    //   position: 'bottom',
+    // },
   });
 
   // Expose for console debugging
   window.studio = studio;
 
   // That's it! The status bar provides:
-  // - [file] Click → rename, save as
-  // - [location] Click → file browser with all project files + "Open..." button
+  // - [files] Click → project files list, browse, new file, rename, save as
   // - [sync] Click → connection status details
   // - [runtime] Click → Python info, change venv, change cwd, restart
 

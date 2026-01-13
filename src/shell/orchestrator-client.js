@@ -287,12 +287,17 @@ export class OrchestratorClient {
    * Create a session for a document
    * @param {string} doc - Document name
    * @param {'shared'|'dedicated'} python - Python runtime mode
+   * @param {string} [venv] - Path to virtual environment (for dedicated runtimes)
    * @returns {Promise<Object>}
    */
-  async createSession(doc, python = 'shared') {
+  async createSession(doc, python = 'shared', venv = null) {
+    const body = { doc, python };
+    if (venv) {
+      body.venv = venv;
+    }
     return this._fetch('/api/sessions', {
       method: 'POST',
-      body: JSON.stringify({ doc, python }),
+      body: JSON.stringify(body),
     });
   }
 

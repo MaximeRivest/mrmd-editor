@@ -197,37 +197,45 @@ export const markdownStyles = `
 }
 
 /* ==========================================================================
-   TABLES (Stable Layout Pattern)
+   BLOCK SPACER (Stable Layout)
 
-   Tables use the same pattern as output widgets:
-   - Lines ALWAYS take space (text transparent when viewing)
-   - Widget overlays using position: absolute
-   - No jitter when cursor enters/leaves
+   When editing raw markdown that will render to a taller widget (tables,
+   images, display math), this spacer prevents layout shift by filling
+   the height difference. Provides visual feedback that space is reserved.
    ========================================================================== */
 
-/* Both states: lines always take same space */
-.cm-md-table-line-hidden,
-.cm-md-table-line-visible {
+/* Line-based spacer (uses padding-bottom, doesn't block navigation) */
+.cm-block-spacer-line {
   position: relative;
 }
 
-/* Hidden: text invisible but same space */
-.cm-md-table-line-hidden {
-  color: transparent !important;
-  user-select: none;
+/* Visual indicator for the padding area */
+.cm-block-spacer-line::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(100% - 1.5em); /* Everything below the text line */
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--md-spacer-color, rgba(128, 128, 128, 0.03)) 30%,
+    var(--md-spacer-color, rgba(128, 128, 128, 0.05)) 70%,
+    transparent 100%
+  );
+  border-left: 2px dotted var(--md-spacer-border, rgba(128, 128, 128, 0.15));
+  margin-left: 0.5em;
+  pointer-events: none;
 }
 
-.cm-md-table-line-hidden > span {
-  visibility: hidden !important;
-}
+/* ==========================================================================
+   TABLES (StateField + Decoration.replace)
 
-/* Visible: text shown for editing - must cover widget underneath */
-.cm-md-table-line-visible {
-  color: var(--widget-text);
-  position: relative;
-  z-index: 2;
-  background: var(--widget-surface-elevated);
-}
+   Tables use Decoration.replace from a StateField (not ViewPlugin) because
+   they span multiple lines. The widget replaces the entire table source.
+   When cursor enters, the StateField removes the decoration, showing source.
+   ========================================================================== */
 
 /* ==========================================================================
    TABLES (Tufte-inspired: maximize data-ink ratio)
@@ -238,12 +246,9 @@ export const markdownStyles = `
    - Minimal borders: only bottom borders for separation
    ========================================================================== */
 
-/* Container - absolutely positioned to overlay hidden markdown lines */
+/* Container - replaces entire table source, flows naturally */
 .cm-table-widget {
-  position: absolute;
-  left: 0;
-  right: 0;
-  z-index: 1;
+  display: block;
   background: var(--md-table-bg, var(--widget-surface));
   padding: 0.5em 0;
 }
@@ -372,11 +377,38 @@ export const markdownStyles = `
   opacity: 0.7;
 }
 
+/* Images in table cells (Tufte: sparklines, icons, thumbnails) */
+.cm-table-cell-img {
+  max-width: var(--md-table-img-max-width, 120px);
+  max-height: var(--md-table-img-max-height, 80px);
+  height: auto;
+  vertical-align: middle;
+  border-radius: 3px;
+}
+
+/* Multiple images in a cell */
+.cm-table td img + img,
+.cm-table th img + img {
+  margin-left: 0.5em;
+}
+
 /* ==========================================================================
    IMAGES (Stable Layout Pattern)
+
+   Two modes:
+   - Inline images: Embedded in text flow, replaced with <img> element
+   - Block images: Standalone on a line, uses stable layout pattern
+     (text line hidden but takes space, widget overlays)
    ========================================================================== */
 
-/* Image syntax placeholder (shown when blurred) */
+/* Image syntax (shown when editing/cursor on line) */
+.cm-md-image-syntax {
+  color: var(--md-marker-color);
+  font-family: var(--md-marker-font);
+  font-size: 0.95em;
+}
+
+/* Image syntax placeholder (for unresolved references) */
 .cm-image-placeholder {
   display: inline-flex;
   align-items: center;
@@ -393,29 +425,223 @@ export const markdownStyles = `
   background: var(--widget-surface-hover);
 }
 
-/* Image widget */
-.cm-image-widget {
-  display: block;
-  margin: 0.5em 0;
+/* --------------------------------------------------------------------------
+   INLINE IMAGES (embedded in text)
+   -------------------------------------------------------------------------- */
+
+.cm-image-inline {
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 0; /* Prevent extra space from line-height */
 }
 
-.cm-image-widget img {
-  max-width: var(--md-image-max-width);
+.cm-image-inline-img {
+  max-width: var(--md-image-inline-max-width, 300px);
+  max-height: var(--md-image-inline-max-height, 200px);
   height: auto;
-  border-radius: var(--md-image-border-radius);
+  border-radius: var(--md-image-border-radius, 4px);
+  vertical-align: middle;
 }
 
-.cm-image-widget.cm-image-loading {
+.cm-image-inline.cm-image-loading {
+  background: var(--widget-surface);
+  padding: 0.25em 0.5em;
+  border-radius: var(--md-image-border-radius, 4px);
+  color: var(--widget-text-muted);
+  font-size: 0.85em;
+  font-style: italic;
+  line-height: 1.2;
+}
+
+.cm-image-inline.cm-image-loading::before {
+  content: '🖼 ';
+}
+
+.cm-image-inline.cm-image-error {
+  background: rgba(239, 68, 68, 0.1);
+  padding: 0.25em 0.5em;
+  border-radius: var(--md-image-border-radius, 4px);
+  color: var(--widget-error, #ef4444);
+  font-size: 0.85em;
+  line-height: 1.2;
+}
+
+.cm-image-inline.cm-image-error::before {
+  content: '⚠️ ';
+}
+
+/* Link wrapper for clickable images */
+.cm-image-link {
+  display: inline-block;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.cm-image-link:hover img {
+  opacity: 0.9;
+  outline: 2px solid var(--md-link-color, #3b82f6);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   BLOCK IMAGES (Replace Decoration)
+
+   Design:
+   - Uses Decoration.replace to replace entire line with image widget
+   - Widget is display:block, takes natural height
+   - No hidden lines or absolute positioning needed
+   - Image pushes content down naturally
+   -------------------------------------------------------------------------- */
+
+/* Block image widget container - replaces entire line */
+.cm-image-block {
+  display: block;
+  padding: 0.75em 0;
+  text-align: center; /* Default: centered */
+}
+
+.cm-image-block-wrapper {
+  display: inline-block;
+  max-width: 100%;
+  text-align: center;
+}
+
+.cm-image-block-img {
+  max-width: var(--md-image-max-width, 100%);
+  max-height: var(--md-image-max-height, 500px);
+  height: auto;
+  border-radius: var(--md-image-border-radius, 4px);
+  box-shadow: var(--md-image-shadow, 0 2px 8px rgba(0, 0, 0, 0.1));
+}
+
+.cm-image-block-wrapper.cm-image-loading {
+  background: var(--widget-surface);
+  padding: 1em 1.5em;
+  border-radius: var(--md-image-border-radius, 4px);
   color: var(--widget-text-muted);
   font-style: italic;
-  padding: 1em;
+  min-width: 150px;
+  min-height: 80px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.cm-image-widget.cm-image-error {
-  color: var(--widget-error);
-  padding: 0.5em;
+.cm-image-block-wrapper.cm-image-error {
   background: rgba(239, 68, 68, 0.1);
-  border-radius: var(--widget-border-radius);
+  padding: 1em 1.5em;
+  border-radius: var(--md-image-border-radius, 4px);
+  color: var(--widget-error, #ef4444);
+}
+
+.cm-image-error-text {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.cm-image-error-text::before {
+  content: '⚠️';
+}
+
+/* Image caption - inherits alignment from parent position modifier */
+.cm-image-caption {
+  font-size: 0.85em;
+  color: var(--widget-text-muted);
+  font-style: italic;
+  margin-top: 0.5em;
+  /* text-align inherited from .cm-image-pos-* parent */
+}
+
+/* Linked block images */
+.cm-image-block .cm-image-link {
+  display: inline-block;
+}
+
+.cm-image-block .cm-image-link:hover img {
+  opacity: 0.95;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+/* --------------------------------------------------------------------------
+   POSITION MODIFIERS
+
+   Syntax: ![alt](url)> for right-align, etc.
+
+   Note: True CSS floats don't work well in line-based editors.
+   Instead, we use alignment for block widgets.
+
+   >  → align right
+   <  → align left
+   ^  → wide/full-bleed
+   _  → small/thumbnail
+   -------------------------------------------------------------------------- */
+
+/* Default: block (centered) */
+.cm-image-pos-block {
+  text-align: center;
+}
+
+/* Align right - image and caption align to the right */
+.cm-image-pos-right {
+  text-align: right;
+  padding-right: 1em;
+}
+
+.cm-image-pos-right .cm-image-block-img {
+  max-width: var(--md-image-align-max-width, 50%);
+}
+
+.cm-image-pos-right .cm-image-block-wrapper {
+  text-align: right;  /* Caption follows image alignment */
+}
+
+/* Align left - image and caption align to the left */
+.cm-image-pos-left {
+  text-align: left;
+  padding-left: 1em;
+}
+
+.cm-image-pos-left .cm-image-block-img {
+  max-width: var(--md-image-align-max-width, 50%);
+}
+
+.cm-image-pos-left .cm-image-block-wrapper {
+  text-align: left;  /* Caption follows image alignment */
+}
+
+/* Wide: full-bleed, breaks out of content column */
+.cm-image-pos-wide {
+  width: 100vw;
+  max-width: none;
+  margin-left: calc(-50vw + 50%);
+  margin-right: calc(-50vw + 50%);
+  text-align: center;
+  padding: 1em 0;
+}
+
+.cm-image-pos-wide .cm-image-block-img {
+  max-width: var(--md-image-wide-max-width, 90vw);
+  max-height: var(--md-image-wide-max-height, 70vh);
+}
+
+.cm-image-pos-wide .cm-image-caption {
+  max-width: var(--md-content-width, 65ch);
+  margin: 0.5em auto 0;
+}
+
+/* Small: thumbnail size, centered */
+.cm-image-pos-small {
+  text-align: center;
+}
+
+.cm-image-pos-small .cm-image-block-img {
+  max-width: var(--md-image-small-max-width, 200px);
+  max-height: var(--md-image-small-max-height, 150px);
+}
+
+.cm-image-pos-small .cm-image-caption {
+  font-size: 0.8em;
 }
 
 /* ==========================================================================
@@ -425,58 +651,34 @@ export const markdownStyles = `
    - Tufte: Math should be beautiful and readable
    - Inline math flows with text
    - Display math is centered and prominent
+
+   Display math uses StateField + Decoration.replace (same as tables)
+   because it can span multiple lines.
    ========================================================================== */
 
-/* Display math - uses same stable layout pattern as tables */
-.cm-md-math-line-hidden,
-.cm-md-math-line-visible {
-  position: relative;
-}
-
-.cm-md-math-line-hidden {
-  color: transparent !important;
-  user-select: none;
-}
-
-.cm-md-math-line-hidden > span {
-  visibility: hidden !important;
-}
-
-.cm-md-math-line-visible {
-  color: var(--md-math-syntax-color, var(--widget-text-muted));
-  font-family: var(--widget-font-mono);
-  font-size: 0.9em;
-}
-
-/* Display math widget container */
+/* Display math widget container - replaces entire math source */
 .cm-math-display {
-  position: absolute;
-  left: 0;
-  right: 0;
-  z-index: 1;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 0;
-  margin-top: -0.5em;  /* Pull up to align with source position */
-  background: transparent !important;  /* Override KaTeX defaults */
+  display: block;
+  text-align: center;
+  padding: 0.75em 0;
+  background: transparent;
 }
 
 .cm-math-display .katex-display {
   margin: 0;
-  background: transparent !important;  /* Override KaTeX defaults */
+  background: transparent;
 }
 
 .cm-math-display .katex {
   font-size: var(--md-math-display-size, 1.2em);
-  color: var(--widget-text) !important;  /* Explicit color - can't inherit from hidden line */
-  background: transparent !important;
+  color: var(--widget-text);
+  background: transparent;
 }
 
 /* Override any KaTeX background colors */
 .cm-math-display .katex-html,
 .cm-math-display .base {
-  background: transparent !important;
+  background: transparent;
 }
 
 /* Inline math widget */

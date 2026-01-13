@@ -7,7 +7,23 @@
  */
 
 export { TaskCheckboxWidget } from './checkbox.js';
-export { ImageWidget, ImagePlaceholder, parseImageMarkdown } from './image.js';
+export {
+  ImageWidget,
+  ImagePlaceholder,
+  BlockImageWidget,
+  parseImageMarkdown,
+  isBlockImage,
+  generateImageId,
+  parseLinkDefinitions,
+  updateLinkDefinitionCache,
+  resolveLinkReference,
+  getLinkDefinitionCache,
+  // Position modifiers
+  POSITION_MODIFIERS,
+  parsePositionModifier,
+  isPositionModifier,
+  extractPositionFromLine,
+} from './image.js';
 export {
   TableWidget,
   parseTable,

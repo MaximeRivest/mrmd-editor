@@ -81,6 +81,27 @@ export { ShellStateManager, createShellState } from './state.js';
 export { Drive, createDrive } from './drive.js';
 
 // =============================================================================
+// AI CLIENT & MENU
+// =============================================================================
+
+export {
+  AiClient,
+  createAiClient,
+  JUICE_LEVELS,
+  JUICE_NAMES,
+  AI_CATEGORIES,
+} from './ai-client.js';
+
+export {
+  AI_COMMANDS,
+  getApplicableCommands,
+  createAiMenu,
+  showAiMenu,
+  AI_MENU_STYLES,
+  injectAiMenuStyles,
+} from './ai-menu.js';
+
+// =============================================================================
 // STYLES
 // =============================================================================
 

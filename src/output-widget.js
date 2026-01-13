@@ -30,6 +30,32 @@ import { WidgetType, Decoration, ViewPlugin, EditorView } from '@codemirror/view
 import { Facet, Annotation } from '@codemirror/state';
 import { terminalToHtml, hasAnsi, stripAnsi, ansiStyles } from './terminal.js';
 
+// =============================================================================
+// Height Cache for Stable Layout (prevents jitter when editing output blocks)
+// =============================================================================
+
+/**
+ * Cache of output widget heights, keyed by block start position.
+ * Used to pad raw markdown to prevent layout shift.
+ */
+const outputHeightCache = new Map();
+
+/**
+ * Cache the height of an output widget
+ */
+function cacheOutputHeight(blockStart, height) {
+  if (height > 0) {
+    outputHeightCache.set(blockStart, height);
+  }
+}
+
+/**
+ * Get cached height for an output block
+ */
+function getCachedOutputHeight(blockStart) {
+  return outputHeightCache.get(blockStart);
+}
+
 // Facet to provide awareness system to the output widget
 export const outputWidgetAwarenessFacet = Facet.define({
   combine: values => values[values.length - 1] || null
@@ -79,6 +105,18 @@ class OutputWidget extends WidgetType {
     // Render with ANSI colors
     const html = terminalToHtml(this.content);
     container.innerHTML = `<pre class="cm-output-content">${html}</pre>`;
+
+    // Cache height for stable layout (prevents jitter when editing)
+    // Only cache when not hidden (widget is visible and has real height)
+    if (!this.hidden) {
+      const blockStart = this.blockStart;
+      requestAnimationFrame(() => {
+        // Cache the widget's container height
+        if (container.offsetHeight > 0) {
+          cacheOutputHeight(blockStart, container.offsetHeight);
+        }
+      });
+    }
 
     // Copy on click
     container.title = 'Click to copy output';
@@ -337,6 +375,30 @@ function buildDecorations(view, awarenessSystem) {
           class: anyCollaboratorFocused ? 'cm-output-line-visible' : 'cm-output-line-hidden',
         }).range(line.from)
       );
+    }
+
+    // Stable layout: when editing, add spacer to prevent layout shift
+    if (anyCollaboratorFocused) {
+      const cachedHeight = getCachedOutputHeight(blockStart);
+      if (cachedHeight) {
+        // Calculate raw content height
+        const lineCount = endLine.number - startLine.number + 1;
+        const lineHeight = view.defaultLineHeight;
+        const rawHeight = lineCount * lineHeight;
+        const padding = cachedHeight - rawHeight;
+
+        if (padding > 0) {
+          // Add padding to the last line (closing fence)
+          decorations.push(
+            Decoration.line({
+              attributes: {
+                class: 'cm-output-spacer-line',
+                style: `padding-bottom: ${padding}px`
+              }
+            }).range(endLine.from)
+          );
+        }
+      }
     }
 
     // Check if output is empty (just whitespace)

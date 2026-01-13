@@ -18,6 +18,8 @@ import { injectShellStyles } from '../styles.js';
 import { showFilePicker, showFolderPicker } from '../dialogs/file-picker.js';
 import { prompt, confirm } from '../dialogs/base-dialog.js';
 import { Drive } from '../drive.js';
+import { AiClient } from '../ai-client.js';
+import { showAiMenu, AI_COMMANDS, injectAiMenuStyles } from '../ai-menu.js';
 
 // =============================================================================
 // STUDIO
@@ -141,12 +143,40 @@ export async function createStudio(target, options = {}) {
   // Get service URLs from orchestrator
   let syncUrl;
   let runtimeUrls = {};
+  let aiUrl = null;
+  let aiClient = null;
   try {
     const urls = await orchestratorClient.getUrls();
     syncUrl = urls.sync;
     runtimeUrls = urls.runtimes || {};
+    aiUrl = urls.ai || null;
     if (!syncUrl) {
       throw new Error('No sync URL returned from orchestrator');
+    }
+
+    // Register the shared session in shell state
+    if (runtimeUrls.python) {
+      shellState.registerSession('shared', {
+        id: 'shared',
+        url: runtimeUrls.python,
+        status: 'ready',
+        dedicated: false,
+        language: 'python',
+      });
+    }
+
+    // Initialize AI client if AI server is available
+    if (aiUrl) {
+      aiClient = new AiClient(orchestratorUrl); // Use orchestrator proxy
+      injectAiMenuStyles();
+
+      // Set AI state for status bar
+      shellState._set('ai', {
+        running: true,
+        url: aiUrl,
+        juiceLevel: 0,
+        active: false,
+      });
     }
   } catch (e) {
     console.error('Failed to get service URLs:', e);
@@ -186,9 +216,10 @@ export async function createStudio(target, options = {}) {
   /**
    * Create editor for a document handle and connect runtimes
    * @param {import('../drive.js').DocumentHandle} handle
+   * @param {string} docName - Document name (for runtime attachment lookup)
    * @returns {Object} Editor instance
    */
-  function createEditorForDocument(handle) {
+  function createEditorForDocument(handle, docName) {
     const mergedOptions = {
       ...editorOptions,
       // Yjs state from Drive
@@ -206,8 +237,23 @@ export async function createStudio(target, options = {}) {
 
     const newEditor = mrmd.default.create(editorContainer, mergedOptions);
 
-    // Connect available runtimes (Python, etc.)
+    // Get the runtime URL for this document (uses attachment or defaults to shared)
+    const attachedRuntimeUrl = shellState.getRuntimeUrl(docName);
+
+    // Connect to the attached runtime first (if different from default)
+    if (attachedRuntimeUrl && newEditor.connectRuntime) {
+      try {
+        newEditor.connectRuntime('python', attachedRuntimeUrl);
+      } catch (e) {
+        console.warn(`[Studio] Failed to connect attached runtime:`, e.message);
+      }
+    }
+
+    // Connect any other available runtimes that aren't already connected
     for (const [language, url] of Object.entries(runtimeUrls)) {
+      // Skip if already connected (Python may already be connected via attachment)
+      if (language === 'python' && attachedRuntimeUrl) continue;
+
       if (url && newEditor.connectRuntime) {
         try {
           newEditor.connectRuntime(language, url);
@@ -225,7 +271,100 @@ export async function createStudio(target, options = {}) {
       });
     }
 
+    // Add AI integration if available
+    if (aiClient && mrmd.default.ai?.aiIntegration) {
+      const aiExtensions = mrmd.default.ai.aiIntegration({
+        onSparkClick: (e, view) => {
+          const context = mrmd.default.ai.getAiContext(view);
+          showAiMenu({
+            x: e.clientX,
+            y: e.clientY,
+            context: {
+              hasSelection: context.selectedText.length > 0,
+              inCodeCell: false, // TODO: detect code cell
+            },
+            onCommand: (cmd) => executeAiCommand(cmd, newEditor),
+            juiceLevel: shellState.get('ai')?.juiceLevel || 0,
+            onJuiceLevelChange: (level) => {
+              shellState._set('ai.juiceLevel', level);
+              aiClient.setJuiceLevel(level);
+            },
+          });
+        },
+      });
+
+      // Add AI extensions to editor
+      newEditor.view.dispatch({
+        effects: mrmd.codemirror.StateEffect.appendConfig.of(aiExtensions),
+      });
+    }
+
     return newEditor;
+  }
+
+  /**
+   * Execute an AI command on the editor
+   */
+  async function executeAiCommand(cmd, targetEditor) {
+    if (!aiClient || !mrmd.default.ai) return;
+
+    const view = targetEditor.view;
+    const context = mrmd.default.ai.getAiContext(view);
+    const juiceLevel = shellState.get('ai')?.juiceLevel || 0;
+
+    // Mark AI as active
+    shellState._set('ai.active', true);
+
+    try {
+      // Build params based on command type
+      let params = {};
+      let resultField = cmd.resultField;
+
+      if (cmd.program.includes('Finish')) {
+        params = {
+          text_before_cursor: context.textBeforeCursor,
+          local_context: context.localContext,
+          document_context: context.documentContext,
+        };
+      } else if (cmd.program.includes('Fix') || cmd.program.includes('Correct')) {
+        params = {
+          text_to_fix: context.selectedText,
+          local_context: context.localContext,
+          document_context: context.documentContext,
+        };
+      } else if (cmd.program.includes('Code')) {
+        params = {
+          code: context.selectedText,
+          language: 'python', // TODO: detect
+          local_context: context.localContext,
+          document_context: context.documentContext,
+        };
+      } else if (cmd.program.includes('Synonym')) {
+        params = {
+          text: context.selectedText,
+          local_context: context.localContext,
+        };
+      } else if (cmd.program.includes('Document')) {
+        params = { document: context.documentContext };
+      }
+
+      await mrmd.default.ai.executeAiOperation(view, aiClient, {
+        program: cmd.program,
+        params,
+        type: cmd.type === 'insert' ? 'insert' : 'replace',
+        from: cmd.type === 'insert' ? context.cursorPos : context.selectionFrom,
+        to: cmd.type === 'insert' ? context.cursorPos : context.selectionTo,
+        resultField,
+        juiceLevel,
+      });
+
+      emit('aiCommandExecuted', { command: cmd.id, program: cmd.program });
+    } catch (error) {
+      console.error('[Studio] AI command failed:', error);
+      emit('aiCommandError', { command: cmd.id, error: error.message });
+    } finally {
+      shellState._set('ai.active', false);
+    }
   }
 
   /**
@@ -261,8 +400,8 @@ export async function createStudio(target, options = {}) {
       // Open new document via Drive
       const handle = await drive.open(normalizedName);
 
-      // Create new editor with the new Yjs state
-      editor = createEditorForDocument(handle);
+      // Create new editor with the new Yjs state (pass docName for runtime attachment lookup)
+      editor = createEditorForDocument(handle, normalizedName);
       currentDocName = normalizedName;
 
       // Update shell state
@@ -294,7 +433,7 @@ export async function createStudio(target, options = {}) {
   const docToOpen = initialDocument || 'untitled';
   try {
     const handle = await drive.open(docToOpen);
-    editor = createEditorForDocument(handle);
+    editor = createEditorForDocument(handle, docToOpen);
     currentDocName = docToOpen;
   } catch (e) {
     console.error('Failed to open initial document:', e);
@@ -352,11 +491,29 @@ export async function createStudio(target, options = {}) {
         title: 'Open File',
         orchestratorClient,
         initialPath: projectRoot || '~',
-        allowOutsideProject: false, // Only allow project files for now (synced via mrmd-sync)
+        allowOutsideProject: true, // Allow browsing whole filesystem
         onSelect: async (path) => {
-          // Extract document name from path
-          // Path format from file picker: "subdir/filename.md" or just "filename.md"
-          const docName = path.replace(/\.md$/, '');
+          // Get the actual docs directory from the API
+          const filesResult = await orchestratorClient.listFiles();
+          const docsRoot = filesResult.root?.replace(/\/$/, '') || '';
+
+          // Check if path is within the docs directory (not just project root)
+          const isInDocsDir = docsRoot && (
+            path.startsWith(docsRoot + '/') || path === docsRoot
+          );
+
+          let docName;
+          if (isInDocsDir) {
+            // Extract relative path for docs files
+            docName = path.slice(docsRoot.length).replace(/^\//, '');
+            // Remove .md extension for document name
+            docName = docName.replace(/\.md$/, '');
+          } else {
+            // File is outside docs directory - use absolute path
+            // The sync server supports absolute paths for external files
+            docName = path.replace(/\.md$/, '');
+          }
+
           await switchDocument(docName);
         },
       });
@@ -364,19 +521,33 @@ export async function createStudio(target, options = {}) {
 
     async onChangeVenv() {
       const python = shellState.get('runtimes.python');
+      const docName = currentDocName;
 
       showFolderPicker({
         title: 'Select Virtual Environment',
         orchestratorClient,
         initialPath: python?.venv || '~',
+        showHidden: true, // Show hidden folders like .venv
         onSelect: async (path) => {
           try {
-            await shellState.setVenv(path);
-            emit('runtimeChanged', { language: 'python', venv: path });
+            // Create a dedicated runtime for this document with the selected venv
+            const sessionInfo = await shellState.createSession(docName, 'dedicated', path);
+
+            // Reconnect the editor to the new runtime
+            if (editor?.connectRuntime && sessionInfo.url) {
+              editor.connectRuntime('python', sessionInfo.url);
+            }
+
+            // Update the legacy python state for status bar display
+            shellState._set('runtimes.python.venv', path);
+            shellState._set('runtimes.python.venvName', path.split('/').pop());
+            shellState._set('runtimes.python.status', 'ready');
+
+            emit('runtimeChanged', { language: 'python', venv: path, dedicated: true });
           } catch (error) {
             await confirm({
               title: 'Error',
-              message: `Failed to change venv: ${error.message}`,
+              message: `Failed to create dedicated runtime: ${error.message}`,
               confirmLabel: 'OK',
               cancelLabel: '',
             });
@@ -412,17 +583,201 @@ export async function createStudio(target, options = {}) {
       // TODO: Implement runtime restart via orchestrator
       console.log('Restart runtime:', language);
     },
+
+    async onNewFile() {
+      const newName = await prompt({
+        title: 'New File',
+        message: 'Enter a name for the new file:',
+        defaultValue: '',
+        placeholder: 'my-notebook',
+        validate: (value) => {
+          if (!value) return 'Name is required';
+          if (value.includes('/') || value.includes('\\')) return 'Name cannot contain path separators';
+          return null;
+        },
+      });
+
+      if (newName) {
+        try {
+          // Create the file via orchestrator
+          await orchestratorClient.createFile(newName);
+          // Open the new file
+          await switchDocument(newName);
+          emit('fileCreated', { doc: newName });
+        } catch (error) {
+          await confirm({
+            title: 'Error',
+            message: `Failed to create file: ${error.message}`,
+            confirmLabel: 'OK',
+            cancelLabel: '',
+          });
+        }
+      }
+    },
+
+    onSetTheme(theme) {
+      // Update editor theme
+      if (editor?.setTheme) {
+        editor.setTheme(theme);
+      }
+      // Store in shell state for persistence
+      shellState._set('theme', theme);
+      emit('themeChanged', { theme });
+    },
+
+    async onCreateDedicatedRuntime(docName) {
+      try {
+        // Create a dedicated session via orchestrator
+        const sessionInfo = await shellState.createSession(docName, 'dedicated');
+
+        // Reconnect the editor to the new runtime
+        if (editor?.connectRuntime && sessionInfo.url) {
+          editor.connectRuntime('python', sessionInfo.url);
+        }
+
+        emit('runtimeCreated', { docName, session: sessionInfo });
+      } catch (error) {
+        await confirm({
+          title: 'Error',
+          message: `Failed to create dedicated runtime: ${error.message}`,
+          confirmLabel: 'OK',
+          cancelLabel: '',
+        });
+      }
+    },
+
+    onRuntimeAttached(docName, sessionId) {
+      // When user attaches a document to a different runtime,
+      // we need to reconnect the editor if this is the current document
+      if (docName === currentDocName) {
+        const session = shellState.getSession(sessionId);
+        if (session?.url && editor?.connectRuntime) {
+          editor.connectRuntime('python', session.url);
+        }
+      }
+      emit('runtimeAttached', { docName, sessionId });
+    },
+
+    // AI Handlers
+    onSetJuiceLevel(level) {
+      if (aiClient) {
+        aiClient.setJuiceLevel(level);
+        shellState._set('ai.juiceLevel', level);
+        emit('aiJuiceLevelChanged', { level });
+      }
+    },
+
+    async onContinueDocument() {
+      if (!aiClient || !editor || !mrmd.default.ai) return;
+
+      const view = editor.view;
+      const docEnd = view.state.doc.length;
+      const content = view.state.doc.toString();
+      const juiceLevel = shellState.get('ai')?.juiceLevel || 0;
+
+      shellState._set('ai.active', true);
+      try {
+        await mrmd.default.ai.executeAiOperation(view, aiClient, {
+          program: 'DocumentResponsePredict',
+          params: { document: content },
+          type: 'insert',
+          from: docEnd,
+          to: docEnd,
+          resultField: 'response',
+          juiceLevel,
+        });
+        emit('aiContinueDocument', { success: true });
+      } catch (error) {
+        console.error('[Studio] Continue document failed:', error);
+        emit('aiContinueDocument', { success: false, error: error.message });
+      } finally {
+        shellState._set('ai.active', false);
+      }
+    },
+
+    async onSummarizeDocument() {
+      if (!aiClient || !editor) return;
+
+      const content = editor.view.state.doc.toString();
+      const juiceLevel = shellState.get('ai')?.juiceLevel || 0;
+
+      shellState._set('ai.active', true);
+      try {
+        const result = await aiClient.summarizeDocument(content, { juiceLevel });
+        const summary = result.summary || result.response || 'No summary generated';
+        await confirm({
+          title: 'Document Summary',
+          message: summary,
+          confirmLabel: 'OK',
+          cancelLabel: '',
+        });
+        emit('aiSummarizeDocument', { success: true });
+      } catch (error) {
+        console.error('[Studio] Summarize failed:', error);
+        await confirm({
+          title: 'Error',
+          message: `Failed to summarize: ${error.message}`,
+          confirmLabel: 'OK',
+          cancelLabel: '',
+        });
+      } finally {
+        shellState._set('ai.active', false);
+      }
+    },
+
+    async onSuggestFilename() {
+      if (!aiClient || !editor) return;
+
+      const content = editor.view.state.doc.toString();
+      const currentName = currentDocName;
+      const juiceLevel = shellState.get('ai')?.juiceLevel || 0;
+
+      shellState._set('ai.active', true);
+      try {
+        const result = await aiClient.suggestNotebookName(content, currentName, { juiceLevel });
+        const suggestedName = result.name;
+
+        if (suggestedName && suggestedName !== currentName) {
+          const confirmed = await confirm({
+            title: 'Rename File?',
+            message: `AI suggests: "${suggestedName}"\n\nRename "${currentName}" to "${suggestedName}"?`,
+            confirmLabel: 'Rename',
+            cancelLabel: 'Cancel',
+          });
+
+          if (confirmed) {
+            await studio.rename(suggestedName);
+          }
+        } else {
+          await confirm({
+            title: 'Filename Suggestion',
+            message: 'The current filename seems appropriate.',
+            confirmLabel: 'OK',
+            cancelLabel: '',
+          });
+        }
+      } catch (error) {
+        console.error('[Studio] Suggest filename failed:', error);
+      } finally {
+        shellState._set('ai.active', false);
+      }
+    },
   };
 
   // Create status bar
   let statusBarComponent = null;
   if (statusBarConfig.enabled !== false) {
+    // Default segments - include 'ai' if AI is available
+    const defaultSegments = aiClient
+      ? ['files', 'sync', 'runtime', 'ai']
+      : ['files', 'sync', 'runtime'];
+
     statusBarComponent = createStatusBar({
       container: statusBarContainer,
       editor,
       shellState,
       orchestratorClient,
-      segments: statusBarConfig.segments || ['file', 'location', 'sync', 'runtime'],
+      segments: statusBarConfig.segments || defaultSegments,
       position: statusBarConfig.position || 'bottom',
       handlers,
     });
@@ -458,6 +813,9 @@ export async function createStudio(target, options = {}) {
 
     /** Orchestrator API client */
     orchestratorClient,
+
+    /** AI client (null if AI not available) */
+    aiClient,
 
     /** Studio container element */
     element: studioEl,

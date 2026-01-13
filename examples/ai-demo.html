@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mrmd - AI Integration Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { color-scheme: light dark; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      height: 100vh;
+      overflow: hidden;
+      background: light-dark(#ffffff, #1e1e1e);
+      color: light-dark(#1a1a1a, #e0e0e0);
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* Header */
+    .header {
+      height: 48px;
+      background: light-dark(#f8f8f8, #252526);
+      border-bottom: 1px solid light-dark(#e0e0e0, #3c3c3c);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 16px;
+    }
+
+    .logo {
+      font-weight: 700;
+      font-size: 18px;
+      color: light-dark(#2563eb, #4f9eff);
+    }
+
+    .logo-sub {
+      font-size: 12px;
+      color: light-dark(#666, #888);
+      margin-left: 8px;
+    }
+
+    .header-actions {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .header-actions select,
+    .header-actions button {
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: 1px solid light-dark(#d0d0d0, #4c4c4c);
+      background: light-dark(#f8f8f8, #2d2d2d);
+      color: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .header-actions button:hover {
+      background: light-dark(#e8e8e8, #3c3c3c);
+    }
+
+    .header-actions .ai-btn {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: white;
+      border: none;
+    }
+
+    .header-actions .ai-btn:hover {
+      background: linear-gradient(135deg, #4f46e5, #7c3aed);
+    }
+
+    /* Main layout */
+    .main {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+    }
+
+    /* Editor area */
+    #editor-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    #editor {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* AI Panel (sidebar) */
+    .ai-panel {
+      width: 300px;
+      background: light-dark(#f8f8f8, #252526);
+      border-left: 1px solid light-dark(#e0e0e0, #3c3c3c);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .ai-panel-header {
+      padding: 12px 16px;
+      font-weight: 600;
+      font-size: 14px;
+      border-bottom: 1px solid light-dark(#e0e0e0, #3c3c3c);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .ai-panel-header .spark {
+      color: #6366f1;
+    }
+
+    .ai-commands {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+    }
+
+    .ai-command-group {
+      margin-bottom: 16px;
+    }
+
+    .ai-command-group h4 {
+      font-size: 11px;
+      text-transform: uppercase;
+      color: light-dark(#666, #888);
+      margin-bottom: 8px;
+      padding: 0 8px;
+    }
+
+    .ai-command {
+      padding: 10px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      transition: background 0.1s;
+    }
+
+    .ai-command:hover {
+      background: light-dark(#e8e8e8, #2d2d2d);
+    }
+
+    .ai-command.disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .ai-command .icon {
+      font-size: 16px;
+      width: 24px;
+      text-align: center;
+    }
+
+    .ai-command .label {
+      flex: 1;
+    }
+
+    .ai-command .shortcut {
+      font-size: 11px;
+      color: light-dark(#888, #666);
+      font-family: monospace;
+    }
+
+    /* Juice level selector */
+    .juice-selector {
+      padding: 12px 16px;
+      border-top: 1px solid light-dark(#e0e0e0, #3c3c3c);
+      background: light-dark(#f0f0f0, #1e1e1e);
+    }
+
+    .juice-selector label {
+      font-size: 11px;
+      text-transform: uppercase;
+      color: light-dark(#666, #888);
+      display: block;
+      margin-bottom: 8px;
+    }
+
+    .juice-buttons {
+      display: flex;
+      gap: 4px;
+    }
+
+    .juice-btn {
+      flex: 1;
+      padding: 6px 8px;
+      border: 1px solid light-dark(#d0d0d0, #4c4c4c);
+      background: light-dark(#fff, #2d2d2d);
+      border-radius: 4px;
+      font-size: 10px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.1s;
+    }
+
+    .juice-btn:hover {
+      border-color: #6366f1;
+    }
+
+    .juice-btn.active {
+      background: #6366f1;
+      border-color: #6366f1;
+      color: white;
+    }
+
+    /* Status bar */
+    .status-bar {
+      height: 28px;
+      background: light-dark(#f0f0f0, #1e1e1e);
+      border-top: 1px solid light-dark(#e0e0e0, #3c3c3c);
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      font-size: 12px;
+      color: light-dark(#666, #888);
+      gap: 16px;
+    }
+
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #888;
+    }
+
+    .status-dot.connected { background: #22c55e; }
+    .status-dot.disconnected { background: #ef4444; }
+    .status-dot.loading { background: #f59e0b; animation: pulse 1s infinite; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* Empty state */
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: light-dark(#888, #666);
+    }
+
+    .empty-state .icon { font-size: 48px; margin-bottom: 16px; }
+    .empty-state h3 { margin-bottom: 8px; }
+    .empty-state p { font-size: 14px; }
+  </style>
+</head>
+<body>
+
+<div class="app">
+  <header class="header">
+    <span class="logo">mrmd</span>
+    <span class="logo-sub">AI Integration Demo</span>
+    <div class="header-actions">
+      <select id="theme-select">
+        <option value="">Theme: Auto</option>
+        <option value="midnight">Midnight</option>
+        <option value="daylight">Daylight</option>
+        <option value="github">GitHub</option>
+        <option value="nord">Nord</option>
+      </select>
+      <button class="ai-btn" onclick="aiContinue()">
+        Continue Document
+      </button>
+    </div>
+  </header>
+
+  <div class="main">
+    <div id="editor-container">
+      <div id="editor"></div>
+      <div class="status-bar">
+        <div class="status-item">
+          <span class="status-dot" id="sync-status"></span>
+          <span id="sync-text">Sync</span>
+        </div>
+        <div class="status-item">
+          <span class="status-dot" id="ai-status"></span>
+          <span id="ai-text">AI</span>
+        </div>
+        <div class="status-item" style="margin-left: auto;">
+          <span id="cursor-pos">Ln 1, Col 1</span>
+        </div>
+      </div>
+    </div>
+
+    <aside class="ai-panel">
+      <div class="ai-panel-header">
+        <span class="spark">&#10022;</span>
+        AI Commands
+      </div>
+      <div class="ai-commands">
+        <div class="ai-command-group">
+          <h4>Complete</h4>
+          <div class="ai-command" data-cmd="finishSentence">
+            <span class="icon">&#8594;</span>
+            <span class="label">Complete Sentence</span>
+            <span class="shortcut">Ctrl+.</span>
+          </div>
+          <div class="ai-command" data-cmd="finishParagraph">
+            <span class="icon">&#182;</span>
+            <span class="label">Complete Paragraph</span>
+          </div>
+        </div>
+
+        <div class="ai-command-group">
+          <h4>Fix</h4>
+          <div class="ai-command" data-cmd="fixGrammar" data-needs-selection="true">
+            <span class="icon">&#10003;</span>
+            <span class="label">Fix Grammar</span>
+          </div>
+          <div class="ai-command" data-cmd="fixTranscription" data-needs-selection="true">
+            <span class="icon">&#127908;</span>
+            <span class="label">Fix Transcription</span>
+          </div>
+        </div>
+
+        <div class="ai-command-group">
+          <h4>Code</h4>
+          <div class="ai-command" data-cmd="documentCode" data-needs-selection="true">
+            <span class="icon">&#128221;</span>
+            <span class="label">Add Documentation</span>
+          </div>
+          <div class="ai-command" data-cmd="addTypeHints" data-needs-selection="true">
+            <span class="icon">T</span>
+            <span class="label">Add Type Hints</span>
+          </div>
+          <div class="ai-command" data-cmd="refactorCode" data-needs-selection="true">
+            <span class="icon">&#9851;</span>
+            <span class="label">Refactor</span>
+          </div>
+        </div>
+
+        <div class="ai-command-group">
+          <h4>Document</h4>
+          <div class="ai-command" data-cmd="continueDocument">
+            <span class="icon">&#128196;</span>
+            <span class="label">Continue Writing</span>
+          </div>
+          <div class="ai-command" data-cmd="summarize">
+            <span class="icon">&#128203;</span>
+            <span class="label">Summarize</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="juice-selector">
+        <label>AI Quality Level</label>
+        <div class="juice-buttons">
+          <button class="juice-btn active" data-level="0">Quick</button>
+          <button class="juice-btn" data-level="1">Balanced</button>
+          <button class="juice-btn" data-level="2">Deep</button>
+          <button class="juice-btn" data-level="3">Max</button>
+          <button class="juice-btn" data-level="4">Ultimate</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script type="module">
+  import mrmd from '../dist/mrmd.esm.js';
+
+  // Shell AI components
+  const {
+    AiClient,
+    JUICE_LEVELS,
+    injectAiMenuStyles,
+    showAiMenu,
+    AI_COMMANDS,
+  } = mrmd.shell;
+
+  // AI Integration (editor extensions)
+  const {
+    aiIntegration,
+    aiState,
+    startAiOperation,
+    completeAiOperation,
+    cancelAiOperation,
+    acceptAiChange,
+    rejectAiChange,
+    acceptAllAiChanges,
+    getAiContext,
+    executeAiOperation,
+  } = mrmd.ai;
+
+  // ==========================================================================
+  // Configuration
+  // ==========================================================================
+
+  const API = 'http://localhost:8080';
+  let juiceLevel = 0;
+  let aiClient = null;
+  let editor = null;
+
+  // ==========================================================================
+  // Initialize Editor
+  // ==========================================================================
+
+  async function init() {
+    // Initialize AI client
+    aiClient = new AiClient(API);
+
+    // Check AI status
+    try {
+      const status = await aiClient.getStatus();
+      updateAiStatus(status.running);
+      if (status.default_juice_level !== undefined) {
+        setJuiceLevel(status.default_juice_level);
+      }
+    } catch (e) {
+      console.warn('AI server not available:', e);
+      updateAiStatus(false);
+    }
+
+    // Inject AI menu styles
+    injectAiMenuStyles();
+
+    // Create editor with AI integration
+    editor = mrmd.create('#editor', {
+      doc: `# AI Integration Demo
+
+Welcome to the mrmd AI integration demo! This example shows how AI features
+integrate with the editor.
+
+## Try these features:
+
+1. **Complete Sentence** - Place cursor at the end of a line and click "Complete Sentence"
+
+2. **Fix Grammar** - Select some text with errors and click "Fix Grammar"
+
+3. **Code Operations** - Select code in a code block and try "Add Documentation" or "Refactor"
+
+## Example Code
+
+\`\`\`python
+def calculate_average(numbers):
+    total = 0
+    for n in numbers:
+        total = total + n
+    return total / len(numbers)
+\`\`\`
+
+## Continue Writing
+
+The AI can continue writing from wherever your cursor is. Try placing your
+cursor at the end of this paragraph and clicking "Continue Document" to see
+the AI write more content.
+`,
+      javascript: true,
+      awarenessUI: true,
+    });
+
+    // Add AI integration extensions
+    const aiExtensions = aiIntegration({
+      onSparkClick: (e, view) => {
+        showAiMenuAtCursor(e);
+      },
+    });
+
+    // Add extensions to editor
+    editor.view.dispatch({
+      effects: mrmd.codemirror.StateEffect.appendConfig.of(aiExtensions),
+    });
+
+    // Track cursor position
+    editor.view.dom.addEventListener('keyup', updateCursorPos);
+    editor.view.dom.addEventListener('click', updateCursorPos);
+    updateCursorPos();
+
+    // Update command states based on selection
+    editor.onChange(() => updateCommandStates());
+    editor.view.dom.addEventListener('mouseup', updateCommandStates);
+
+    // Wire up AI commands
+    wireAiCommands();
+
+    updateSyncStatus('connected');
+  }
+
+  // ==========================================================================
+  // AI Commands
+  // ==========================================================================
+
+  function wireAiCommands() {
+    document.querySelectorAll('.ai-command').forEach(el => {
+      el.addEventListener('click', async () => {
+        if (el.classList.contains('disabled')) return;
+
+        const cmd = el.dataset.cmd;
+        await executeCommand(cmd);
+      });
+    });
+
+    // Juice level buttons
+    document.querySelectorAll('.juice-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        setJuiceLevel(parseInt(btn.dataset.level));
+      });
+    });
+
+    // Theme selector
+    document.getElementById('theme-select').addEventListener('change', e => {
+      editor.setTheme(e.target.value || null);
+    });
+
+    // Keyboard shortcut for complete sentence
+    document.addEventListener('keydown', e => {
+      if (e.ctrlKey && e.key === '.') {
+        e.preventDefault();
+        executeCommand('finishSentence');
+      }
+    });
+  }
+
+  async function executeCommand(cmd) {
+    const view = editor.view;
+    const context = getAiContext(view);
+
+    updateAiStatus('loading');
+
+    try {
+      switch (cmd) {
+        case 'finishSentence':
+          await executeAiOperation(view, aiClient, {
+            program: 'FinishSentencePredict',
+            params: {
+              text_before_cursor: context.textBeforeCursor,
+              local_context: context.localContext,
+              document_context: context.documentContext,
+            },
+            type: 'insert',
+            from: context.cursorPos,
+            to: context.cursorPos,
+            resultField: 'completion',
+            juiceLevel,
+          });
+          break;
+
+        case 'finishParagraph':
+          await executeAiOperation(view, aiClient, {
+            program: 'FinishParagraphPredict',
+            params: {
+              text_before_cursor: context.textBeforeCursor,
+              local_context: context.localContext,
+              document_context: context.documentContext,
+            },
+            type: 'insert',
+            from: context.cursorPos,
+            to: context.cursorPos,
+            resultField: 'completion',
+            juiceLevel,
+          });
+          break;
+
+        case 'fixGrammar':
+          if (!context.selectedText) {
+            alert('Please select text to fix');
+            return;
+          }
+          await executeAiOperation(view, aiClient, {
+            program: 'FixGrammarPredict',
+            params: {
+              text_to_fix: context.selectedText,
+              local_context: context.localContext,
+              document_context: context.documentContext,
+            },
+            type: 'replace',
+            from: context.selectionFrom,
+            to: context.selectionTo,
+            resultField: 'fixed_text',
+            juiceLevel,
+          });
+          break;
+
+        case 'fixTranscription':
+          if (!context.selectedText) {
+            alert('Please select text to fix');
+            return;
+          }
+          await executeAiOperation(view, aiClient, {
+            program: 'FixTranscriptionPredict',
+            params: {
+              text_to_fix: context.selectedText,
+              local_context: context.localContext,
+              document_context: context.documentContext,
+            },
+            type: 'replace',
+            from: context.selectionFrom,
+            to: context.selectionTo,
+            resultField: 'fixed_text',
+            juiceLevel,
+          });
+          break;
+
+        case 'documentCode':
+          if (!context.selectedText) {
+            alert('Please select code to document');
+            return;
+          }
+          await executeAiOperation(view, aiClient, {
+            program: 'DocumentCodePredict',
+            params: {
+              code: context.selectedText,
+              language: detectLanguage(context),
+              local_context: context.localContext,
+              document_context: context.documentContext,
+            },
+            type: 'replace',
+            from: context.selectionFrom,
+            to: context.selectionTo,
+            resultField: 'documented_code',
+            juiceLevel,
+          });
+          break;
+
+        case 'addTypeHints':
+          if (!context.selectedText) {
+            alert('Please select code');
+            return;
+          }
+          await executeAiOperation(view, aiClient, {
+            program: 'AddTypeHintsPredict',
+            params: {
+              code: context.selectedText,
+              language: detectLanguage(context),
+              local_context: context.localContext,
+              document_context: context.documentContext,
+            },
+            type: 'replace',
+            from: context.selectionFrom,
+            to: context.selectionTo,
+            resultField: 'typed_code',
+            juiceLevel,
+          });
+          break;
+
+        case 'refactorCode':
+          if (!context.selectedText) {
+            alert('Please select code to refactor');
+            return;
+          }
+          await executeAiOperation(view, aiClient, {
+            program: 'RefactorCodePredict',
+            params: {
+              code: context.selectedText,
+              language: detectLanguage(context),
+              local_context: context.localContext,
+              document_context: context.documentContext,
+            },
+            type: 'replace',
+            from: context.selectionFrom,
+            to: context.selectionTo,
+            resultField: 'refactored_code',
+            juiceLevel,
+          });
+          break;
+
+        case 'continueDocument':
+          await aiContinue();
+          break;
+
+        case 'summarize':
+          const result = await aiClient.summarizeDocument(context.documentContext, { juiceLevel });
+          alert('Summary:\n\n' + (result.summary || result.response || 'No summary generated'));
+          break;
+      }
+    } catch (e) {
+      console.error('AI command failed:', e);
+      alert('AI command failed: ' + e.message);
+    } finally {
+      updateAiStatus(true);
+    }
+  }
+
+  // Continue document (writes at end)
+  window.aiContinue = async function() {
+    const view = editor.view;
+    const docEnd = view.state.doc.length;
+    const content = view.state.doc.toString();
+
+    updateAiStatus('loading');
+
+    try {
+      await executeAiOperation(view, aiClient, {
+        program: 'DocumentResponsePredict',
+        params: {
+          document: content,
+        },
+        type: 'insert',
+        from: docEnd,
+        to: docEnd,
+        resultField: 'response',
+        juiceLevel,
+      });
+    } catch (e) {
+      console.error('Continue document failed:', e);
+      alert('Continue document failed: ' + e.message);
+    } finally {
+      updateAiStatus(true);
+    }
+  };
+
+  function detectLanguage(context) {
+    // Simple language detection from context
+    const before = context.textBeforeCursor.slice(-200);
+    if (before.includes('```python') || before.includes('```py')) return 'python';
+    if (before.includes('```javascript') || before.includes('```js')) return 'javascript';
+    if (before.includes('```typescript') || before.includes('```ts')) return 'typescript';
+    if (before.includes('```rust')) return 'rust';
+    if (before.includes('```go')) return 'go';
+    return 'python'; // Default
+  }
+
+  // ==========================================================================
+  // UI Updates
+  // ==========================================================================
+
+  function setJuiceLevel(level) {
+    juiceLevel = level;
+    aiClient?.setJuiceLevel(level);
+
+    document.querySelectorAll('.juice-btn').forEach(btn => {
+      btn.classList.toggle('active', parseInt(btn.dataset.level) === level);
+    });
+  }
+
+  function updateCommandStates() {
+    const sel = editor.view.state.selection.main;
+    const hasSelection = !sel.empty;
+
+    document.querySelectorAll('.ai-command').forEach(el => {
+      const needsSelection = el.dataset.needsSelection === 'true';
+      el.classList.toggle('disabled', needsSelection && !hasSelection);
+    });
+  }
+
+  function updateCursorPos() {
+    const pos = editor.view.state.selection.main.head;
+    const line = editor.view.state.doc.lineAt(pos);
+    const col = pos - line.from + 1;
+    document.getElementById('cursor-pos').textContent = `Ln ${line.number}, Col ${col}`;
+  }
+
+  function updateSyncStatus(status) {
+    const dot = document.getElementById('sync-status');
+    const text = document.getElementById('sync-text');
+
+    dot.className = 'status-dot ' + status;
+    text.textContent = status === 'connected' ? 'Synced' : 'Offline';
+  }
+
+  function updateAiStatus(status) {
+    const dot = document.getElementById('ai-status');
+    const text = document.getElementById('ai-text');
+
+    if (status === 'loading') {
+      dot.className = 'status-dot loading';
+      text.textContent = 'AI Working...';
+    } else if (status === true) {
+      dot.className = 'status-dot connected';
+      text.textContent = 'AI Ready';
+    } else {
+      dot.className = 'status-dot disconnected';
+      text.textContent = 'AI Offline';
+    }
+  }
+
+  function showAiMenuAtCursor(event) {
+    const context = getAiContext(editor.view);
+    showAiMenu({
+      x: event.clientX,
+      y: event.clientY,
+      context: {
+        hasSelection: context.selectedText.length > 0,
+        inCodeCell: false, // TODO: detect
+      },
+      onCommand: (cmd) => executeCommand(cmd.id.replace(/-/g, '')),
+      juiceLevel,
+      onJuiceLevelChange: setJuiceLevel,
+    });
+  }
+
+  // ==========================================================================
+  // Init
+  // ==========================================================================
+
+  init().catch(e => {
+    console.error('Failed to initialize:', e);
+    document.getElementById('editor').innerHTML = `
+      <div class="empty-state">
+        <div class="icon">&#9888;</div>
+        <h3>Failed to Initialize</h3>
+        <p>${e.message}</p>
+        <p style="margin-top: 12px; font-size: 12px;">
+          Make sure the orchestrator is running:<br>
+          <code>cd mrmd-orchestrator && uv run mrmd</code>
+        </p>
+      </div>
+    `;
+  });
+</script>
+
+</body>
+</html>

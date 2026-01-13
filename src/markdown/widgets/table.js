@@ -690,11 +690,35 @@ export class TableWidget extends WidgetType {
   }
 
   /**
-   * Render basic inline markdown (bold, italic, code)
+   * Render basic inline markdown (bold, italic, code, images)
    */
   renderInlineMarkdown(content) {
-    let html = this.escapeHtml(content);
+    // Process images BEFORE escaping HTML (they contain special chars)
+    // Match: ![alt](url) or ![alt](url "title")
+    let html = content.replace(
+      /!\[([^\]]*)\]\(([^)"]+)(?:\s+"([^"]*)")?\)/g,
+      (match, alt, url, title) => {
+        const escapedAlt = this.escapeHtml(alt);
+        const escapedUrl = this.escapeHtml(url);
+        const titleAttr = title ? ` title="${this.escapeHtml(title)}"` : '';
+        return `<img src="${escapedUrl}" alt="${escapedAlt}"${titleAttr} class="cm-table-cell-img">`;
+      }
+    );
 
+    // Now escape remaining HTML
+    // But preserve our img tags - extract them first
+    const imgTags = [];
+    html = html.replace(/<img [^>]+>/g, (match) => {
+      imgTags.push(match);
+      return `__IMG_${imgTags.length - 1}__`;
+    });
+
+    html = this.escapeHtml(html);
+
+    // Restore img tags
+    html = html.replace(/__IMG_(\d+)__/g, (match, index) => imgTags[parseInt(index)]);
+
+    // Process other inline markdown
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
     html = html.replace(/`(.+?)`/g, '<code>$1</code>');

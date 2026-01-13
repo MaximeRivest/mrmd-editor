@@ -271,6 +271,7 @@ export function showFilePicker(options) {
  * @param {string} options.title
  * @param {import('../orchestrator-client.js').OrchestratorClient} options.orchestratorClient
  * @param {string} [options.initialPath='~']
+ * @param {boolean} [options.showHidden=false] - Show hidden folders (e.g., .venv)
  * @param {(path: string) => void} options.onSelect
  * @param {() => void} [options.onCancel]
  */
@@ -279,6 +280,7 @@ export function showFolderPicker(options) {
     title,
     orchestratorClient,
     initialPath = '~',
+    showHidden = false,
     onSelect,
     onCancel,
   } = options;
@@ -397,7 +399,7 @@ export function showFolderPicker(options) {
     renderFolderList();
 
     try {
-      const result = await orchestratorClient.browse({ path, type: 'dir' });
+      const result = await orchestratorClient.browse({ path, type: 'dir', showHidden });
       currentPath = result.path;
       entries = result.entries;
     } catch (error) {
