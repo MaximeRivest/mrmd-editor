@@ -360,6 +360,55 @@ export const tokenDefinitions = {
   '--md-alert-important-color': { description: 'Important alert accent color', category: 'markdown', default: 'var(--syntax-keyword)' },
   '--md-alert-warning-color': { description: 'Warning alert accent color', category: 'markdown', default: 'var(--widget-warning)' },
   '--md-alert-caution-color': { description: 'Caution alert accent color', category: 'markdown', default: 'var(--widget-error)' },
+
+  // ===========================================================================
+  // SHELL (Status bar, menus, dialogs)
+  // ===========================================================================
+  '--mrmd-ui-font': { description: 'UI font family for shell components', category: 'shell', default: 'var(--widget-font-sans)' },
+  '--mrmd-ui-font-size': { description: 'UI font size', category: 'shell', default: '13px' },
+  '--mrmd-ui-font-size-sm': { description: 'Small UI font size', category: 'shell', default: '11px' },
+  '--mrmd-panel-bg': { description: 'Panel/surface background', category: 'shell', default: '#1e1e1e' },
+  '--mrmd-popup-bg': { description: 'Popup/menu background', category: 'shell', default: '#252526' },
+  '--mrmd-bg': { description: 'Main background', category: 'shell', default: '#1e1e1e' },
+  '--mrmd-fg': { description: 'Primary foreground color', category: 'shell', default: '#cccccc' },
+  '--mrmd-fg-muted': { description: 'Muted foreground color', category: 'shell', default: '#888888' },
+  '--mrmd-border': { description: 'Border color', category: 'shell', default: '#3c3c3c' },
+  '--mrmd-hover-bg': { description: 'Hover background', category: 'shell', default: 'rgba(255, 255, 255, 0.05)' },
+  '--mrmd-active-bg': { description: 'Active/pressed background', category: 'shell', default: 'rgba(255, 255, 255, 0.08)' },
+  '--mrmd-selection-bg': { description: 'Selection background', category: 'shell', default: 'rgba(0, 122, 204, 0.3)' },
+  '--mrmd-accent': { description: 'Accent color', category: 'shell', default: '#007acc' },
+  '--mrmd-accent-hover': { description: 'Accent hover color', category: 'shell', default: '#0098ff' },
+  '--mrmd-success': { description: 'Success color', category: 'shell', default: '#4caf50' },
+  '--mrmd-warning': { description: 'Warning color', category: 'shell', default: '#ff9800' },
+  '--mrmd-error': { description: 'Error color', category: 'shell', default: '#f44336' },
+  '--mrmd-shadow-md': { description: 'Medium shadow', category: 'shell', default: '0 4px 12px rgba(0, 0, 0, 0.3)' },
+  '--mrmd-shadow-lg': { description: 'Large shadow', category: 'shell', default: '0 8px 32px rgba(0, 0, 0, 0.4)' },
+  '--mrmd-shadow-xl': { description: 'Extra large shadow', category: 'shell', default: '0 16px 48px rgba(0, 0, 0, 0.5)' },
+  // Status bar specific
+  '--mrmd-statusbar-bg': { description: 'Status bar background', category: 'shell', default: 'var(--mrmd-panel-bg)' },
+  '--mrmd-statusbar-fg': { description: 'Status bar foreground', category: 'shell', default: 'var(--mrmd-fg-muted)' },
+  '--mrmd-statusbar-fg-muted': { description: 'Status bar muted foreground', category: 'shell', default: 'var(--mrmd-fg-muted)' },
+  '--mrmd-statusbar-border': { description: 'Status bar border', category: 'shell', default: 'var(--mrmd-border)' },
+  '--mrmd-statusbar-hover': { description: 'Status bar hover background', category: 'shell', default: 'var(--mrmd-hover-bg)' },
+  '--mrmd-statusbar-active': { description: 'Status bar active background', category: 'shell', default: 'var(--mrmd-active-bg)' },
+  '--mrmd-statusbar-separator': { description: 'Status bar separator color', category: 'shell', default: 'var(--mrmd-border)' },
+  // Menu specific
+  '--mrmd-menu-bg': { description: 'Menu background', category: 'shell', default: 'var(--mrmd-popup-bg)' },
+  '--mrmd-menu-border': { description: 'Menu border', category: 'shell', default: '#454545' },
+  '--mrmd-menu-hover': { description: 'Menu item hover background', category: 'shell', default: 'var(--mrmd-hover-bg)' },
+  '--mrmd-menu-active': { description: 'Menu item active background', category: 'shell', default: 'var(--mrmd-selection-bg)' },
+  '--mrmd-menu-divider': { description: 'Menu divider color', category: 'shell', default: 'var(--mrmd-border)' },
+  // Dialog specific
+  '--mrmd-dialog-bg': { description: 'Dialog background', category: 'shell', default: 'var(--mrmd-popup-bg)' },
+  '--mrmd-dialog-border': { description: 'Dialog border', category: 'shell', default: '#454545' },
+  // Input specific
+  '--mrmd-input-bg': { description: 'Input background', category: 'shell', default: 'var(--mrmd-bg)' },
+  '--mrmd-input-border': { description: 'Input border', category: 'shell', default: '#454545' },
+  // Button specific
+  '--mrmd-button-bg': { description: 'Button background', category: 'shell', default: '#3c3c3c' },
+  '--mrmd-button-border': { description: 'Button border', category: 'shell', default: '#5a5a5a' },
+  '--mrmd-button-hover': { description: 'Button hover background', category: 'shell', default: '#4a4a4a' },
+  '--mrmd-button-active': { description: 'Button active background', category: 'shell', default: '#555555' },
 };
 
 // #endregion TOKEN_DEFINITIONS
@@ -525,6 +574,28 @@ export const midnightTheme = {
   '--md-alert-important-color': '#569cd6',
   '--md-alert-warning-color': '#f59e0b',
   '--md-alert-caution-color': '#ef4444',
+
+  // Shell (status bar, menus, dialogs)
+  '--mrmd-ui-font': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  '--mrmd-ui-font-size': '13px',
+  '--mrmd-ui-font-size-sm': '11px',
+  '--mrmd-panel-bg': '#1e1e1e',
+  '--mrmd-popup-bg': '#252526',
+  '--mrmd-bg': '#1e1e1e',
+  '--mrmd-fg': '#cccccc',
+  '--mrmd-fg-muted': '#888888',
+  '--mrmd-border': '#3c3c3c',
+  '--mrmd-hover-bg': 'rgba(255, 255, 255, 0.05)',
+  '--mrmd-active-bg': 'rgba(255, 255, 255, 0.08)',
+  '--mrmd-selection-bg': 'rgba(100, 149, 237, 0.3)',
+  '--mrmd-accent': '#6495ed',
+  '--mrmd-accent-hover': '#7ba6f7',
+  '--mrmd-success': '#4caf50',
+  '--mrmd-warning': '#ff9800',
+  '--mrmd-error': '#f44336',
+  '--mrmd-shadow-md': '0 4px 12px rgba(0, 0, 0, 0.3)',
+  '--mrmd-shadow-lg': '0 8px 32px rgba(0, 0, 0, 0.4)',
+  '--mrmd-shadow-xl': '0 16px 48px rgba(0, 0, 0, 0.5)',
 };
 
 /**
@@ -686,6 +757,35 @@ export const daylightTheme = {
   '--md-alert-important-color': '#0000ff',
   '--md-alert-warning-color': '#d97706',
   '--md-alert-caution-color': '#dc2626',
+
+  // Shell (status bar, menus, dialogs) - Light theme
+  '--mrmd-ui-font': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  '--mrmd-ui-font-size': '13px',
+  '--mrmd-ui-font-size-sm': '11px',
+  '--mrmd-panel-bg': '#f5f5f5',
+  '--mrmd-popup-bg': '#ffffff',
+  '--mrmd-bg': '#ffffff',
+  '--mrmd-fg': '#333333',
+  '--mrmd-fg-muted': '#666666',
+  '--mrmd-border': '#e0e0e0',
+  '--mrmd-hover-bg': 'rgba(0, 0, 0, 0.04)',
+  '--mrmd-active-bg': 'rgba(0, 0, 0, 0.08)',
+  '--mrmd-selection-bg': 'rgba(37, 99, 235, 0.15)',
+  '--mrmd-accent': '#2563eb',
+  '--mrmd-accent-hover': '#1d4ed8',
+  '--mrmd-success': '#16a34a',
+  '--mrmd-warning': '#d97706',
+  '--mrmd-error': '#dc2626',
+  '--mrmd-shadow-md': '0 4px 12px rgba(0, 0, 0, 0.1)',
+  '--mrmd-shadow-lg': '0 8px 32px rgba(0, 0, 0, 0.15)',
+  '--mrmd-shadow-xl': '0 16px 48px rgba(0, 0, 0, 0.2)',
+  '--mrmd-menu-border': '#d0d0d0',
+  '--mrmd-dialog-border': '#d0d0d0',
+  '--mrmd-input-border': '#d0d0d0',
+  '--mrmd-button-bg': '#f0f0f0',
+  '--mrmd-button-border': '#d0d0d0',
+  '--mrmd-button-hover': '#e8e8e8',
+  '--mrmd-button-active': '#e0e0e0',
 };
 
 /**
@@ -847,6 +947,35 @@ export const githubTheme = {
   '--md-alert-important-color': '#a371f7',
   '--md-alert-warning-color': '#d29922',
   '--md-alert-caution-color': '#f85149',
+
+  // Shell (status bar, menus, dialogs) - GitHub dark
+  '--mrmd-ui-font': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif",
+  '--mrmd-ui-font-size': '14px',
+  '--mrmd-ui-font-size-sm': '12px',
+  '--mrmd-panel-bg': '#161b22',
+  '--mrmd-popup-bg': '#1c2128',
+  '--mrmd-bg': '#0d1117',
+  '--mrmd-fg': '#c9d1d9',
+  '--mrmd-fg-muted': '#8b949e',
+  '--mrmd-border': '#30363d',
+  '--mrmd-hover-bg': 'rgba(177, 186, 196, 0.12)',
+  '--mrmd-active-bg': 'rgba(177, 186, 196, 0.18)',
+  '--mrmd-selection-bg': 'rgba(88, 166, 255, 0.2)',
+  '--mrmd-accent': '#58a6ff',
+  '--mrmd-accent-hover': '#79c0ff',
+  '--mrmd-success': '#238636',
+  '--mrmd-warning': '#d29922',
+  '--mrmd-error': '#f85149',
+  '--mrmd-shadow-md': '0 8px 24px rgba(1, 4, 9, 0.75)',
+  '--mrmd-shadow-lg': '0 12px 28px rgba(1, 4, 9, 0.8)',
+  '--mrmd-shadow-xl': '0 16px 36px rgba(1, 4, 9, 0.85)',
+  '--mrmd-menu-border': '#30363d',
+  '--mrmd-dialog-border': '#30363d',
+  '--mrmd-input-border': '#30363d',
+  '--mrmd-button-bg': '#21262d',
+  '--mrmd-button-border': '#30363d',
+  '--mrmd-button-hover': '#30363d',
+  '--mrmd-button-active': '#3c444d',
 };
 
 /**

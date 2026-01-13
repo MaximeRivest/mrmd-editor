@@ -67,6 +67,9 @@ import { ExecutionManager, createExecutionManager } from './execution.js';
 import { MonitorCoordination, EXECUTION_STATUS, createMonitorCoordination } from './monitor-coordination.js';
 import { MRPClient } from './mrp-client.js';
 
+// Shell (status bar, file management, studio layout)
+import * as shellModule from './shell/index.js';
+
 // Cell controls (run buttons, queue, status)
 import { createCellControls, CellControlsSystem } from './cell-controls/index.js';
 
@@ -2563,6 +2566,8 @@ const mrmd = {
   runtimeLsp: runtimeLspExports,
   // Markdown rendering (blur→render, focus→source)
   markdown: markdownExports,
+  // Shell (status bar, file management, studio layout)
+  shell: shellModule,
   // Utilities for runtime authors
   RuntimeRegistry,
   createRuntimeRegistry,
@@ -2583,6 +2588,10 @@ const mrmd = {
   createRuntimeHoverExtension,
   createRuntimeCompletionExtension,
   createVariableExplorer,
+  // Direct shell exports for convenience
+  createStudio: shellModule.createStudio,
+  OrchestratorClient: shellModule.OrchestratorClient,
+  Drive: shellModule.Drive,
 };
 
 export default mrmd;
@@ -2679,5 +2688,10 @@ export {
   isTableDelimiter,
   generateTableId,
   AlertTitleWidget,
+  // Shell module exports
+  shellModule as shell,
 };
+
+// Re-export shell components for direct imports
+export const { createStudio, OrchestratorClient, Drive, createDrive, ShellStateManager, injectShellStyles } = shellModule;
 // #endregion EXPORTS

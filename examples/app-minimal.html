@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mrmd - Minimal</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: light-dark(#ffffff, #1e1e1e);
+      color: light-dark(#1a1a1a, #e0e0e0);
+      color-scheme: light dark;
+    }
+
+    /* Full height studio */
+    #app {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Optional header - Studio provides its own status bar */
+    .header {
+      height: 36px;
+      background: light-dark(#f5f5f5, #252526);
+      border-bottom: 1px solid light-dark(#e0e0e0, #3c3c3c);
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      font-size: 13px;
+      color: light-dark(#666, #999);
+    }
+
+    .header .logo {
+      font-weight: 600;
+      color: light-dark(#2563eb, #4f9eff);
+    }
+
+    #studio {
+      flex: 1;
+      min-height: 0;
+    }
+  </style>
+</head>
+<body>
+
+<div id="app">
+  <div class="header">
+    <span class="logo">mrmd</span>
+  </div>
+  <div id="studio"></div>
+</div>
+
+<script type="module">
+  import { createStudio } from '../dist/mrmd.esm.js';
+
+  // That's it. createStudio handles EVERYTHING:
+  // - Yjs connection via Drive
+  // - File management (status bar → location segment → click to browse)
+  // - Sync status display
+  // - Python runtime connection
+  // - File switching with safe destroy+recreate
+
+  const studio = await createStudio('#studio', {
+    orchestratorUrl: 'http://localhost:8080',
+    // Opens first available file, or 'untitled' if none
+    // document: 'my-notebook',
+
+    editorOptions: {
+      // theme: 'nord',
+      cellControls: { enabled: true },
+    },
+
+    // Status bar shows: file info, file browser, sync status, runtime info
+    statusBar: {
+      segments: ['file', 'location', 'sync', 'runtime'],
+      position: 'bottom',
+    },
+  });
+
+  // Expose for console debugging
+  window.studio = studio;
+
+  // That's it! The status bar provides:
+  // - [file] Click → rename, save as
+  // - [location] Click → file browser with all project files + "Open..." button
+  // - [sync] Click → connection status details
+  // - [runtime] Click → Python info, change venv, change cwd, restart
+
+  console.log('Studio ready. Click the status bar segments to access features.');
+  console.log('Current document:', studio.currentDocument);
+</script>
+
+</body>
+</html>

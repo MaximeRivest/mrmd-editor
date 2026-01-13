@@ -27,4 +27,7 @@ export {
   generateMathId,
   isKaTeXAvailable,
   renderLatex,
+  defaultMacros,
+  getKaTeXVersion,
+  injectKaTeXStyles,
 } from './math.js';

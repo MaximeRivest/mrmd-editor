@@ -1,13 +1,13 @@
 /**
  * Math Widget
  *
- * Renders LaTeX math expressions using KaTeX.
+ * Renders LaTeX math expressions using KaTeX (bundled).
  * Supports both inline ($...$) and display ($$...$$) modes.
  *
  * Design philosophy:
  * - Tufte: Math should be beautiful and readable
- * - Graceful degradation when KaTeX not available
- * - Clear error messages for invalid LaTeX
+ * - Bundled KaTeX for zero-config setup
+ * - Extensible for custom syntax support
  *
  * Syntax support:
  * - Inline: $E = mc^2$ or \(E = mc^2\)
@@ -17,6 +17,7 @@
  */
 
 import { WidgetType } from '@codemirror/view';
+import katex from 'katex';
 
 // =============================================================================
 // Detection Functions
@@ -117,59 +118,83 @@ export function generateMathId(from) {
 }
 
 // =============================================================================
-// KaTeX Integration
+// KaTeX Integration (Bundled)
 // =============================================================================
 
 /**
- * Check if KaTeX is available
+ * Check if KaTeX is available (always true since bundled)
  *
  * @returns {boolean}
  */
 export function isKaTeXAvailable() {
-  return typeof window !== 'undefined' && typeof window.katex !== 'undefined';
+  return true;
 }
 
 /**
- * Render LaTeX to HTML using KaTeX
- *
- * @param {string} latex
- * @param {boolean} displayMode
- * @returns {{html: string, error: string | null}}
+ * Default macros for common math notation
+ * These can be extended by users via the renderLatex options
  */
-export function renderLatex(latex, displayMode = false) {
-  if (!isKaTeXAvailable()) {
-    return {
-      html: null,
-      error: 'KaTeX not loaded',
-    };
-  }
+export const defaultMacros = {
+  // Number sets
+  '\\R': '\\mathbb{R}',
+  '\\N': '\\mathbb{N}',
+  '\\Z': '\\mathbb{Z}',
+  '\\Q': '\\mathbb{Q}',
+  '\\C': '\\mathbb{C}',
+  // Greek variants
+  '\\eps': '\\varepsilon',
+  '\\phi': '\\varphi',
+  // Common operators
+  '\\argmax': '\\operatorname{argmax}',
+  '\\argmin': '\\operatorname{argmin}',
+  '\\grad': '\\nabla',
+  '\\div': '\\nabla \\cdot',
+  '\\curl': '\\nabla \\times',
+  // Probability/Statistics
+  '\\E': '\\mathbb{E}',
+  '\\Var': '\\operatorname{Var}',
+  '\\Cov': '\\operatorname{Cov}',
+  '\\P': '\\mathbb{P}',
+  // Linear algebra
+  '\\tr': '\\operatorname{tr}',
+  '\\diag': '\\operatorname{diag}',
+  '\\rank': '\\operatorname{rank}',
+  // Brackets
+  '\\abs': '\\left|#1\\right|',
+  '\\norm': '\\left\\|#1\\right\\|',
+  '\\inner': '\\langle #1, #2 \\rangle',
+  '\\floor': '\\lfloor #1 \\rfloor',
+  '\\ceil': '\\lceil #1 \\rceil',
+};
 
+/**
+ * Render LaTeX to HTML using bundled KaTeX
+ *
+ * @param {string} latex - LaTeX string to render
+ * @param {boolean} displayMode - Whether to render in display mode
+ * @param {Object} options - Additional KaTeX options
+ * @returns {{html: string | null, error: string | null}}
+ */
+export function renderLatex(latex, displayMode = false, options = {}) {
   try {
-    const html = window.katex.renderToString(latex, {
+    const html = katex.renderToString(latex, {
       displayMode,
       throwOnError: true,
       errorColor: '#cc0000',
       strict: 'warn',
       trust: false,
-      macros: {
-        // Common macros
-        '\\R': '\\mathbb{R}',
-        '\\N': '\\mathbb{N}',
-        '\\Z': '\\mathbb{Z}',
-        '\\Q': '\\mathbb{Q}',
-        '\\C': '\\mathbb{C}',
-        '\\eps': '\\varepsilon',
-        '\\phi': '\\varphi',
-      },
+      macros: { ...defaultMacros, ...options.macros },
+      ...options,
     });
     return { html, error: null };
   } catch (e) {
     // Try with throwOnError: false for partial rendering
     try {
-      const html = window.katex.renderToString(latex, {
+      const html = katex.renderToString(latex, {
         displayMode,
         throwOnError: false,
         errorColor: '#cc0000',
+        macros: { ...defaultMacros, ...options.macros },
       });
       return { html, error: e.message };
     } catch (e2) {
@@ -179,6 +204,38 @@ export function renderLatex(latex, displayMode = false) {
       };
     }
   }
+}
+
+/**
+ * Get KaTeX version
+ * @returns {string}
+ */
+export function getKaTeXVersion() {
+  return katex.version || 'unknown';
+}
+
+// =============================================================================
+// CSS Injection
+// =============================================================================
+
+let katexCssInjected = false;
+
+/**
+ * Inject KaTeX CSS into the document
+ * Called automatically when rendering, but can be called manually for preloading
+ */
+export function injectKaTeXStyles() {
+  if (katexCssInjected || typeof document === 'undefined') return;
+
+  // Import KaTeX CSS as a string and inject it
+  // We use a CDN fallback since bundling CSS with JS is complex
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css';
+  link.crossOrigin = 'anonymous';
+  document.head.appendChild(link);
+
+  katexCssInjected = true;
 }
 
 // =============================================================================
@@ -204,6 +261,9 @@ export class InlineMathWidget extends WidgetType {
   }
 
   toDOM() {
+    // Ensure KaTeX CSS is loaded
+    injectKaTeXStyles();
+
     const span = document.createElement('span');
     span.className = 'cm-math-inline';
     span.dataset.latex = this.latex;
@@ -252,6 +312,9 @@ export class DisplayMathWidget extends WidgetType {
   }
 
   toDOM() {
+    // Ensure KaTeX CSS is loaded
+    injectKaTeXStyles();
+
     const container = document.createElement('div');
     container.className = 'cm-math-display';
     container.dataset.mathId = this.mathId;

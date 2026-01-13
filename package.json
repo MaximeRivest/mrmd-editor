@@ -58,9 +58,10 @@
     "@plutojl/lang-julia": "^0.12.1",
     "codemirror": "^6.0.1",
     "codemirror-lang-r": "^0.1.1",
+    "katex": "^0.16.27",
+    "mrmd-js": "file:../mrmd-js",
     "y-codemirror.next": "^0.3.5",
     "y-websocket": "^2.0.0",
-    "yjs": "^13.6.18",
-    "mrmd-js": "file:../mrmd-js"
+    "yjs": "^13.6.18"
   }
 }
