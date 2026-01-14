@@ -63583,8 +63583,46 @@ ${studioStyles}
       },
 
       async onRestartRuntime(language) {
-        // TODO: Implement runtime restart via orchestrator
-        console.log('Restart runtime:', language);
+        console.log('[RestartRuntime] Starting restart for:', language);
+
+        const docName = shellState.get('currentDoc');
+        if (!docName) {
+          console.warn('[RestartRuntime] No current document');
+          return;
+        }
+
+        try {
+          // Get current session info to preserve venv
+          const python = shellState.get('runtimes.python') || {};
+          const currentVenv = python.venv;
+          console.log('[RestartRuntime] Current venv:', currentVenv);
+
+          // Destroy existing session (kills the daemon)
+          console.log('[RestartRuntime] Destroying session for:', docName);
+          await orchestratorClient.destroySession(docName);
+
+          // Small delay to ensure cleanup
+          await new Promise(r => setTimeout(r, 500));
+
+          // Create new session with same venv
+          console.log('[RestartRuntime] Creating new session with venv:', currentVenv);
+          const sessionInfo = await shellState.createSession(docName, 'dedicated', currentVenv);
+          console.log('[RestartRuntime] New session created:', sessionInfo);
+
+          // Reconnect editor to new runtime
+          if (editor?.connectRuntime && sessionInfo.url) {
+            editor.connectRuntime('python', sessionInfo.url);
+          }
+
+          // Update execution manager
+          if (editor?.execution?.setRuntimeUrl) {
+            editor.execution.setRuntimeUrl(sessionInfo.url);
+          }
+
+          emit('runtimeRestarted', { language, session: sessionInfo });
+        } catch (error) {
+          console.error('[RestartRuntime] Error:', error);
+        }
       },
 
       async onNewFile() {
