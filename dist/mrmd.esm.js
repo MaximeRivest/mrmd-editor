@@ -63521,9 +63521,12 @@ async function createStudio$1(target, options = {}) {
         initialPath: python?.venv || '~',
         showHidden: true, // Show hidden folders like .venv
         onSelect: async (path) => {
+          console.log('[ChangeVenv] onSelect called with path:', path, 'for doc:', docName);
           try {
             // Create a dedicated runtime for this document with the selected venv
+            console.log('[ChangeVenv] Calling createSession...');
             const sessionInfo = await shellState.createSession(docName, 'dedicated', path);
+            console.log('[ChangeVenv] createSession returned:', sessionInfo);
 
             // Reconnect the editor to the new runtime
             if (editor?.connectRuntime && sessionInfo.url) {
