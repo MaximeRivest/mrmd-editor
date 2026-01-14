@@ -59,6 +59,13 @@ function getInitialState() {
     projectRoot: '',
     file: null,
     theme: null, // null = auto, or theme name
+    // Project info from orchestrator
+    project: {
+      root: '',
+      name: '',
+      type: 'unknown',
+      venv: null,
+    },
     runtimes: {
       // Legacy: single Python runtime info (for backward compat)
       python: null,
@@ -279,14 +286,19 @@ export class ShellStateManager {
    */
   async refresh() {
     try {
-      // Fetch status and environment in parallel
-      const [status, env] = await Promise.all([
+      // Fetch status, environment, and project info in parallel
+      const [status, env, project] = await Promise.all([
         this._client.getStatus(),
         this._client.getEnvironment(),
+        this._client.getProject().catch(() => null),
       ]);
 
       this._updateFromOrchestratorStatus(status);
       this._updateFromEnvironment(env);
+
+      if (project) {
+        this._set('project', project);
+      }
 
       this._set('orchestrator.status', 'connected');
       this._set('orchestrator.error', null);

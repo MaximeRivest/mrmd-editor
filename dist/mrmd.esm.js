@@ -58361,6 +58361,45 @@ let OrchestratorClient$1 = class OrchestratorClient {
     });
   }
 
+  /**
+   * List all active sessions
+   * @returns {Promise<{sessions: Array}>}
+   */
+  async listSessions() {
+    return this._fetch('/api/sessions');
+  }
+
+  // ===========================================================================
+  // Project & Runtime Management
+  // ===========================================================================
+
+  /**
+   * Get project information
+   * @returns {Promise<{root: string, name: string, type: string, venv: string|null}>}
+   */
+  async getProject() {
+    return this._fetch('/api/project');
+  }
+
+  /**
+   * List all runtimes (shared and dedicated)
+   * @returns {Promise<{shared: Object|null, dedicated: Array, sessions: Array, project: Object}>}
+   */
+  async listRuntimes() {
+    return this._fetch('/api/runtimes');
+  }
+
+  /**
+   * Kill a runtime
+   * @param {string} runtimeId - Runtime ID ('shared' or document name for dedicated)
+   * @returns {Promise<{id: string, killed: boolean, message: string}>}
+   */
+  async killRuntime(runtimeId) {
+    return this._fetch(`/api/runtimes/${encodeURIComponent(runtimeId)}`, {
+      method: 'DELETE',
+    });
+  }
+
   // ===========================================================================
   // Logs
   // ===========================================================================
@@ -58508,6 +58547,13 @@ function getInitialState$1() {
     projectRoot: '',
     file: null,
     theme: null, // null = auto, or theme name
+    // Project info from orchestrator
+    project: {
+      root: '',
+      name: '',
+      type: 'unknown',
+      venv: null,
+    },
     runtimes: {
       // Legacy: single Python runtime info (for backward compat)
       python: null,
@@ -58728,14 +58774,19 @@ let ShellStateManager$1 = class ShellStateManager {
    */
   async refresh() {
     try {
-      // Fetch status and environment in parallel
-      const [status, env] = await Promise.all([
+      // Fetch status, environment, and project info in parallel
+      const [status, env, project] = await Promise.all([
         this._client.getStatus(),
         this._client.getEnvironment(),
+        this._client.getProject().catch(() => null),
       ]);
 
       this._updateFromOrchestratorStatus(status);
       this._updateFromEnvironment(env);
+
+      if (project) {
+        this._set('project', project);
+      }
 
       this._set('orchestrator.status', 'connected');
       this._set('orchestrator.error', null);
@@ -59415,6 +59466,8 @@ function createSegment(type, context) {
       return createSyncSegment(context);
     case 'runtime':
       return createRuntimeSegment(context);
+    case 'runtimes':
+      return createRuntimesSegment(context);
     case 'ai':
       return createAiSegment(context);
     case 'theme':
@@ -60359,6 +60412,241 @@ function createThemeSegment({ editorRef, shellState, handlers, onCleanup }) {
   const unsubscribe = shellState.onPath('theme', render);
   onCleanup(unsubscribe);
   onCleanup(() => currentMenu?.close());
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// RUNTIMES SEGMENT (Project-wide runtime management)
+// =============================================================================
+
+function createRuntimesSegment({ shellState, orchestratorClient, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment mrmd-statusbar__segment--runtimes';
+  segment.setAttribute('data-segment', 'runtimes');
+
+  let currentMenu = null;
+  let cachedRuntimes = null;
+  let lastFetchTime = 0;
+  const CACHE_TTL = 3000; // 3 seconds
+
+  async function fetchRuntimes() {
+    const now = Date.now();
+    if (now - lastFetchTime < CACHE_TTL && cachedRuntimes) {
+      return cachedRuntimes;
+    }
+
+    try {
+      cachedRuntimes = await orchestratorClient.listRuntimes();
+      lastFetchTime = now;
+      return cachedRuntimes;
+    } catch (error) {
+      console.error('Failed to list runtimes:', error);
+      return cachedRuntimes || { shared: null, dedicated: [], sessions: [], project: {} };
+    }
+  }
+
+  function render() {
+    const python = shellState.get('runtimes.python');
+    const project = shellState.get('project') || {};
+
+    // Count active runtimes
+    let runtimeCount = 0;
+    if (python?.running || python?.status === 'ready') runtimeCount++;
+
+    const sessions = shellState.getSessions();
+    const dedicatedCount = sessions.filter(s => s.info?.dedicated).length;
+    runtimeCount += dedicatedCount;
+
+    // Project name
+    const projectName = project.name || 'mrmd';
+
+    // Status dot
+    const hasActiveRuntime = runtimeCount > 0;
+    const dotClass = hasActiveRuntime ? 'connected' : 'disconnected';
+
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__dot mrmd-statusbar__dot--${dotClass}"></span>
+      <span class="mrmd-statusbar__icon">⚡</span>
+      <span class="mrmd-statusbar__label">${projectName}</span>
+      ${runtimeCount > 0 ? `<span class="mrmd-statusbar__badge">${runtimeCount} runtime${runtimeCount > 1 ? 's' : ''}</span>` : ''}
+      <span class="mrmd-statusbar__chevron">▾</span>
+    `;
+  }
+
+  async function openMenu() {
+    if (currentMenu) {
+      currentMenu.close();
+      return;
+    }
+
+    const runtimes = await fetchRuntimes();
+    const items = [];
+
+    // Project section
+    const project = runtimes.project || {};
+    items.push({
+      type: 'header',
+      label: 'Project',
+    });
+    items.push({
+      type: 'info',
+      label: 'Name',
+      value: project.name || 'unknown',
+    });
+    items.push({
+      type: 'info',
+      label: 'Root',
+      value: shortenPath(project.root, 35),
+    });
+    if (project.venv) {
+      items.push({
+        type: 'info',
+        label: 'Venv',
+        value: shortenPath(project.venv, 35),
+      });
+    }
+
+    // Shared Runtime section
+    items.push({ type: 'divider' });
+    items.push({
+      type: 'header',
+      label: 'Shared Runtime',
+    });
+
+    if (runtimes.shared && runtimes.shared.alive) {
+      items.push({
+        type: 'info',
+        label: 'Status',
+        value: '● Running',
+      });
+      items.push({
+        type: 'info',
+        label: 'PID',
+        value: String(runtimes.shared.pid || 'unknown'),
+      });
+      items.push({
+        type: 'info',
+        label: 'Port',
+        value: String(runtimes.shared.port || 'unknown'),
+      });
+      if (runtimes.shared.venv) {
+        items.push({
+          type: 'info',
+          label: 'Venv',
+          value: shortenPath(runtimes.shared.venv, 30),
+        });
+      }
+      items.push({
+        icon: '💀',
+        label: 'Kill shared runtime',
+        description: 'Release memory, restarts on next exec',
+        onClick: async () => {
+          await handlers.onKillRuntime?.('shared');
+          // Refresh after a moment
+          setTimeout(render, 500);
+        },
+      });
+    } else {
+      items.push({
+        type: 'info',
+        label: 'Status',
+        value: '○ Not running',
+      });
+      items.push({
+        type: 'info',
+        label: '',
+        value: 'Starts on first code execution',
+      });
+    }
+
+    // Dedicated Runtimes section
+    if (runtimes.dedicated && runtimes.dedicated.length > 0) {
+      items.push({ type: 'divider' });
+      items.push({
+        type: 'header',
+        label: `Dedicated Runtimes (${runtimes.dedicated.length})`,
+      });
+
+      for (const rt of runtimes.dedicated) {
+        const statusIcon = rt.alive ? '●' : '○';
+        const statusText = rt.alive ? 'running' : 'stopped';
+        items.push({
+          type: 'info',
+          label: rt.doc || rt.id,
+          value: `${statusIcon} ${statusText} (port ${rt.port || '?'})`,
+        });
+      }
+
+      items.push({
+        icon: '🗑️',
+        label: 'Kill all dedicated runtimes',
+        onClick: async () => {
+          for (const rt of runtimes.dedicated) {
+            await handlers.onKillRuntime?.(rt.doc || rt.id);
+          }
+          setTimeout(render, 500);
+        },
+      });
+    }
+
+    // Sessions section
+    if (runtimes.sessions && runtimes.sessions.length > 0) {
+      items.push({ type: 'divider' });
+      items.push({
+        type: 'header',
+        label: `Active Sessions (${runtimes.sessions.length})`,
+      });
+
+      for (const session of runtimes.sessions) {
+        if (!session) continue;
+        const runtimeType = session.runtimes?.python?.dedicated ? 'dedicated' : 'shared';
+        const port = session.runtimes?.python?.port;
+        items.push({
+          type: 'info',
+          label: session.doc,
+          value: `${runtimeType}${port ? ` (port ${port})` : ''}`,
+        });
+      }
+    }
+
+    // Actions section
+    items.push({ type: 'divider' });
+    items.push({
+      icon: '🔄',
+      label: 'Refresh',
+      onClick: async () => {
+        cachedRuntimes = null;
+        lastFetchTime = 0;
+        await shellState.refresh();
+        render();
+      },
+    });
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment,
+      position: 'bottom-right',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to state changes
+  const unsubscribe1 = shellState.onPath('runtimes', render);
+  const unsubscribe2 = shellState.onPath('project', render);
+  const unsubscribe3 = shellState.onPath('orchestrator.services', render);
+  onCleanup(unsubscribe1);
+  onCleanup(unsubscribe2);
+  onCleanup(unsubscribe3);
+  onCleanup(() => currentMenu?.close());
+
+  // Initial fetch of project info
+  orchestratorClient.getProject().then(project => {
+    shellState._set('project', project);
+  }).catch(() => {});
 
   render();
   return segment;
@@ -63128,6 +63416,62 @@ async function createStudio$1(target, options = {}) {
     return () => eventHandlers.get(event).delete(handler);
   }
 
+  /**
+   * Detect if cursor is inside a code block and return block info
+   * @param {EditorView} view
+   * @returns {{language: string, code: string, start: number, end: number}|null}
+   */
+  function detectCodeBlockAtCursor(view) {
+    const content = view.state.doc.toString();
+    const pos = view.state.selection.main.head;
+
+    // Parse code blocks from content
+    const lines = content.split('\n');
+    let inBlock = false;
+    let blockStart = 0;
+    let blockLanguage = '';
+    let codeStart = 0;
+    let charOffset = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineStart = charOffset;
+
+      if (!inBlock) {
+        const match = line.match(/^(`{3,})(\w*)/);
+        if (match) {
+          inBlock = true;
+          blockStart = lineStart;
+          blockLanguage = match[2].toLowerCase();
+          codeStart = lineStart + line.length + 1;
+        }
+      } else {
+        if (line.match(/^`{3,}\s*$/)) {
+          const codeEnd = lineStart;
+          const blockEnd = lineStart + line.length;
+
+          // Check if cursor is within this block
+          if (pos >= blockStart && pos <= blockEnd) {
+            return {
+              language: blockLanguage || 'text',
+              code: content.slice(codeStart, codeEnd),
+              start: blockStart,
+              end: blockEnd,
+              codeStart,
+              codeEnd,
+            };
+          }
+
+          inBlock = false;
+        }
+      }
+
+      charOffset += line.length + 1;
+    }
+
+    return null;
+  }
+
   // Get service URLs from orchestrator
   let syncUrl;
   let runtimeUrls = {};
@@ -63268,14 +63612,16 @@ async function createStudio$1(target, options = {}) {
       const aiExtensions = mrmd.default.ai.aiIntegration({
         onSparkClick: (e, view) => {
           const context = mrmd.default.ai.getAiContext(view);
+          const codeBlock = detectCodeBlockAtCursor(view);
           showAiMenu({
             x: e.clientX,
             y: e.clientY,
             context: {
               hasSelection: context.selectedText.length > 0,
-              inCodeCell: false, // TODO: detect code cell
+              inCodeCell: codeBlock !== null,
+              codeLanguage: codeBlock?.language || null,
             },
-            onCommand: (cmd) => executeAiCommand(cmd, newEditor),
+            onCommand: (cmd) => executeAiCommand(cmd, newEditor, codeBlock),
             juiceLevel: shellState.get('ai')?.juiceLevel || 0,
             onJuiceLevelChange: (level) => {
               shellState._set('ai.juiceLevel', level);
@@ -63296,13 +63642,19 @@ async function createStudio$1(target, options = {}) {
 
   /**
    * Execute an AI command on the editor
+   * @param {Object} cmd - Command object
+   * @param {Object} targetEditor - Editor instance
+   * @param {Object|null} codeBlock - Code block info if cursor is in a code block
    */
-  async function executeAiCommand(cmd, targetEditor) {
+  async function executeAiCommand(cmd, targetEditor, codeBlock = null) {
     if (!aiClient || !mrmd.default.ai) return;
 
     const view = targetEditor.view;
     const context = mrmd.default.ai.getAiContext(view);
     const juiceLevel = shellState.get('ai')?.juiceLevel || 0;
+
+    // Detect language from code block, or fall back to python
+    const detectedLanguage = codeBlock?.language || 'python';
 
     // Mark AI as active
     shellState._set('ai.active', true);
@@ -63327,7 +63679,7 @@ async function createStudio$1(target, options = {}) {
       } else if (cmd.program.includes('Code')) {
         params = {
           code: context.selectedText,
-          language: 'python', // TODO: detect
+          language: detectedLanguage,
           local_context: context.localContext,
           document_context: context.documentContext,
         };
@@ -63580,9 +63932,7 @@ async function createStudio$1(target, options = {}) {
     },
 
     async onRestartRuntime(language) {
-      console.log('[RestartRuntime] Starting restart for:', language);
-
-      const docName = shellState.get('currentDoc');
+      const docName = currentDocName;
       if (!docName) {
         console.warn('[RestartRuntime] No current document');
         return;
@@ -63592,19 +63942,15 @@ async function createStudio$1(target, options = {}) {
         // Get current session info to preserve venv
         const python = shellState.get('runtimes.python') || {};
         const currentVenv = python.venv;
-        console.log('[RestartRuntime] Current venv:', currentVenv);
 
         // Destroy existing session (kills the daemon)
-        console.log('[RestartRuntime] Destroying session for:', docName);
         await orchestratorClient.destroySession(docName);
 
         // Small delay to ensure cleanup
         await new Promise(r => setTimeout(r, 500));
 
         // Create new session with same venv
-        console.log('[RestartRuntime] Creating new session with venv:', currentVenv);
         const sessionInfo = await shellState.createSession(docName, 'dedicated', currentVenv);
-        console.log('[RestartRuntime] New session created:', sessionInfo);
 
         // Reconnect editor to new runtime
         if (editor?.connectRuntime && sessionInfo.url) {
@@ -63619,6 +63965,31 @@ async function createStudio$1(target, options = {}) {
         emit('runtimeRestarted', { language, session: sessionInfo });
       } catch (error) {
         console.error('[RestartRuntime] Error:', error);
+      }
+    },
+
+    async onKillRuntime(runtimeId) {
+      try {
+        const result = await orchestratorClient.killRuntime(runtimeId);
+
+        // Refresh state after kill
+        await shellState.refresh();
+
+        // If we killed the current document's runtime, update the editor
+        if (runtimeId === currentDocName && editor?.execution) {
+          // Clear the runtime connection
+          editor.execution.setRuntimeUrl(null);
+        }
+
+        emit('runtimeKilled', { runtimeId, result });
+      } catch (error) {
+        console.error('[KillRuntime] Error:', error);
+        await confirm({
+          title: 'Error',
+          message: `Failed to kill runtime: ${error.message}`,
+          confirmLabel: 'OK',
+          cancelLabel: '',
+        });
       }
     },
 
@@ -63805,10 +64176,10 @@ async function createStudio$1(target, options = {}) {
   // Create status bar
   let statusBarComponent = null;
   if (statusBarConfig.enabled !== false) {
-    // Default segments - include 'ai' if AI is available
+    // Default segments - 'runtimes' for project-wide management, 'ai' if available
     const defaultSegments = aiClient
-      ? ['files', 'sync', 'runtime', 'ai']
-      : ['files', 'sync', 'runtime'];
+      ? ['files', 'runtimes', 'sync', 'ai']
+      : ['files', 'runtimes', 'sync'];
 
     statusBarComponent = createStatusBar$1({
       container: statusBarContainer,

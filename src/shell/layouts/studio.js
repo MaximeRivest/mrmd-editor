@@ -142,6 +142,62 @@ export async function createStudio(target, options = {}) {
     return () => eventHandlers.get(event).delete(handler);
   }
 
+  /**
+   * Detect if cursor is inside a code block and return block info
+   * @param {EditorView} view
+   * @returns {{language: string, code: string, start: number, end: number}|null}
+   */
+  function detectCodeBlockAtCursor(view) {
+    const content = view.state.doc.toString();
+    const pos = view.state.selection.main.head;
+
+    // Parse code blocks from content
+    const lines = content.split('\n');
+    let inBlock = false;
+    let blockStart = 0;
+    let blockLanguage = '';
+    let codeStart = 0;
+    let charOffset = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineStart = charOffset;
+
+      if (!inBlock) {
+        const match = line.match(/^(`{3,})(\w*)/);
+        if (match) {
+          inBlock = true;
+          blockStart = lineStart;
+          blockLanguage = match[2].toLowerCase();
+          codeStart = lineStart + line.length + 1;
+        }
+      } else {
+        if (line.match(/^`{3,}\s*$/)) {
+          const codeEnd = lineStart;
+          const blockEnd = lineStart + line.length;
+
+          // Check if cursor is within this block
+          if (pos >= blockStart && pos <= blockEnd) {
+            return {
+              language: blockLanguage || 'text',
+              code: content.slice(codeStart, codeEnd),
+              start: blockStart,
+              end: blockEnd,
+              codeStart,
+              codeEnd,
+            };
+          }
+
+          inBlock = false;
+        }
+      }
+
+      charOffset += line.length + 1;
+    }
+
+    return null;
+  }
+
   // Get service URLs from orchestrator
   let syncUrl;
   let runtimeUrls = {};
@@ -282,14 +338,16 @@ export async function createStudio(target, options = {}) {
       const aiExtensions = mrmd.default.ai.aiIntegration({
         onSparkClick: (e, view) => {
           const context = mrmd.default.ai.getAiContext(view);
+          const codeBlock = detectCodeBlockAtCursor(view);
           showAiMenu({
             x: e.clientX,
             y: e.clientY,
             context: {
               hasSelection: context.selectedText.length > 0,
-              inCodeCell: false, // TODO: detect code cell
+              inCodeCell: codeBlock !== null,
+              codeLanguage: codeBlock?.language || null,
             },
-            onCommand: (cmd) => executeAiCommand(cmd, newEditor),
+            onCommand: (cmd) => executeAiCommand(cmd, newEditor, codeBlock),
             juiceLevel: shellState.get('ai')?.juiceLevel || 0,
             onJuiceLevelChange: (level) => {
               shellState._set('ai.juiceLevel', level);
@@ -310,13 +368,19 @@ export async function createStudio(target, options = {}) {
 
   /**
    * Execute an AI command on the editor
+   * @param {Object} cmd - Command object
+   * @param {Object} targetEditor - Editor instance
+   * @param {Object|null} codeBlock - Code block info if cursor is in a code block
    */
-  async function executeAiCommand(cmd, targetEditor) {
+  async function executeAiCommand(cmd, targetEditor, codeBlock = null) {
     if (!aiClient || !mrmd.default.ai) return;
 
     const view = targetEditor.view;
     const context = mrmd.default.ai.getAiContext(view);
     const juiceLevel = shellState.get('ai')?.juiceLevel || 0;
+
+    // Detect language from code block, or fall back to python
+    const detectedLanguage = codeBlock?.language || 'python';
 
     // Mark AI as active
     shellState._set('ai.active', true);
@@ -341,7 +405,7 @@ export async function createStudio(target, options = {}) {
       } else if (cmd.program.includes('Code')) {
         params = {
           code: context.selectedText,
-          language: 'python', // TODO: detect
+          language: detectedLanguage,
           local_context: context.localContext,
           document_context: context.documentContext,
         };
@@ -594,9 +658,7 @@ export async function createStudio(target, options = {}) {
     },
 
     async onRestartRuntime(language) {
-      console.log('[RestartRuntime] Starting restart for:', language);
-
-      const docName = shellState.get('currentDoc');
+      const docName = currentDocName;
       if (!docName) {
         console.warn('[RestartRuntime] No current document');
         return;
@@ -606,19 +668,15 @@ export async function createStudio(target, options = {}) {
         // Get current session info to preserve venv
         const python = shellState.get('runtimes.python') || {};
         const currentVenv = python.venv;
-        console.log('[RestartRuntime] Current venv:', currentVenv);
 
         // Destroy existing session (kills the daemon)
-        console.log('[RestartRuntime] Destroying session for:', docName);
         await orchestratorClient.destroySession(docName);
 
         // Small delay to ensure cleanup
         await new Promise(r => setTimeout(r, 500));
 
         // Create new session with same venv
-        console.log('[RestartRuntime] Creating new session with venv:', currentVenv);
         const sessionInfo = await shellState.createSession(docName, 'dedicated', currentVenv);
-        console.log('[RestartRuntime] New session created:', sessionInfo);
 
         // Reconnect editor to new runtime
         if (editor?.connectRuntime && sessionInfo.url) {
@@ -633,6 +691,31 @@ export async function createStudio(target, options = {}) {
         emit('runtimeRestarted', { language, session: sessionInfo });
       } catch (error) {
         console.error('[RestartRuntime] Error:', error);
+      }
+    },
+
+    async onKillRuntime(runtimeId) {
+      try {
+        const result = await orchestratorClient.killRuntime(runtimeId);
+
+        // Refresh state after kill
+        await shellState.refresh();
+
+        // If we killed the current document's runtime, update the editor
+        if (runtimeId === currentDocName && editor?.execution) {
+          // Clear the runtime connection
+          editor.execution.setRuntimeUrl(null);
+        }
+
+        emit('runtimeKilled', { runtimeId, result });
+      } catch (error) {
+        console.error('[KillRuntime] Error:', error);
+        await confirm({
+          title: 'Error',
+          message: `Failed to kill runtime: ${error.message}`,
+          confirmLabel: 'OK',
+          cancelLabel: '',
+        });
       }
     },
 
@@ -819,10 +902,10 @@ export async function createStudio(target, options = {}) {
   // Create status bar
   let statusBarComponent = null;
   if (statusBarConfig.enabled !== false) {
-    // Default segments - include 'ai' if AI is available
+    // Default segments - 'runtimes' for project-wide management, 'ai' if available
     const defaultSegments = aiClient
-      ? ['files', 'sync', 'runtime', 'ai']
-      : ['files', 'sync', 'runtime'];
+      ? ['files', 'runtimes', 'sync', 'ai']
+      : ['files', 'runtimes', 'sync'];
 
     statusBarComponent = createStatusBar({
       container: statusBarContainer,

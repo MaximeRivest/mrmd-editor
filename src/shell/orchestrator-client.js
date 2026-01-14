@@ -321,6 +321,45 @@ export class OrchestratorClient {
     });
   }
 
+  /**
+   * List all active sessions
+   * @returns {Promise<{sessions: Array}>}
+   */
+  async listSessions() {
+    return this._fetch('/api/sessions');
+  }
+
+  // ===========================================================================
+  // Project & Runtime Management
+  // ===========================================================================
+
+  /**
+   * Get project information
+   * @returns {Promise<{root: string, name: string, type: string, venv: string|null}>}
+   */
+  async getProject() {
+    return this._fetch('/api/project');
+  }
+
+  /**
+   * List all runtimes (shared and dedicated)
+   * @returns {Promise<{shared: Object|null, dedicated: Array, sessions: Array, project: Object}>}
+   */
+  async listRuntimes() {
+    return this._fetch('/api/runtimes');
+  }
+
+  /**
+   * Kill a runtime
+   * @param {string} runtimeId - Runtime ID ('shared' or document name for dedicated)
+   * @returns {Promise<{id: string, killed: boolean, message: string}>}
+   */
+  async killRuntime(runtimeId) {
+    return this._fetch(`/api/runtimes/${encodeURIComponent(runtimeId)}`, {
+      method: 'DELETE',
+    });
+  }
+
   // ===========================================================================
   // Logs
   // ===========================================================================

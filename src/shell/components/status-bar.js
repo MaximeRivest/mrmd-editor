@@ -109,6 +109,8 @@ function createSegment(type, context) {
       return createSyncSegment(context);
     case 'runtime':
       return createRuntimeSegment(context);
+    case 'runtimes':
+      return createRuntimesSegment(context);
     case 'ai':
       return createAiSegment(context);
     case 'theme':
@@ -1053,6 +1055,241 @@ function createThemeSegment({ editorRef, shellState, handlers, onCleanup }) {
   const unsubscribe = shellState.onPath('theme', render);
   onCleanup(unsubscribe);
   onCleanup(() => currentMenu?.close());
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// RUNTIMES SEGMENT (Project-wide runtime management)
+// =============================================================================
+
+function createRuntimesSegment({ shellState, orchestratorClient, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment mrmd-statusbar__segment--runtimes';
+  segment.setAttribute('data-segment', 'runtimes');
+
+  let currentMenu = null;
+  let cachedRuntimes = null;
+  let lastFetchTime = 0;
+  const CACHE_TTL = 3000; // 3 seconds
+
+  async function fetchRuntimes() {
+    const now = Date.now();
+    if (now - lastFetchTime < CACHE_TTL && cachedRuntimes) {
+      return cachedRuntimes;
+    }
+
+    try {
+      cachedRuntimes = await orchestratorClient.listRuntimes();
+      lastFetchTime = now;
+      return cachedRuntimes;
+    } catch (error) {
+      console.error('Failed to list runtimes:', error);
+      return cachedRuntimes || { shared: null, dedicated: [], sessions: [], project: {} };
+    }
+  }
+
+  function render() {
+    const python = shellState.get('runtimes.python');
+    const project = shellState.get('project') || {};
+
+    // Count active runtimes
+    let runtimeCount = 0;
+    if (python?.running || python?.status === 'ready') runtimeCount++;
+
+    const sessions = shellState.getSessions();
+    const dedicatedCount = sessions.filter(s => s.info?.dedicated).length;
+    runtimeCount += dedicatedCount;
+
+    // Project name
+    const projectName = project.name || 'mrmd';
+
+    // Status dot
+    const hasActiveRuntime = runtimeCount > 0;
+    const dotClass = hasActiveRuntime ? 'connected' : 'disconnected';
+
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__dot mrmd-statusbar__dot--${dotClass}"></span>
+      <span class="mrmd-statusbar__icon">⚡</span>
+      <span class="mrmd-statusbar__label">${projectName}</span>
+      ${runtimeCount > 0 ? `<span class="mrmd-statusbar__badge">${runtimeCount} runtime${runtimeCount > 1 ? 's' : ''}</span>` : ''}
+      <span class="mrmd-statusbar__chevron">▾</span>
+    `;
+  }
+
+  async function openMenu() {
+    if (currentMenu) {
+      currentMenu.close();
+      return;
+    }
+
+    const runtimes = await fetchRuntimes();
+    const items = [];
+
+    // Project section
+    const project = runtimes.project || {};
+    items.push({
+      type: 'header',
+      label: 'Project',
+    });
+    items.push({
+      type: 'info',
+      label: 'Name',
+      value: project.name || 'unknown',
+    });
+    items.push({
+      type: 'info',
+      label: 'Root',
+      value: shortenPath(project.root, 35),
+    });
+    if (project.venv) {
+      items.push({
+        type: 'info',
+        label: 'Venv',
+        value: shortenPath(project.venv, 35),
+      });
+    }
+
+    // Shared Runtime section
+    items.push({ type: 'divider' });
+    items.push({
+      type: 'header',
+      label: 'Shared Runtime',
+    });
+
+    if (runtimes.shared && runtimes.shared.alive) {
+      items.push({
+        type: 'info',
+        label: 'Status',
+        value: '● Running',
+      });
+      items.push({
+        type: 'info',
+        label: 'PID',
+        value: String(runtimes.shared.pid || 'unknown'),
+      });
+      items.push({
+        type: 'info',
+        label: 'Port',
+        value: String(runtimes.shared.port || 'unknown'),
+      });
+      if (runtimes.shared.venv) {
+        items.push({
+          type: 'info',
+          label: 'Venv',
+          value: shortenPath(runtimes.shared.venv, 30),
+        });
+      }
+      items.push({
+        icon: '💀',
+        label: 'Kill shared runtime',
+        description: 'Release memory, restarts on next exec',
+        onClick: async () => {
+          await handlers.onKillRuntime?.('shared');
+          // Refresh after a moment
+          setTimeout(render, 500);
+        },
+      });
+    } else {
+      items.push({
+        type: 'info',
+        label: 'Status',
+        value: '○ Not running',
+      });
+      items.push({
+        type: 'info',
+        label: '',
+        value: 'Starts on first code execution',
+      });
+    }
+
+    // Dedicated Runtimes section
+    if (runtimes.dedicated && runtimes.dedicated.length > 0) {
+      items.push({ type: 'divider' });
+      items.push({
+        type: 'header',
+        label: `Dedicated Runtimes (${runtimes.dedicated.length})`,
+      });
+
+      for (const rt of runtimes.dedicated) {
+        const statusIcon = rt.alive ? '●' : '○';
+        const statusText = rt.alive ? 'running' : 'stopped';
+        items.push({
+          type: 'info',
+          label: rt.doc || rt.id,
+          value: `${statusIcon} ${statusText} (port ${rt.port || '?'})`,
+        });
+      }
+
+      items.push({
+        icon: '🗑️',
+        label: 'Kill all dedicated runtimes',
+        onClick: async () => {
+          for (const rt of runtimes.dedicated) {
+            await handlers.onKillRuntime?.(rt.doc || rt.id);
+          }
+          setTimeout(render, 500);
+        },
+      });
+    }
+
+    // Sessions section
+    if (runtimes.sessions && runtimes.sessions.length > 0) {
+      items.push({ type: 'divider' });
+      items.push({
+        type: 'header',
+        label: `Active Sessions (${runtimes.sessions.length})`,
+      });
+
+      for (const session of runtimes.sessions) {
+        if (!session) continue;
+        const runtimeType = session.runtimes?.python?.dedicated ? 'dedicated' : 'shared';
+        const port = session.runtimes?.python?.port;
+        items.push({
+          type: 'info',
+          label: session.doc,
+          value: `${runtimeType}${port ? ` (port ${port})` : ''}`,
+        });
+      }
+    }
+
+    // Actions section
+    items.push({ type: 'divider' });
+    items.push({
+      icon: '🔄',
+      label: 'Refresh',
+      onClick: async () => {
+        cachedRuntimes = null;
+        lastFetchTime = 0;
+        await shellState.refresh();
+        render();
+      },
+    });
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment,
+      position: 'bottom-right',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to state changes
+  const unsubscribe1 = shellState.onPath('runtimes', render);
+  const unsubscribe2 = shellState.onPath('project', render);
+  const unsubscribe3 = shellState.onPath('orchestrator.services', render);
+  onCleanup(unsubscribe1);
+  onCleanup(unsubscribe2);
+  onCleanup(unsubscribe3);
+  onCleanup(() => currentMenu?.close());
+
+  // Initial fetch of project info
+  orchestratorClient.getProject().then(project => {
+    shellState._set('project', project);
+  }).catch(() => {});
 
   render();
   return segment;
