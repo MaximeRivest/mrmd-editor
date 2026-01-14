@@ -1,6 +1,6 @@
 {
   "name": "mrmd-editor",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Markdown editor with realtime collaboration - the core editor package",
   "type": "module",
   "main": "dist/mrmd.cjs",
@@ -59,7 +59,7 @@
     "codemirror": "^6.0.1",
     "codemirror-lang-r": "^0.1.1",
     "katex": "^0.16.27",
-    "mrmd-js": "file:../mrmd-js",
+    "mrmd-js": "^2.0.0",
     "y-codemirror.next": "^0.3.5",
     "y-websocket": "^2.0.0",
     "yjs": "^13.6.18"
