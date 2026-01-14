@@ -63,6 +63,9 @@ export class MRPClient {
     this.#defaultSession = options.session || 'default';
     this.#fallbackLanguages = options.languages || null;
 
+    // Expose runtime URL for ExecutionManager to use in monitor mode routing
+    this.runtimeUrl = this.#endpoint;
+
     // Auto-fetch capabilities (fire and forget)
     if (options.prefetch !== false) {
       this.#capabilitiesPromise = this.getCapabilities().catch(() => null);

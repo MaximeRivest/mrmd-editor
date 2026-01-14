@@ -114,6 +114,8 @@ export async function createStudio(target, options = {}) {
     studioEl.appendChild(statusBarContainer);
   }
 
+  // Clear any existing content (like "Loading..." placeholders)
+  container.innerHTML = '';
   container.appendChild(studioEl);
 
   // Create orchestrator client
@@ -265,9 +267,13 @@ export async function createStudio(target, options = {}) {
 
     // Enable monitor mode for execution if available
     if (newEditor.execution?.enableMonitorMode) {
+      // Use attached runtime URL or fall back to default Python runtime
+      const monitorRuntimeUrl = attachedRuntimeUrl || runtimeUrls.python;
       newEditor.execution.enableMonitorMode({
         ydoc: handle.ydoc,
         awareness: handle.awareness,
+        runtimeUrl: monitorRuntimeUrl,
+        session: docName,
       });
     }
 
@@ -536,6 +542,11 @@ export async function createStudio(target, options = {}) {
             // Reconnect the editor to the new runtime
             if (editor?.connectRuntime && sessionInfo.url) {
               editor.connectRuntime('python', sessionInfo.url);
+            }
+
+            // IMPORTANT: Update ExecutionManager's runtime URL for monitor mode
+            if (editor?.execution?.setRuntimeUrl && sessionInfo.url) {
+              editor.execution.setRuntimeUrl(sessionInfo.url);
             }
 
             // Update the legacy python state for status bar display

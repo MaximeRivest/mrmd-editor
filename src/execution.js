@@ -104,6 +104,15 @@ export class ExecutionManager {
   }
 
   /**
+   * Update the default runtime URL (for switching venvs without recreating the editor)
+   * @param {string} runtimeUrl - New runtime URL
+   */
+  setRuntimeUrl(runtimeUrl) {
+    this._defaultRuntimeUrl = runtimeUrl;
+    console.log('[ExecutionManager] Runtime URL updated:', runtimeUrl);
+  }
+
+  /**
    * Disable monitor mode (use direct execution)
    */
   disableMonitorMode() {

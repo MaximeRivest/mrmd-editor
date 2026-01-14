@@ -56231,6 +56231,15 @@ ${ansiStyles}
     }
 
     /**
+     * Update the default runtime URL (for switching venvs without recreating the editor)
+     * @param {string} runtimeUrl - New runtime URL
+     */
+    setRuntimeUrl(runtimeUrl) {
+      this._defaultRuntimeUrl = runtimeUrl;
+      console.log('[ExecutionManager] Runtime URL updated:', runtimeUrl);
+    }
+
+    /**
      * Disable monitor mode (use direct execution)
      */
     disableMonitorMode() {
@@ -57368,6 +57377,9 @@ ${ansiStyles}
       this.#endpoint = endpoint.replace(/\/$/, ''); // Remove trailing slash
       this.#defaultSession = options.session || 'default';
       this.#fallbackLanguages = options.languages || null;
+
+      // Expose runtime URL for ExecutionManager to use in monitor mode routing
+      this.runtimeUrl = this.#endpoint;
 
       // Auto-fetch capabilities (fire and forget)
       if (options.prefetch !== false) {
@@ -59935,6 +59947,10 @@ ${ansiStyles}
       const python = shellState.get('runtimes.python');
       const { session } = getCurrentSession();
 
+      // Check for daemon info (new in 0.9.8+)
+      const isDaemon = python?.daemon === true;
+      python?.pid;
+
       if (!python && !session) {
         segment.innerHTML = `
         <span class="mrmd-statusbar__icon">🐍</span>
@@ -59947,20 +59963,27 @@ ${ansiStyles}
       segment.classList.remove('mrmd-statusbar__segment--disabled');
 
       // Use session info if available, otherwise fall back to legacy python info
-      const status = session?.status || python?.status || 'stopped';
+      const status = session?.status || python?.status || (python?.running ? 'ready' : 'stopped');
       const version = python?.version || '?';
       const venvName = python?.venvName;
       const isDedicated = session?.dedicated;
 
-      const dotClass = status === 'ready' ? 'connected' : status;
+      const dotClass = status === 'ready' || python?.running ? 'connected' : status;
       const venvDisplay = venvName ? ` (${venvName})` : '';
-      const sessionBadge = isDedicated ? '<span class="mrmd-statusbar__badge">dedicated</span>' : '';
+
+      // Show daemon badge for independent daemon processes
+      let badge = '';
+      if (isDedicated) {
+        badge = '<span class="mrmd-statusbar__badge">dedicated</span>';
+      } else if (isDaemon) {
+        badge = '<span class="mrmd-statusbar__badge" title="Independent daemon process">daemon</span>';
+      }
 
       segment.innerHTML = `
       <span class="mrmd-statusbar__dot mrmd-statusbar__dot--${dotClass}"></span>
       <span class="mrmd-statusbar__icon">🐍</span>
       <span class="mrmd-statusbar__label">Python ${version}${venvDisplay}</span>
-      ${sessionBadge}
+      ${badge}
       <span class="mrmd-statusbar__chevron">▾</span>
     `;
     }
@@ -60035,6 +60058,23 @@ ${ansiStyles}
           type: 'header',
           label: 'Environment',
         });
+
+        // Show daemon info if available
+        if (python.daemon) {
+          items.push({
+            type: 'info',
+            label: 'Mode',
+            value: 'Independent Daemon',
+          });
+          if (python.pid) {
+            items.push({
+              type: 'info',
+              label: 'PID',
+              value: String(python.pid),
+            });
+          }
+        }
+
         items.push({
           type: 'info',
           label: 'Virtual Env',
@@ -60057,11 +60097,22 @@ ${ansiStyles}
           onClick: () => handlers.onChangeCwd?.(),
         });
         items.push({ type: 'divider' });
-        items.push({
-          icon: '🔄',
-          label: 'Restart runtime',
-          onClick: () => handlers.onRestartRuntime?.('python'),
-        });
+
+        if (python.daemon) {
+          // For daemon mode, killing releases GPU memory
+          items.push({
+            icon: '💀',
+            label: 'Kill daemon (release GPU)',
+            description: 'Stops daemon and releases all memory',
+            onClick: () => handlers.onKillRuntime?.('python'),
+          });
+        } else {
+          items.push({
+            icon: '🔄',
+            label: 'Restart runtime',
+            onClick: () => handlers.onRestartRuntime?.('python'),
+          });
+        }
       }
 
       currentMenu = createMenu({
@@ -63052,6 +63103,8 @@ ${studioStyles}
       studioEl.appendChild(statusBarContainer);
     }
 
+    // Clear any existing content (like "Loading..." placeholders)
+    container.innerHTML = '';
     container.appendChild(studioEl);
 
     // Create orchestrator client
@@ -63203,9 +63256,13 @@ ${studioStyles}
 
       // Enable monitor mode for execution if available
       if (newEditor.execution?.enableMonitorMode) {
+        // Use attached runtime URL or fall back to default Python runtime
+        const monitorRuntimeUrl = attachedRuntimeUrl || runtimeUrls.python;
         newEditor.execution.enableMonitorMode({
           ydoc: handle.ydoc,
           awareness: handle.awareness,
+          runtimeUrl: monitorRuntimeUrl,
+          session: docName,
         });
       }
 
@@ -63474,6 +63531,11 @@ ${studioStyles}
               // Reconnect the editor to the new runtime
               if (editor?.connectRuntime && sessionInfo.url) {
                 editor.connectRuntime('python', sessionInfo.url);
+              }
+
+              // IMPORTANT: Update ExecutionManager's runtime URL for monitor mode
+              if (editor?.execution?.setRuntimeUrl && sessionInfo.url) {
+                editor.execution.setRuntimeUrl(sessionInfo.url);
               }
 
               // Update the legacy python state for status bar display
