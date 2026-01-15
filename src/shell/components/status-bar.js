@@ -6,6 +6,7 @@
  */
 
 import { createMenu } from './menu.js';
+import { showFolderPicker } from '../dialogs/file-picker.js';
 
 // =============================================================================
 // STATUS BAR
@@ -98,6 +99,8 @@ export function createStatusBar(options) {
  */
 function createSegment(type, context) {
   switch (type) {
+    case 'simple':
+      return createSimpleSegment(context);
     case 'files':
       return createFilesSegment(context);
     // Legacy segments (kept for backward compat, prefer 'files')
@@ -617,37 +620,68 @@ function createSyncSegment({ editorRef, shellState, onCleanup }) {
 // RUNTIME SEGMENT
 // =============================================================================
 
-function createRuntimeSegment({ shellState, handlers, onCleanup }) {
+function createRuntimeSegment({ shellState, orchestratorClient, handlers, onCleanup }) {
   const segment = document.createElement('div');
   segment.className = 'mrmd-statusbar__segment';
   segment.setAttribute('data-segment', 'runtime');
 
   let currentMenu = null;
+  let cachedRuntimes = null;
+  let cachedVenvs = null;
 
   function getCurrentDocName() {
     const file = shellState.get('file');
     return file?.name || 'untitled';
   }
 
-  function getCurrentSession() {
+  function getAttachedRuntime() {
     const docName = getCurrentDocName();
-    const sessionId = shellState.getDocumentSession(docName);
-    const session = shellState.getSession(sessionId);
-    return { sessionId, session };
+    // Get the runtime URL this doc is attached to
+    const attachments = shellState.get('runtimes.attachments') || {};
+    const runtimeId = attachments[docName] || 'shared';
+
+    // Find the runtime info
+    if (cachedRuntimes) {
+      const allRuntimes = [
+        cachedRuntimes.shared,
+        ...(cachedRuntimes.dedicated || []),
+      ].filter(Boolean);
+
+      return allRuntimes.find(r => r.id === runtimeId) || cachedRuntimes.shared;
+    }
+    return null;
+  }
+
+  async function fetchRuntimes() {
+    try {
+      cachedRuntimes = await orchestratorClient.listRuntimes();
+      return cachedRuntimes;
+    } catch (error) {
+      console.error('Failed to fetch runtimes:', error);
+      return cachedRuntimes || { shared: null, dedicated: [] };
+    }
+  }
+
+  async function fetchVenvs() {
+    try {
+      const result = await orchestratorClient.listVenvs();
+      cachedVenvs = result.venvs || [];
+      return cachedVenvs;
+    } catch (error) {
+      console.error('Failed to fetch venvs:', error);
+      return cachedVenvs || [];
+    }
   }
 
   function render() {
+    const attached = getAttachedRuntime();
     const python = shellState.get('runtimes.python');
-    const { sessionId, session } = getCurrentSession();
 
-    // Check for daemon info (new in 0.9.8+)
-    const isDaemon = python?.daemon === true;
-    const daemonPid = python?.pid;
-
-    if (!python && !session) {
+    if (!attached && !python) {
       segment.innerHTML = `
         <span class="mrmd-statusbar__icon">🐍</span>
-        <span class="mrmd-statusbar__secondary">No Python</span>
+        <span class="mrmd-statusbar__secondary">No Runtime</span>
+        <span class="mrmd-statusbar__chevron">▾</span>
       `;
       segment.classList.add('mrmd-statusbar__segment--disabled');
       return;
@@ -655,158 +689,190 @@ function createRuntimeSegment({ shellState, handlers, onCleanup }) {
 
     segment.classList.remove('mrmd-statusbar__segment--disabled');
 
-    // Use session info if available, otherwise fall back to legacy python info
-    const status = session?.status || python?.status || (python?.running ? 'ready' : 'stopped');
-    const version = python?.version || '?';
-    const venvName = python?.venvName;
-    const isDedicated = session?.dedicated;
+    const runtime = attached || {};
+    const isAlive = runtime.alive !== false;
+    const venvName = runtime.venv ? runtime.venv.split('/').pop() : 'System';
+    const runtimeId = runtime.id || 'shared';
+    const isShared = runtimeId === 'shared';
 
-    const dotClass = status === 'ready' || python?.running ? 'connected' : status;
-    const venvDisplay = venvName ? ` (${venvName})` : '';
-
-    // Show daemon badge for independent daemon processes
-    let badge = '';
-    if (isDedicated) {
-      badge = '<span class="mrmd-statusbar__badge">dedicated</span>';
-    } else if (isDaemon) {
-      badge = '<span class="mrmd-statusbar__badge" title="Independent daemon process">daemon</span>';
-    }
+    const dotClass = isAlive ? 'connected' : 'disconnected';
+    const badge = isShared ? '' : `<span class="mrmd-statusbar__badge">${runtimeId}</span>`;
 
     segment.innerHTML = `
       <span class="mrmd-statusbar__dot mrmd-statusbar__dot--${dotClass}"></span>
       <span class="mrmd-statusbar__icon">🐍</span>
-      <span class="mrmd-statusbar__label">Python ${version}${venvDisplay}</span>
+      <span class="mrmd-statusbar__label">${venvName}</span>
       ${badge}
       <span class="mrmd-statusbar__chevron">▾</span>
     `;
   }
 
-  function openMenu() {
+  async function openMenu() {
     if (currentMenu) {
       currentMenu.close();
       return;
     }
 
-    const python = shellState.get('runtimes.python');
-    const { sessionId, session } = getCurrentSession();
-    const sessions = shellState.getSessions();
+    // Fetch fresh data
+    const [runtimes, venvs] = await Promise.all([fetchRuntimes(), fetchVenvs()]);
     const docName = getCurrentDocName();
+    const attachments = shellState.get('runtimes.attachments') || {};
+    const currentRuntimeId = attachments[docName] || 'shared';
 
     const items = [];
 
-    // Header showing current document's runtime
+    // Header
     items.push({
       type: 'header',
       label: `Runtime for "${docName}"`,
     });
 
-    // Show attached session info
-    if (session) {
-      items.push({
-        type: 'info',
-        label: 'Session',
-        value: session.dedicated ? `Dedicated (${sessionId})` : 'Shared',
-      });
-    }
+    // Available runtimes section
+    const allRuntimes = [
+      runtimes.shared ? { ...runtimes.shared, id: 'shared' } : null,
+      ...(runtimes.dedicated || []),
+    ].filter(Boolean);
 
-    // Available sessions to attach to
-    if (sessions.length > 0) {
-      items.push({ type: 'divider' });
+    if (allRuntimes.length > 0) {
       items.push({
         type: 'header',
-        label: 'Attach to Runtime',
+        label: 'Available Runtimes',
       });
 
-      for (const { id, info } of sessions) {
-        const isCurrent = id === sessionId;
-        const label = info.dedicated
-          ? `Dedicated: ${id}`
-          : 'Shared Runtime';
+      for (const rt of allRuntimes) {
+        const isCurrent = rt.id === currentRuntimeId;
+        const venvName = rt.venv ? rt.venv.split('/').pop() : 'System';
+        const statusIcon = rt.alive ? '●' : '○';
+        const label = rt.id === 'shared'
+          ? `Shared (${venvName})`
+          : `${rt.id} (${venvName})`;
 
         items.push({
-          icon: isCurrent ? '✓' : ' ',
+          icon: isCurrent ? '✓' : statusIcon,
           label,
-          selected: isCurrent,
+          active: isCurrent,
           onClick: () => {
-            shellState.attachDocument(docName, id);
-            handlers.onRuntimeAttached?.(docName, id);
+            // Attach this document to the selected runtime
+            shellState.attachDocument(docName, rt.id);
+            // Store the runtime URL for execution
+            shellState._set(`runtimes.sessions.${rt.id}`, {
+              id: rt.id,
+              url: rt.url,
+              venv: rt.venv,
+              alive: rt.alive,
+            });
+            handlers.onRuntimeAttached?.(docName, rt.id, rt.url);
             render();
           },
         });
       }
+    } else {
+      items.push({
+        type: 'info',
+        label: 'No runtimes',
+        value: 'Start one below',
+      });
     }
 
-    // Create new dedicated runtime
+    // Start new runtime section
     items.push({ type: 'divider' });
     items.push({
-      icon: '➕',
-      label: 'Create dedicated runtime...',
-      onClick: () => handlers.onCreateDedicatedRuntime?.(docName),
+      type: 'header',
+      label: 'Start New Runtime',
     });
 
-    // Environment settings (for current session)
-    if (python) {
+    // Show available venvs to start
+    for (const venv of venvs) {
+      // Skip if already running
+      const isRunning = allRuntimes.some(r => r.venv === venv.path);
+      if (isRunning) continue;
+
+      items.push({
+        icon: '▶',
+        label: `${venv.name} (${venv.version})`,
+        onClick: async () => {
+          try {
+            const result = await orchestratorClient.startRuntime({
+              venv: venv.path,
+            });
+            if (result.success) {
+              // Attach this doc to the new runtime
+              const newRuntime = result.runtime;
+              shellState.attachDocument(docName, newRuntime.id);
+              shellState._set(`runtimes.sessions.${newRuntime.id}`, {
+                id: newRuntime.id,
+                url: newRuntime.url,
+                venv: newRuntime.venv,
+                alive: true,
+              });
+              handlers.onRuntimeAttached?.(docName, newRuntime.id, newRuntime.url);
+            }
+            // Refresh display
+            cachedRuntimes = null;
+            render();
+          } catch (err) {
+            console.error('Failed to start runtime:', err);
+          }
+        },
+      });
+    }
+
+    // Current runtime info and actions
+    const currentRuntime = allRuntimes.find(r => r.id === currentRuntimeId);
+    if (currentRuntime) {
       items.push({ type: 'divider' });
       items.push({
         type: 'header',
-        label: 'Environment',
+        label: 'Current Runtime',
       });
 
-      // Show daemon info if available
-      if (python.daemon) {
+      items.push({
+        type: 'info',
+        label: 'ID',
+        value: currentRuntime.id,
+      });
+      items.push({
+        type: 'info',
+        label: 'Port',
+        value: String(currentRuntime.port || 'N/A'),
+      });
+      if (currentRuntime.pid) {
         items.push({
           type: 'info',
-          label: 'Mode',
-          value: 'Independent Daemon',
-        });
-        if (python.pid) {
-          items.push({
-            type: 'info',
-            label: 'PID',
-            value: String(python.pid),
-          });
-        }
-      }
-
-      items.push({
-        type: 'info',
-        label: 'Virtual Env',
-        value: python.venv || 'System Python',
-      });
-      items.push({
-        type: 'info',
-        label: 'Working Dir',
-        value: python.cwd || 'N/A',
-      });
-      items.push({ type: 'divider' });
-      items.push({
-        icon: '📦',
-        label: 'Change venv...',
-        onClick: () => handlers.onChangeVenv?.(),
-      });
-      items.push({
-        icon: '📂',
-        label: 'Set working dir...',
-        onClick: () => handlers.onChangeCwd?.(),
-      });
-      items.push({ type: 'divider' });
-
-      if (python.daemon) {
-        // For daemon mode, killing releases GPU memory
-        items.push({
-          icon: '💀',
-          label: 'Kill daemon (release GPU)',
-          description: 'Stops daemon and releases all memory',
-          onClick: () => handlers.onKillRuntime?.('python'),
-        });
-      } else {
-        items.push({
-          icon: '🔄',
-          label: 'Restart runtime',
-          onClick: () => handlers.onRestartRuntime?.('python'),
+          label: 'PID',
+          value: String(currentRuntime.pid),
         });
       }
+      items.push({
+        type: 'info',
+        label: 'Venv',
+        value: currentRuntime.venv || 'System Python',
+      });
+
+      items.push({ type: 'divider' });
+      items.push({
+        icon: '💀',
+        label: 'Kill runtime',
+        onClick: async () => {
+          await handlers.onKillRuntime?.(currentRuntime.id);
+          cachedRuntimes = null;
+          render();
+        },
+      });
     }
+
+    // Refresh action
+    items.push({ type: 'divider' });
+    items.push({
+      icon: '🔄',
+      label: 'Refresh',
+      onClick: async () => {
+        cachedRuntimes = null;
+        cachedVenvs = null;
+        await fetchRuntimes();
+        render();
+      },
+    });
 
     currentMenu = createMenu({
       items,
@@ -817,6 +883,9 @@ function createRuntimeSegment({ shellState, handlers, onCleanup }) {
   }
 
   segment.addEventListener('click', openMenu);
+
+  // Initial fetch
+  fetchRuntimes().then(render);
 
   // Subscribe to state changes
   const unsubscribe1 = shellState.onPath('runtimes', render);
@@ -1151,6 +1220,12 @@ function createRuntimesSegment({ shellState, orchestratorClient, handlers, onCle
       });
     }
 
+    // Get current doc attachment info
+    const currentDocName = shellState.get('file')?.name || 'untitled';
+    const attachments = shellState.get('runtimes.attachments') || {};
+    const currentAttachedId = attachments[currentDocName] || 'shared';
+    const isAttachedToShared = currentAttachedId === 'shared';
+
     // Shared Runtime section
     items.push({ type: 'divider' });
     items.push({
@@ -1159,28 +1234,25 @@ function createRuntimesSegment({ shellState, orchestratorClient, handlers, onCle
     });
 
     if (runtimes.shared && runtimes.shared.alive) {
+      const venvPath = runtimes.shared.venv || 'System Python';
       items.push({
-        type: 'info',
-        label: 'Status',
-        value: '● Running',
+        icon: isAttachedToShared ? '✓' : '●',
+        label: shortenPath(venvPath, 40),
+        description: `port ${runtimes.shared.port || '?'}`,
+        active: isAttachedToShared,
+        onClick: () => {
+          // Attach current document to shared runtime
+          shellState.attachDocument(currentDocName, 'shared');
+          shellState._set('runtimes.sessions.shared', {
+            id: 'shared',
+            url: runtimes.shared.url,
+            venv: runtimes.shared.venv,
+            alive: runtimes.shared.alive,
+          });
+          handlers.onRuntimeAttached?.(currentDocName, 'shared', runtimes.shared.url);
+          render();
+        },
       });
-      items.push({
-        type: 'info',
-        label: 'PID',
-        value: String(runtimes.shared.pid || 'unknown'),
-      });
-      items.push({
-        type: 'info',
-        label: 'Port',
-        value: String(runtimes.shared.port || 'unknown'),
-      });
-      if (runtimes.shared.venv) {
-        items.push({
-          type: 'info',
-          label: 'Venv',
-          value: shortenPath(runtimes.shared.venv, 30),
-        });
-      }
       items.push({
         icon: '💀',
         label: 'Kill shared runtime',
@@ -1214,25 +1286,129 @@ function createRuntimesSegment({ shellState, orchestratorClient, handlers, onCle
 
       for (const rt of runtimes.dedicated) {
         const statusIcon = rt.alive ? '●' : '○';
-        const statusText = rt.alive ? 'running' : 'stopped';
+        const isAttached = rt.id === currentAttachedId;
+        // Show full venv path for clarity
+        const venvPath = rt.venv || 'unknown';
         items.push({
-          type: 'info',
-          label: rt.doc || rt.id,
-          value: `${statusIcon} ${statusText} (port ${rt.port || '?'})`,
+          icon: isAttached ? '✓' : statusIcon,
+          label: shortenPath(venvPath, 40),
+          description: `port ${rt.port || '?'}`,
+          active: isAttached,
+          onClick: rt.alive ? () => {
+            // Attach current document to this runtime
+            shellState.attachDocument(currentDocName, rt.id);
+            shellState._set(`runtimes.sessions.${rt.id}`, {
+              id: rt.id,
+              url: rt.url,
+              venv: rt.venv,
+              alive: rt.alive,
+            });
+            handlers.onRuntimeAttached?.(currentDocName, rt.id, rt.url);
+            render();
+          } : undefined,
         });
+        // Individual kill button for this runtime
+        if (rt.alive) {
+          items.push({
+            icon: '💀',
+            label: `Kill this runtime`,
+            description: `PID ${rt.pid || '?'}`,
+            onClick: async () => {
+              await handlers.onKillRuntime?.(rt.id);
+              setTimeout(render, 500);
+            },
+          });
+        }
       }
+    }
 
+    // Start New Runtime section
+    items.push({ type: 'divider' });
+    items.push({
+      type: 'header',
+      label: 'Start New Runtime',
+    });
+
+    // Fetch available venvs
+    let venvs = [];
+    try {
+      const result = await orchestratorClient.listVenvs();
+      venvs = result.venvs || [];
+    } catch (e) {
+      console.warn('Failed to fetch venvs:', e);
+    }
+
+    // Get all running runtimes to check which venvs are already running
+    const allRuntimes = [
+      runtimes.shared,
+      ...(runtimes.dedicated || []),
+    ].filter(Boolean);
+
+    // Show available venvs that aren't already running
+    let hasAvailableVenvs = false;
+    for (const venv of venvs) {
+      const isRunning = allRuntimes.some(r => r.venv === venv.path);
+      if (isRunning) continue;
+
+      hasAvailableVenvs = true;
       items.push({
-        icon: '🗑️',
-        label: 'Kill all dedicated runtimes',
+        icon: '▶',
+        label: `${venv.name} (${venv.version})`,
         onClick: async () => {
-          for (const rt of runtimes.dedicated) {
-            await handlers.onKillRuntime?.(rt.doc || rt.id);
+          try {
+            await orchestratorClient.startRuntime({ venv: venv.path });
+            // Refresh
+            cachedRuntimes = null;
+            lastFetchTime = 0;
+            render();
+          } catch (err) {
+            console.error('Failed to start runtime:', err);
           }
-          setTimeout(render, 500);
         },
       });
     }
+
+    if (!hasAvailableVenvs) {
+      items.push({
+        type: 'info',
+        label: 'All detected venvs',
+        value: 'already running',
+      });
+    }
+
+    // Browse for custom venv
+    items.push({
+      icon: '📂',
+      label: 'Browse for venv...',
+      onClick: () => {
+        // Close the menu first
+        currentMenu?.close();
+        currentMenu = null;
+
+        showFolderPicker({
+          title: 'Select Virtual Environment',
+          orchestratorClient,
+          initialPath: runtimes.project?.root || '~',
+          showHidden: true, // Show .venv folders
+          onSelect: async (venvPath) => {
+            try {
+              // Start a new runtime with this venv
+              const result = await orchestratorClient.startRuntime({ venv: venvPath });
+              if (result.success) {
+                console.log('Started new runtime:', result.runtime);
+                // Refresh the display
+                cachedRuntimes = null;
+                lastFetchTime = 0;
+                render();
+              }
+            } catch (err) {
+              console.error('Failed to start runtime:', err);
+              alert(`Failed to start runtime: ${err.message}`);
+            }
+          },
+        });
+      },
+    });
 
     // Sessions section
     if (runtimes.sessions && runtimes.sessions.length > 0) {
@@ -1244,12 +1420,34 @@ function createRuntimesSegment({ shellState, orchestratorClient, handlers, onCle
 
       for (const session of runtimes.sessions) {
         if (!session) continue;
-        const runtimeType = session.runtimes?.python?.dedicated ? 'dedicated' : 'shared';
-        const port = session.runtimes?.python?.port;
+        // Get attached runtime for this session's doc
+        const docAttachment = attachments[session.doc] || 'shared';
+        const attachedRuntime = docAttachment === 'shared'
+          ? runtimes.shared
+          : runtimes.dedicated?.find(r => r.id === docAttachment);
+        const runtimeLabel = attachedRuntime?.venv
+          ? attachedRuntime.venv.split('/').slice(-2).join('/')
+          : docAttachment;
+
         items.push({
-          type: 'info',
+          icon: '📄',
           label: session.doc,
-          value: `${runtimeType}${port ? ` (port ${port})` : ''}`,
+          description: runtimeLabel,
+        });
+        items.push({
+          icon: '✖',
+          label: `Close "${session.doc}" session`,
+          description: 'Stops monitor',
+          onClick: async () => {
+            try {
+              await orchestratorClient.destroySession(session.doc);
+              cachedRuntimes = null;
+              lastFetchTime = 0;
+              render();
+            } catch (err) {
+              console.error('Failed to close session:', err);
+            }
+          },
         });
       }
     }
@@ -1290,6 +1488,322 @@ function createRuntimesSegment({ shellState, orchestratorClient, handlers, onCle
   orchestratorClient.getProject().then(project => {
     shellState._set('project', project);
   }).catch(() => {});
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// SIMPLE SEGMENT - Filename + Runtime Dot
+// =============================================================================
+
+/**
+ * Simplified status bar: just filename on left, runtime dot on right.
+ * Clicking the dot opens a two-section menu:
+ * 1. Running runtimes (attach or kill)
+ * 2. Available venvs (start new runtime)
+ */
+function createSimpleSegment({ shellState, orchestratorClient, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment mrmd-statusbar__segment--simple';
+  segment.setAttribute('data-segment', 'simple');
+  segment.style.cssText = 'display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 0 12px;';
+
+  let currentMenu = null;
+  let runtimeState = 'disconnected'; // 'connected', 'disconnected', 'error'
+
+  function render() {
+    const file = shellState.get('file');
+    const filename = file?.name || 'untitled';
+    const attachments = shellState.get('runtimes.attachments') || {};
+    const attachedRuntimeId = attachments[filename] || 'shared';
+
+    // Determine dot state
+    const sessions = shellState.get('runtimes.sessions') || {};
+    const attachedRuntime = sessions[attachedRuntimeId];
+
+    if (attachedRuntime?.alive) {
+      runtimeState = 'connected';
+    } else if (runtimeState === 'error') {
+      // Keep error state until user interacts
+    } else {
+      runtimeState = 'disconnected';
+    }
+
+    const dotColors = {
+      connected: '#4ade80',     // Green
+      disconnected: '#6b7280', // Gray
+      error: '#ef4444',        // Red
+    };
+    const dotColor = dotColors[runtimeState];
+    const dotTitle = {
+      connected: 'Runtime connected - click to manage',
+      disconnected: 'No runtime - click to select venv',
+      error: 'No venv selected - click to pick one',
+    }[runtimeState];
+
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__filename" style="font-weight: 500;">${filename}</span>
+      <span class="mrmd-statusbar__runtime-dot"
+            style="width: 10px; height: 10px; border-radius: 50%; background: ${dotColor}; cursor: pointer; ${runtimeState === 'error' ? 'animation: blink 1s infinite;' : ''}"
+            title="${dotTitle}"></span>
+    `;
+
+    // Add blink animation if needed
+    if (runtimeState === 'error' && !document.getElementById('mrmd-blink-style')) {
+      const style = document.createElement('style');
+      style.id = 'mrmd-blink-style';
+      style.textContent = '@keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.3; } }';
+      document.head.appendChild(style);
+    }
+  }
+
+  async function openMenu(e) {
+    // Only open menu when clicking the dot
+    if (!e.target.classList.contains('mrmd-statusbar__runtime-dot')) {
+      return;
+    }
+
+    if (currentMenu) {
+      currentMenu.close();
+      currentMenu = null;
+      return;
+    }
+
+    const items = [];
+    const file = shellState.get('file');
+    const filename = file?.name || 'untitled';
+    const attachments = shellState.get('runtimes.attachments') || {};
+    const currentAttachedId = attachments[filename] || 'shared';
+
+    // Fetch runtimes and venvs
+    let runtimes = [];
+    let venvs = [];
+    try {
+      const [runtimesResult, venvResult] = await Promise.all([
+        orchestratorClient.listRuntimes(),
+        orchestratorClient.listVenvs(),
+      ]);
+
+      // Combine shared and dedicated runtimes
+      if (runtimesResult.shared) {
+        runtimes.push({ ...runtimesResult.shared, id: 'shared' });
+      }
+      if (runtimesResult.dedicated) {
+        runtimes.push(...runtimesResult.dedicated);
+      }
+      venvs = venvResult.venvs || [];
+    } catch (err) {
+      console.error('Failed to fetch runtimes/venvs:', err);
+    }
+
+    // Section 1: Running Runtimes
+    items.push({
+      type: 'header',
+      label: 'Running Runtimes',
+    });
+
+    const aliveRuntimes = runtimes.filter(r => r.alive);
+    if (aliveRuntimes.length === 0) {
+      items.push({
+        type: 'info',
+        label: 'No runtimes running',
+        value: 'Start one below',
+      });
+    } else {
+      for (const rt of aliveRuntimes) {
+        const isAttached = rt.id === currentAttachedId;
+        const venvPath = rt.venv || 'System Python';
+        const shortPath = venvPath.split('/').slice(-2).join('/');
+
+        items.push({
+          icon: isAttached ? '✓' : '●',
+          label: shortPath,
+          description: `port ${rt.port}`,
+          active: isAttached,
+          onClick: () => {
+            // Attach to this runtime
+            shellState.attachDocument(filename, rt.id);
+            shellState._set(`runtimes.sessions.${rt.id}`, {
+              id: rt.id,
+              url: rt.url,
+              venv: rt.venv,
+              alive: rt.alive,
+            });
+            runtimeState = 'connected';
+            handlers.onRuntimeAttached?.(filename, rt.id, rt.url);
+            render();
+          },
+        });
+
+        // Kill button for this runtime
+        items.push({
+          icon: '×',
+          label: `Stop ${rt.id === 'shared' ? 'shared' : 'this'} runtime`,
+          onClick: async () => {
+            try {
+              await orchestratorClient.killRuntime(rt.id);
+              currentMenu?.close();
+              currentMenu = null;
+              render();
+            } catch (err) {
+              console.error('Failed to kill runtime:', err);
+            }
+          },
+        });
+      }
+    }
+
+    // Section 2: Available Venvs
+    items.push({ type: 'divider' });
+    items.push({
+      type: 'header',
+      label: 'Start New Runtime',
+    });
+
+    // Filter out venvs that already have running runtimes
+    const runningVenvPaths = new Set(aliveRuntimes.map(r => r.venv).filter(Boolean));
+    const availableVenvs = venvs.filter(v => !runningVenvPaths.has(v.path));
+
+    if (availableVenvs.length === 0 && venvs.length > 0) {
+      items.push({
+        type: 'info',
+        label: 'All venvs already running',
+      });
+    } else if (venvs.length === 0) {
+      items.push({
+        type: 'info',
+        label: 'No venvs found',
+        value: 'Browse to add one',
+      });
+    } else {
+      for (const venv of availableVenvs.slice(0, 5)) { // Show max 5
+        const shortPath = venv.path ? venv.path.split('/').slice(-2).join('/') : venv.name;
+        items.push({
+          icon: '▶',
+          label: shortPath,
+          description: `Python ${venv.version}`,
+          onClick: async () => {
+            try {
+              const result = await orchestratorClient.startRuntime({ venv: venv.path });
+              if (result.success) {
+                // Auto-attach to new runtime
+                const newRuntime = result.runtime;
+                shellState.attachDocument(filename, newRuntime.id);
+                shellState._set(`runtimes.sessions.${newRuntime.id}`, {
+                  id: newRuntime.id,
+                  url: newRuntime.url,
+                  venv: newRuntime.venv,
+                  alive: true,
+                });
+                runtimeState = 'connected';
+                handlers.onRuntimeAttached?.(filename, newRuntime.id, newRuntime.url);
+              }
+              currentMenu?.close();
+              currentMenu = null;
+              render();
+            } catch (err) {
+              console.error('Failed to start runtime:', err);
+            }
+          },
+        });
+      }
+    }
+
+    // Search for more venvs
+    items.push({
+      icon: '🔍',
+      label: 'Search for more venvs...',
+      onClick: async () => {
+        currentMenu?.close();
+        currentMenu = null;
+
+        // Show loading indicator
+        const loadingDiv = document.createElement('div');
+        loadingDiv.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--mrmd-bg-secondary, #1e1e1e); padding: 20px; border-radius: 8px; z-index: 10000;';
+        loadingDiv.textContent = 'Searching for venvs...';
+        document.body.appendChild(loadingDiv);
+
+        try {
+          const result = await orchestratorClient.searchVenvs();
+          loadingDiv.remove();
+
+          if (result.count > 0) {
+            alert(`Found ${result.count} venvs. Click the dot again to see them.`);
+          } else {
+            alert('No additional venvs found.');
+          }
+        } catch (err) {
+          loadingDiv.remove();
+          console.error('Search failed:', err);
+          alert(`Search failed: ${err.message}`);
+        }
+      },
+    });
+
+    // Browse option
+    items.push({
+      icon: '📂',
+      label: 'Browse for venv...',
+      onClick: () => {
+        currentMenu?.close();
+        currentMenu = null;
+
+        showFolderPicker({
+          title: 'Select Virtual Environment',
+          orchestratorClient,
+          initialPath: file?.root || '~',
+          showHidden: true,
+          onSelect: async (venvPath) => {
+            try {
+              const result = await orchestratorClient.startRuntime({ venv: venvPath });
+              if (result.success) {
+                const newRuntime = result.runtime;
+                shellState.attachDocument(filename, newRuntime.id);
+                shellState._set(`runtimes.sessions.${newRuntime.id}`, {
+                  id: newRuntime.id,
+                  url: newRuntime.url,
+                  venv: newRuntime.venv,
+                  alive: true,
+                });
+                runtimeState = 'connected';
+                handlers.onRuntimeAttached?.(filename, newRuntime.id, newRuntime.url);
+                render();
+              }
+            } catch (err) {
+              console.error('Failed to start runtime:', err);
+              alert(`Failed to start runtime: ${err.message}`);
+            }
+          },
+        });
+      },
+    });
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment.querySelector('.mrmd-statusbar__runtime-dot'),
+      position: 'top-right',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  // Set error state when Python execution fails without venv
+  function setErrorState() {
+    runtimeState = 'error';
+    render();
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to state changes
+  const unsubscribe1 = shellState.onPath('file', render);
+  const unsubscribe2 = shellState.onPath('runtimes', render);
+  onCleanup(unsubscribe1);
+  onCleanup(unsubscribe2);
+  onCleanup(() => currentMenu?.close());
+
+  // Expose setErrorState for external use
+  segment.setErrorState = setErrorState;
 
   render();
   return segment;

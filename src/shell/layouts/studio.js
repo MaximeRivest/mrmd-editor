@@ -474,6 +474,13 @@ export async function createStudio(target, options = {}) {
       editor = createEditorForDocument(handle, normalizedName);
       currentDocName = normalizedName;
 
+      // Ensure session exists (starts monitor if needed)
+      try {
+        await orchestratorClient.createSession(normalizedName, 'shared');
+      } catch (e) {
+        console.warn('Failed to create session for', normalizedName, e);
+      }
+
       // Update shell state
       const filesResult = await orchestratorClient.listFiles();
       shellState.setFile({
@@ -505,6 +512,13 @@ export async function createStudio(target, options = {}) {
     const handle = await drive.open(docToOpen);
     editor = createEditorForDocument(handle, docToOpen);
     currentDocName = docToOpen;
+
+    // Ensure session exists (starts monitor if needed)
+    try {
+      await orchestratorClient.createSession(docToOpen, 'shared');
+    } catch (e) {
+      console.warn('Failed to create session for initial doc:', e);
+    }
   } catch (e) {
     console.error('Failed to open initial document:', e);
     throw new Error(`Could not open document "${docToOpen}": ${e.message}`);
@@ -589,110 +603,9 @@ export async function createStudio(target, options = {}) {
       });
     },
 
-    async onChangeVenv() {
-      const python = shellState.get('runtimes.python');
-      const docName = currentDocName;
-
-      showFolderPicker({
-        title: 'Select Virtual Environment',
-        orchestratorClient,
-        initialPath: python?.venv || '~',
-        showHidden: true, // Show hidden folders like .venv
-        onSelect: async (path) => {
-          console.log('[ChangeVenv] onSelect called with path:', path, 'for doc:', docName);
-          try {
-            // Create a dedicated runtime for this document with the selected venv
-            console.log('[ChangeVenv] Calling createSession...');
-            const sessionInfo = await shellState.createSession(docName, 'dedicated', path);
-            console.log('[ChangeVenv] createSession returned:', sessionInfo);
-
-            // Reconnect the editor to the new runtime
-            if (editor?.connectRuntime && sessionInfo.url) {
-              editor.connectRuntime('python', sessionInfo.url);
-            }
-
-            // IMPORTANT: Update ExecutionManager's runtime URL for monitor mode
-            if (editor?.execution?.setRuntimeUrl && sessionInfo.url) {
-              editor.execution.setRuntimeUrl(sessionInfo.url);
-            }
-
-            // Update the legacy python state for status bar display
-            shellState._set('runtimes.python.venv', path);
-            shellState._set('runtimes.python.venvName', path.split('/').pop());
-            shellState._set('runtimes.python.status', 'ready');
-
-            emit('runtimeChanged', { language: 'python', venv: path, dedicated: true });
-          } catch (error) {
-            await confirm({
-              title: 'Error',
-              message: `Failed to create dedicated runtime: ${error.message}`,
-              confirmLabel: 'OK',
-              cancelLabel: '',
-            });
-          }
-        },
-      });
-    },
-
-    async onChangeCwd() {
-      const python = shellState.get('runtimes.python');
-
-      showFolderPicker({
-        title: 'Select Working Directory',
-        orchestratorClient,
-        initialPath: python?.cwd || '~',
-        onSelect: async (path) => {
-          try {
-            await shellState.setCwd(path);
-            emit('runtimeChanged', { language: 'python', cwd: path });
-          } catch (error) {
-            await confirm({
-              title: 'Error',
-              message: `Failed to change working directory: ${error.message}`,
-              confirmLabel: 'OK',
-              cancelLabel: '',
-            });
-          }
-        },
-      });
-    },
-
-    async onRestartRuntime(language) {
-      const docName = currentDocName;
-      if (!docName) {
-        console.warn('[RestartRuntime] No current document');
-        return;
-      }
-
-      try {
-        // Get current session info to preserve venv
-        const python = shellState.get('runtimes.python') || {};
-        const currentVenv = python.venv;
-
-        // Destroy existing session (kills the daemon)
-        await orchestratorClient.destroySession(docName);
-
-        // Small delay to ensure cleanup
-        await new Promise(r => setTimeout(r, 500));
-
-        // Create new session with same venv
-        const sessionInfo = await shellState.createSession(docName, 'dedicated', currentVenv);
-
-        // Reconnect editor to new runtime
-        if (editor?.connectRuntime && sessionInfo.url) {
-          editor.connectRuntime('python', sessionInfo.url);
-        }
-
-        // Update execution manager
-        if (editor?.execution?.setRuntimeUrl) {
-          editor.execution.setRuntimeUrl(sessionInfo.url);
-        }
-
-        emit('runtimeRestarted', { language, session: sessionInfo });
-      } catch (error) {
-        console.error('[RestartRuntime] Error:', error);
-      }
-    },
+    // NOTE: onChangeVenv, onChangeCwd, and onRestartRuntime are no longer used.
+    // The new runtime model doesn't support changing venv/cwd on running runtimes.
+    // Instead, users start new runtimes via the status bar menu and attach docs to them.
 
     async onKillRuntime(runtimeId) {
       try {
@@ -760,37 +673,23 @@ export async function createStudio(target, options = {}) {
       emit('themeChanged', { theme });
     },
 
-    async onCreateDedicatedRuntime(docName) {
-      try {
-        // Create a dedicated session via orchestrator
-        const sessionInfo = await shellState.createSession(docName, 'dedicated');
+    // NOTE: onCreateDedicatedRuntime is no longer used.
+    // Users now start runtimes from the status bar menu and attach docs to them.
 
-        // Reconnect the editor to the new runtime
-        if (editor?.connectRuntime && sessionInfo.url) {
-          editor.connectRuntime('python', sessionInfo.url);
-        }
-
-        emit('runtimeCreated', { docName, session: sessionInfo });
-      } catch (error) {
-        await confirm({
-          title: 'Error',
-          message: `Failed to create dedicated runtime: ${error.message}`,
-          confirmLabel: 'OK',
-          cancelLabel: '',
-        });
-      }
-    },
-
-    onRuntimeAttached(docName, sessionId) {
+    onRuntimeAttached(docName, runtimeId, runtimeUrl) {
       // When user attaches a document to a different runtime,
       // we need to reconnect the editor if this is the current document
-      if (docName === currentDocName) {
-        const session = shellState.getSession(sessionId);
-        if (session?.url && editor?.connectRuntime) {
-          editor.connectRuntime('python', session.url);
+      if (docName === currentDocName && runtimeUrl) {
+        // Update editor's runtime connection
+        if (editor?.connectRuntime) {
+          editor.connectRuntime('python', runtimeUrl);
+        }
+        // Update execution manager's runtime URL for monitor mode
+        if (editor?.execution?.setRuntimeUrl) {
+          editor.execution.setRuntimeUrl(runtimeUrl);
         }
       }
-      emit('runtimeAttached', { docName, sessionId });
+      emit('runtimeAttached', { docName, runtimeId, runtimeUrl });
     },
 
     // AI Handlers
@@ -902,10 +801,11 @@ export async function createStudio(target, options = {}) {
   // Create status bar
   let statusBarComponent = null;
   if (statusBarConfig.enabled !== false) {
-    // Default segments - 'runtimes' for project-wide management, 'ai' if available
-    const defaultSegments = aiClient
-      ? ['files', 'runtimes', 'sync', 'ai']
-      : ['files', 'runtimes', 'sync'];
+    // Use simple mode by default - just filename + runtime dot
+    // Pass segments: ['files', 'runtimes', 'sync'] for legacy mode
+    const defaultSegments = statusBarConfig.simple !== false
+      ? ['simple']
+      : (aiClient ? ['files', 'runtimes', 'sync', 'ai'] : ['files', 'runtimes', 'sync']);
 
     statusBarComponent = createStatusBar({
       container: statusBarContainer,

@@ -58404,6 +58404,41 @@ let OrchestratorClient$1 = class OrchestratorClient {
     });
   }
 
+  /**
+   * Start a new runtime
+   * @param {Object} options
+   * @param {string} [options.id] - Runtime ID (auto-generated if not provided)
+   * @param {string} [options.venv] - Path to virtual environment
+   * @param {string} [options.cwd] - Working directory
+   * @returns {Promise<{success: boolean, runtime: Object}>}
+   */
+  async startRuntime(options = {}) {
+    return this._fetch('/api/runtimes', {
+      method: 'POST',
+      body: JSON.stringify(options),
+    });
+  }
+
+  /**
+   * List available virtual environments
+   * @returns {Promise<{venvs: Array<{path: string, name: string, python: string, version: string, source: string}>, project_root: string}>}
+   */
+  async listVenvs(deep = false) {
+    return this._fetch(`/api/venvs${deep ? '?deep=true' : ''}`);
+  }
+
+  /**
+   * Search for venvs across the filesystem
+   * @param {string} [searchRoot] - Optional root to search from
+   * @returns {Promise<{venvs: Array, count: number}>}
+   */
+  async searchVenvs(searchRoot = null) {
+    return this._fetch('/api/venvs/search', {
+      method: 'POST',
+      body: JSON.stringify(searchRoot ? { search_root: searchRoot } : {}),
+    });
+  }
+
   // ===========================================================================
   // Logs
   // ===========================================================================
@@ -59361,2008 +59396,6 @@ function createFileMenu$1(options) {
 }
 
 /**
- * @fileoverview Status Bar Component
- *
- * The main status bar that displays file info, sync status, and runtime info.
- * Each segment is clickable and opens a context menu.
- */
-
-
-// =============================================================================
-// STATUS BAR
-// =============================================================================
-
-/**
- * @typedef {Object} StatusBarOptions
- * @property {HTMLElement} container - Container element
- * @property {Object} editor - mrmd editor instance
- * @property {import('../state.js').ShellStateManager} shellState - Shell state manager
- * @property {import('../orchestrator-client.js').OrchestratorClient} orchestratorClient
- * @property {string[]} [segments=['files', 'sync', 'runtime']] - Segment types to display
- * @property {'top'|'bottom'} [position='bottom']
- * @property {Object} [handlers] - Event handlers
- */
-
-/**
- * Create a status bar
- * @param {StatusBarOptions} options
- * @returns {{element: HTMLElement, setEditor: (editor: Object) => void, destroy: () => void}}
- */
-function createStatusBar$1(options) {
-  const {
-    container,
-    editor: initialEditor,
-    shellState,
-    orchestratorClient,
-    segments = ['files', 'sync', 'runtime'],
-    position = 'bottom',
-    handlers = {},
-  } = options;
-
-  // Create status bar element
-  const statusBar = document.createElement('div');
-  statusBar.className = `mrmd-statusbar mrmd-statusbar--${position}`;
-
-  // Track segment elements and their cleanup functions
-  const segmentElements = new Map();
-  const cleanupFunctions = [];
-
-  // Shared editor reference that can be updated
-  const editorRef = { current: initialEditor };
-
-  // Create segments
-  for (const segmentType of segments) {
-    const segmentEl = createSegment(segmentType, {
-      editorRef,
-      shellState,
-      orchestratorClient,
-      handlers,
-      onCleanup: (fn) => cleanupFunctions.push(fn),
-    });
-
-    if (segmentEl) {
-      segmentElements.set(segmentType, segmentEl);
-      statusBar.appendChild(segmentEl);
-    }
-  }
-
-  // Add to container
-  container.appendChild(statusBar);
-
-  return {
-    element: statusBar,
-
-    /**
-     * Update the editor reference (called when editor is recreated)
-     * @param {Object} newEditor
-     */
-    setEditor(newEditor) {
-      editorRef.current = newEditor;
-      // Trigger re-render of sync segment which depends on editor
-      // This is handled automatically by shell state changes
-    },
-
-    destroy() {
-      cleanupFunctions.forEach(fn => fn());
-      statusBar.remove();
-    },
-  };
-}
-
-// =============================================================================
-// SEGMENT FACTORY
-// =============================================================================
-
-/**
- * Create a segment element
- * @private
- */
-function createSegment(type, context) {
-  switch (type) {
-    case 'files':
-      return createFilesSegment(context);
-    // Legacy segments (kept for backward compat, prefer 'files')
-    case 'file':
-      return createFileSegment(context);
-    case 'location':
-      return createLocationSegment(context);
-    case 'sync':
-      return createSyncSegment(context);
-    case 'runtime':
-      return createRuntimeSegment(context);
-    case 'runtimes':
-      return createRuntimesSegment(context);
-    case 'ai':
-      return createAiSegment(context);
-    case 'theme':
-      return createThemeSegment(context);
-    default:
-      console.warn(`Unknown segment type: ${type}`);
-      return null;
-  }
-}
-
-// =============================================================================
-// UNIFIED FILES SEGMENT
-// =============================================================================
-
-/**
- * Unified file segment - combines file listing with file operations.
- * This is the recommended segment for file management.
- */
-function createFilesSegment({ shellState, orchestratorClient, handlers, onCleanup }) {
-  const segment = document.createElement('div');
-  segment.className = 'mrmd-statusbar__segment mrmd-statusbar__segment--files';
-  segment.setAttribute('data-segment', 'files');
-
-  let currentMenu = null;
-  let cachedFiles = [];
-  let lastFetchTime = 0;
-  const CACHE_TTL = 5000; // 5 seconds
-
-  function render() {
-    const file = shellState.get('file');
-    const projectRoot = shellState.get('projectRoot');
-
-    // Build display
-    let fileName = 'No file';
-    let pathDisplay = '';
-    let dirtyIndicator = '';
-    let isExternalFile = false;
-
-    if (file) {
-      fileName = file.name || 'untitled';
-      dirtyIndicator = file.dirty ? ' •' : '';
-
-      // Check if this is an external file (absolute path)
-      if (file.path && file.path.startsWith('/')) {
-        isExternalFile = true;
-        // Show shortened directory path for external files
-        const dir = file.path.split('/').slice(0, -1).join('/');
-        pathDisplay = shortenPath(dir, 20) + '/';
-      } else if (file.path && file.path.includes('/')) {
-        // Show relative path if in a subdirectory
-        const dir = file.path.split('/').slice(0, -1).join('/');
-        pathDisplay = dir + '/';
-      }
-    }
-
-    // Shorten project root for display (only show for project files)
-    let projectDisplay = '';
-    if (projectRoot && !isExternalFile) {
-      projectDisplay = projectRoot;
-      if (projectDisplay.length > 25) {
-        projectDisplay = '...' + projectDisplay.slice(-22);
-      }
-    } else if (isExternalFile) {
-      projectDisplay = '(external)';
-    }
-
-    segment.innerHTML = `
-      <span class="mrmd-statusbar__icon">📄</span>
-      <span class="mrmd-statusbar__label">${pathDisplay}${fileName}${dirtyIndicator}</span>
-      <span class="mrmd-statusbar__secondary">${projectDisplay}</span>
-      <span class="mrmd-statusbar__chevron">▾</span>
-    `;
-
-    if (!file) {
-      segment.classList.add('mrmd-statusbar__segment--disabled');
-    } else {
-      segment.classList.remove('mrmd-statusbar__segment--disabled');
-    }
-  }
-
-  async function fetchFiles() {
-    const now = Date.now();
-    if (now - lastFetchTime < CACHE_TTL && cachedFiles.length > 0) {
-      return cachedFiles;
-    }
-
-    try {
-      const result = await orchestratorClient.listFiles();
-      cachedFiles = result.files || [];
-      lastFetchTime = now;
-      return cachedFiles;
-    } catch (error) {
-      console.error('Failed to list files:', error);
-      return cachedFiles; // Return cached on error
-    }
-  }
-
-  async function openMenu() {
-    if (currentMenu) {
-      currentMenu.close();
-      return;
-    }
-
-    const file = shellState.get('file');
-    const projectRoot = shellState.get('projectRoot');
-    const files = await fetchFiles();
-    const currentPath = file?.path;
-
-    const items = [];
-
-    // Project files section
-    if (files.length > 0) {
-      items.push({
-        type: 'header',
-        label: 'Project Files',
-      });
-
-      // Filter to markdown files and sort
-      const mdFiles = files
-        .filter(f => f.type === 'file' && (f.name.endsWith('.md') || !f.name.includes('.')))
-        .slice(0, 10); // Limit to 10 files
-
-      for (const f of mdFiles) {
-        const displayName = f.name.replace(/\.md$/, '');
-        const isCurrent = f.path === currentPath;
-
-        items.push({
-          icon: isCurrent ? '●' : '○',
-          label: displayName,
-          active: isCurrent,
-          onClick: () => handlers.onOpenFile?.(f.path),
-        });
-      }
-
-      if (files.length > 10) {
-        items.push({
-          type: 'info',
-          label: '',
-          value: `+${files.length - 10} more files`,
-        });
-      }
-    } else {
-      items.push({
-        type: 'info',
-        label: 'No files',
-        value: 'Create one below',
-      });
-    }
-
-    // File actions section
-    items.push({ type: 'divider' });
-
-    items.push({
-      icon: '📂',
-      label: 'Browse...',
-      onClick: () => handlers.onOpenFilePicker?.(),
-    });
-
-    items.push({
-      icon: '➕',
-      label: 'New File...',
-      onClick: () => handlers.onNewFile?.(),
-    });
-
-    // Current file operations (only if file is open)
-    if (file) {
-      items.push({ type: 'divider' });
-
-      items.push({
-        icon: '✏️',
-        label: 'Rename...',
-        onClick: () => handlers.onRename?.(),
-      });
-
-      items.push({
-        icon: '💾',
-        label: 'Save As...',
-        onClick: () => handlers.onSaveAs?.(),
-      });
-    }
-
-    // Info section
-    items.push({ type: 'divider' });
-
-    if (file?.path) {
-      items.push({
-        type: 'info',
-        label: 'File',
-        value: file.path,
-      });
-    }
-
-    if (projectRoot) {
-      items.push({
-        type: 'info',
-        label: 'Project',
-        value: shortenPath(projectRoot, 30),
-      });
-    }
-
-    currentMenu = createMenu({
-      items,
-      anchor: segment,
-      position: 'bottom-left',
-      onClose: () => { currentMenu = null; },
-    });
-  }
-
-  segment.addEventListener('click', openMenu);
-
-  // Subscribe to state changes
-  const unsubscribe1 = shellState.onPath('file', render);
-  const unsubscribe2 = shellState.onPath('projectRoot', render);
-  onCleanup(unsubscribe1);
-  onCleanup(unsubscribe2);
-  onCleanup(() => currentMenu?.close());
-
-  render();
-  return segment;
-}
-
-// =============================================================================
-// FILE SEGMENT (Legacy)
-// =============================================================================
-
-function createFileSegment({ shellState, handlers, onCleanup }) {
-  const segment = document.createElement('div');
-  segment.className = 'mrmd-statusbar__segment';
-  segment.setAttribute('data-segment', 'file');
-
-  let currentMenu = null;
-
-  function render() {
-    const file = shellState.get('file');
-
-    if (!file) {
-      segment.innerHTML = `
-        <span class="mrmd-statusbar__icon">📄</span>
-        <span class="mrmd-statusbar__label">No file</span>
-      `;
-      segment.classList.add('mrmd-statusbar__segment--disabled');
-      return;
-    }
-
-    segment.classList.remove('mrmd-statusbar__segment--disabled');
-
-    let warningBadge = '';
-    if (file.isOutsideProject) {
-      warningBadge = '<span class="mrmd-statusbar__warning" title="File is outside project">!</span>';
-    }
-
-    let dirtyIndicator = file.dirty ? ' •' : '';
-
-    segment.innerHTML = `
-      <span class="mrmd-statusbar__icon">📄</span>
-      <span class="mrmd-statusbar__label">${file.name}${dirtyIndicator}</span>
-      ${warningBadge}
-      <span class="mrmd-statusbar__chevron">▾</span>
-    `;
-  }
-
-  function openMenu() {
-    if (currentMenu) {
-      currentMenu.close();
-      return;
-    }
-
-    const file = shellState.get('file');
-
-    const items = [];
-
-    // File operations (always available)
-    items.push(
-      {
-        icon: '📂',
-        label: 'Open...',
-        onClick: () => handlers.onOpenFilePicker?.(),
-      },
-      {
-        icon: '➕',
-        label: 'New File...',
-        onClick: () => handlers.onNewFile?.(),
-      },
-    );
-
-    // Current file operations (only if file is open)
-    if (file) {
-      items.push(
-        { type: 'divider' },
-        {
-          type: 'header',
-          label: file.name + '.md',
-        },
-        {
-          icon: '✏️',
-          label: 'Rename...',
-          onClick: () => handlers.onRename?.(),
-        },
-        {
-          icon: '💾',
-          label: 'Save As...',
-          onClick: () => handlers.onSaveAs?.(),
-        },
-        { type: 'divider' },
-        {
-          type: 'info',
-          label: 'Path',
-          value: file.path,
-        },
-      );
-    }
-
-    currentMenu = createMenu({
-      items,
-      anchor: segment,
-      position: 'bottom-left',
-      onClose: () => { currentMenu = null; },
-    });
-  }
-
-  segment.addEventListener('click', openMenu);
-
-  // Subscribe to state changes
-  const unsubscribe = shellState.onPath('file', render);
-  onCleanup(unsubscribe);
-  onCleanup(() => currentMenu?.close());
-
-  render();
-  return segment;
-}
-
-// =============================================================================
-// LOCATION SEGMENT
-// =============================================================================
-
-function createLocationSegment({ shellState, orchestratorClient, handlers, onCleanup }) {
-  const segment = document.createElement('div');
-  segment.className = 'mrmd-statusbar__segment';
-  segment.setAttribute('data-segment', 'location');
-
-  let currentMenu = null;
-
-  function render() {
-    shellState.get('file');
-    const projectRoot = shellState.get('projectRoot');
-
-    // Show shortened path
-    let displayPath = projectRoot || '~';
-    if (displayPath.length > 30) {
-      displayPath = '...' + displayPath.slice(-27);
-    }
-
-    segment.innerHTML = `
-      <span class="mrmd-statusbar__icon">📁</span>
-      <span class="mrmd-statusbar__secondary">${displayPath}</span>
-      <span class="mrmd-statusbar__chevron">▾</span>
-    `;
-  }
-
-  async function openMenu() {
-    if (currentMenu) {
-      currentMenu.close();
-      return;
-    }
-
-    // Fetch files
-    let files = [];
-    try {
-      const result = await orchestratorClient.listFiles();
-      files = result.files || [];
-    } catch (error) {
-      console.error('Failed to list files:', error);
-    }
-
-    const currentPath = shellState.get('file.path');
-
-    currentMenu = createFileMenu({
-      files,
-      currentPath,
-      onSelect: (path) => handlers.onOpenFile?.(path),
-      onOpenFile: () => handlers.onOpenFilePicker?.(),
-      anchor: segment,
-      onClose: () => { currentMenu = null; },
-    });
-  }
-
-  segment.addEventListener('click', openMenu);
-
-  // Subscribe to state changes
-  const unsubscribe = shellState.onChange(render);
-  onCleanup(unsubscribe);
-  onCleanup(() => currentMenu?.close());
-
-  render();
-  return segment;
-}
-
-// =============================================================================
-// SYNC SEGMENT
-// =============================================================================
-
-function createSyncSegment({ editorRef, shellState, onCleanup }) {
-  const segment = document.createElement('div');
-  segment.className = 'mrmd-statusbar__segment';
-  segment.setAttribute('data-segment', 'sync');
-
-  let currentMenu = null;
-
-  function render() {
-    const editor = editorRef.current;
-
-    // Get sync status from editor state if available
-    let syncStatus = 'disconnected';
-    let latency = null;
-
-    if (editor?.state) {
-      const connectionState = editor.state.get?.('connection') || {};
-      syncStatus = connectionState.status || 'disconnected';
-      latency = connectionState.latency;
-    }
-
-    // Fall back to orchestrator status
-    const orchServices = shellState.get('orchestrator.services') || {};
-    const syncService = orchServices['mrmd-sync'];
-
-    if (syncService?.running && syncStatus === 'disconnected') {
-      syncStatus = 'connected';
-    }
-
-    const dotClass = syncStatus === 'connected' ? 'connected' : 'disconnected';
-    const label = syncStatus === 'connected' ? 'Synced' : 'Offline';
-    const latencyText = latency ? ` (${latency}ms)` : '';
-
-    segment.innerHTML = `
-      <span class="mrmd-statusbar__dot mrmd-statusbar__dot--${dotClass}"></span>
-      <span class="mrmd-statusbar__label">${label}${latencyText}</span>
-    `;
-  }
-
-  function openMenu() {
-    if (currentMenu) {
-      currentMenu.close();
-      return;
-    }
-
-    const editor = editorRef.current;
-    const orchServices = shellState.get('orchestrator.services') || {};
-    const syncService = orchServices['mrmd-sync'];
-
-    let connectionState = {};
-    if (editor?.state?.get) {
-      connectionState = editor.state.get('connection') || {};
-    }
-
-    const items = [
-      {
-        type: 'header',
-        label: 'Sync Status',
-      },
-      {
-        type: 'info',
-        label: 'Status',
-        value: connectionState.status || (syncService?.running ? 'connected' : 'disconnected'),
-      },
-      {
-        type: 'info',
-        label: 'URL',
-        value: syncService?.url || 'N/A',
-      },
-    ];
-
-    if (connectionState.latency) {
-      items.push({
-        type: 'info',
-        label: 'Latency',
-        value: `${connectionState.latency}ms`,
-      });
-    }
-
-    currentMenu = createMenu({
-      items,
-      anchor: segment,
-      position: 'bottom-left',
-      onClose: () => { currentMenu = null; },
-    });
-  }
-
-  segment.addEventListener('click', openMenu);
-
-  // Subscribe to shell state for orchestrator service status
-  const unsubscribe1 = shellState.onPath('orchestrator.services', render);
-  onCleanup(unsubscribe1);
-
-  // Note: We can't subscribe to editor.state.onPath because editor changes
-  // The render() function reads from editorRef.current which is always current
-
-  onCleanup(() => currentMenu?.close());
-
-  render();
-  return segment;
-}
-
-// =============================================================================
-// RUNTIME SEGMENT
-// =============================================================================
-
-function createRuntimeSegment({ shellState, handlers, onCleanup }) {
-  const segment = document.createElement('div');
-  segment.className = 'mrmd-statusbar__segment';
-  segment.setAttribute('data-segment', 'runtime');
-
-  let currentMenu = null;
-
-  function getCurrentDocName() {
-    const file = shellState.get('file');
-    return file?.name || 'untitled';
-  }
-
-  function getCurrentSession() {
-    const docName = getCurrentDocName();
-    const sessionId = shellState.getDocumentSession(docName);
-    const session = shellState.getSession(sessionId);
-    return { sessionId, session };
-  }
-
-  function render() {
-    const python = shellState.get('runtimes.python');
-    const { session } = getCurrentSession();
-
-    // Check for daemon info (new in 0.9.8+)
-    const isDaemon = python?.daemon === true;
-    python?.pid;
-
-    if (!python && !session) {
-      segment.innerHTML = `
-        <span class="mrmd-statusbar__icon">🐍</span>
-        <span class="mrmd-statusbar__secondary">No Python</span>
-      `;
-      segment.classList.add('mrmd-statusbar__segment--disabled');
-      return;
-    }
-
-    segment.classList.remove('mrmd-statusbar__segment--disabled');
-
-    // Use session info if available, otherwise fall back to legacy python info
-    const status = session?.status || python?.status || (python?.running ? 'ready' : 'stopped');
-    const version = python?.version || '?';
-    const venvName = python?.venvName;
-    const isDedicated = session?.dedicated;
-
-    const dotClass = status === 'ready' || python?.running ? 'connected' : status;
-    const venvDisplay = venvName ? ` (${venvName})` : '';
-
-    // Show daemon badge for independent daemon processes
-    let badge = '';
-    if (isDedicated) {
-      badge = '<span class="mrmd-statusbar__badge">dedicated</span>';
-    } else if (isDaemon) {
-      badge = '<span class="mrmd-statusbar__badge" title="Independent daemon process">daemon</span>';
-    }
-
-    segment.innerHTML = `
-      <span class="mrmd-statusbar__dot mrmd-statusbar__dot--${dotClass}"></span>
-      <span class="mrmd-statusbar__icon">🐍</span>
-      <span class="mrmd-statusbar__label">Python ${version}${venvDisplay}</span>
-      ${badge}
-      <span class="mrmd-statusbar__chevron">▾</span>
-    `;
-  }
-
-  function openMenu() {
-    if (currentMenu) {
-      currentMenu.close();
-      return;
-    }
-
-    const python = shellState.get('runtimes.python');
-    const { sessionId, session } = getCurrentSession();
-    const sessions = shellState.getSessions();
-    const docName = getCurrentDocName();
-
-    const items = [];
-
-    // Header showing current document's runtime
-    items.push({
-      type: 'header',
-      label: `Runtime for "${docName}"`,
-    });
-
-    // Show attached session info
-    if (session) {
-      items.push({
-        type: 'info',
-        label: 'Session',
-        value: session.dedicated ? `Dedicated (${sessionId})` : 'Shared',
-      });
-    }
-
-    // Available sessions to attach to
-    if (sessions.length > 0) {
-      items.push({ type: 'divider' });
-      items.push({
-        type: 'header',
-        label: 'Attach to Runtime',
-      });
-
-      for (const { id, info } of sessions) {
-        const isCurrent = id === sessionId;
-        const label = info.dedicated
-          ? `Dedicated: ${id}`
-          : 'Shared Runtime';
-
-        items.push({
-          icon: isCurrent ? '✓' : ' ',
-          label,
-          selected: isCurrent,
-          onClick: () => {
-            shellState.attachDocument(docName, id);
-            handlers.onRuntimeAttached?.(docName, id);
-            render();
-          },
-        });
-      }
-    }
-
-    // Create new dedicated runtime
-    items.push({ type: 'divider' });
-    items.push({
-      icon: '➕',
-      label: 'Create dedicated runtime...',
-      onClick: () => handlers.onCreateDedicatedRuntime?.(docName),
-    });
-
-    // Environment settings (for current session)
-    if (python) {
-      items.push({ type: 'divider' });
-      items.push({
-        type: 'header',
-        label: 'Environment',
-      });
-
-      // Show daemon info if available
-      if (python.daemon) {
-        items.push({
-          type: 'info',
-          label: 'Mode',
-          value: 'Independent Daemon',
-        });
-        if (python.pid) {
-          items.push({
-            type: 'info',
-            label: 'PID',
-            value: String(python.pid),
-          });
-        }
-      }
-
-      items.push({
-        type: 'info',
-        label: 'Virtual Env',
-        value: python.venv || 'System Python',
-      });
-      items.push({
-        type: 'info',
-        label: 'Working Dir',
-        value: python.cwd || 'N/A',
-      });
-      items.push({ type: 'divider' });
-      items.push({
-        icon: '📦',
-        label: 'Change venv...',
-        onClick: () => handlers.onChangeVenv?.(),
-      });
-      items.push({
-        icon: '📂',
-        label: 'Set working dir...',
-        onClick: () => handlers.onChangeCwd?.(),
-      });
-      items.push({ type: 'divider' });
-
-      if (python.daemon) {
-        // For daemon mode, killing releases GPU memory
-        items.push({
-          icon: '💀',
-          label: 'Kill daemon (release GPU)',
-          description: 'Stops daemon and releases all memory',
-          onClick: () => handlers.onKillRuntime?.('python'),
-        });
-      } else {
-        items.push({
-          icon: '🔄',
-          label: 'Restart runtime',
-          onClick: () => handlers.onRestartRuntime?.('python'),
-        });
-      }
-    }
-
-    currentMenu = createMenu({
-      items,
-      anchor: segment,
-      position: 'bottom-right',
-      onClose: () => { currentMenu = null; },
-    });
-  }
-
-  segment.addEventListener('click', openMenu);
-
-  // Subscribe to state changes
-  const unsubscribe1 = shellState.onPath('runtimes', render);
-  const unsubscribe2 = shellState.onPath('file', render);
-  onCleanup(unsubscribe1);
-  onCleanup(unsubscribe2);
-  onCleanup(() => currentMenu?.close());
-
-  render();
-  return segment;
-}
-
-// =============================================================================
-// AI SEGMENT
-// =============================================================================
-
-const JUICE_NAMES$1 = ['Quick', 'Balanced', 'Deep', 'Maximum', 'Ultimate'];
-
-function createAiSegment({ shellState, handlers, onCleanup }) {
-  const segment = document.createElement('div');
-  segment.className = 'mrmd-statusbar__segment';
-  segment.setAttribute('data-segment', 'ai');
-
-  let currentMenu = null;
-
-  function render() {
-    const ai = shellState.get('ai');
-
-    if (!ai || !ai.running) {
-      segment.innerHTML = `
-        <span class="mrmd-statusbar__icon">✦</span>
-        <span class="mrmd-statusbar__secondary">AI Offline</span>
-      `;
-      segment.classList.add('mrmd-statusbar__segment--disabled');
-      return;
-    }
-
-    segment.classList.remove('mrmd-statusbar__segment--disabled');
-
-    const juiceName = JUICE_NAMES$1[ai.juiceLevel || 0] || 'Quick';
-    const activeClass = ai.active ? 'mrmd-statusbar__segment--active' : '';
-
-    segment.className = `mrmd-statusbar__segment ${activeClass}`;
-    segment.innerHTML = `
-      <span class="mrmd-statusbar__dot mrmd-statusbar__dot--connected"></span>
-      <span class="mrmd-statusbar__icon">✦</span>
-      <span class="mrmd-statusbar__label">AI</span>
-      <span class="mrmd-statusbar__badge">${juiceName}</span>
-      <span class="mrmd-statusbar__chevron">▾</span>
-    `;
-  }
-
-  function openMenu() {
-    if (currentMenu) {
-      currentMenu.close();
-      return;
-    }
-
-    const ai = shellState.get('ai') || {};
-
-    const items = [
-      {
-        type: 'header',
-        label: 'AI Assistant',
-      },
-      {
-        type: 'info',
-        label: 'Status',
-        value: ai.running ? 'Running' : 'Offline',
-      },
-      { type: 'divider' },
-      {
-        icon: '⚡',
-        label: 'Quick (Fastest)',
-        selected: ai.juiceLevel === 0,
-        onClick: () => handlers.onSetJuiceLevel?.(0),
-      },
-      {
-        icon: '⚖️',
-        label: 'Balanced',
-        selected: ai.juiceLevel === 1,
-        onClick: () => handlers.onSetJuiceLevel?.(1),
-      },
-      {
-        icon: '🔍',
-        label: 'Deep',
-        selected: ai.juiceLevel === 2,
-        onClick: () => handlers.onSetJuiceLevel?.(2),
-      },
-      {
-        icon: '💪',
-        label: 'Maximum',
-        selected: ai.juiceLevel === 3,
-        onClick: () => handlers.onSetJuiceLevel?.(3),
-      },
-      {
-        icon: '🚀',
-        label: 'Ultimate (Multi-Model)',
-        selected: ai.juiceLevel === 4,
-        onClick: () => handlers.onSetJuiceLevel?.(4),
-      },
-      { type: 'divider' },
-      {
-        icon: '📝',
-        label: 'Continue Document',
-        onClick: () => handlers.onContinueDocument?.(),
-        description: 'AI writes at the end of document',
-      },
-      {
-        icon: '📋',
-        label: 'Summarize Document',
-        onClick: () => handlers.onSummarizeDocument?.(),
-      },
-      {
-        icon: '📛',
-        label: 'Suggest Filename',
-        onClick: () => handlers.onSuggestFilename?.(),
-      },
-    ];
-
-    currentMenu = createMenu({
-      items,
-      anchor: segment,
-      position: 'bottom-right',
-      onClose: () => { currentMenu = null; },
-    });
-  }
-
-  segment.addEventListener('click', openMenu);
-
-  // Subscribe to state changes
-  const unsubscribe = shellState.onPath('ai', render);
-  onCleanup(unsubscribe);
-  onCleanup(() => currentMenu?.close());
-
-  render();
-  return segment;
-}
-
-// =============================================================================
-// THEME SEGMENT
-// =============================================================================
-
-function createThemeSegment({ editorRef, shellState, handlers, onCleanup }) {
-  const segment = document.createElement('div');
-  segment.className = 'mrmd-statusbar__segment';
-  segment.setAttribute('data-segment', 'theme');
-
-  let currentMenu = null;
-  let currentTheme = null;
-
-  function getThemeName() {
-    const editor = editorRef.current;
-    // Try to get theme from editor config
-    if (editor?.config?.appearance?.theme) {
-      return editor.config.appearance.theme;
-    }
-    // Fall back to shell state
-    return shellState.get('theme') || 'auto';
-  }
-
-  function getAvailableThemes() {
-    const editor = editorRef.current;
-    if (editor?.getThemeNames) {
-      return editor.getThemeNames();
-    }
-    // Fallback to known themes
-    return ['midnight', 'daylight', 'github', 'nord', 'nord-outputs'];
-  }
-
-  function render() {
-    currentTheme = getThemeName();
-    const displayName = currentTheme === 'auto' ? 'Auto' : currentTheme;
-
-    segment.innerHTML = `
-      <span class="mrmd-statusbar__icon">🎨</span>
-      <span class="mrmd-statusbar__label">${displayName}</span>
-      <span class="mrmd-statusbar__chevron">▾</span>
-    `;
-  }
-
-  function openMenu() {
-    if (currentMenu) {
-      currentMenu.close();
-      return;
-    }
-
-    const themes = getAvailableThemes();
-    currentTheme = getThemeName();
-
-    const items = [
-      {
-        type: 'header',
-        label: 'Theme',
-      },
-      {
-        icon: '🌗',
-        label: 'Auto (System)',
-        selected: currentTheme === 'auto' || currentTheme === null,
-        onClick: () => {
-          handlers.onSetTheme?.(null);
-          render();
-        },
-      },
-      { type: 'divider' },
-    ];
-
-    // Add available themes
-    for (const theme of themes) {
-      const icon = theme.includes('dark') || theme === 'midnight' || theme === 'nord' || theme === 'nord-outputs'
-        ? '🌙'
-        : '☀️';
-
-      items.push({
-        icon,
-        label: theme.charAt(0).toUpperCase() + theme.slice(1).replace('-', ' '),
-        selected: currentTheme === theme,
-        onClick: () => {
-          handlers.onSetTheme?.(theme);
-          render();
-        },
-      });
-    }
-
-    currentMenu = createMenu({
-      items,
-      anchor: segment,
-      position: 'bottom-right',
-      onClose: () => { currentMenu = null; },
-    });
-  }
-
-  segment.addEventListener('click', openMenu);
-
-  // Subscribe to theme changes in shell state
-  const unsubscribe = shellState.onPath('theme', render);
-  onCleanup(unsubscribe);
-  onCleanup(() => currentMenu?.close());
-
-  render();
-  return segment;
-}
-
-// =============================================================================
-// RUNTIMES SEGMENT (Project-wide runtime management)
-// =============================================================================
-
-function createRuntimesSegment({ shellState, orchestratorClient, handlers, onCleanup }) {
-  const segment = document.createElement('div');
-  segment.className = 'mrmd-statusbar__segment mrmd-statusbar__segment--runtimes';
-  segment.setAttribute('data-segment', 'runtimes');
-
-  let currentMenu = null;
-  let cachedRuntimes = null;
-  let lastFetchTime = 0;
-  const CACHE_TTL = 3000; // 3 seconds
-
-  async function fetchRuntimes() {
-    const now = Date.now();
-    if (now - lastFetchTime < CACHE_TTL && cachedRuntimes) {
-      return cachedRuntimes;
-    }
-
-    try {
-      cachedRuntimes = await orchestratorClient.listRuntimes();
-      lastFetchTime = now;
-      return cachedRuntimes;
-    } catch (error) {
-      console.error('Failed to list runtimes:', error);
-      return cachedRuntimes || { shared: null, dedicated: [], sessions: [], project: {} };
-    }
-  }
-
-  function render() {
-    const python = shellState.get('runtimes.python');
-    const project = shellState.get('project') || {};
-
-    // Count active runtimes
-    let runtimeCount = 0;
-    if (python?.running || python?.status === 'ready') runtimeCount++;
-
-    const sessions = shellState.getSessions();
-    const dedicatedCount = sessions.filter(s => s.info?.dedicated).length;
-    runtimeCount += dedicatedCount;
-
-    // Project name
-    const projectName = project.name || 'mrmd';
-
-    // Status dot
-    const hasActiveRuntime = runtimeCount > 0;
-    const dotClass = hasActiveRuntime ? 'connected' : 'disconnected';
-
-    segment.innerHTML = `
-      <span class="mrmd-statusbar__dot mrmd-statusbar__dot--${dotClass}"></span>
-      <span class="mrmd-statusbar__icon">⚡</span>
-      <span class="mrmd-statusbar__label">${projectName}</span>
-      ${runtimeCount > 0 ? `<span class="mrmd-statusbar__badge">${runtimeCount} runtime${runtimeCount > 1 ? 's' : ''}</span>` : ''}
-      <span class="mrmd-statusbar__chevron">▾</span>
-    `;
-  }
-
-  async function openMenu() {
-    if (currentMenu) {
-      currentMenu.close();
-      return;
-    }
-
-    const runtimes = await fetchRuntimes();
-    const items = [];
-
-    // Project section
-    const project = runtimes.project || {};
-    items.push({
-      type: 'header',
-      label: 'Project',
-    });
-    items.push({
-      type: 'info',
-      label: 'Name',
-      value: project.name || 'unknown',
-    });
-    items.push({
-      type: 'info',
-      label: 'Root',
-      value: shortenPath(project.root, 35),
-    });
-    if (project.venv) {
-      items.push({
-        type: 'info',
-        label: 'Venv',
-        value: shortenPath(project.venv, 35),
-      });
-    }
-
-    // Shared Runtime section
-    items.push({ type: 'divider' });
-    items.push({
-      type: 'header',
-      label: 'Shared Runtime',
-    });
-
-    if (runtimes.shared && runtimes.shared.alive) {
-      items.push({
-        type: 'info',
-        label: 'Status',
-        value: '● Running',
-      });
-      items.push({
-        type: 'info',
-        label: 'PID',
-        value: String(runtimes.shared.pid || 'unknown'),
-      });
-      items.push({
-        type: 'info',
-        label: 'Port',
-        value: String(runtimes.shared.port || 'unknown'),
-      });
-      if (runtimes.shared.venv) {
-        items.push({
-          type: 'info',
-          label: 'Venv',
-          value: shortenPath(runtimes.shared.venv, 30),
-        });
-      }
-      items.push({
-        icon: '💀',
-        label: 'Kill shared runtime',
-        description: 'Release memory, restarts on next exec',
-        onClick: async () => {
-          await handlers.onKillRuntime?.('shared');
-          // Refresh after a moment
-          setTimeout(render, 500);
-        },
-      });
-    } else {
-      items.push({
-        type: 'info',
-        label: 'Status',
-        value: '○ Not running',
-      });
-      items.push({
-        type: 'info',
-        label: '',
-        value: 'Starts on first code execution',
-      });
-    }
-
-    // Dedicated Runtimes section
-    if (runtimes.dedicated && runtimes.dedicated.length > 0) {
-      items.push({ type: 'divider' });
-      items.push({
-        type: 'header',
-        label: `Dedicated Runtimes (${runtimes.dedicated.length})`,
-      });
-
-      for (const rt of runtimes.dedicated) {
-        const statusIcon = rt.alive ? '●' : '○';
-        const statusText = rt.alive ? 'running' : 'stopped';
-        items.push({
-          type: 'info',
-          label: rt.doc || rt.id,
-          value: `${statusIcon} ${statusText} (port ${rt.port || '?'})`,
-        });
-      }
-
-      items.push({
-        icon: '🗑️',
-        label: 'Kill all dedicated runtimes',
-        onClick: async () => {
-          for (const rt of runtimes.dedicated) {
-            await handlers.onKillRuntime?.(rt.doc || rt.id);
-          }
-          setTimeout(render, 500);
-        },
-      });
-    }
-
-    // Sessions section
-    if (runtimes.sessions && runtimes.sessions.length > 0) {
-      items.push({ type: 'divider' });
-      items.push({
-        type: 'header',
-        label: `Active Sessions (${runtimes.sessions.length})`,
-      });
-
-      for (const session of runtimes.sessions) {
-        if (!session) continue;
-        const runtimeType = session.runtimes?.python?.dedicated ? 'dedicated' : 'shared';
-        const port = session.runtimes?.python?.port;
-        items.push({
-          type: 'info',
-          label: session.doc,
-          value: `${runtimeType}${port ? ` (port ${port})` : ''}`,
-        });
-      }
-    }
-
-    // Actions section
-    items.push({ type: 'divider' });
-    items.push({
-      icon: '🔄',
-      label: 'Refresh',
-      onClick: async () => {
-        cachedRuntimes = null;
-        lastFetchTime = 0;
-        await shellState.refresh();
-        render();
-      },
-    });
-
-    currentMenu = createMenu({
-      items,
-      anchor: segment,
-      position: 'bottom-right',
-      onClose: () => { currentMenu = null; },
-    });
-  }
-
-  segment.addEventListener('click', openMenu);
-
-  // Subscribe to state changes
-  const unsubscribe1 = shellState.onPath('runtimes', render);
-  const unsubscribe2 = shellState.onPath('project', render);
-  const unsubscribe3 = shellState.onPath('orchestrator.services', render);
-  onCleanup(unsubscribe1);
-  onCleanup(unsubscribe2);
-  onCleanup(unsubscribe3);
-  onCleanup(() => currentMenu?.close());
-
-  // Initial fetch of project info
-  orchestratorClient.getProject().then(project => {
-    shellState._set('project', project);
-  }).catch(() => {});
-
-  render();
-  return segment;
-}
-
-// =============================================================================
-// HELPERS
-// =============================================================================
-
-function shortenPath(path, maxLength = 25) {
-  if (!path) return '';
-  if (path.length <= maxLength) return path;
-  return '...' + path.slice(-(maxLength - 3));
-}
-
-/**
- * @fileoverview Shell component styles
- *
- * Uses the editor's theme tokens for consistent styling.
- * All styles use CSS custom properties that inherit from the theme.
- */
-
-// =============================================================================
-// STATUS BAR STYLES
-// =============================================================================
-
-const statusBarStyles = `
-/* Status Bar Container */
-.mrmd-statusbar {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  height: 24px;
-  font-family: var(--mrmd-ui-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-  font-size: var(--mrmd-ui-font-size-sm, 12px);
-  background: var(--mrmd-statusbar-bg, var(--mrmd-panel-bg, #1e1e1e));
-  border-top: 1px solid var(--mrmd-statusbar-border, var(--mrmd-border, #333));
-  color: var(--mrmd-statusbar-fg, var(--mrmd-fg-muted, #999));
-  user-select: none;
-  overflow: hidden;
-}
-
-.mrmd-statusbar--top {
-  border-top: none;
-  border-bottom: 1px solid var(--mrmd-statusbar-border, var(--mrmd-border, #333));
-}
-
-/* Status Bar Segment */
-.mrmd-statusbar__segment {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  height: 100%;
-  cursor: pointer;
-  transition: background-color 0.15s ease;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.mrmd-statusbar__segment:hover {
-  background: var(--mrmd-statusbar-hover, var(--mrmd-hover-bg, rgba(255, 255, 255, 0.05)));
-}
-
-.mrmd-statusbar__segment:active {
-  background: var(--mrmd-statusbar-active, var(--mrmd-active-bg, rgba(255, 255, 255, 0.08)));
-}
-
-.mrmd-statusbar__segment--disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.mrmd-statusbar__segment--disabled:hover {
-  background: transparent;
-}
-
-/* Segment parts */
-.mrmd-statusbar__icon {
-  flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.mrmd-statusbar__label {
-  color: var(--mrmd-statusbar-fg, var(--mrmd-fg, #ccc));
-}
-
-.mrmd-statusbar__secondary {
-  color: var(--mrmd-statusbar-fg-muted, var(--mrmd-fg-muted, #666));
-}
-
-.mrmd-statusbar__chevron {
-  font-size: 8px;
-  opacity: 0.5;
-  margin-left: 2px;
-}
-
-/* Status indicator dot */
-.mrmd-statusbar__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.mrmd-statusbar__dot--connected,
-.mrmd-statusbar__dot--ready,
-.mrmd-statusbar__dot--running {
-  background: var(--mrmd-success, #4caf50);
-}
-
-.mrmd-statusbar__dot--disconnected,
-.mrmd-statusbar__dot--stopped {
-  background: var(--mrmd-fg-muted, #666);
-}
-
-.mrmd-statusbar__dot--error {
-  background: var(--mrmd-error, #f44336);
-}
-
-.mrmd-statusbar__dot--starting {
-  background: var(--mrmd-warning, #ff9800);
-  animation: mrmd-statusbar-pulse 1s ease-in-out infinite;
-}
-
-@keyframes mrmd-statusbar-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-/* Separator */
-.mrmd-statusbar__separator {
-  width: 1px;
-  height: 14px;
-  background: var(--mrmd-statusbar-separator, var(--mrmd-border, #333));
-  margin: 0 2px;
-}
-
-/* Spacer (pushes remaining items to the right) */
-.mrmd-statusbar__spacer {
-  flex: 1;
-}
-
-/* Warning badge for outside-project files */
-.mrmd-statusbar__warning {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  background: var(--mrmd-warning, #ff9800);
-  color: #000;
-  border-radius: 3px;
-  font-size: 10px;
-  font-weight: bold;
-}
-
-/* Generic badge (e.g., "dedicated" for runtime) */
-.mrmd-statusbar__badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 5px;
-  background: var(--mrmd-accent, #007acc);
-  color: #fff;
-  border-radius: 3px;
-  font-size: 9px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  margin-left: 4px;
-}
-
-/* Unified files segment - takes more space */
-.mrmd-statusbar__segment--files {
-  min-width: 120px;
-  flex-shrink: 1;
-}
-
-.mrmd-statusbar__segment--files .mrmd-statusbar__secondary {
-  margin-left: auto;
-  font-size: 10px;
-}
-`;
-
-// =============================================================================
-// MENU STYLES
-// =============================================================================
-
-const menuStyles = `
-/* Dropdown Menu */
-.mrmd-menu {
-  position: fixed;
-  z-index: 1000;
-  min-width: 180px;
-  max-width: 320px;
-  max-height: 400px;
-  overflow-y: auto;
-  background: var(--mrmd-menu-bg, var(--mrmd-popup-bg, #252526));
-  border: 1px solid var(--mrmd-menu-border, var(--mrmd-border, #454545));
-  border-radius: 6px;
-  box-shadow: var(--mrmd-shadow-lg, 0 8px 32px rgba(0, 0, 0, 0.4));
-  padding: 4px 0;
-  font-family: var(--mrmd-ui-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-  font-size: var(--mrmd-ui-font-size, 13px);
-}
-
-.mrmd-menu--hidden {
-  display: none;
-}
-
-/* Menu Header */
-.mrmd-menu__header {
-  padding: 8px 12px 6px;
-  font-size: var(--mrmd-ui-font-size-sm, 11px);
-  font-weight: 600;
-  color: var(--mrmd-fg-muted, #888);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-/* Menu Item */
-.mrmd-menu__item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 12px;
-  cursor: pointer;
-  color: var(--mrmd-fg, #ccc);
-  transition: background-color 0.1s ease;
-}
-
-.mrmd-menu__item:hover {
-  background: var(--mrmd-menu-hover, var(--mrmd-hover-bg, rgba(255, 255, 255, 0.08)));
-}
-
-.mrmd-menu__item--active {
-  background: var(--mrmd-menu-active, var(--mrmd-selection-bg, rgba(0, 122, 204, 0.3)));
-}
-
-.mrmd-menu__item--disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.mrmd-menu__item--disabled:hover {
-  background: transparent;
-}
-
-/* Menu Item Parts */
-.mrmd-menu__item-icon {
-  flex-shrink: 0;
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-}
-
-.mrmd-menu__item-label {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mrmd-menu__item-shortcut {
-  flex-shrink: 0;
-  font-size: var(--mrmd-ui-font-size-sm, 11px);
-  color: var(--mrmd-fg-muted, #666);
-}
-
-.mrmd-menu__item-check {
-  flex-shrink: 0;
-  width: 16px;
-  text-align: center;
-  color: var(--mrmd-accent, #007acc);
-}
-
-/* Menu Divider */
-.mrmd-menu__divider {
-  height: 1px;
-  background: var(--mrmd-menu-divider, var(--mrmd-border, #333));
-  margin: 4px 8px;
-}
-
-/* Menu Info Row (readonly info display) */
-.mrmd-menu__info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  color: var(--mrmd-fg-muted, #888);
-  font-size: var(--mrmd-ui-font-size-sm, 11px);
-}
-
-.mrmd-menu__info-label {
-  flex-shrink: 0;
-}
-
-.mrmd-menu__info-value {
-  flex: 1;
-  text-align: right;
-  color: var(--mrmd-fg, #ccc);
-}
-
-/* File browser in menu */
-.mrmd-menu__file {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 12px;
-  cursor: pointer;
-  color: var(--mrmd-fg, #ccc);
-}
-
-.mrmd-menu__file:hover {
-  background: var(--mrmd-menu-hover, var(--mrmd-hover-bg, rgba(255, 255, 255, 0.08)));
-}
-
-.mrmd-menu__file--current {
-  background: var(--mrmd-menu-active, var(--mrmd-selection-bg, rgba(0, 122, 204, 0.2)));
-}
-
-.mrmd-menu__file-icon {
-  flex-shrink: 0;
-  width: 16px;
-  text-align: center;
-}
-
-.mrmd-menu__file-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mrmd-menu__file-indicator {
-  flex-shrink: 0;
-  font-size: 10px;
-  color: var(--mrmd-accent, #007acc);
-}
-`;
-
-// =============================================================================
-// DIALOG STYLES
-// =============================================================================
-
-const dialogStyles = `
-/* Dialog Overlay */
-.mrmd-dialog-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1001;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-}
-
-.mrmd-dialog-overlay--hidden {
-  display: none;
-}
-
-/* Dialog */
-.mrmd-dialog {
-  background: var(--mrmd-dialog-bg, var(--mrmd-popup-bg, #252526));
-  border: 1px solid var(--mrmd-dialog-border, var(--mrmd-border, #454545));
-  border-radius: 8px;
-  box-shadow: var(--mrmd-shadow-xl, 0 16px 48px rgba(0, 0, 0, 0.5));
-  min-width: 320px;
-  max-width: 560px;
-  max-height: calc(100vh - 40px);
-  display: flex;
-  flex-direction: column;
-  font-family: var(--mrmd-ui-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-  font-size: var(--mrmd-ui-font-size, 13px);
-  color: var(--mrmd-fg, #ccc);
-}
-
-/* Dialog Header */
-.mrmd-dialog__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--mrmd-border, #333);
-}
-
-.mrmd-dialog__title {
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.mrmd-dialog__close {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  color: var(--mrmd-fg-muted, #888);
-  cursor: pointer;
-  border-radius: 4px;
-  font-size: 18px;
-}
-
-.mrmd-dialog__close:hover {
-  background: var(--mrmd-hover-bg, rgba(255, 255, 255, 0.08));
-  color: var(--mrmd-fg, #ccc);
-}
-
-/* Dialog Body */
-.mrmd-dialog__body {
-  flex: 1;
-  padding: 16px;
-  overflow-y: auto;
-}
-
-/* Dialog Footer */
-.mrmd-dialog__footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--mrmd-border, #333);
-}
-
-/* Input */
-.mrmd-input {
-  width: 100%;
-  padding: 8px 10px;
-  background: var(--mrmd-input-bg, var(--mrmd-bg, #1e1e1e));
-  border: 1px solid var(--mrmd-input-border, var(--mrmd-border, #454545));
-  border-radius: 4px;
-  color: var(--mrmd-fg, #ccc);
-  font-family: inherit;
-  font-size: inherit;
-  outline: none;
-}
-
-.mrmd-input:focus {
-  border-color: var(--mrmd-accent, #007acc);
-  box-shadow: 0 0 0 1px var(--mrmd-accent, #007acc);
-}
-
-.mrmd-input::placeholder {
-  color: var(--mrmd-fg-muted, #666);
-}
-
-/* Label */
-.mrmd-label {
-  display: block;
-  margin-bottom: 6px;
-  font-size: var(--mrmd-ui-font-size-sm, 12px);
-  color: var(--mrmd-fg-muted, #888);
-}
-
-/* Button */
-.mrmd-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 6px 14px;
-  background: var(--mrmd-button-bg, #3c3c3c);
-  border: 1px solid var(--mrmd-button-border, #5a5a5a);
-  border-radius: 4px;
-  color: var(--mrmd-fg, #ccc);
-  font-family: inherit;
-  font-size: var(--mrmd-ui-font-size, 13px);
-  cursor: pointer;
-  transition: background-color 0.1s ease;
-}
-
-.mrmd-button:hover {
-  background: var(--mrmd-button-hover, #4a4a4a);
-}
-
-.mrmd-button:active {
-  background: var(--mrmd-button-active, #555);
-}
-
-.mrmd-button--primary {
-  background: var(--mrmd-accent, #007acc);
-  border-color: var(--mrmd-accent, #007acc);
-  color: #fff;
-}
-
-.mrmd-button--primary:hover {
-  background: var(--mrmd-accent-hover, #0098ff);
-}
-
-.mrmd-button--danger {
-  background: var(--mrmd-error, #d32f2f);
-  border-color: var(--mrmd-error, #d32f2f);
-  color: #fff;
-}
-
-.mrmd-button--danger:hover {
-  background: #e53935;
-}
-`;
-
-// =============================================================================
-// FILE PICKER STYLES
-// =============================================================================
-
-const filePickerStyles = `
-/* File Picker */
-.mrmd-filepicker {
-  min-height: 300px;
-}
-
-/* Path bar */
-.mrmd-filepicker__path {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 0;
-  margin-bottom: 8px;
-  border-bottom: 1px solid var(--mrmd-border, #333);
-  overflow-x: auto;
-  white-space: nowrap;
-}
-
-.mrmd-filepicker__path-segment {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 6px;
-  border-radius: 3px;
-  cursor: pointer;
-  color: var(--mrmd-fg-muted, #888);
-}
-
-.mrmd-filepicker__path-segment:hover {
-  background: var(--mrmd-hover-bg, rgba(255, 255, 255, 0.08));
-  color: var(--mrmd-fg, #ccc);
-}
-
-.mrmd-filepicker__path-separator {
-  color: var(--mrmd-fg-muted, #666);
-}
-
-/* File list */
-.mrmd-filepicker__list {
-  max-height: 280px;
-  overflow-y: auto;
-}
-
-.mrmd-filepicker__item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.mrmd-filepicker__item:hover {
-  background: var(--mrmd-hover-bg, rgba(255, 255, 255, 0.05));
-}
-
-.mrmd-filepicker__item--selected {
-  background: var(--mrmd-selection-bg, rgba(0, 122, 204, 0.2));
-}
-
-.mrmd-filepicker__item-icon {
-  flex-shrink: 0;
-  width: 20px;
-  text-align: center;
-  font-size: 16px;
-}
-
-.mrmd-filepicker__item-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mrmd-filepicker__item-info {
-  flex-shrink: 0;
-  font-size: var(--mrmd-ui-font-size-sm, 11px);
-  color: var(--mrmd-fg-muted, #666);
-}
-
-/* Empty state */
-.mrmd-filepicker__empty {
-  padding: 40px 20px;
-  text-align: center;
-  color: var(--mrmd-fg-muted, #666);
-}
-
-/* New file input */
-.mrmd-filepicker__new {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-  border-top: 1px solid var(--mrmd-border, #333);
-  margin-top: 8px;
-}
-
-.mrmd-filepicker__new-input {
-  flex: 1;
-}
-`;
-
-// =============================================================================
-// ALL STYLES COMBINED
-// =============================================================================
-// STUDIO STYLES
-// =============================================================================
-
-const studioStyles = `
-/* Studio Container */
-.mrmd-studio {
-  position: relative;
-}
-
-/* Editor Container */
-.mrmd-studio__editor {
-  position: relative;
-}
-
-/* Loading State */
-.mrmd-studio__editor--loading {
-  pointer-events: none;
-}
-
-.mrmd-studio__editor--loading::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: var(--mrmd-bg, #1e1e1e);
-  opacity: 0.7;
-  z-index: 100;
-  animation: mrmd-studio-fade-in 0.15s ease;
-}
-
-@keyframes mrmd-studio-fade-in {
-  from { opacity: 0; }
-  to { opacity: 0.7; }
-}
-
-/* Loading spinner (optional, can be added via pseudo or actual element) */
-.mrmd-studio__editor--loading::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 24px;
-  height: 24px;
-  margin: -12px 0 0 -12px;
-  border: 2px solid var(--mrmd-border, #333);
-  border-top-color: var(--mrmd-accent, #007acc);
-  border-radius: 50%;
-  z-index: 101;
-  animation: mrmd-studio-spin 0.8s linear infinite;
-}
-
-@keyframes mrmd-studio-spin {
-  to { transform: rotate(360deg); }
-}
-`;
-
-// =============================================================================
-// COMBINED STYLES
-// =============================================================================
-
-const shellStyles = `
-${statusBarStyles}
-${menuStyles}
-${dialogStyles}
-${filePickerStyles}
-${studioStyles}
-`;
-
-// =============================================================================
-// STYLE INJECTION
-// =============================================================================
-
-let stylesInjected$3 = false;
-
-/**
- * Inject shell styles into the document
- */
-function injectShellStyles$1() {
-  if (stylesInjected$3) return;
-
-  const style = document.createElement('style');
-  style.id = 'mrmd-shell-styles';
-  style.textContent = shellStyles;
-  document.head.appendChild(style);
-
-  stylesInjected$3 = true;
-}
-
-/**
  * @fileoverview Base Dialog Component
  *
  * A reusable modal dialog component.
@@ -62123,6 +60156,2519 @@ function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * @fileoverview Status Bar Component
+ *
+ * The main status bar that displays file info, sync status, and runtime info.
+ * Each segment is clickable and opens a context menu.
+ */
+
+
+// =============================================================================
+// STATUS BAR
+// =============================================================================
+
+/**
+ * @typedef {Object} StatusBarOptions
+ * @property {HTMLElement} container - Container element
+ * @property {Object} editor - mrmd editor instance
+ * @property {import('../state.js').ShellStateManager} shellState - Shell state manager
+ * @property {import('../orchestrator-client.js').OrchestratorClient} orchestratorClient
+ * @property {string[]} [segments=['files', 'sync', 'runtime']] - Segment types to display
+ * @property {'top'|'bottom'} [position='bottom']
+ * @property {Object} [handlers] - Event handlers
+ */
+
+/**
+ * Create a status bar
+ * @param {StatusBarOptions} options
+ * @returns {{element: HTMLElement, setEditor: (editor: Object) => void, destroy: () => void}}
+ */
+function createStatusBar$1(options) {
+  const {
+    container,
+    editor: initialEditor,
+    shellState,
+    orchestratorClient,
+    segments = ['files', 'sync', 'runtime'],
+    position = 'bottom',
+    handlers = {},
+  } = options;
+
+  // Create status bar element
+  const statusBar = document.createElement('div');
+  statusBar.className = `mrmd-statusbar mrmd-statusbar--${position}`;
+
+  // Track segment elements and their cleanup functions
+  const segmentElements = new Map();
+  const cleanupFunctions = [];
+
+  // Shared editor reference that can be updated
+  const editorRef = { current: initialEditor };
+
+  // Create segments
+  for (const segmentType of segments) {
+    const segmentEl = createSegment(segmentType, {
+      editorRef,
+      shellState,
+      orchestratorClient,
+      handlers,
+      onCleanup: (fn) => cleanupFunctions.push(fn),
+    });
+
+    if (segmentEl) {
+      segmentElements.set(segmentType, segmentEl);
+      statusBar.appendChild(segmentEl);
+    }
+  }
+
+  // Add to container
+  container.appendChild(statusBar);
+
+  return {
+    element: statusBar,
+
+    /**
+     * Update the editor reference (called when editor is recreated)
+     * @param {Object} newEditor
+     */
+    setEditor(newEditor) {
+      editorRef.current = newEditor;
+      // Trigger re-render of sync segment which depends on editor
+      // This is handled automatically by shell state changes
+    },
+
+    destroy() {
+      cleanupFunctions.forEach(fn => fn());
+      statusBar.remove();
+    },
+  };
+}
+
+// =============================================================================
+// SEGMENT FACTORY
+// =============================================================================
+
+/**
+ * Create a segment element
+ * @private
+ */
+function createSegment(type, context) {
+  switch (type) {
+    case 'simple':
+      return createSimpleSegment(context);
+    case 'files':
+      return createFilesSegment(context);
+    // Legacy segments (kept for backward compat, prefer 'files')
+    case 'file':
+      return createFileSegment(context);
+    case 'location':
+      return createLocationSegment(context);
+    case 'sync':
+      return createSyncSegment(context);
+    case 'runtime':
+      return createRuntimeSegment(context);
+    case 'runtimes':
+      return createRuntimesSegment(context);
+    case 'ai':
+      return createAiSegment(context);
+    case 'theme':
+      return createThemeSegment(context);
+    default:
+      console.warn(`Unknown segment type: ${type}`);
+      return null;
+  }
+}
+
+// =============================================================================
+// UNIFIED FILES SEGMENT
+// =============================================================================
+
+/**
+ * Unified file segment - combines file listing with file operations.
+ * This is the recommended segment for file management.
+ */
+function createFilesSegment({ shellState, orchestratorClient, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment mrmd-statusbar__segment--files';
+  segment.setAttribute('data-segment', 'files');
+
+  let currentMenu = null;
+  let cachedFiles = [];
+  let lastFetchTime = 0;
+  const CACHE_TTL = 5000; // 5 seconds
+
+  function render() {
+    const file = shellState.get('file');
+    const projectRoot = shellState.get('projectRoot');
+
+    // Build display
+    let fileName = 'No file';
+    let pathDisplay = '';
+    let dirtyIndicator = '';
+    let isExternalFile = false;
+
+    if (file) {
+      fileName = file.name || 'untitled';
+      dirtyIndicator = file.dirty ? ' •' : '';
+
+      // Check if this is an external file (absolute path)
+      if (file.path && file.path.startsWith('/')) {
+        isExternalFile = true;
+        // Show shortened directory path for external files
+        const dir = file.path.split('/').slice(0, -1).join('/');
+        pathDisplay = shortenPath(dir, 20) + '/';
+      } else if (file.path && file.path.includes('/')) {
+        // Show relative path if in a subdirectory
+        const dir = file.path.split('/').slice(0, -1).join('/');
+        pathDisplay = dir + '/';
+      }
+    }
+
+    // Shorten project root for display (only show for project files)
+    let projectDisplay = '';
+    if (projectRoot && !isExternalFile) {
+      projectDisplay = projectRoot;
+      if (projectDisplay.length > 25) {
+        projectDisplay = '...' + projectDisplay.slice(-22);
+      }
+    } else if (isExternalFile) {
+      projectDisplay = '(external)';
+    }
+
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__icon">📄</span>
+      <span class="mrmd-statusbar__label">${pathDisplay}${fileName}${dirtyIndicator}</span>
+      <span class="mrmd-statusbar__secondary">${projectDisplay}</span>
+      <span class="mrmd-statusbar__chevron">▾</span>
+    `;
+
+    if (!file) {
+      segment.classList.add('mrmd-statusbar__segment--disabled');
+    } else {
+      segment.classList.remove('mrmd-statusbar__segment--disabled');
+    }
+  }
+
+  async function fetchFiles() {
+    const now = Date.now();
+    if (now - lastFetchTime < CACHE_TTL && cachedFiles.length > 0) {
+      return cachedFiles;
+    }
+
+    try {
+      const result = await orchestratorClient.listFiles();
+      cachedFiles = result.files || [];
+      lastFetchTime = now;
+      return cachedFiles;
+    } catch (error) {
+      console.error('Failed to list files:', error);
+      return cachedFiles; // Return cached on error
+    }
+  }
+
+  async function openMenu() {
+    if (currentMenu) {
+      currentMenu.close();
+      return;
+    }
+
+    const file = shellState.get('file');
+    const projectRoot = shellState.get('projectRoot');
+    const files = await fetchFiles();
+    const currentPath = file?.path;
+
+    const items = [];
+
+    // Project files section
+    if (files.length > 0) {
+      items.push({
+        type: 'header',
+        label: 'Project Files',
+      });
+
+      // Filter to markdown files and sort
+      const mdFiles = files
+        .filter(f => f.type === 'file' && (f.name.endsWith('.md') || !f.name.includes('.')))
+        .slice(0, 10); // Limit to 10 files
+
+      for (const f of mdFiles) {
+        const displayName = f.name.replace(/\.md$/, '');
+        const isCurrent = f.path === currentPath;
+
+        items.push({
+          icon: isCurrent ? '●' : '○',
+          label: displayName,
+          active: isCurrent,
+          onClick: () => handlers.onOpenFile?.(f.path),
+        });
+      }
+
+      if (files.length > 10) {
+        items.push({
+          type: 'info',
+          label: '',
+          value: `+${files.length - 10} more files`,
+        });
+      }
+    } else {
+      items.push({
+        type: 'info',
+        label: 'No files',
+        value: 'Create one below',
+      });
+    }
+
+    // File actions section
+    items.push({ type: 'divider' });
+
+    items.push({
+      icon: '📂',
+      label: 'Browse...',
+      onClick: () => handlers.onOpenFilePicker?.(),
+    });
+
+    items.push({
+      icon: '➕',
+      label: 'New File...',
+      onClick: () => handlers.onNewFile?.(),
+    });
+
+    // Current file operations (only if file is open)
+    if (file) {
+      items.push({ type: 'divider' });
+
+      items.push({
+        icon: '✏️',
+        label: 'Rename...',
+        onClick: () => handlers.onRename?.(),
+      });
+
+      items.push({
+        icon: '💾',
+        label: 'Save As...',
+        onClick: () => handlers.onSaveAs?.(),
+      });
+    }
+
+    // Info section
+    items.push({ type: 'divider' });
+
+    if (file?.path) {
+      items.push({
+        type: 'info',
+        label: 'File',
+        value: file.path,
+      });
+    }
+
+    if (projectRoot) {
+      items.push({
+        type: 'info',
+        label: 'Project',
+        value: shortenPath(projectRoot, 30),
+      });
+    }
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment,
+      position: 'bottom-left',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to state changes
+  const unsubscribe1 = shellState.onPath('file', render);
+  const unsubscribe2 = shellState.onPath('projectRoot', render);
+  onCleanup(unsubscribe1);
+  onCleanup(unsubscribe2);
+  onCleanup(() => currentMenu?.close());
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// FILE SEGMENT (Legacy)
+// =============================================================================
+
+function createFileSegment({ shellState, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment';
+  segment.setAttribute('data-segment', 'file');
+
+  let currentMenu = null;
+
+  function render() {
+    const file = shellState.get('file');
+
+    if (!file) {
+      segment.innerHTML = `
+        <span class="mrmd-statusbar__icon">📄</span>
+        <span class="mrmd-statusbar__label">No file</span>
+      `;
+      segment.classList.add('mrmd-statusbar__segment--disabled');
+      return;
+    }
+
+    segment.classList.remove('mrmd-statusbar__segment--disabled');
+
+    let warningBadge = '';
+    if (file.isOutsideProject) {
+      warningBadge = '<span class="mrmd-statusbar__warning" title="File is outside project">!</span>';
+    }
+
+    let dirtyIndicator = file.dirty ? ' •' : '';
+
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__icon">📄</span>
+      <span class="mrmd-statusbar__label">${file.name}${dirtyIndicator}</span>
+      ${warningBadge}
+      <span class="mrmd-statusbar__chevron">▾</span>
+    `;
+  }
+
+  function openMenu() {
+    if (currentMenu) {
+      currentMenu.close();
+      return;
+    }
+
+    const file = shellState.get('file');
+
+    const items = [];
+
+    // File operations (always available)
+    items.push(
+      {
+        icon: '📂',
+        label: 'Open...',
+        onClick: () => handlers.onOpenFilePicker?.(),
+      },
+      {
+        icon: '➕',
+        label: 'New File...',
+        onClick: () => handlers.onNewFile?.(),
+      },
+    );
+
+    // Current file operations (only if file is open)
+    if (file) {
+      items.push(
+        { type: 'divider' },
+        {
+          type: 'header',
+          label: file.name + '.md',
+        },
+        {
+          icon: '✏️',
+          label: 'Rename...',
+          onClick: () => handlers.onRename?.(),
+        },
+        {
+          icon: '💾',
+          label: 'Save As...',
+          onClick: () => handlers.onSaveAs?.(),
+        },
+        { type: 'divider' },
+        {
+          type: 'info',
+          label: 'Path',
+          value: file.path,
+        },
+      );
+    }
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment,
+      position: 'bottom-left',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to state changes
+  const unsubscribe = shellState.onPath('file', render);
+  onCleanup(unsubscribe);
+  onCleanup(() => currentMenu?.close());
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// LOCATION SEGMENT
+// =============================================================================
+
+function createLocationSegment({ shellState, orchestratorClient, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment';
+  segment.setAttribute('data-segment', 'location');
+
+  let currentMenu = null;
+
+  function render() {
+    shellState.get('file');
+    const projectRoot = shellState.get('projectRoot');
+
+    // Show shortened path
+    let displayPath = projectRoot || '~';
+    if (displayPath.length > 30) {
+      displayPath = '...' + displayPath.slice(-27);
+    }
+
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__icon">📁</span>
+      <span class="mrmd-statusbar__secondary">${displayPath}</span>
+      <span class="mrmd-statusbar__chevron">▾</span>
+    `;
+  }
+
+  async function openMenu() {
+    if (currentMenu) {
+      currentMenu.close();
+      return;
+    }
+
+    // Fetch files
+    let files = [];
+    try {
+      const result = await orchestratorClient.listFiles();
+      files = result.files || [];
+    } catch (error) {
+      console.error('Failed to list files:', error);
+    }
+
+    const currentPath = shellState.get('file.path');
+
+    currentMenu = createFileMenu({
+      files,
+      currentPath,
+      onSelect: (path) => handlers.onOpenFile?.(path),
+      onOpenFile: () => handlers.onOpenFilePicker?.(),
+      anchor: segment,
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to state changes
+  const unsubscribe = shellState.onChange(render);
+  onCleanup(unsubscribe);
+  onCleanup(() => currentMenu?.close());
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// SYNC SEGMENT
+// =============================================================================
+
+function createSyncSegment({ editorRef, shellState, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment';
+  segment.setAttribute('data-segment', 'sync');
+
+  let currentMenu = null;
+
+  function render() {
+    const editor = editorRef.current;
+
+    // Get sync status from editor state if available
+    let syncStatus = 'disconnected';
+    let latency = null;
+
+    if (editor?.state) {
+      const connectionState = editor.state.get?.('connection') || {};
+      syncStatus = connectionState.status || 'disconnected';
+      latency = connectionState.latency;
+    }
+
+    // Fall back to orchestrator status
+    const orchServices = shellState.get('orchestrator.services') || {};
+    const syncService = orchServices['mrmd-sync'];
+
+    if (syncService?.running && syncStatus === 'disconnected') {
+      syncStatus = 'connected';
+    }
+
+    const dotClass = syncStatus === 'connected' ? 'connected' : 'disconnected';
+    const label = syncStatus === 'connected' ? 'Synced' : 'Offline';
+    const latencyText = latency ? ` (${latency}ms)` : '';
+
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__dot mrmd-statusbar__dot--${dotClass}"></span>
+      <span class="mrmd-statusbar__label">${label}${latencyText}</span>
+    `;
+  }
+
+  function openMenu() {
+    if (currentMenu) {
+      currentMenu.close();
+      return;
+    }
+
+    const editor = editorRef.current;
+    const orchServices = shellState.get('orchestrator.services') || {};
+    const syncService = orchServices['mrmd-sync'];
+
+    let connectionState = {};
+    if (editor?.state?.get) {
+      connectionState = editor.state.get('connection') || {};
+    }
+
+    const items = [
+      {
+        type: 'header',
+        label: 'Sync Status',
+      },
+      {
+        type: 'info',
+        label: 'Status',
+        value: connectionState.status || (syncService?.running ? 'connected' : 'disconnected'),
+      },
+      {
+        type: 'info',
+        label: 'URL',
+        value: syncService?.url || 'N/A',
+      },
+    ];
+
+    if (connectionState.latency) {
+      items.push({
+        type: 'info',
+        label: 'Latency',
+        value: `${connectionState.latency}ms`,
+      });
+    }
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment,
+      position: 'bottom-left',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to shell state for orchestrator service status
+  const unsubscribe1 = shellState.onPath('orchestrator.services', render);
+  onCleanup(unsubscribe1);
+
+  // Note: We can't subscribe to editor.state.onPath because editor changes
+  // The render() function reads from editorRef.current which is always current
+
+  onCleanup(() => currentMenu?.close());
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// RUNTIME SEGMENT
+// =============================================================================
+
+function createRuntimeSegment({ shellState, orchestratorClient, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment';
+  segment.setAttribute('data-segment', 'runtime');
+
+  let currentMenu = null;
+  let cachedRuntimes = null;
+  let cachedVenvs = null;
+
+  function getCurrentDocName() {
+    const file = shellState.get('file');
+    return file?.name || 'untitled';
+  }
+
+  function getAttachedRuntime() {
+    const docName = getCurrentDocName();
+    // Get the runtime URL this doc is attached to
+    const attachments = shellState.get('runtimes.attachments') || {};
+    const runtimeId = attachments[docName] || 'shared';
+
+    // Find the runtime info
+    if (cachedRuntimes) {
+      const allRuntimes = [
+        cachedRuntimes.shared,
+        ...(cachedRuntimes.dedicated || []),
+      ].filter(Boolean);
+
+      return allRuntimes.find(r => r.id === runtimeId) || cachedRuntimes.shared;
+    }
+    return null;
+  }
+
+  async function fetchRuntimes() {
+    try {
+      cachedRuntimes = await orchestratorClient.listRuntimes();
+      return cachedRuntimes;
+    } catch (error) {
+      console.error('Failed to fetch runtimes:', error);
+      return cachedRuntimes || { shared: null, dedicated: [] };
+    }
+  }
+
+  async function fetchVenvs() {
+    try {
+      const result = await orchestratorClient.listVenvs();
+      cachedVenvs = result.venvs || [];
+      return cachedVenvs;
+    } catch (error) {
+      console.error('Failed to fetch venvs:', error);
+      return cachedVenvs || [];
+    }
+  }
+
+  function render() {
+    const attached = getAttachedRuntime();
+    const python = shellState.get('runtimes.python');
+
+    if (!attached && !python) {
+      segment.innerHTML = `
+        <span class="mrmd-statusbar__icon">🐍</span>
+        <span class="mrmd-statusbar__secondary">No Runtime</span>
+        <span class="mrmd-statusbar__chevron">▾</span>
+      `;
+      segment.classList.add('mrmd-statusbar__segment--disabled');
+      return;
+    }
+
+    segment.classList.remove('mrmd-statusbar__segment--disabled');
+
+    const runtime = attached || {};
+    const isAlive = runtime.alive !== false;
+    const venvName = runtime.venv ? runtime.venv.split('/').pop() : 'System';
+    const runtimeId = runtime.id || 'shared';
+    const isShared = runtimeId === 'shared';
+
+    const dotClass = isAlive ? 'connected' : 'disconnected';
+    const badge = isShared ? '' : `<span class="mrmd-statusbar__badge">${runtimeId}</span>`;
+
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__dot mrmd-statusbar__dot--${dotClass}"></span>
+      <span class="mrmd-statusbar__icon">🐍</span>
+      <span class="mrmd-statusbar__label">${venvName}</span>
+      ${badge}
+      <span class="mrmd-statusbar__chevron">▾</span>
+    `;
+  }
+
+  async function openMenu() {
+    if (currentMenu) {
+      currentMenu.close();
+      return;
+    }
+
+    // Fetch fresh data
+    const [runtimes, venvs] = await Promise.all([fetchRuntimes(), fetchVenvs()]);
+    const docName = getCurrentDocName();
+    const attachments = shellState.get('runtimes.attachments') || {};
+    const currentRuntimeId = attachments[docName] || 'shared';
+
+    const items = [];
+
+    // Header
+    items.push({
+      type: 'header',
+      label: `Runtime for "${docName}"`,
+    });
+
+    // Available runtimes section
+    const allRuntimes = [
+      runtimes.shared ? { ...runtimes.shared, id: 'shared' } : null,
+      ...(runtimes.dedicated || []),
+    ].filter(Boolean);
+
+    if (allRuntimes.length > 0) {
+      items.push({
+        type: 'header',
+        label: 'Available Runtimes',
+      });
+
+      for (const rt of allRuntimes) {
+        const isCurrent = rt.id === currentRuntimeId;
+        const venvName = rt.venv ? rt.venv.split('/').pop() : 'System';
+        const statusIcon = rt.alive ? '●' : '○';
+        const label = rt.id === 'shared'
+          ? `Shared (${venvName})`
+          : `${rt.id} (${venvName})`;
+
+        items.push({
+          icon: isCurrent ? '✓' : statusIcon,
+          label,
+          active: isCurrent,
+          onClick: () => {
+            // Attach this document to the selected runtime
+            shellState.attachDocument(docName, rt.id);
+            // Store the runtime URL for execution
+            shellState._set(`runtimes.sessions.${rt.id}`, {
+              id: rt.id,
+              url: rt.url,
+              venv: rt.venv,
+              alive: rt.alive,
+            });
+            handlers.onRuntimeAttached?.(docName, rt.id, rt.url);
+            render();
+          },
+        });
+      }
+    } else {
+      items.push({
+        type: 'info',
+        label: 'No runtimes',
+        value: 'Start one below',
+      });
+    }
+
+    // Start new runtime section
+    items.push({ type: 'divider' });
+    items.push({
+      type: 'header',
+      label: 'Start New Runtime',
+    });
+
+    // Show available venvs to start
+    for (const venv of venvs) {
+      // Skip if already running
+      const isRunning = allRuntimes.some(r => r.venv === venv.path);
+      if (isRunning) continue;
+
+      items.push({
+        icon: '▶',
+        label: `${venv.name} (${venv.version})`,
+        onClick: async () => {
+          try {
+            const result = await orchestratorClient.startRuntime({
+              venv: venv.path,
+            });
+            if (result.success) {
+              // Attach this doc to the new runtime
+              const newRuntime = result.runtime;
+              shellState.attachDocument(docName, newRuntime.id);
+              shellState._set(`runtimes.sessions.${newRuntime.id}`, {
+                id: newRuntime.id,
+                url: newRuntime.url,
+                venv: newRuntime.venv,
+                alive: true,
+              });
+              handlers.onRuntimeAttached?.(docName, newRuntime.id, newRuntime.url);
+            }
+            // Refresh display
+            cachedRuntimes = null;
+            render();
+          } catch (err) {
+            console.error('Failed to start runtime:', err);
+          }
+        },
+      });
+    }
+
+    // Current runtime info and actions
+    const currentRuntime = allRuntimes.find(r => r.id === currentRuntimeId);
+    if (currentRuntime) {
+      items.push({ type: 'divider' });
+      items.push({
+        type: 'header',
+        label: 'Current Runtime',
+      });
+
+      items.push({
+        type: 'info',
+        label: 'ID',
+        value: currentRuntime.id,
+      });
+      items.push({
+        type: 'info',
+        label: 'Port',
+        value: String(currentRuntime.port || 'N/A'),
+      });
+      if (currentRuntime.pid) {
+        items.push({
+          type: 'info',
+          label: 'PID',
+          value: String(currentRuntime.pid),
+        });
+      }
+      items.push({
+        type: 'info',
+        label: 'Venv',
+        value: currentRuntime.venv || 'System Python',
+      });
+
+      items.push({ type: 'divider' });
+      items.push({
+        icon: '💀',
+        label: 'Kill runtime',
+        onClick: async () => {
+          await handlers.onKillRuntime?.(currentRuntime.id);
+          cachedRuntimes = null;
+          render();
+        },
+      });
+    }
+
+    // Refresh action
+    items.push({ type: 'divider' });
+    items.push({
+      icon: '🔄',
+      label: 'Refresh',
+      onClick: async () => {
+        cachedRuntimes = null;
+        cachedVenvs = null;
+        await fetchRuntimes();
+        render();
+      },
+    });
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment,
+      position: 'bottom-right',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Initial fetch
+  fetchRuntimes().then(render);
+
+  // Subscribe to state changes
+  const unsubscribe1 = shellState.onPath('runtimes', render);
+  const unsubscribe2 = shellState.onPath('file', render);
+  onCleanup(unsubscribe1);
+  onCleanup(unsubscribe2);
+  onCleanup(() => currentMenu?.close());
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// AI SEGMENT
+// =============================================================================
+
+const JUICE_NAMES$1 = ['Quick', 'Balanced', 'Deep', 'Maximum', 'Ultimate'];
+
+function createAiSegment({ shellState, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment';
+  segment.setAttribute('data-segment', 'ai');
+
+  let currentMenu = null;
+
+  function render() {
+    const ai = shellState.get('ai');
+
+    if (!ai || !ai.running) {
+      segment.innerHTML = `
+        <span class="mrmd-statusbar__icon">✦</span>
+        <span class="mrmd-statusbar__secondary">AI Offline</span>
+      `;
+      segment.classList.add('mrmd-statusbar__segment--disabled');
+      return;
+    }
+
+    segment.classList.remove('mrmd-statusbar__segment--disabled');
+
+    const juiceName = JUICE_NAMES$1[ai.juiceLevel || 0] || 'Quick';
+    const activeClass = ai.active ? 'mrmd-statusbar__segment--active' : '';
+
+    segment.className = `mrmd-statusbar__segment ${activeClass}`;
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__dot mrmd-statusbar__dot--connected"></span>
+      <span class="mrmd-statusbar__icon">✦</span>
+      <span class="mrmd-statusbar__label">AI</span>
+      <span class="mrmd-statusbar__badge">${juiceName}</span>
+      <span class="mrmd-statusbar__chevron">▾</span>
+    `;
+  }
+
+  function openMenu() {
+    if (currentMenu) {
+      currentMenu.close();
+      return;
+    }
+
+    const ai = shellState.get('ai') || {};
+
+    const items = [
+      {
+        type: 'header',
+        label: 'AI Assistant',
+      },
+      {
+        type: 'info',
+        label: 'Status',
+        value: ai.running ? 'Running' : 'Offline',
+      },
+      { type: 'divider' },
+      {
+        icon: '⚡',
+        label: 'Quick (Fastest)',
+        selected: ai.juiceLevel === 0,
+        onClick: () => handlers.onSetJuiceLevel?.(0),
+      },
+      {
+        icon: '⚖️',
+        label: 'Balanced',
+        selected: ai.juiceLevel === 1,
+        onClick: () => handlers.onSetJuiceLevel?.(1),
+      },
+      {
+        icon: '🔍',
+        label: 'Deep',
+        selected: ai.juiceLevel === 2,
+        onClick: () => handlers.onSetJuiceLevel?.(2),
+      },
+      {
+        icon: '💪',
+        label: 'Maximum',
+        selected: ai.juiceLevel === 3,
+        onClick: () => handlers.onSetJuiceLevel?.(3),
+      },
+      {
+        icon: '🚀',
+        label: 'Ultimate (Multi-Model)',
+        selected: ai.juiceLevel === 4,
+        onClick: () => handlers.onSetJuiceLevel?.(4),
+      },
+      { type: 'divider' },
+      {
+        icon: '📝',
+        label: 'Continue Document',
+        onClick: () => handlers.onContinueDocument?.(),
+        description: 'AI writes at the end of document',
+      },
+      {
+        icon: '📋',
+        label: 'Summarize Document',
+        onClick: () => handlers.onSummarizeDocument?.(),
+      },
+      {
+        icon: '📛',
+        label: 'Suggest Filename',
+        onClick: () => handlers.onSuggestFilename?.(),
+      },
+    ];
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment,
+      position: 'bottom-right',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to state changes
+  const unsubscribe = shellState.onPath('ai', render);
+  onCleanup(unsubscribe);
+  onCleanup(() => currentMenu?.close());
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// THEME SEGMENT
+// =============================================================================
+
+function createThemeSegment({ editorRef, shellState, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment';
+  segment.setAttribute('data-segment', 'theme');
+
+  let currentMenu = null;
+  let currentTheme = null;
+
+  function getThemeName() {
+    const editor = editorRef.current;
+    // Try to get theme from editor config
+    if (editor?.config?.appearance?.theme) {
+      return editor.config.appearance.theme;
+    }
+    // Fall back to shell state
+    return shellState.get('theme') || 'auto';
+  }
+
+  function getAvailableThemes() {
+    const editor = editorRef.current;
+    if (editor?.getThemeNames) {
+      return editor.getThemeNames();
+    }
+    // Fallback to known themes
+    return ['midnight', 'daylight', 'github', 'nord', 'nord-outputs'];
+  }
+
+  function render() {
+    currentTheme = getThemeName();
+    const displayName = currentTheme === 'auto' ? 'Auto' : currentTheme;
+
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__icon">🎨</span>
+      <span class="mrmd-statusbar__label">${displayName}</span>
+      <span class="mrmd-statusbar__chevron">▾</span>
+    `;
+  }
+
+  function openMenu() {
+    if (currentMenu) {
+      currentMenu.close();
+      return;
+    }
+
+    const themes = getAvailableThemes();
+    currentTheme = getThemeName();
+
+    const items = [
+      {
+        type: 'header',
+        label: 'Theme',
+      },
+      {
+        icon: '🌗',
+        label: 'Auto (System)',
+        selected: currentTheme === 'auto' || currentTheme === null,
+        onClick: () => {
+          handlers.onSetTheme?.(null);
+          render();
+        },
+      },
+      { type: 'divider' },
+    ];
+
+    // Add available themes
+    for (const theme of themes) {
+      const icon = theme.includes('dark') || theme === 'midnight' || theme === 'nord' || theme === 'nord-outputs'
+        ? '🌙'
+        : '☀️';
+
+      items.push({
+        icon,
+        label: theme.charAt(0).toUpperCase() + theme.slice(1).replace('-', ' '),
+        selected: currentTheme === theme,
+        onClick: () => {
+          handlers.onSetTheme?.(theme);
+          render();
+        },
+      });
+    }
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment,
+      position: 'bottom-right',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to theme changes in shell state
+  const unsubscribe = shellState.onPath('theme', render);
+  onCleanup(unsubscribe);
+  onCleanup(() => currentMenu?.close());
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// RUNTIMES SEGMENT (Project-wide runtime management)
+// =============================================================================
+
+function createRuntimesSegment({ shellState, orchestratorClient, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment mrmd-statusbar__segment--runtimes';
+  segment.setAttribute('data-segment', 'runtimes');
+
+  let currentMenu = null;
+  let cachedRuntimes = null;
+  let lastFetchTime = 0;
+  const CACHE_TTL = 3000; // 3 seconds
+
+  async function fetchRuntimes() {
+    const now = Date.now();
+    if (now - lastFetchTime < CACHE_TTL && cachedRuntimes) {
+      return cachedRuntimes;
+    }
+
+    try {
+      cachedRuntimes = await orchestratorClient.listRuntimes();
+      lastFetchTime = now;
+      return cachedRuntimes;
+    } catch (error) {
+      console.error('Failed to list runtimes:', error);
+      return cachedRuntimes || { shared: null, dedicated: [], sessions: [], project: {} };
+    }
+  }
+
+  function render() {
+    const python = shellState.get('runtimes.python');
+    const project = shellState.get('project') || {};
+
+    // Count active runtimes
+    let runtimeCount = 0;
+    if (python?.running || python?.status === 'ready') runtimeCount++;
+
+    const sessions = shellState.getSessions();
+    const dedicatedCount = sessions.filter(s => s.info?.dedicated).length;
+    runtimeCount += dedicatedCount;
+
+    // Project name
+    const projectName = project.name || 'mrmd';
+
+    // Status dot
+    const hasActiveRuntime = runtimeCount > 0;
+    const dotClass = hasActiveRuntime ? 'connected' : 'disconnected';
+
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__dot mrmd-statusbar__dot--${dotClass}"></span>
+      <span class="mrmd-statusbar__icon">⚡</span>
+      <span class="mrmd-statusbar__label">${projectName}</span>
+      ${runtimeCount > 0 ? `<span class="mrmd-statusbar__badge">${runtimeCount} runtime${runtimeCount > 1 ? 's' : ''}</span>` : ''}
+      <span class="mrmd-statusbar__chevron">▾</span>
+    `;
+  }
+
+  async function openMenu() {
+    if (currentMenu) {
+      currentMenu.close();
+      return;
+    }
+
+    const runtimes = await fetchRuntimes();
+    const items = [];
+
+    // Project section
+    const project = runtimes.project || {};
+    items.push({
+      type: 'header',
+      label: 'Project',
+    });
+    items.push({
+      type: 'info',
+      label: 'Name',
+      value: project.name || 'unknown',
+    });
+    items.push({
+      type: 'info',
+      label: 'Root',
+      value: shortenPath(project.root, 35),
+    });
+    if (project.venv) {
+      items.push({
+        type: 'info',
+        label: 'Venv',
+        value: shortenPath(project.venv, 35),
+      });
+    }
+
+    // Get current doc attachment info
+    const currentDocName = shellState.get('file')?.name || 'untitled';
+    const attachments = shellState.get('runtimes.attachments') || {};
+    const currentAttachedId = attachments[currentDocName] || 'shared';
+    const isAttachedToShared = currentAttachedId === 'shared';
+
+    // Shared Runtime section
+    items.push({ type: 'divider' });
+    items.push({
+      type: 'header',
+      label: 'Shared Runtime',
+    });
+
+    if (runtimes.shared && runtimes.shared.alive) {
+      const venvPath = runtimes.shared.venv || 'System Python';
+      items.push({
+        icon: isAttachedToShared ? '✓' : '●',
+        label: shortenPath(venvPath, 40),
+        description: `port ${runtimes.shared.port || '?'}`,
+        active: isAttachedToShared,
+        onClick: () => {
+          // Attach current document to shared runtime
+          shellState.attachDocument(currentDocName, 'shared');
+          shellState._set('runtimes.sessions.shared', {
+            id: 'shared',
+            url: runtimes.shared.url,
+            venv: runtimes.shared.venv,
+            alive: runtimes.shared.alive,
+          });
+          handlers.onRuntimeAttached?.(currentDocName, 'shared', runtimes.shared.url);
+          render();
+        },
+      });
+      items.push({
+        icon: '💀',
+        label: 'Kill shared runtime',
+        description: 'Release memory, restarts on next exec',
+        onClick: async () => {
+          await handlers.onKillRuntime?.('shared');
+          // Refresh after a moment
+          setTimeout(render, 500);
+        },
+      });
+    } else {
+      items.push({
+        type: 'info',
+        label: 'Status',
+        value: '○ Not running',
+      });
+      items.push({
+        type: 'info',
+        label: '',
+        value: 'Starts on first code execution',
+      });
+    }
+
+    // Dedicated Runtimes section
+    if (runtimes.dedicated && runtimes.dedicated.length > 0) {
+      items.push({ type: 'divider' });
+      items.push({
+        type: 'header',
+        label: `Dedicated Runtimes (${runtimes.dedicated.length})`,
+      });
+
+      for (const rt of runtimes.dedicated) {
+        const statusIcon = rt.alive ? '●' : '○';
+        const isAttached = rt.id === currentAttachedId;
+        // Show full venv path for clarity
+        const venvPath = rt.venv || 'unknown';
+        items.push({
+          icon: isAttached ? '✓' : statusIcon,
+          label: shortenPath(venvPath, 40),
+          description: `port ${rt.port || '?'}`,
+          active: isAttached,
+          onClick: rt.alive ? () => {
+            // Attach current document to this runtime
+            shellState.attachDocument(currentDocName, rt.id);
+            shellState._set(`runtimes.sessions.${rt.id}`, {
+              id: rt.id,
+              url: rt.url,
+              venv: rt.venv,
+              alive: rt.alive,
+            });
+            handlers.onRuntimeAttached?.(currentDocName, rt.id, rt.url);
+            render();
+          } : undefined,
+        });
+        // Individual kill button for this runtime
+        if (rt.alive) {
+          items.push({
+            icon: '💀',
+            label: `Kill this runtime`,
+            description: `PID ${rt.pid || '?'}`,
+            onClick: async () => {
+              await handlers.onKillRuntime?.(rt.id);
+              setTimeout(render, 500);
+            },
+          });
+        }
+      }
+    }
+
+    // Start New Runtime section
+    items.push({ type: 'divider' });
+    items.push({
+      type: 'header',
+      label: 'Start New Runtime',
+    });
+
+    // Fetch available venvs
+    let venvs = [];
+    try {
+      const result = await orchestratorClient.listVenvs();
+      venvs = result.venvs || [];
+    } catch (e) {
+      console.warn('Failed to fetch venvs:', e);
+    }
+
+    // Get all running runtimes to check which venvs are already running
+    const allRuntimes = [
+      runtimes.shared,
+      ...(runtimes.dedicated || []),
+    ].filter(Boolean);
+
+    // Show available venvs that aren't already running
+    let hasAvailableVenvs = false;
+    for (const venv of venvs) {
+      const isRunning = allRuntimes.some(r => r.venv === venv.path);
+      if (isRunning) continue;
+
+      hasAvailableVenvs = true;
+      items.push({
+        icon: '▶',
+        label: `${venv.name} (${venv.version})`,
+        onClick: async () => {
+          try {
+            await orchestratorClient.startRuntime({ venv: venv.path });
+            // Refresh
+            cachedRuntimes = null;
+            lastFetchTime = 0;
+            render();
+          } catch (err) {
+            console.error('Failed to start runtime:', err);
+          }
+        },
+      });
+    }
+
+    if (!hasAvailableVenvs) {
+      items.push({
+        type: 'info',
+        label: 'All detected venvs',
+        value: 'already running',
+      });
+    }
+
+    // Browse for custom venv
+    items.push({
+      icon: '📂',
+      label: 'Browse for venv...',
+      onClick: () => {
+        // Close the menu first
+        currentMenu?.close();
+        currentMenu = null;
+
+        showFolderPicker({
+          title: 'Select Virtual Environment',
+          orchestratorClient,
+          initialPath: runtimes.project?.root || '~',
+          showHidden: true, // Show .venv folders
+          onSelect: async (venvPath) => {
+            try {
+              // Start a new runtime with this venv
+              const result = await orchestratorClient.startRuntime({ venv: venvPath });
+              if (result.success) {
+                console.log('Started new runtime:', result.runtime);
+                // Refresh the display
+                cachedRuntimes = null;
+                lastFetchTime = 0;
+                render();
+              }
+            } catch (err) {
+              console.error('Failed to start runtime:', err);
+              alert(`Failed to start runtime: ${err.message}`);
+            }
+          },
+        });
+      },
+    });
+
+    // Sessions section
+    if (runtimes.sessions && runtimes.sessions.length > 0) {
+      items.push({ type: 'divider' });
+      items.push({
+        type: 'header',
+        label: `Active Sessions (${runtimes.sessions.length})`,
+      });
+
+      for (const session of runtimes.sessions) {
+        if (!session) continue;
+        // Get attached runtime for this session's doc
+        const docAttachment = attachments[session.doc] || 'shared';
+        const attachedRuntime = docAttachment === 'shared'
+          ? runtimes.shared
+          : runtimes.dedicated?.find(r => r.id === docAttachment);
+        const runtimeLabel = attachedRuntime?.venv
+          ? attachedRuntime.venv.split('/').slice(-2).join('/')
+          : docAttachment;
+
+        items.push({
+          icon: '📄',
+          label: session.doc,
+          description: runtimeLabel,
+        });
+        items.push({
+          icon: '✖',
+          label: `Close "${session.doc}" session`,
+          description: 'Stops monitor',
+          onClick: async () => {
+            try {
+              await orchestratorClient.destroySession(session.doc);
+              cachedRuntimes = null;
+              lastFetchTime = 0;
+              render();
+            } catch (err) {
+              console.error('Failed to close session:', err);
+            }
+          },
+        });
+      }
+    }
+
+    // Actions section
+    items.push({ type: 'divider' });
+    items.push({
+      icon: '🔄',
+      label: 'Refresh',
+      onClick: async () => {
+        cachedRuntimes = null;
+        lastFetchTime = 0;
+        await shellState.refresh();
+        render();
+      },
+    });
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment,
+      position: 'bottom-right',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to state changes
+  const unsubscribe1 = shellState.onPath('runtimes', render);
+  const unsubscribe2 = shellState.onPath('project', render);
+  const unsubscribe3 = shellState.onPath('orchestrator.services', render);
+  onCleanup(unsubscribe1);
+  onCleanup(unsubscribe2);
+  onCleanup(unsubscribe3);
+  onCleanup(() => currentMenu?.close());
+
+  // Initial fetch of project info
+  orchestratorClient.getProject().then(project => {
+    shellState._set('project', project);
+  }).catch(() => {});
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// SIMPLE SEGMENT - Filename + Runtime Dot
+// =============================================================================
+
+/**
+ * Simplified status bar: just filename on left, runtime dot on right.
+ * Clicking the dot opens a two-section menu:
+ * 1. Running runtimes (attach or kill)
+ * 2. Available venvs (start new runtime)
+ */
+function createSimpleSegment({ shellState, orchestratorClient, handlers, onCleanup }) {
+  const segment = document.createElement('div');
+  segment.className = 'mrmd-statusbar__segment mrmd-statusbar__segment--simple';
+  segment.setAttribute('data-segment', 'simple');
+  segment.style.cssText = 'display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 0 12px;';
+
+  let currentMenu = null;
+  let runtimeState = 'disconnected'; // 'connected', 'disconnected', 'error'
+
+  function render() {
+    const file = shellState.get('file');
+    const filename = file?.name || 'untitled';
+    const attachments = shellState.get('runtimes.attachments') || {};
+    const attachedRuntimeId = attachments[filename] || 'shared';
+
+    // Determine dot state
+    const sessions = shellState.get('runtimes.sessions') || {};
+    const attachedRuntime = sessions[attachedRuntimeId];
+
+    if (attachedRuntime?.alive) {
+      runtimeState = 'connected';
+    } else if (runtimeState === 'error') ; else {
+      runtimeState = 'disconnected';
+    }
+
+    const dotColors = {
+      connected: '#4ade80',     // Green
+      disconnected: '#6b7280', // Gray
+      error: '#ef4444',        // Red
+    };
+    const dotColor = dotColors[runtimeState];
+    const dotTitle = {
+      connected: 'Runtime connected - click to manage',
+      disconnected: 'No runtime - click to select venv',
+      error: 'No venv selected - click to pick one',
+    }[runtimeState];
+
+    segment.innerHTML = `
+      <span class="mrmd-statusbar__filename" style="font-weight: 500;">${filename}</span>
+      <span class="mrmd-statusbar__runtime-dot"
+            style="width: 10px; height: 10px; border-radius: 50%; background: ${dotColor}; cursor: pointer; ${runtimeState === 'error' ? 'animation: blink 1s infinite;' : ''}"
+            title="${dotTitle}"></span>
+    `;
+
+    // Add blink animation if needed
+    if (runtimeState === 'error' && !document.getElementById('mrmd-blink-style')) {
+      const style = document.createElement('style');
+      style.id = 'mrmd-blink-style';
+      style.textContent = '@keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.3; } }';
+      document.head.appendChild(style);
+    }
+  }
+
+  async function openMenu(e) {
+    // Only open menu when clicking the dot
+    if (!e.target.classList.contains('mrmd-statusbar__runtime-dot')) {
+      return;
+    }
+
+    if (currentMenu) {
+      currentMenu.close();
+      currentMenu = null;
+      return;
+    }
+
+    const items = [];
+    const file = shellState.get('file');
+    const filename = file?.name || 'untitled';
+    const attachments = shellState.get('runtimes.attachments') || {};
+    const currentAttachedId = attachments[filename] || 'shared';
+
+    // Fetch runtimes and venvs
+    let runtimes = [];
+    let venvs = [];
+    try {
+      const [runtimesResult, venvResult] = await Promise.all([
+        orchestratorClient.listRuntimes(),
+        orchestratorClient.listVenvs(),
+      ]);
+
+      // Combine shared and dedicated runtimes
+      if (runtimesResult.shared) {
+        runtimes.push({ ...runtimesResult.shared, id: 'shared' });
+      }
+      if (runtimesResult.dedicated) {
+        runtimes.push(...runtimesResult.dedicated);
+      }
+      venvs = venvResult.venvs || [];
+    } catch (err) {
+      console.error('Failed to fetch runtimes/venvs:', err);
+    }
+
+    // Section 1: Running Runtimes
+    items.push({
+      type: 'header',
+      label: 'Running Runtimes',
+    });
+
+    const aliveRuntimes = runtimes.filter(r => r.alive);
+    if (aliveRuntimes.length === 0) {
+      items.push({
+        type: 'info',
+        label: 'No runtimes running',
+        value: 'Start one below',
+      });
+    } else {
+      for (const rt of aliveRuntimes) {
+        const isAttached = rt.id === currentAttachedId;
+        const venvPath = rt.venv || 'System Python';
+        const shortPath = venvPath.split('/').slice(-2).join('/');
+
+        items.push({
+          icon: isAttached ? '✓' : '●',
+          label: shortPath,
+          description: `port ${rt.port}`,
+          active: isAttached,
+          onClick: () => {
+            // Attach to this runtime
+            shellState.attachDocument(filename, rt.id);
+            shellState._set(`runtimes.sessions.${rt.id}`, {
+              id: rt.id,
+              url: rt.url,
+              venv: rt.venv,
+              alive: rt.alive,
+            });
+            runtimeState = 'connected';
+            handlers.onRuntimeAttached?.(filename, rt.id, rt.url);
+            render();
+          },
+        });
+
+        // Kill button for this runtime
+        items.push({
+          icon: '×',
+          label: `Stop ${rt.id === 'shared' ? 'shared' : 'this'} runtime`,
+          onClick: async () => {
+            try {
+              await orchestratorClient.killRuntime(rt.id);
+              currentMenu?.close();
+              currentMenu = null;
+              render();
+            } catch (err) {
+              console.error('Failed to kill runtime:', err);
+            }
+          },
+        });
+      }
+    }
+
+    // Section 2: Available Venvs
+    items.push({ type: 'divider' });
+    items.push({
+      type: 'header',
+      label: 'Start New Runtime',
+    });
+
+    // Filter out venvs that already have running runtimes
+    const runningVenvPaths = new Set(aliveRuntimes.map(r => r.venv).filter(Boolean));
+    const availableVenvs = venvs.filter(v => !runningVenvPaths.has(v.path));
+
+    if (availableVenvs.length === 0 && venvs.length > 0) {
+      items.push({
+        type: 'info',
+        label: 'All venvs already running',
+      });
+    } else if (venvs.length === 0) {
+      items.push({
+        type: 'info',
+        label: 'No venvs found',
+        value: 'Browse to add one',
+      });
+    } else {
+      for (const venv of availableVenvs.slice(0, 5)) { // Show max 5
+        const shortPath = venv.path ? venv.path.split('/').slice(-2).join('/') : venv.name;
+        items.push({
+          icon: '▶',
+          label: shortPath,
+          description: `Python ${venv.version}`,
+          onClick: async () => {
+            try {
+              const result = await orchestratorClient.startRuntime({ venv: venv.path });
+              if (result.success) {
+                // Auto-attach to new runtime
+                const newRuntime = result.runtime;
+                shellState.attachDocument(filename, newRuntime.id);
+                shellState._set(`runtimes.sessions.${newRuntime.id}`, {
+                  id: newRuntime.id,
+                  url: newRuntime.url,
+                  venv: newRuntime.venv,
+                  alive: true,
+                });
+                runtimeState = 'connected';
+                handlers.onRuntimeAttached?.(filename, newRuntime.id, newRuntime.url);
+              }
+              currentMenu?.close();
+              currentMenu = null;
+              render();
+            } catch (err) {
+              console.error('Failed to start runtime:', err);
+            }
+          },
+        });
+      }
+    }
+
+    // Search for more venvs
+    items.push({
+      icon: '🔍',
+      label: 'Search for more venvs...',
+      onClick: async () => {
+        currentMenu?.close();
+        currentMenu = null;
+
+        // Show loading indicator
+        const loadingDiv = document.createElement('div');
+        loadingDiv.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--mrmd-bg-secondary, #1e1e1e); padding: 20px; border-radius: 8px; z-index: 10000;';
+        loadingDiv.textContent = 'Searching for venvs...';
+        document.body.appendChild(loadingDiv);
+
+        try {
+          const result = await orchestratorClient.searchVenvs();
+          loadingDiv.remove();
+
+          if (result.count > 0) {
+            alert(`Found ${result.count} venvs. Click the dot again to see them.`);
+          } else {
+            alert('No additional venvs found.');
+          }
+        } catch (err) {
+          loadingDiv.remove();
+          console.error('Search failed:', err);
+          alert(`Search failed: ${err.message}`);
+        }
+      },
+    });
+
+    // Browse option
+    items.push({
+      icon: '📂',
+      label: 'Browse for venv...',
+      onClick: () => {
+        currentMenu?.close();
+        currentMenu = null;
+
+        showFolderPicker({
+          title: 'Select Virtual Environment',
+          orchestratorClient,
+          initialPath: file?.root || '~',
+          showHidden: true,
+          onSelect: async (venvPath) => {
+            try {
+              const result = await orchestratorClient.startRuntime({ venv: venvPath });
+              if (result.success) {
+                const newRuntime = result.runtime;
+                shellState.attachDocument(filename, newRuntime.id);
+                shellState._set(`runtimes.sessions.${newRuntime.id}`, {
+                  id: newRuntime.id,
+                  url: newRuntime.url,
+                  venv: newRuntime.venv,
+                  alive: true,
+                });
+                runtimeState = 'connected';
+                handlers.onRuntimeAttached?.(filename, newRuntime.id, newRuntime.url);
+                render();
+              }
+            } catch (err) {
+              console.error('Failed to start runtime:', err);
+              alert(`Failed to start runtime: ${err.message}`);
+            }
+          },
+        });
+      },
+    });
+
+    currentMenu = createMenu({
+      items,
+      anchor: segment.querySelector('.mrmd-statusbar__runtime-dot'),
+      position: 'top-right',
+      onClose: () => { currentMenu = null; },
+    });
+  }
+
+  // Set error state when Python execution fails without venv
+  function setErrorState() {
+    runtimeState = 'error';
+    render();
+  }
+
+  segment.addEventListener('click', openMenu);
+
+  // Subscribe to state changes
+  const unsubscribe1 = shellState.onPath('file', render);
+  const unsubscribe2 = shellState.onPath('runtimes', render);
+  onCleanup(unsubscribe1);
+  onCleanup(unsubscribe2);
+  onCleanup(() => currentMenu?.close());
+
+  // Expose setErrorState for external use
+  segment.setErrorState = setErrorState;
+
+  render();
+  return segment;
+}
+
+// =============================================================================
+// HELPERS
+// =============================================================================
+
+function shortenPath(path, maxLength = 25) {
+  if (!path) return '';
+  if (path.length <= maxLength) return path;
+  return '...' + path.slice(-(maxLength - 3));
+}
+
+/**
+ * @fileoverview Shell component styles
+ *
+ * Uses the editor's theme tokens for consistent styling.
+ * All styles use CSS custom properties that inherit from the theme.
+ */
+
+// =============================================================================
+// STATUS BAR STYLES
+// =============================================================================
+
+const statusBarStyles = `
+/* Status Bar Container */
+.mrmd-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 24px;
+  font-family: var(--mrmd-ui-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: var(--mrmd-ui-font-size-sm, 12px);
+  background: var(--mrmd-statusbar-bg, var(--mrmd-panel-bg, #1e1e1e));
+  border-top: 1px solid var(--mrmd-statusbar-border, var(--mrmd-border, #333));
+  color: var(--mrmd-statusbar-fg, var(--mrmd-fg-muted, #999));
+  user-select: none;
+  overflow: hidden;
+}
+
+.mrmd-statusbar--top {
+  border-top: none;
+  border-bottom: 1px solid var(--mrmd-statusbar-border, var(--mrmd-border, #333));
+}
+
+/* Status Bar Segment */
+.mrmd-statusbar__segment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  height: 100%;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mrmd-statusbar__segment:hover {
+  background: var(--mrmd-statusbar-hover, var(--mrmd-hover-bg, rgba(255, 255, 255, 0.05)));
+}
+
+.mrmd-statusbar__segment:active {
+  background: var(--mrmd-statusbar-active, var(--mrmd-active-bg, rgba(255, 255, 255, 0.08)));
+}
+
+.mrmd-statusbar__segment--disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.mrmd-statusbar__segment--disabled:hover {
+  background: transparent;
+}
+
+/* Segment parts */
+.mrmd-statusbar__icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mrmd-statusbar__label {
+  color: var(--mrmd-statusbar-fg, var(--mrmd-fg, #ccc));
+}
+
+.mrmd-statusbar__secondary {
+  color: var(--mrmd-statusbar-fg-muted, var(--mrmd-fg-muted, #666));
+}
+
+.mrmd-statusbar__chevron {
+  font-size: 8px;
+  opacity: 0.5;
+  margin-left: 2px;
+}
+
+/* Status indicator dot */
+.mrmd-statusbar__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mrmd-statusbar__dot--connected,
+.mrmd-statusbar__dot--ready,
+.mrmd-statusbar__dot--running {
+  background: var(--mrmd-success, #4caf50);
+}
+
+.mrmd-statusbar__dot--disconnected,
+.mrmd-statusbar__dot--stopped {
+  background: var(--mrmd-fg-muted, #666);
+}
+
+.mrmd-statusbar__dot--error {
+  background: var(--mrmd-error, #f44336);
+}
+
+.mrmd-statusbar__dot--starting {
+  background: var(--mrmd-warning, #ff9800);
+  animation: mrmd-statusbar-pulse 1s ease-in-out infinite;
+}
+
+@keyframes mrmd-statusbar-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Separator */
+.mrmd-statusbar__separator {
+  width: 1px;
+  height: 14px;
+  background: var(--mrmd-statusbar-separator, var(--mrmd-border, #333));
+  margin: 0 2px;
+}
+
+/* Spacer (pushes remaining items to the right) */
+.mrmd-statusbar__spacer {
+  flex: 1;
+}
+
+/* Warning badge for outside-project files */
+.mrmd-statusbar__warning {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  background: var(--mrmd-warning, #ff9800);
+  color: #000;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: bold;
+}
+
+/* Generic badge (e.g., "dedicated" for runtime) */
+.mrmd-statusbar__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  background: var(--mrmd-accent, #007acc);
+  color: #fff;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-left: 4px;
+}
+
+/* Unified files segment - takes more space */
+.mrmd-statusbar__segment--files {
+  min-width: 120px;
+  flex-shrink: 1;
+}
+
+.mrmd-statusbar__segment--files .mrmd-statusbar__secondary {
+  margin-left: auto;
+  font-size: 10px;
+}
+`;
+
+// =============================================================================
+// MENU STYLES
+// =============================================================================
+
+const menuStyles = `
+/* Dropdown Menu */
+.mrmd-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 180px;
+  max-width: 320px;
+  max-height: 400px;
+  overflow-y: auto;
+  background: var(--mrmd-menu-bg, var(--mrmd-popup-bg, #252526));
+  border: 1px solid var(--mrmd-menu-border, var(--mrmd-border, #454545));
+  border-radius: 6px;
+  box-shadow: var(--mrmd-shadow-lg, 0 8px 32px rgba(0, 0, 0, 0.4));
+  padding: 4px 0;
+  font-family: var(--mrmd-ui-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: var(--mrmd-ui-font-size, 13px);
+}
+
+.mrmd-menu--hidden {
+  display: none;
+}
+
+/* Menu Header */
+.mrmd-menu__header {
+  padding: 8px 12px 6px;
+  font-size: var(--mrmd-ui-font-size-sm, 11px);
+  font-weight: 600;
+  color: var(--mrmd-fg-muted, #888);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Menu Item */
+.mrmd-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  cursor: pointer;
+  color: var(--mrmd-fg, #ccc);
+  transition: background-color 0.1s ease;
+}
+
+.mrmd-menu__item:hover {
+  background: var(--mrmd-menu-hover, var(--mrmd-hover-bg, rgba(255, 255, 255, 0.08)));
+}
+
+.mrmd-menu__item--active {
+  background: var(--mrmd-menu-active, var(--mrmd-selection-bg, rgba(0, 122, 204, 0.3)));
+}
+
+.mrmd-menu__item--disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.mrmd-menu__item--disabled:hover {
+  background: transparent;
+}
+
+/* Menu Item Parts */
+.mrmd-menu__item-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+
+.mrmd-menu__item-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mrmd-menu__item-shortcut {
+  flex-shrink: 0;
+  font-size: var(--mrmd-ui-font-size-sm, 11px);
+  color: var(--mrmd-fg-muted, #666);
+}
+
+.mrmd-menu__item-check {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  color: var(--mrmd-accent, #007acc);
+}
+
+/* Menu Divider */
+.mrmd-menu__divider {
+  height: 1px;
+  background: var(--mrmd-menu-divider, var(--mrmd-border, #333));
+  margin: 4px 8px;
+}
+
+/* Menu Info Row (readonly info display) */
+.mrmd-menu__info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  color: var(--mrmd-fg-muted, #888);
+  font-size: var(--mrmd-ui-font-size-sm, 11px);
+}
+
+.mrmd-menu__info-label {
+  flex-shrink: 0;
+}
+
+.mrmd-menu__info-value {
+  flex: 1;
+  text-align: right;
+  color: var(--mrmd-fg, #ccc);
+}
+
+/* File browser in menu */
+.mrmd-menu__file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  color: var(--mrmd-fg, #ccc);
+}
+
+.mrmd-menu__file:hover {
+  background: var(--mrmd-menu-hover, var(--mrmd-hover-bg, rgba(255, 255, 255, 0.08)));
+}
+
+.mrmd-menu__file--current {
+  background: var(--mrmd-menu-active, var(--mrmd-selection-bg, rgba(0, 122, 204, 0.2)));
+}
+
+.mrmd-menu__file-icon {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+}
+
+.mrmd-menu__file-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mrmd-menu__file-indicator {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--mrmd-accent, #007acc);
+}
+`;
+
+// =============================================================================
+// DIALOG STYLES
+// =============================================================================
+
+const dialogStyles = `
+/* Dialog Overlay */
+.mrmd-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1001;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.mrmd-dialog-overlay--hidden {
+  display: none;
+}
+
+/* Dialog */
+.mrmd-dialog {
+  background: var(--mrmd-dialog-bg, var(--mrmd-popup-bg, #252526));
+  border: 1px solid var(--mrmd-dialog-border, var(--mrmd-border, #454545));
+  border-radius: 8px;
+  box-shadow: var(--mrmd-shadow-xl, 0 16px 48px rgba(0, 0, 0, 0.5));
+  min-width: 320px;
+  max-width: 560px;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  font-family: var(--mrmd-ui-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: var(--mrmd-ui-font-size, 13px);
+  color: var(--mrmd-fg, #ccc);
+}
+
+/* Dialog Header */
+.mrmd-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--mrmd-border, #333);
+}
+
+.mrmd-dialog__title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.mrmd-dialog__close {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--mrmd-fg-muted, #888);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 18px;
+}
+
+.mrmd-dialog__close:hover {
+  background: var(--mrmd-hover-bg, rgba(255, 255, 255, 0.08));
+  color: var(--mrmd-fg, #ccc);
+}
+
+/* Dialog Body */
+.mrmd-dialog__body {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+/* Dialog Footer */
+.mrmd-dialog__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--mrmd-border, #333);
+}
+
+/* Input */
+.mrmd-input {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--mrmd-input-bg, var(--mrmd-bg, #1e1e1e));
+  border: 1px solid var(--mrmd-input-border, var(--mrmd-border, #454545));
+  border-radius: 4px;
+  color: var(--mrmd-fg, #ccc);
+  font-family: inherit;
+  font-size: inherit;
+  outline: none;
+}
+
+.mrmd-input:focus {
+  border-color: var(--mrmd-accent, #007acc);
+  box-shadow: 0 0 0 1px var(--mrmd-accent, #007acc);
+}
+
+.mrmd-input::placeholder {
+  color: var(--mrmd-fg-muted, #666);
+}
+
+/* Label */
+.mrmd-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: var(--mrmd-ui-font-size-sm, 12px);
+  color: var(--mrmd-fg-muted, #888);
+}
+
+/* Button */
+.mrmd-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: var(--mrmd-button-bg, #3c3c3c);
+  border: 1px solid var(--mrmd-button-border, #5a5a5a);
+  border-radius: 4px;
+  color: var(--mrmd-fg, #ccc);
+  font-family: inherit;
+  font-size: var(--mrmd-ui-font-size, 13px);
+  cursor: pointer;
+  transition: background-color 0.1s ease;
+}
+
+.mrmd-button:hover {
+  background: var(--mrmd-button-hover, #4a4a4a);
+}
+
+.mrmd-button:active {
+  background: var(--mrmd-button-active, #555);
+}
+
+.mrmd-button--primary {
+  background: var(--mrmd-accent, #007acc);
+  border-color: var(--mrmd-accent, #007acc);
+  color: #fff;
+}
+
+.mrmd-button--primary:hover {
+  background: var(--mrmd-accent-hover, #0098ff);
+}
+
+.mrmd-button--danger {
+  background: var(--mrmd-error, #d32f2f);
+  border-color: var(--mrmd-error, #d32f2f);
+  color: #fff;
+}
+
+.mrmd-button--danger:hover {
+  background: #e53935;
+}
+`;
+
+// =============================================================================
+// FILE PICKER STYLES
+// =============================================================================
+
+const filePickerStyles = `
+/* File Picker */
+.mrmd-filepicker {
+  min-height: 300px;
+}
+
+/* Path bar */
+.mrmd-filepicker__path {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--mrmd-border, #333);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.mrmd-filepicker__path-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--mrmd-fg-muted, #888);
+}
+
+.mrmd-filepicker__path-segment:hover {
+  background: var(--mrmd-hover-bg, rgba(255, 255, 255, 0.08));
+  color: var(--mrmd-fg, #ccc);
+}
+
+.mrmd-filepicker__path-separator {
+  color: var(--mrmd-fg-muted, #666);
+}
+
+/* File list */
+.mrmd-filepicker__list {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.mrmd-filepicker__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.mrmd-filepicker__item:hover {
+  background: var(--mrmd-hover-bg, rgba(255, 255, 255, 0.05));
+}
+
+.mrmd-filepicker__item--selected {
+  background: var(--mrmd-selection-bg, rgba(0, 122, 204, 0.2));
+}
+
+.mrmd-filepicker__item-icon {
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+  font-size: 16px;
+}
+
+.mrmd-filepicker__item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mrmd-filepicker__item-info {
+  flex-shrink: 0;
+  font-size: var(--mrmd-ui-font-size-sm, 11px);
+  color: var(--mrmd-fg-muted, #666);
+}
+
+/* Empty state */
+.mrmd-filepicker__empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--mrmd-fg-muted, #666);
+}
+
+/* New file input */
+.mrmd-filepicker__new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--mrmd-border, #333);
+  margin-top: 8px;
+}
+
+.mrmd-filepicker__new-input {
+  flex: 1;
+}
+`;
+
+// =============================================================================
+// ALL STYLES COMBINED
+// =============================================================================
+// STUDIO STYLES
+// =============================================================================
+
+const studioStyles = `
+/* Studio Container */
+.mrmd-studio {
+  position: relative;
+}
+
+/* Editor Container */
+.mrmd-studio__editor {
+  position: relative;
+}
+
+/* Loading State */
+.mrmd-studio__editor--loading {
+  pointer-events: none;
+}
+
+.mrmd-studio__editor--loading::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--mrmd-bg, #1e1e1e);
+  opacity: 0.7;
+  z-index: 100;
+  animation: mrmd-studio-fade-in 0.15s ease;
+}
+
+@keyframes mrmd-studio-fade-in {
+  from { opacity: 0; }
+  to { opacity: 0.7; }
+}
+
+/* Loading spinner (optional, can be added via pseudo or actual element) */
+.mrmd-studio__editor--loading::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 24px;
+  height: 24px;
+  margin: -12px 0 0 -12px;
+  border: 2px solid var(--mrmd-border, #333);
+  border-top-color: var(--mrmd-accent, #007acc);
+  border-radius: 50%;
+  z-index: 101;
+  animation: mrmd-studio-spin 0.8s linear infinite;
+}
+
+@keyframes mrmd-studio-spin {
+  to { transform: rotate(360deg); }
+}
+`;
+
+// =============================================================================
+// COMBINED STYLES
+// =============================================================================
+
+const shellStyles = `
+${statusBarStyles}
+${menuStyles}
+${dialogStyles}
+${filePickerStyles}
+${studioStyles}
+`;
+
+// =============================================================================
+// STYLE INJECTION
+// =============================================================================
+
+let stylesInjected$3 = false;
+
+/**
+ * Inject shell styles into the document
+ */
+function injectShellStyles$1() {
+  if (stylesInjected$3) return;
+
+  const style = document.createElement('style');
+  style.id = 'mrmd-shell-styles';
+  style.textContent = shellStyles;
+  document.head.appendChild(style);
+
+  stylesInjected$3 = true;
 }
 
 /**
@@ -63752,6 +64298,13 @@ async function createStudio$1(target, options = {}) {
       editor = createEditorForDocument(handle, normalizedName);
       currentDocName = normalizedName;
 
+      // Ensure session exists (starts monitor if needed)
+      try {
+        await orchestratorClient.createSession(normalizedName, 'shared');
+      } catch (e) {
+        console.warn('Failed to create session for', normalizedName, e);
+      }
+
       // Update shell state
       const filesResult = await orchestratorClient.listFiles();
       shellState.setFile({
@@ -63783,6 +64336,13 @@ async function createStudio$1(target, options = {}) {
     const handle = await drive.open(docToOpen);
     editor = createEditorForDocument(handle, docToOpen);
     currentDocName = docToOpen;
+
+    // Ensure session exists (starts monitor if needed)
+    try {
+      await orchestratorClient.createSession(docToOpen, 'shared');
+    } catch (e) {
+      console.warn('Failed to create session for initial doc:', e);
+    }
   } catch (e) {
     console.error('Failed to open initial document:', e);
     throw new Error(`Could not open document "${docToOpen}": ${e.message}`);
@@ -63867,110 +64427,9 @@ async function createStudio$1(target, options = {}) {
       });
     },
 
-    async onChangeVenv() {
-      const python = shellState.get('runtimes.python');
-      const docName = currentDocName;
-
-      showFolderPicker({
-        title: 'Select Virtual Environment',
-        orchestratorClient,
-        initialPath: python?.venv || '~',
-        showHidden: true, // Show hidden folders like .venv
-        onSelect: async (path) => {
-          console.log('[ChangeVenv] onSelect called with path:', path, 'for doc:', docName);
-          try {
-            // Create a dedicated runtime for this document with the selected venv
-            console.log('[ChangeVenv] Calling createSession...');
-            const sessionInfo = await shellState.createSession(docName, 'dedicated', path);
-            console.log('[ChangeVenv] createSession returned:', sessionInfo);
-
-            // Reconnect the editor to the new runtime
-            if (editor?.connectRuntime && sessionInfo.url) {
-              editor.connectRuntime('python', sessionInfo.url);
-            }
-
-            // IMPORTANT: Update ExecutionManager's runtime URL for monitor mode
-            if (editor?.execution?.setRuntimeUrl && sessionInfo.url) {
-              editor.execution.setRuntimeUrl(sessionInfo.url);
-            }
-
-            // Update the legacy python state for status bar display
-            shellState._set('runtimes.python.venv', path);
-            shellState._set('runtimes.python.venvName', path.split('/').pop());
-            shellState._set('runtimes.python.status', 'ready');
-
-            emit('runtimeChanged', { language: 'python', venv: path, dedicated: true });
-          } catch (error) {
-            await confirm({
-              title: 'Error',
-              message: `Failed to create dedicated runtime: ${error.message}`,
-              confirmLabel: 'OK',
-              cancelLabel: '',
-            });
-          }
-        },
-      });
-    },
-
-    async onChangeCwd() {
-      const python = shellState.get('runtimes.python');
-
-      showFolderPicker({
-        title: 'Select Working Directory',
-        orchestratorClient,
-        initialPath: python?.cwd || '~',
-        onSelect: async (path) => {
-          try {
-            await shellState.setCwd(path);
-            emit('runtimeChanged', { language: 'python', cwd: path });
-          } catch (error) {
-            await confirm({
-              title: 'Error',
-              message: `Failed to change working directory: ${error.message}`,
-              confirmLabel: 'OK',
-              cancelLabel: '',
-            });
-          }
-        },
-      });
-    },
-
-    async onRestartRuntime(language) {
-      const docName = currentDocName;
-      if (!docName) {
-        console.warn('[RestartRuntime] No current document');
-        return;
-      }
-
-      try {
-        // Get current session info to preserve venv
-        const python = shellState.get('runtimes.python') || {};
-        const currentVenv = python.venv;
-
-        // Destroy existing session (kills the daemon)
-        await orchestratorClient.destroySession(docName);
-
-        // Small delay to ensure cleanup
-        await new Promise(r => setTimeout(r, 500));
-
-        // Create new session with same venv
-        const sessionInfo = await shellState.createSession(docName, 'dedicated', currentVenv);
-
-        // Reconnect editor to new runtime
-        if (editor?.connectRuntime && sessionInfo.url) {
-          editor.connectRuntime('python', sessionInfo.url);
-        }
-
-        // Update execution manager
-        if (editor?.execution?.setRuntimeUrl) {
-          editor.execution.setRuntimeUrl(sessionInfo.url);
-        }
-
-        emit('runtimeRestarted', { language, session: sessionInfo });
-      } catch (error) {
-        console.error('[RestartRuntime] Error:', error);
-      }
-    },
+    // NOTE: onChangeVenv, onChangeCwd, and onRestartRuntime are no longer used.
+    // The new runtime model doesn't support changing venv/cwd on running runtimes.
+    // Instead, users start new runtimes via the status bar menu and attach docs to them.
 
     async onKillRuntime(runtimeId) {
       try {
@@ -64038,37 +64497,23 @@ async function createStudio$1(target, options = {}) {
       emit('themeChanged', { theme });
     },
 
-    async onCreateDedicatedRuntime(docName) {
-      try {
-        // Create a dedicated session via orchestrator
-        const sessionInfo = await shellState.createSession(docName, 'dedicated');
+    // NOTE: onCreateDedicatedRuntime is no longer used.
+    // Users now start runtimes from the status bar menu and attach docs to them.
 
-        // Reconnect the editor to the new runtime
-        if (editor?.connectRuntime && sessionInfo.url) {
-          editor.connectRuntime('python', sessionInfo.url);
-        }
-
-        emit('runtimeCreated', { docName, session: sessionInfo });
-      } catch (error) {
-        await confirm({
-          title: 'Error',
-          message: `Failed to create dedicated runtime: ${error.message}`,
-          confirmLabel: 'OK',
-          cancelLabel: '',
-        });
-      }
-    },
-
-    onRuntimeAttached(docName, sessionId) {
+    onRuntimeAttached(docName, runtimeId, runtimeUrl) {
       // When user attaches a document to a different runtime,
       // we need to reconnect the editor if this is the current document
-      if (docName === currentDocName) {
-        const session = shellState.getSession(sessionId);
-        if (session?.url && editor?.connectRuntime) {
-          editor.connectRuntime('python', session.url);
+      if (docName === currentDocName && runtimeUrl) {
+        // Update editor's runtime connection
+        if (editor?.connectRuntime) {
+          editor.connectRuntime('python', runtimeUrl);
+        }
+        // Update execution manager's runtime URL for monitor mode
+        if (editor?.execution?.setRuntimeUrl) {
+          editor.execution.setRuntimeUrl(runtimeUrl);
         }
       }
-      emit('runtimeAttached', { docName, sessionId });
+      emit('runtimeAttached', { docName, runtimeId, runtimeUrl });
     },
 
     // AI Handlers
@@ -64180,10 +64625,11 @@ async function createStudio$1(target, options = {}) {
   // Create status bar
   let statusBarComponent = null;
   if (statusBarConfig.enabled !== false) {
-    // Default segments - 'runtimes' for project-wide management, 'ai' if available
-    const defaultSegments = aiClient
-      ? ['files', 'runtimes', 'sync', 'ai']
-      : ['files', 'runtimes', 'sync'];
+    // Use simple mode by default - just filename + runtime dot
+    // Pass segments: ['files', 'runtimes', 'sync'] for legacy mode
+    const defaultSegments = statusBarConfig.simple !== false
+      ? ['simple']
+      : (aiClient ? ['files', 'runtimes', 'sync', 'ai'] : ['files', 'runtimes', 'sync']);
 
     statusBarComponent = createStatusBar$1({
       container: statusBarContainer,

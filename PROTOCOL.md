@@ -101,6 +101,8 @@ Returns what this runtime supports. Clients should call this once on connection 
 }
 ```
 
+**Note:** The `environment` field is **read-only information** about which Python interpreter this runtime is using. It cannot be changed after the runtime starts. To use a different Python/venv, start a different runtime server.
+
 **Feature Descriptions:**
 
 | Feature | Description |
@@ -120,9 +122,37 @@ Returns what this runtime supports. Clients should call this once on connection 
 
 ---
 
+## Runtime Model
+
+**One runtime server = one Python interpreter.**
+
+A runtime server executes code using whatever Python interpreter started it. The runtime does NOT:
+- Switch between virtual environments
+- Spawn subprocesses for different interpreters
+- Manage multiple Python installations
+
+If you need code to run in a different venv, **start a different runtime server** using that venv's Python:
+
+```bash
+# Runtime A - uses project's venv
+/path/to/project/.venv/bin/python -m mrmd_python --port 8001
+
+# Runtime B - uses another venv
+/path/to/other/.venv/bin/python -m mrmd_python --port 8002
+```
+
+The **orchestrator** (not the runtime) is responsible for:
+- Deciding which venv to use for a project
+- Starting runtime servers with the correct Python
+- Routing requests to the appropriate runtime
+
+This separation keeps the runtime simple and predictable. The `environment` field in `/capabilities` tells you which Python this runtime is using—it's informational, not configurable.
+
+---
+
 ## Sessions
 
-Sessions are isolated execution contexts. Variables persist within a session until reset or destroyed.
+Sessions are isolated namespaces within a single runtime. Variables persist within a session until reset or destroyed. All sessions share the same Python interpreter.
 
 ### `GET /sessions`
 
@@ -147,28 +177,18 @@ List all active sessions.
 
 ### `POST /sessions`
 
-Create a new session.
+Create a new session (isolated namespace).
 
 **Request:**
 
 ```json
 {
   "id": "analysis-1",
-  "language": "python",
-  "environment": {
-    "cwd": "/home/user/project",
-    "executable": "/usr/bin/python3.11",
-    "virtualenv": "/home/user/project/.venv",
-    "env": {
-      "PYTHONPATH": "./lib"
-    }
-  },
-  "dependencies": ["pandas>=2.0", "numpy"],
-  "pythonVersion": ">=3.11"
+  "language": "python"
 }
 ```
 
-All fields except `language` are optional. If `id` is omitted, one will be generated.
+All fields are optional. If `id` is omitted, one will be generated.
 
 **Response:**
 
@@ -179,12 +199,7 @@ All fields except `language` are optional. If `id` is omitted, one will be gener
   "created": "2024-01-15T12:00:00Z",
   "lastActivity": "2024-01-15T12:00:00Z",
   "executionCount": 0,
-  "variableCount": 0,
-  "environment": {
-    "cwd": "/home/user/project",
-    "executable": "/usr/bin/python3.11",
-    "virtualenv": "/home/user/project/.venv"
-  }
+  "variableCount": 0
 }
 ```
 

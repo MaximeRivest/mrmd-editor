@@ -360,6 +360,41 @@ export class OrchestratorClient {
     });
   }
 
+  /**
+   * Start a new runtime
+   * @param {Object} options
+   * @param {string} [options.id] - Runtime ID (auto-generated if not provided)
+   * @param {string} [options.venv] - Path to virtual environment
+   * @param {string} [options.cwd] - Working directory
+   * @returns {Promise<{success: boolean, runtime: Object}>}
+   */
+  async startRuntime(options = {}) {
+    return this._fetch('/api/runtimes', {
+      method: 'POST',
+      body: JSON.stringify(options),
+    });
+  }
+
+  /**
+   * List available virtual environments
+   * @returns {Promise<{venvs: Array<{path: string, name: string, python: string, version: string, source: string}>, project_root: string}>}
+   */
+  async listVenvs(deep = false) {
+    return this._fetch(`/api/venvs${deep ? '?deep=true' : ''}`);
+  }
+
+  /**
+   * Search for venvs across the filesystem
+   * @param {string} [searchRoot] - Optional root to search from
+   * @returns {Promise<{venvs: Array, count: number}>}
+   */
+  async searchVenvs(searchRoot = null) {
+    return this._fetch('/api/venvs/search', {
+      method: 'POST',
+      body: JSON.stringify(searchRoot ? { search_root: searchRoot } : {}),
+    });
+  }
+
   // ===========================================================================
   // Logs
   // ===========================================================================
