@@ -97476,7 +97476,7 @@ const markdownStyles = `
 /* Container - replaces entire table source, flows naturally */
 .cm-table-widget {
   display: block;
-  background: var(--md-table-bg, var(--widget-surface));
+  background: var(--md-table-bg, var(--editor-background));
   padding: 0.5em 0;
 }
 
