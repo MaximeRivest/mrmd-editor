@@ -76,6 +76,21 @@ import * as aiIntegrationModule from './ai-integration.js';
 // Cell controls (run buttons, queue, status)
 import { createCellControls, CellControlsSystem } from './cell-controls/index.js';
 
+// Runtime CodeLens (inline session controls)
+import {
+  createRuntimeCodeLensExtensions,
+  rebuildRuntimeCodeLens,
+  runtimeCodeLensFacet,
+  runtimeCodeLensPlugin,
+  rebuildRuntimeCodeLensEffect,
+  injectRuntimeCodeLensStyles,
+  removeRuntimeCodeLensStyles,
+  findRuntimeBlocks,
+  findYamlConfigBlocks,
+  findSessionFrontmatter,
+  RuntimeCodeLensWidget,
+} from './runtime-codelens/index.js';
+
 // Commands and keymap
 import { commandRegistry } from './commands.js';
 import { createKeymap, mergeKeybindings, defaultKeybindings } from './keymap.js';
@@ -2511,6 +2526,22 @@ const cellControlsExports = {
 };
 // #endregion CELL_CONTROLS_EXPORTS
 
+// #region RUNTIME_CODELENS_EXPORTS
+const runtimeCodeLensExports = {
+  createExtensions: createRuntimeCodeLensExtensions,
+  rebuild: rebuildRuntimeCodeLens,
+  facet: runtimeCodeLensFacet,
+  plugin: runtimeCodeLensPlugin,
+  rebuildEffect: rebuildRuntimeCodeLensEffect,
+  injectStyles: injectRuntimeCodeLensStyles,
+  removeStyles: removeRuntimeCodeLensStyles,
+  findBlocks: findRuntimeBlocks,
+  findYamlConfigBlocks,
+  findSessionFrontmatter,
+  Widget: RuntimeCodeLensWidget,
+};
+// #endregion RUNTIME_CODELENS_EXPORTS
+
 // #region RUNTIME_LSP_EXPORTS
 const runtimeLspExports = {
   // Adapters
@@ -2570,6 +2601,8 @@ const mrmd = {
   stateUtils: stateExports,
   // Cell controls (run buttons, queue, status)
   cellControls: cellControlsExports,
+  // Runtime CodeLens (inline session controls above yaml config blocks)
+  runtimeCodeLens: runtimeCodeLensExports,
   // Runtime LSP (hover, completions, variables)
   runtimeLsp: runtimeLspExports,
   // Markdown rendering (blur→render, focus→source)
@@ -2613,6 +2646,7 @@ export {
   codemirror,
   terminal,
   awarenessExports as awareness,
+  runtimeCodeLensExports as runtimeCodeLens,
   RuntimeRegistry,
   createRuntimeRegistry,
   createJavaScriptRuntime,
@@ -2678,6 +2712,19 @@ export {
   cellControlsExports,
   createCellControls,
   CellControlsSystem,
+  // Runtime CodeLens exports
+  runtimeCodeLensExports,
+  createRuntimeCodeLensExtensions,
+  rebuildRuntimeCodeLens,
+  runtimeCodeLensFacet,
+  runtimeCodeLensPlugin,
+  rebuildRuntimeCodeLensEffect,
+  injectRuntimeCodeLensStyles,
+  removeRuntimeCodeLensStyles,
+  findRuntimeBlocks,
+  findYamlConfigBlocks,
+  findSessionFrontmatter,
+  RuntimeCodeLensWidget,
   // Monitor coordination exports
   MonitorCoordination,
   EXECUTION_STATUS,

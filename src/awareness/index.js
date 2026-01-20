@@ -549,6 +549,11 @@ export class AwarenessSystem {
    * Clean up all resources.
    */
   destroy() {
+    // Clear cursor position from awareness so it doesn't appear as a stale/anonymous cursor
+    // when the user navigates back to this document. The cursor field is managed by
+    // y-codemirror.next and stored directly on awareness (not under 'user').
+    this.yjsAwareness.setLocalStateField('cursor', null);
+
     // Clear transient state
     this.stateManager.clearTransient();
 

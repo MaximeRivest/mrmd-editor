@@ -461,6 +461,12 @@ export async function createStudio(target, options = {}) {
     editorContainer.classList.add('mrmd-studio__editor--loading');
 
     try {
+      // Clear cursor from awareness before destroying to prevent stale cursors
+      // appearing as "anonymous" when navigating back to this document
+      if (editor?.awareness) {
+        editor.awareness.setLocalStateField('cursor', null);
+      }
+
       // Destroy existing editor (this cleans up y-codemirror.next bindings)
       if (editor) {
         editor.destroy();

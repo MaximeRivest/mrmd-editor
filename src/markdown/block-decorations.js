@@ -528,8 +528,11 @@ export const lineHeightTracker = ViewPlugin.fromClass(
       setLineHeight(this.view.defaultLineHeight);
 
       // If height changed mid-session (font load, resize), trigger rebuild
+      // Use requestAnimationFrame to avoid dispatching during update
       if (oldHeight !== cachedLineHeight) {
-        this.view.dispatch({});
+        requestAnimationFrame(() => {
+          this.view.dispatch({});
+        });
       }
     }
   }
