@@ -91,6 +91,20 @@ export const tokenDefinitions = {
   },
 
   // ===========================================================================
+  // TEXT LAYOUT
+  // ===========================================================================
+  '--widget-white-space': {
+    description: 'White-space handling for widget content. Use "pre" for no wrapping with horizontal scroll, "pre-wrap" for wrapping.',
+    category: 'text-layout',
+    default: 'pre-wrap',
+  },
+  '--widget-word-break': {
+    description: 'Word break behavior for widget content. Use "normal" with white-space: pre, or "break-word" with pre-wrap.',
+    category: 'text-layout',
+    default: 'break-word',
+  },
+
+  // ===========================================================================
   // TYPOGRAPHY
   // ===========================================================================
   '--widget-font-mono': {
@@ -435,6 +449,10 @@ export const midnightTheme = {
   '--widget-border-width': '1px',
   '--widget-border-accent-width': '3px',
 
+  // Text layout
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
+
   // Typography (shared across themes)
   '--widget-font-mono': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
   '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
@@ -617,6 +635,10 @@ export const daylightTheme = {
   '--widget-border-radius': '6px',
   '--widget-border-width': '1px',
   '--widget-border-accent-width': '3px',
+
+  // Text layout (same as midnight)
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
 
   // Typography (same as midnight)
   '--widget-font-mono': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
@@ -807,6 +829,10 @@ export const githubTheme = {
   '--widget-border-radius': '6px',
   '--widget-border-width': '1px',
   '--widget-border-accent-width': '4px',
+
+  // Text layout
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
 
   // Typography (GitHub's font stack)
   '--widget-font-mono': "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
@@ -1063,6 +1089,10 @@ export const nordTheme = {
   '--widget-border-radius': '4px',  // Slightly less rounded than default
   '--widget-border-width': '1px',
   '--widget-border-accent-width': '3px',
+
+  // Text layout
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
 
   // ===========================================================================
   // TYPOGRAPHY

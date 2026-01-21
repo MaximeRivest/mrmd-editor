@@ -54746,6 +54746,9 @@ const ansiStyles = `
  */
 
 
+// Regex to match ANSI escape sequences (same as in terminal.js)
+const ANSI_ESCAPE_REGEX = /\x1b\[[0-9;]*[a-zA-Z]/g;
+
 // =============================================================================
 // Height Cache for Stable Layout (prevents jitter when editing output blocks)
 // =============================================================================
@@ -55093,6 +55096,34 @@ function buildDecorations$4(view, awarenessSystem) {
       );
     }
 
+    // When hidden, collapse ANSI escape sequences so raw text width matches rendered widget
+    // This prevents height mismatch between raw text (with escape codes) and widget (without)
+    if (!anyCollaboratorFocused) {
+      // Only process content lines (skip opening and closing fence lines)
+      let ansiCount = 0;
+      for (let i = startLine.number + 1; i < endLine.number; i++) {
+        const line = doc.line(i);
+        const lineText = line.text;
+
+        // Find all ANSI escape sequences in this line
+        let match;
+        ANSI_ESCAPE_REGEX.lastIndex = 0; // Reset regex state
+        while ((match = ANSI_ESCAPE_REGEX.exec(lineText)) !== null) {
+          const escapeStart = line.from + match.index;
+          const escapeEnd = escapeStart + match[0].length;
+          decorations.push(
+            Decoration.mark({
+              class: 'cm-ansi-escape-hidden',
+            }).range(escapeStart, escapeEnd)
+          );
+          ansiCount++;
+        }
+      }
+      if (ansiCount > 0) {
+        console.log(`[output-widget] Collapsed ${ansiCount} ANSI escape sequences in output block`);
+      }
+    }
+
     // Stable layout: when editing, add spacer to prevent layout shift
     if (anyCollaboratorFocused) {
       const cachedHeight = getCachedOutputHeight(blockStart);
@@ -55182,6 +55213,25 @@ function buildDecorations$4(view, awarenessSystem) {
           class: anyCollaboratorFocused ? 'cm-stdin-line-visible' : 'cm-stdin-line-hidden',
         }).range(line.from)
       );
+    }
+
+    // When hidden, collapse ANSI escape sequences (same as output blocks)
+    if (!anyCollaboratorFocused) {
+      for (let i = startLine.number + 1; i < endLine.number; i++) {
+        const line = doc.line(i);
+        const lineText = line.text;
+        let match;
+        ANSI_ESCAPE_REGEX.lastIndex = 0;
+        while ((match = ANSI_ESCAPE_REGEX.exec(lineText)) !== null) {
+          const escapeStart = line.from + match.index;
+          const escapeEnd = escapeStart + match[0].length;
+          decorations.push(
+            Decoration.mark({
+              class: 'cm-ansi-escape-hidden',
+            }).range(escapeStart, escapeEnd)
+          );
+        }
+      }
     }
 
     // Check if stdin has content
@@ -55325,8 +55375,8 @@ const outputWidgetStyles = `
 .cm-output-widget pre {
   margin: 0;
   padding: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: var(--widget-white-space, pre-wrap);
+  word-break: var(--widget-word-break, break-word);
 }
 
 .cm-output-widget:hover {
@@ -55363,6 +55413,15 @@ const outputWidgetStyles = `
   visibility: hidden !important;
 }
 
+/* Collapse ANSI escape sequences in hidden output lines so they don't take space */
+/* This makes the raw text width match the rendered widget width for proper height alignment */
+.cm-ansi-escape-hidden {
+  font-size: 0 !important;
+  width: 0 !important;
+  display: inline-block !important;
+  overflow: hidden !important;
+}
+
 /* Visible: text shown for editing - must cover the widget underneath */
 .cm-output-line-visible {
   color: var(--widget-text, #e0e0e0);
@@ -55378,8 +55437,8 @@ const outputWidgetStyles = `
 
 /* Output content container */
 .cm-output-content {
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: var(--widget-white-space, pre-wrap);
+  word-break: var(--widget-word-break, break-word);
 }
 
 /* Empty output widget - subtle indicator */
@@ -55735,8 +55794,8 @@ ${ansiStyles}
 .cm-stdin-widget pre.cm-stdin-content {
   margin: 0;
   padding: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: var(--widget-white-space, pre-wrap);
+  word-break: var(--widget-word-break, break-word);
   color: var(--widget-text, #e0e0e0);
   min-height: 1.2em;
 }
@@ -57580,7 +57639,7 @@ class MRPClient {
    *        - An options object with onStdinRequest property
    * @returns {Promise<ExecuteResult>}
    */
-  async executeStreaming(code, language, onChunk, optionsOrStdinHandler = {}) {
+  async executeStreaming(code, language, onChunk, optionsOrStdinHandler = {}, extraOptions = {}) {
     // Cancel any previous execution
     if (this.#currentExecution) {
       this.#currentExecution.abort();
@@ -57590,14 +57649,15 @@ class MRPClient {
     this.#currentExecution = controller;
 
     // Handle both signatures:
-    // 1. executeStreaming(code, lang, onChunk, onStdinRequest) - Runtime interface
+    // 1. executeStreaming(code, lang, onChunk, onStdinRequest, options) - Runtime interface (5 params)
     // 2. executeStreaming(code, lang, onChunk, { onStdinRequest, ...options }) - Original MRP client
     let onStdinRequest;
     let executeOptions = {};
 
     if (typeof optionsOrStdinHandler === 'function') {
-      // Runtime interface: 4th param is the stdin handler directly
+      // Runtime interface: 4th param is the stdin handler, 5th is options
       onStdinRequest = optionsOrStdinHandler;
+      executeOptions = extraOptions;
     } else {
       // Options object
       ({ onStdinRequest, ...executeOptions } = optionsOrStdinHandler);
@@ -65241,8 +65301,15 @@ function buildDecorations$3(view) {
     }
   }
 
-  // Sort by position
-  decorations.sort((a, b) => a.from - b.from);
+  // Sort by position and startSide (required by CodeMirror)
+  decorations.sort((a, b) => {
+    const fromDiff = a.from - b.from;
+    if (fromDiff !== 0) return fromDiff;
+    // When same position, sort by startSide (widget side)
+    const aSide = a.value?.startSide ?? a.value?.spec?.side ?? 0;
+    const bSide = b.value?.startSide ?? b.value?.spec?.side ?? 0;
+    return aSide - bSide;
+  });
 
   return Decoration.set(decorations);
 }
@@ -74937,7 +75004,7 @@ var YAML = /*#__PURE__*/Object.freeze({
 
 
 /** Supported runtime languages */
-const RUNTIME_LANGUAGES = ['python', 'node', 'julia', 'r', 'shell'];
+const RUNTIME_LANGUAGES = ['python', 'bash', 'node', 'julia', 'r', 'shell'];
 
 /**
  * @typedef {Object} RuntimeConfig
@@ -74997,7 +75064,9 @@ function findYamlConfigBlocks(content) {
       if (closingPattern.test(line)) {
         // Parse the YAML content
         const yamlContent = blockContent.join('\n');
-        const runtimes = extractRuntimes(yamlContent);
+        // Content starts after the opening fence line + newline
+        const contentStartOffset = fenceLineEnd + 1;
+        const runtimes = extractRuntimes(yamlContent, contentStartOffset);
 
         // Only include if it has runtime config
         if (runtimes.length > 0) {
@@ -75062,9 +75131,10 @@ function findSessionFrontmatter(content) {
 /**
  * Extract runtime configurations from YAML content
  * @param {string} yamlContent - Raw YAML string
+ * @param {number} [contentStartOffset=0] - Character offset where YAML content starts in document
  * @returns {RuntimeConfig[]}
  */
-function extractRuntimes(yamlContent) {
+function extractRuntimes(yamlContent, contentStartOffset = 0) {
   const runtimes = [];
 
   try {
@@ -75077,12 +75147,26 @@ function extractRuntimes(yamlContent) {
     for (const language of RUNTIME_LANGUAGES) {
       const config = parsed.session[language];
       if (config) {
+        // Find the line where this runtime is declared (e.g., "  python:")
+        // Search for the pattern with proper indentation under session:
+        const pattern = new RegExp(`^(  ${language}:)`, 'm');
+        const match = yamlContent.match(pattern);
+        let lineOffset = null;
+
+        if (match) {
+          // Find the end of the line where this runtime key appears
+          const keyStart = match.index;
+          const lineEnd = yamlContent.indexOf('\n', keyStart);
+          lineOffset = contentStartOffset + (lineEnd !== -1 ? lineEnd : keyStart + match[1].length);
+        }
+
         runtimes.push({
           language,
           name: config.name || 'default',
           venv: config.venv,
           cwd: config.cwd,
           autoStart: config.auto_start ?? config.autoStart ?? true,
+          lineOffset, // Position to place widget for this runtime
         });
       }
     }
@@ -75137,6 +75221,7 @@ function findRuntimeBlocks(content, options = {}) {
 /** Language display labels */
 const LANGUAGE_LABELS = {
   python: '🐍 Python',
+  bash: '$ Bash',
   node: '⬢ Node',
   julia: '◐ Julia',
   r: '📊 R',
@@ -75402,38 +75487,40 @@ function buildDecorations$1(state) {
   const decorations = [];
 
   for (const block of blocks) {
-    // Enrich runtimes with status
-    const runtimesWithStatus = block.runtimes.map((runtime) => {
+    // Create a separate widget for each runtime at its line position
+    for (const runtime of block.runtimes) {
       const sessionName = getSessionName(runtime.name, context.projectName);
       const status = context.getSessionStatus?.(sessionName) || null;
-      return {
+
+      const runtimeWithStatus = {
         ...runtime,
         name: sessionName,
         status,
       };
-    });
 
-    // Create widget
-    const widget = new RuntimeCodeLensWidget({
-      runtimes: runtimesWithStatus,
-      callbacks: {
-        onStart: (runtime) => context.onStart?.(runtime),
-        onStop: (name) => context.onStop?.(name),
-        onRestart: (name) => context.onRestart?.(name),
-        onRestartAll: () => context.onRestartAll?.(),
-      },
-      blockType: block.type,
-    });
+      // Create widget for this single runtime
+      const widget = new RuntimeCodeLensWidget({
+        runtimes: [runtimeWithStatus],
+        callbacks: {
+          onStart: (rt) => context.onStart?.(rt),
+          onStop: (name) => context.onStop?.(name),
+          onRestart: (name) => context.onRestart?.(name),
+          onRestartAll: () => context.onRestartAll?.(),
+        },
+        blockType: block.type,
+      });
 
-    // Place widget after the opening fence/delimiter line
-    // Using block: true makes it render on its own line
-    decorations.push(
-      Decoration.widget({
-        widget,
-        side: 1, // After the position
-        block: true, // Render as block element (requires StateField)
-      }).range(block.fenceLineEnd)
-    );
+      // Place widget at the runtime's line position, or fallback to block start
+      const position = runtime.lineOffset ?? block.fenceLineEnd;
+
+      decorations.push(
+        Decoration.widget({
+          widget,
+          side: 1, // After the position
+          block: true, // Render as block element (requires StateField)
+        }).range(position)
+      );
+    }
   }
 
   return Decoration.set(decorations, true);
@@ -104910,6 +104997,24 @@ const lineHeightTracker = ViewPlugin.fromClass(
 
 
 // =============================================================================
+// Asset Resolver Facet
+// =============================================================================
+
+/**
+ * Facet for resolving asset URLs.
+ * Allows the host application (e.g., Electron) to transform relative asset
+ * paths into absolute URLs that the browser can load.
+ *
+ * Example usage:
+ *   assetResolverFacet.of((url) => `file://${projectRoot}/${url}`)
+ *
+ * @type {Facet<(url: string) => string, ((url: string) => string) | null>}
+ */
+const assetResolverFacet = Facet.define({
+  combine: (values) => values[values.length - 1] || null,
+});
+
+// =============================================================================
 // Height Caching for Stable Layout
 // =============================================================================
 
@@ -104993,6 +105098,20 @@ function buildDecorations(view) {
   const doc = view.state.doc;
   const cursorPos = view.state.selection.main.head;
   const cursorLine = doc.lineAt(cursorPos).number;
+
+  // Get asset resolver from facet (may be null)
+  const assetResolver = view.state.facet(assetResolverFacet);
+
+  // Helper to resolve asset URLs
+  const resolveUrl = (url) => {
+    if (!url || !assetResolver) return url;
+    // Only resolve relative URLs (not http://, https://, data:, etc.)
+    if (url.startsWith('http://') || url.startsWith('https://') ||
+        url.startsWith('data:') || url.startsWith('file://')) {
+      return url;
+    }
+    return assetResolver(url);
+  };
 
   // Update link definition cache for reference-style images/links
   updateLinkDefinitionCache(doc.toString());
@@ -105380,10 +105499,10 @@ function buildDecorations(view) {
           decorations.push(
             Decoration.replace({
               widget: new BlockImageWidgetWithHeightCache(
-                imageUrl,
+                resolveUrl(imageUrl),
                 imageAlt,
                 isLinkedImage,
-                linkUrl,
+                resolveUrl(linkUrl),
                 imageId,
                 position,    // Position modifier: 'block', 'right', 'left', 'wide', 'small'
                 imageTitle,  // Caption from title attribute
@@ -105395,7 +105514,7 @@ function buildDecorations(view) {
           // Inline image: replace with inline image widget
           decorations.push(
             Decoration.replace({
-              widget: new ImageWidget(imageUrl, imageAlt, isLinkedImage, linkUrl),
+              widget: new ImageWidget(resolveUrl(imageUrl), imageAlt, isLinkedImage, resolveUrl(linkUrl)),
             }).range(syntaxStart, syntaxEnd)
           );
         }
@@ -111221,6 +111340,20 @@ const tokenDefinitions = {
   },
 
   // ===========================================================================
+  // TEXT LAYOUT
+  // ===========================================================================
+  '--widget-white-space': {
+    description: 'White-space handling for widget content. Use "pre" for no wrapping with horizontal scroll, "pre-wrap" for wrapping.',
+    category: 'text-layout',
+    default: 'pre-wrap',
+  },
+  '--widget-word-break': {
+    description: 'Word break behavior for widget content. Use "normal" with white-space: pre, or "break-word" with pre-wrap.',
+    category: 'text-layout',
+    default: 'break-word',
+  },
+
+  // ===========================================================================
   // TYPOGRAPHY
   // ===========================================================================
   '--widget-font-mono': {
@@ -111565,6 +111698,10 @@ const midnightTheme = {
   '--widget-border-width': '1px',
   '--widget-border-accent-width': '3px',
 
+  // Text layout
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
+
   // Typography (shared across themes)
   '--widget-font-mono': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
   '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
@@ -111747,6 +111884,10 @@ const daylightTheme = {
   '--widget-border-radius': '6px',
   '--widget-border-width': '1px',
   '--widget-border-accent-width': '3px',
+
+  // Text layout (same as midnight)
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
 
   // Typography (same as midnight)
   '--widget-font-mono': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
@@ -111937,6 +112078,10 @@ const githubTheme = {
   '--widget-border-radius': '6px',
   '--widget-border-width': '1px',
   '--widget-border-accent-width': '4px',
+
+  // Text layout
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
 
   // Typography (GitHub's font stack)
   '--widget-font-mono': "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
@@ -112193,6 +112338,10 @@ const nordTheme = {
   '--widget-border-radius': '4px',  // Slightly less rounded than default
   '--widget-border-width': '1px',
   '--widget-border-accent-width': '3px',
+
+  // Text layout
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
 
   // ===========================================================================
   // TYPOGRAPHY
@@ -117625,6 +117774,9 @@ const markdownExports = {
   markdown: markdown,
   markdownRenderer,
 
+  // Asset resolver facet (for Electron/desktop apps)
+  assetResolverFacet,
+
   // Styles
   markdownStyles,
   injectMarkdownStyles,
@@ -117723,6 +117875,7 @@ var index = /*#__PURE__*/Object.freeze({
   adaptMrmdJsSession: adaptMrmdJsSession,
   ansiStyles: ansiStyles,
   applyTheme: applyTheme,
+  assetResolverFacet: assetResolverFacet,
   awareness: awarenessExports,
   cellControlsExports: cellControlsExports,
   codemirror: codemirror,
@@ -117809,5 +117962,5 @@ var index = /*#__PURE__*/Object.freeze({
   yjs: yjs
 });
 
-export { AlertTitleWidget, AwarenessStateManager, AwarenessSystem, CellControlsSystem, Drive, EXECUTION_STATUS, ImagePlaceholder, ImageWidget, MRPClient, MonitorCoordination, OrchestratorClient, RuntimeCodeLensWidget, RuntimeRegistry, ShellStateManager, TableWidget, TaskCheckboxWidget, TerminalBuffer, adaptMRPClient, adaptMrmdJsSession, ansiStyles, applyTheme, awarenessExports as awareness, cellControlsExports, codemirror, configExports, create, createAIState, createAvatarRow, createAwareness, createCellControls, createCollaboratorList, createConfigHandler, createCursorExtensions, createDrive, createFloatingCollaboratorList, createHumanState, createIndicatorExtensions, createJavaScriptRuntime, createMonitorCoordination, createReactiveConfig, createRuntimeCodeLensExtensions, createRuntimeCompletionExtension, createRuntimeHoverExtension, createRuntimeRegistry, createRuntimeState, createStateManager, createStatusBar, createStudio, createTheme, createVariableExplorer, daylightTheme, mrmd as default, defaultAwarenessConfig, detectTheme, devPanelExtension, drive, findRuntimeBlocks, findSessionFrontmatter, findYamlConfigBlocks, generateTableId, generateThemeCSS, getTheme, getThemeNames, githubTheme, hasAnsi, initTheme, injectAwarenessStyles, injectDevPanelStyles, injectMarkdownStyles, injectRuntimeCodeLensStyles, injectRuntimeLspStyles, injectShellStyles, isFullySerializable, isTableDelimiter, isTableLine, markdown, markdownExports, markdownRenderer, markdownStyles, midnightTheme, minimalAwarenessConfig, normalizeOptions, parseImageMarkdown, parseTable, processTerminalOutput, rebuildRuntimeCodeLens, rebuildRuntimeCodeLensEffect, registerTheme, removeRuntimeCodeLensStyles, runtimeCodeLensExports as runtimeCodeLens, runtimeCodeLensExports, runtimeCodeLensFacet, runtimeCodeLensPlugin, runtimeLspExports, serializeConfig, session, shellModule as shell, stateExports, stripAnsi, terminal, terminalToHtml, toggleDevPanel, watchTheme, widgets, yjs };
+export { AlertTitleWidget, AwarenessStateManager, AwarenessSystem, CellControlsSystem, Drive, EXECUTION_STATUS, ImagePlaceholder, ImageWidget, MRPClient, MonitorCoordination, OrchestratorClient, RuntimeCodeLensWidget, RuntimeRegistry, ShellStateManager, TableWidget, TaskCheckboxWidget, TerminalBuffer, adaptMRPClient, adaptMrmdJsSession, ansiStyles, applyTheme, assetResolverFacet, awarenessExports as awareness, cellControlsExports, codemirror, configExports, create, createAIState, createAvatarRow, createAwareness, createCellControls, createCollaboratorList, createConfigHandler, createCursorExtensions, createDrive, createFloatingCollaboratorList, createHumanState, createIndicatorExtensions, createJavaScriptRuntime, createMonitorCoordination, createReactiveConfig, createRuntimeCodeLensExtensions, createRuntimeCompletionExtension, createRuntimeHoverExtension, createRuntimeRegistry, createRuntimeState, createStateManager, createStatusBar, createStudio, createTheme, createVariableExplorer, daylightTheme, mrmd as default, defaultAwarenessConfig, detectTheme, devPanelExtension, drive, findRuntimeBlocks, findSessionFrontmatter, findYamlConfigBlocks, generateTableId, generateThemeCSS, getTheme, getThemeNames, githubTheme, hasAnsi, initTheme, injectAwarenessStyles, injectDevPanelStyles, injectMarkdownStyles, injectRuntimeCodeLensStyles, injectRuntimeLspStyles, injectShellStyles, isFullySerializable, isTableDelimiter, isTableLine, markdown, markdownExports, markdownRenderer, markdownStyles, midnightTheme, minimalAwarenessConfig, normalizeOptions, parseImageMarkdown, parseTable, processTerminalOutput, rebuildRuntimeCodeLens, rebuildRuntimeCodeLensEffect, registerTheme, removeRuntimeCodeLensStyles, runtimeCodeLensExports as runtimeCodeLens, runtimeCodeLensExports, runtimeCodeLensFacet, runtimeCodeLensPlugin, runtimeLspExports, serializeConfig, session, shellModule as shell, stateExports, stripAnsi, terminal, terminalToHtml, toggleDevPanel, watchTheme, widgets, yjs };
 //# sourceMappingURL=mrmd.esm.js.map

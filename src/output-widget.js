@@ -30,6 +30,9 @@ import { WidgetType, Decoration, ViewPlugin, EditorView } from '@codemirror/view
 import { Facet, Annotation } from '@codemirror/state';
 import { terminalToHtml, hasAnsi, stripAnsi, ansiStyles } from './terminal.js';
 
+// Regex to match ANSI escape sequences (same as in terminal.js)
+const ANSI_ESCAPE_REGEX = /\x1b\[[0-9;]*[a-zA-Z]/g;
+
 // =============================================================================
 // Height Cache for Stable Layout (prevents jitter when editing output blocks)
 // =============================================================================
@@ -377,6 +380,34 @@ function buildDecorations(view, awarenessSystem) {
       );
     }
 
+    // When hidden, collapse ANSI escape sequences so raw text width matches rendered widget
+    // This prevents height mismatch between raw text (with escape codes) and widget (without)
+    if (!anyCollaboratorFocused) {
+      // Only process content lines (skip opening and closing fence lines)
+      let ansiCount = 0;
+      for (let i = startLine.number + 1; i < endLine.number; i++) {
+        const line = doc.line(i);
+        const lineText = line.text;
+
+        // Find all ANSI escape sequences in this line
+        let match;
+        ANSI_ESCAPE_REGEX.lastIndex = 0; // Reset regex state
+        while ((match = ANSI_ESCAPE_REGEX.exec(lineText)) !== null) {
+          const escapeStart = line.from + match.index;
+          const escapeEnd = escapeStart + match[0].length;
+          decorations.push(
+            Decoration.mark({
+              class: 'cm-ansi-escape-hidden',
+            }).range(escapeStart, escapeEnd)
+          );
+          ansiCount++;
+        }
+      }
+      if (ansiCount > 0) {
+        console.log(`[output-widget] Collapsed ${ansiCount} ANSI escape sequences in output block`);
+      }
+    }
+
     // Stable layout: when editing, add spacer to prevent layout shift
     if (anyCollaboratorFocused) {
       const cachedHeight = getCachedOutputHeight(blockStart);
@@ -466,6 +497,25 @@ function buildDecorations(view, awarenessSystem) {
           class: anyCollaboratorFocused ? 'cm-stdin-line-visible' : 'cm-stdin-line-hidden',
         }).range(line.from)
       );
+    }
+
+    // When hidden, collapse ANSI escape sequences (same as output blocks)
+    if (!anyCollaboratorFocused) {
+      for (let i = startLine.number + 1; i < endLine.number; i++) {
+        const line = doc.line(i);
+        const lineText = line.text;
+        let match;
+        ANSI_ESCAPE_REGEX.lastIndex = 0;
+        while ((match = ANSI_ESCAPE_REGEX.exec(lineText)) !== null) {
+          const escapeStart = line.from + match.index;
+          const escapeEnd = escapeStart + match[0].length;
+          decorations.push(
+            Decoration.mark({
+              class: 'cm-ansi-escape-hidden',
+            }).range(escapeStart, escapeEnd)
+          );
+        }
+      }
     }
 
     // Check if stdin has content
@@ -609,8 +659,8 @@ export const outputWidgetStyles = `
 .cm-output-widget pre {
   margin: 0;
   padding: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: var(--widget-white-space, pre-wrap);
+  word-break: var(--widget-word-break, break-word);
 }
 
 .cm-output-widget:hover {
@@ -647,6 +697,15 @@ export const outputWidgetStyles = `
   visibility: hidden !important;
 }
 
+/* Collapse ANSI escape sequences in hidden output lines so they don't take space */
+/* This makes the raw text width match the rendered widget width for proper height alignment */
+.cm-ansi-escape-hidden {
+  font-size: 0 !important;
+  width: 0 !important;
+  display: inline-block !important;
+  overflow: hidden !important;
+}
+
 /* Visible: text shown for editing - must cover the widget underneath */
 .cm-output-line-visible {
   color: var(--widget-text, #e0e0e0);
@@ -662,8 +721,8 @@ export const outputWidgetStyles = `
 
 /* Output content container */
 .cm-output-content {
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: var(--widget-white-space, pre-wrap);
+  word-break: var(--widget-word-break, break-word);
 }
 
 /* Empty output widget - subtle indicator */
@@ -1019,8 +1078,8 @@ ${ansiStyles}
 .cm-stdin-widget pre.cm-stdin-content {
   margin: 0;
   padding: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: var(--widget-white-space, pre-wrap);
+  word-break: var(--widget-word-break, break-word);
   color: var(--widget-text, #e0e0e0);
   min-height: 1.2em;
 }
