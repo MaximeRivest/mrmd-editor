@@ -13,7 +13,26 @@
  */
 
 import { ViewPlugin, Decoration, WidgetType } from '@codemirror/view';
+import { Facet } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
+
+// =============================================================================
+// Asset Resolver Facet
+// =============================================================================
+
+/**
+ * Facet for resolving asset URLs.
+ * Allows the host application (e.g., Electron) to transform relative asset
+ * paths into absolute URLs that the browser can load.
+ *
+ * Example usage:
+ *   assetResolverFacet.of((url) => `file://${projectRoot}/${url}`)
+ *
+ * @type {Facet<(url: string) => string, ((url: string) => string) | null>}
+ */
+export const assetResolverFacet = Facet.define({
+  combine: (values) => values[values.length - 1] || null,
+});
 
 // Import widgets
 import {
@@ -158,6 +177,20 @@ function buildDecorations(view) {
   const doc = view.state.doc;
   const cursorPos = view.state.selection.main.head;
   const cursorLine = doc.lineAt(cursorPos).number;
+
+  // Get asset resolver from facet (may be null)
+  const assetResolver = view.state.facet(assetResolverFacet);
+
+  // Helper to resolve asset URLs
+  const resolveUrl = (url) => {
+    if (!url || !assetResolver) return url;
+    // Only resolve relative URLs (not http://, https://, data:, etc.)
+    if (url.startsWith('http://') || url.startsWith('https://') ||
+        url.startsWith('data:') || url.startsWith('file://')) {
+      return url;
+    }
+    return assetResolver(url);
+  };
 
   // Update link definition cache for reference-style images/links
   updateLinkDefinitionCache(doc.toString());
@@ -545,10 +578,10 @@ function buildDecorations(view) {
           decorations.push(
             Decoration.replace({
               widget: new BlockImageWidgetWithHeightCache(
-                imageUrl,
+                resolveUrl(imageUrl),
                 imageAlt,
                 isLinkedImage,
-                linkUrl,
+                resolveUrl(linkUrl),
                 imageId,
                 position,    // Position modifier: 'block', 'right', 'left', 'wide', 'small'
                 imageTitle,  // Caption from title attribute
@@ -560,7 +593,7 @@ function buildDecorations(view) {
           // Inline image: replace with inline image widget
           decorations.push(
             Decoration.replace({
-              widget: new ImageWidget(imageUrl, imageAlt, isLinkedImage, linkUrl),
+              widget: new ImageWidget(resolveUrl(imageUrl), imageAlt, isLinkedImage, resolveUrl(linkUrl)),
             }).range(syntaxStart, syntaxEnd)
           );
         }

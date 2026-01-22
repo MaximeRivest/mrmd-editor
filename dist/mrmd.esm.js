@@ -53378,6 +53378,7 @@ const RENDERED_LANGUAGES = new Set(['html', 'html-rendered']);
  * @param {string} content - Document content
  * @returns {Array<{
  *   language: string,
+ *   session: string|null, // session name if specified (e.g., ```js mysession)
  *   code: string,
  *   start: number,      // start of opening fence
  *   end: number,        // end of closing fence
@@ -53395,6 +53396,7 @@ function findCodeBlocks(content) {
   let inBlock = false;
   let blockStart = 0;
   let blockLanguage = '';
+  let blockSession = null;
   let codeStart = 0;
   let blockLine = 0;
   let charOffset = 0;
@@ -53404,12 +53406,14 @@ function findCodeBlocks(content) {
     const lineStart = charOffset;
 
     if (!inBlock) {
-      // Look for opening fence
-      const match = line.match(/^(`{3,})(\w*)/);
+      // Look for opening fence: ```language [session]
+      // Examples: ```js, ```js sandbox, ```python myenv
+      const match = line.match(/^(`{3,})(\w*)(?:\s+(\S+))?/);
       if (match) {
         inBlock = true;
         blockStart = lineStart;
         blockLanguage = match[2].toLowerCase();
+        blockSession = match[3] || null; // session name after language
         codeStart = lineStart + line.length + 1; // +1 for newline
         blockLine = i;
       }
@@ -53421,6 +53425,7 @@ function findCodeBlocks(content) {
 
         blocks.push({
           language: blockLanguage,
+          session: blockSession,
           code: content.slice(codeStart, codeEnd),
           start: blockStart,
           end: blockEnd,
@@ -53432,6 +53437,7 @@ function findCodeBlocks(content) {
         });
 
         inBlock = false;
+        blockSession = null;
       }
     }
 
@@ -53455,7 +53461,7 @@ function findCodeBlockAtPosition(content, pos) {
 
 /**
  * Find the output block following a code block
- * Supports both ```output and ```output:execId formats
+ * Supports both ```output and ```output:execId formats (3+ backticks)
  *
  * @param {string} content - Document content
  * @param {number} codeBlockEnd - End position of the code block
@@ -53463,18 +53469,21 @@ function findCodeBlockAtPosition(content, pos) {
  */
 function findOutputBlock(content, codeBlockEnd) {
   // Look for ```output or ```output:execId immediately after the code block
+  // Supports variable-length fences (3+ backticks) with backreference for closing
   const after = content.slice(codeBlockEnd);
 
   // Allow for whitespace/newlines between blocks
-  // Group 1: gap, Group 2: full fence line, Group 3: execId (optional), Group 4: content, Group 5: closing
-  const match = after.match(/^(\s*\n)(```output(?::([^\n]*))?\n)([\s\S]*?)(```)/);
+  // Group 1: gap, Group 2: backticks, Group 3: rest of fence line, Group 4: execId (optional), Group 5: content
+  const match = after.match(/^(\s*\n)(`{3,})(output(?::([^\n]*))?\n)([\s\S]*?)\2/);
   if (!match) return null;
 
   const gapLength = match[1].length;
-  const fenceLength = match[2].length;
-  const execId = match[3] || null;
-  const outputContent = match[4];
-  const closingLength = match[5].length;
+  const backticks = match[2];
+  const fenceRestLength = match[3].length;
+  const fenceLength = backticks.length + fenceRestLength;
+  const execId = match[4] || null;
+  const outputContent = match[5];
+  const closingLength = backticks.length;
 
   return {
     start: codeBlockEnd + gapLength,
@@ -53488,32 +53497,36 @@ function findOutputBlock(content, codeBlockEnd) {
 
 /**
  * Find an output block by its execution ID
- * Searches the entire document for ```output:execId
+ * Searches the entire document for ```output:execId (3+ backticks)
  *
  * @param {string} content - Document content
  * @param {string} execId - Execution ID to find
  * @returns {{start: number, end: number, contentStart: number, contentEnd: number, content: string, execId: string}|null}
  */
 function findOutputBlockByExecId(content, execId) {
-  const marker = '```output:' + execId;
-  const pos = content.indexOf(marker);
-  if (pos === -1) return null;
+  // Use regex to find output block with variable-length fences
+  // Escape special regex characters in execId
+  const escapedExecId = execId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp('(`{3,})output:' + escapedExecId + '[^\\n]*\\n([\\s\\S]*?)\\1', 'g');
 
-  // Parse the block from that position
-  const after = content.slice(pos);
-  // Group 1: fence line with execId, Group 2: content, Group 3: closing
-  const match = after.match(/^(```output:[^\n]*\n)([\s\S]*?)(```)/);
+  const match = regex.exec(content);
   if (!match) return null;
 
-  const fenceLength = match[1].length;
+  const pos = match.index;
+  const fullMatch = match[0];
+  match[1];
   const outputContent = match[2];
-  const closingLength = match[3].length;
+
+  // Find where content starts (after the first newline)
+  const fenceLineEndIndex = fullMatch.indexOf('\n') + 1;
+  const contentStart = pos + fenceLineEndIndex;
+  const contentEnd = contentStart + outputContent.length;
 
   return {
     start: pos,
-    end: pos + fenceLength + outputContent.length + closingLength,
-    contentStart: pos + fenceLength,
-    contentEnd: pos + fenceLength + outputContent.length,
+    end: pos + fullMatch.length,
+    contentStart,
+    contentEnd,
     content: outputContent,
     execId,
   };
@@ -53521,32 +53534,35 @@ function findOutputBlockByExecId(content, execId) {
 
 /**
  * Find a stdin block by execution ID
- * Searches the entire document for ```stdin:execId
+ * Searches the entire document for ```stdin:execId (3+ backticks)
  *
  * @param {string} content - Document content
  * @param {string} execId - Execution ID to find
  * @returns {{start: number, end: number, contentStart: number, contentEnd: number, content: string, execId: string}|null}
  */
 function findStdinBlockByExecId(content, execId) {
-  const marker = '```stdin:' + execId;
-  const pos = content.indexOf(marker);
-  if (pos === -1) return null;
+  // Use regex to find stdin block with variable-length fences
+  // Escape special regex characters in execId
+  const escapedExecId = execId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp('(`{3,})stdin:' + escapedExecId + '[^\\n]*\\n([\\s\\S]*?)\\1', 'g');
 
-  // Parse the block from that position
-  const after = content.slice(pos);
-  // Group 1: fence line with execId, Group 2: content, Group 3: closing
-  const match = after.match(/^(```stdin:[^\n]*\n)([\s\S]*?)(```)/);
+  const match = regex.exec(content);
   if (!match) return null;
 
-  const fenceLength = match[1].length;
+  const pos = match.index;
+  const fullMatch = match[0];
   const stdinContent = match[2];
-  const closingLength = match[3].length;
+
+  // Find where content starts (after the first newline)
+  const fenceLineEndIndex = fullMatch.indexOf('\n') + 1;
+  const contentStart = pos + fenceLineEndIndex;
+  const contentEnd = contentStart + stdinContent.length;
 
   return {
     start: pos,
-    end: pos + fenceLength + stdinContent.length + closingLength,
-    contentStart: pos + fenceLength,
-    contentEnd: pos + fenceLength + stdinContent.length,
+    end: pos + fullMatch.length,
+    contentStart,
+    contentEnd,
     content: stdinContent,
     execId,
   };
@@ -54664,6 +54680,214 @@ function hasAnsi(text) {
   return /\x1b\[/.test(text);
 }
 
+// #region ANSI_DECORATIONS
+
+/**
+ * Parse ANSI content and return decoration ranges for CodeMirror.
+ *
+ * This enables line-by-line rendering of ANSI content without widgets:
+ * - Escape sequences are marked for hiding (zero-width)
+ * - Text between sequences is marked with style classes
+ *
+ * @param {string} content - Text with ANSI escape sequences
+ * @param {number} docOffset - Document position where content starts
+ * @returns {{escapes: Array<{from: number, to: number}>, styles: Array<{from: number, to: number, classes: string}>}}
+ */
+function parseAnsiDecorations(content, docOffset = 0) {
+  const escapes = [];  // Ranges to hide (escape sequences)
+  const styles = [];   // Ranges to style (text with classes)
+
+  // Current style state (persists across the entire content)
+  let currentStyle = {
+    fg: null,
+    bg: null,
+    bold: false,
+    dim: false,
+    italic: false,
+    underline: false,
+    strikethrough: false,
+    inverse: false,
+  };
+
+  let i = 0;           // Position in content string
+  let docPos = docOffset;  // Position in document
+
+  while (i < content.length) {
+    // Check for escape sequence
+    if (content[i] === '\x1b' && content[i + 1] === '[') {
+      // Find end of escape sequence
+      let j = i + 2;
+
+      // Check for DEC private mode prefix '?'
+      const isPrivateMode = content[j] === '?';
+      if (isPrivateMode) j++;
+
+      // Collect parameter bytes (digits and semicolons)
+      while (j < content.length && /[0-9;]/.test(content[j])) {
+        j++;
+      }
+
+      // Include command byte
+      if (j < content.length) j++;
+
+      const escapeLen = j - i;
+
+      // Mark escape sequence for hiding
+      escapes.push({
+        from: docPos,
+        to: docPos + escapeLen,
+      });
+
+      // Parse and apply the escape sequence to current style (only SGR)
+      if (!isPrivateMode) {
+        const params = content.slice(i + 2, j - 1);
+        const cmd = content[j - 1];
+
+        if (cmd === 'm') {
+          // SGR - Select Graphic Rendition
+          const nums = params ? params.split(';').map(n => parseInt(n) || 0) : [0];
+          applyAnsiSgr(currentStyle, nums);
+        }
+      }
+
+      docPos += escapeLen;
+      i = j;
+    } else {
+      // Regular character or newline - find run of text until next escape
+      let runStart = i;
+      let runDocStart = docPos;
+
+      while (i < content.length && !(content[i] === '\x1b' && content[i + 1] === '[')) {
+        i++;
+        docPos++;
+      }
+
+      // If we have active styles, add a style range for this text
+      const classes = styleToClasses(currentStyle);
+      if (classes && i > runStart) {
+        styles.push({
+          from: runDocStart,
+          to: docPos,
+          classes: classes,
+        });
+      }
+    }
+  }
+
+  return { escapes, styles };
+}
+
+/**
+ * Apply SGR (Select Graphic Rendition) codes to a style object
+ * @param {Object} style - Style object to modify
+ * @param {number[]} codes - SGR codes
+ */
+function applyAnsiSgr(style, codes) {
+  let i = 0;
+  while (i < codes.length) {
+    const code = codes[i];
+
+    switch (code) {
+      case 0: // Reset
+        style.fg = null;
+        style.bg = null;
+        style.bold = false;
+        style.dim = false;
+        style.italic = false;
+        style.underline = false;
+        style.strikethrough = false;
+        style.inverse = false;
+        break;
+      case 1: style.bold = true; break;
+      case 2: style.dim = true; break;
+      case 3: style.italic = true; break;
+      case 4: style.underline = true; break;
+      case 7: style.inverse = true; break;
+      case 9: style.strikethrough = true; break;
+      case 22: style.bold = false; style.dim = false; break;
+      case 23: style.italic = false; break;
+      case 24: style.underline = false; break;
+      case 27: style.inverse = false; break;
+      case 29: style.strikethrough = false; break;
+      case 39: style.fg = null; break;
+      case 49: style.bg = null; break;
+      default:
+        // Standard foreground colors (30-37, 90-97)
+        if (code >= 30 && code <= 37) {
+          style.fg = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'][code - 30];
+        } else if (code >= 90 && code <= 97) {
+          style.fg = ['bright-black', 'bright-red', 'bright-green', 'bright-yellow', 'bright-blue', 'bright-magenta', 'bright-cyan', 'bright-white'][code - 90];
+        }
+        // Standard background colors (40-47, 100-107)
+        else if (code >= 40 && code <= 47) {
+          style.bg = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'][code - 40];
+        } else if (code >= 100 && code <= 107) {
+          style.bg = ['bright-black', 'bright-red', 'bright-green', 'bright-yellow', 'bright-blue', 'bright-magenta', 'bright-cyan', 'bright-white'][code - 100];
+        }
+        // 256-color: 38;5;n or 48;5;n
+        else if (code === 38 && codes[i + 1] === 5 && codes[i + 2] !== undefined) {
+          style.fg = `c256-${codes[i + 2]}`;
+          i += 2;
+        } else if (code === 48 && codes[i + 1] === 5 && codes[i + 2] !== undefined) {
+          style.bg = `c256-${codes[i + 2]}`;
+          i += 2;
+        }
+        // 24-bit RGB: 38;2;r;g;b or 48;2;r;g;b
+        else if (code === 38 && codes[i + 1] === 2 && codes[i + 4] !== undefined) {
+          style.fg = `rgb-${codes[i + 2]}-${codes[i + 3]}-${codes[i + 4]}`;
+          i += 4;
+        } else if (code === 48 && codes[i + 1] === 2 && codes[i + 4] !== undefined) {
+          style.bg = `rgb-${codes[i + 2]}-${codes[i + 3]}-${codes[i + 4]}`;
+          i += 4;
+        }
+    }
+    i++;
+  }
+}
+
+/**
+ * Convert style object to CSS class string
+ * @param {Object} style - Style object
+ * @returns {string} Space-separated CSS classes
+ */
+function styleToClasses(style) {
+  const classes = [];
+
+  if (style.bold) classes.push('ansi-bold');
+  if (style.dim) classes.push('ansi-dim');
+  if (style.italic) classes.push('ansi-italic');
+  if (style.underline) classes.push('ansi-underline');
+  if (style.strikethrough) classes.push('ansi-strikethrough');
+  if (style.inverse) classes.push('ansi-inverse');
+
+  if (style.fg) {
+    if (style.fg.startsWith('c256-')) {
+      // 256-color - use inline style via special class
+      classes.push(`ansi-fg-256-${style.fg.slice(5)}`);
+    } else if (style.fg.startsWith('rgb-')) {
+      // RGB - use inline style via special class
+      classes.push(`ansi-fg-${style.fg}`);
+    } else {
+      // Standard color
+      classes.push(`ansi-fg-${style.fg}`);
+    }
+  }
+
+  if (style.bg) {
+    if (style.bg.startsWith('c256-')) {
+      classes.push(`ansi-bg-256-${style.bg.slice(5)}`);
+    } else if (style.bg.startsWith('rgb-')) {
+      classes.push(`ansi-bg-${style.bg}`);
+    } else {
+      classes.push(`ansi-bg-${style.bg}`);
+    }
+  }
+
+  return classes.join(' ');
+}
+
+// #endregion ANSI_DECORATIONS
+
 /**
  * CSS styles for ANSI HTML output
  *
@@ -54749,30 +54973,26 @@ const ansiStyles = `
 // Regex to match ANSI escape sequences (same as in terminal.js)
 const ANSI_ESCAPE_REGEX = /\x1b\[[0-9;]*[a-zA-Z]/g;
 
-// =============================================================================
-// Height Cache for Stable Layout (prevents jitter when editing output blocks)
-// =============================================================================
-
 /**
- * Cache of output widget heights, keyed by block start position.
- * Used to pad raw markdown to prevent layout shift.
+ * Zero-width widget used to completely hide ANSI escape sequences.
+ * Using Decoration.replace with this widget removes the escape codes
+ * from rendering, including CodeMirror's control character display.
  */
-const outputHeightCache = new Map();
-
-/**
- * Cache the height of an output widget
- */
-function cacheOutputHeight(blockStart, height) {
-  if (height > 0) {
-    outputHeightCache.set(blockStart, height);
+class HiddenWidget extends WidgetType {
+  toDOM() {
+    const span = document.createElement('span');
+    span.className = 'cm-ansi-hidden';
+    span.style.display = 'none';
+    return span;
   }
-}
 
-/**
- * Get cached height for an output block
- */
-function getCachedOutputHeight(blockStart) {
-  return outputHeightCache.get(blockStart);
+  eq() {
+    return true; // All hidden widgets are equal
+  }
+
+  ignoreEvent() {
+    return true;
+  }
 }
 
 // Facet to provide awareness system to the output widget
@@ -54786,82 +55006,6 @@ const outputWidgetAwarenessAnnotation = Annotation.define();
 // Store pending stdin requests keyed by execId
 // Key: execId, Value: { prompt, password, execId, cellIndex, resolve, reject, _currentValue }
 const pendingStdinRequests = new Map();
-
-// #region WIDGET
-
-/**
- * Widget for rendering output with ANSI colors
- */
-class OutputWidget extends WidgetType {
-  /**
-   * @param {string} content - Output content with ANSI codes
-   * @param {boolean} hidden - Whether widget should be hidden (cursor in block)
-   * @param {number} blockStart - Document position where this output block starts
-   * @param {string|null} execId - Execution ID for this output block
-   */
-  constructor(content, hidden = false, blockStart = 0, execId = null) {
-    super();
-    this.content = content;
-    this.hidden = hidden;
-    this.blockStart = blockStart;
-    this.execId = execId;
-  }
-
-  eq(other) {
-    return other.content === this.content && other.hidden === this.hidden && other.blockStart === this.blockStart && other.execId === this.execId;
-  }
-
-  toDOM() {
-    const container = document.createElement('div');
-    container.className = 'cm-output-widget' + (this.hidden ? ' cm-output-widget-hidden' : '');
-    // Store block position for backwards compat
-    container.dataset.outputBlockStart = String(this.blockStart);
-    // Store execId for stdin input injection - this is the key identifier
-    if (this.execId) {
-      container.dataset.execId = this.execId;
-    }
-
-    // Render with ANSI colors
-    const html = terminalToHtml(this.content);
-    container.innerHTML = `<pre class="cm-output-content">${html}</pre>`;
-
-    // Cache height for stable layout (prevents jitter when editing)
-    // Only cache when not hidden (widget is visible and has real height)
-    if (!this.hidden) {
-      const blockStart = this.blockStart;
-      requestAnimationFrame(() => {
-        // Cache the widget's container height
-        if (container.offsetHeight > 0) {
-          cacheOutputHeight(blockStart, container.offsetHeight);
-        }
-      });
-    }
-
-    // Copy on click
-    container.title = 'Click to copy output';
-    const handleCopy = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-
-      // Copy plain text (without ANSI codes)
-      const plainText = stripAnsi(this.content);
-      navigator.clipboard.writeText(plainText).then(() => {
-        const feedback = document.createElement('div');
-        feedback.className = 'cm-output-copy-feedback';
-        feedback.textContent = 'Copied!';
-        container.appendChild(feedback);
-        setTimeout(() => feedback.remove(), 1500);
-      });
-    };
-    container.onclick = handleCopy;
-
-    return container;
-  }
-
-  ignoreEvent() {
-    return false;
-  }
-}
 
 /**
  * Widget for empty output blocks - shows subtle "No output" indicator
@@ -55045,17 +55189,18 @@ function buildDecorations$4(view, awarenessSystem) {
   const cursorLine = doc.lineAt(cursorPos).number;
   const text = doc.toString();
 
-  // Find ```output or ```output:execId blocks
-  // Group 1: optional execId, Group 2: content
-  const outputBlockRegex = /```output(?::([^\n]*))?\n([\s\S]*?)```/g;
+  // Find ```output or ```output:execId blocks (supports 3+ backticks for nesting)
+  // Group 1: backticks, Group 2: optional execId, Group 3: content
+  // Uses backreference \1 to match same number of closing backticks
+  const outputBlockRegex = /(`{3,})output(?::([^\n]*))?\n([\s\S]*?)\1/g;
   let match;
 
   // Track which execIds have output blocks (for stdin positioning)
   const outputBlocksByExecId = new Map();
 
   while ((match = outputBlockRegex.exec(text)) !== null) {
-    const execId = match[1] || null;  // May be undefined for legacy ```output blocks
-    const content = match[2];
+    const execId = match[2] || null;  // May be undefined for legacy ```output blocks
+    const content = match[3];
     const blockStart = match.index;
     const blockEnd = blockStart + match[0].length;
 
@@ -55085,102 +55230,102 @@ function buildDecorations$4(view, awarenessSystem) {
       }
     }
 
-    // ALWAYS add line decorations to hide raw text (widget overlays on top)
-    // When editing (anyCollaboratorFocused), lines become visible and widget hides
-    for (let i = startLine.number; i <= endLine.number; i++) {
-      const line = doc.line(i);
-      decorations.push(
-        Decoration.line({
-          class: anyCollaboratorFocused ? 'cm-output-line-visible' : 'cm-output-line-hidden',
-        }).range(line.from)
-      );
-    }
-
-    // When hidden, collapse ANSI escape sequences so raw text width matches rendered widget
-    // This prevents height mismatch between raw text (with escape codes) and widget (without)
-    if (!anyCollaboratorFocused) {
-      // Only process content lines (skip opening and closing fence lines)
-      let ansiCount = 0;
-      for (let i = startLine.number + 1; i < endLine.number; i++) {
-        const line = doc.line(i);
-        const lineText = line.text;
-
-        // Find all ANSI escape sequences in this line
-        let match;
-        ANSI_ESCAPE_REGEX.lastIndex = 0; // Reset regex state
-        while ((match = ANSI_ESCAPE_REGEX.exec(lineText)) !== null) {
-          const escapeStart = line.from + match.index;
-          const escapeEnd = escapeStart + match[0].length;
-          decorations.push(
-            Decoration.mark({
-              class: 'cm-ansi-escape-hidden',
-            }).range(escapeStart, escapeEnd)
-          );
-          ansiCount++;
-        }
-      }
-      if (ansiCount > 0) {
-        console.log(`[output-widget] Collapsed ${ansiCount} ANSI escape sequences in output block`);
-      }
-    }
-
-    // Stable layout: when editing, add spacer to prevent layout shift
-    if (anyCollaboratorFocused) {
-      const cachedHeight = getCachedOutputHeight(blockStart);
-      if (cachedHeight) {
-        // Calculate raw content height
-        const lineCount = endLine.number - startLine.number + 1;
-        const lineHeight = view.defaultLineHeight;
-        const rawHeight = lineCount * lineHeight;
-        const padding = cachedHeight - rawHeight;
-
-        if (padding > 0) {
-          // Add padding to the last line (closing fence)
-          decorations.push(
-            Decoration.line({
-              attributes: {
-                class: 'cm-output-spacer-line',
-                style: `padding-bottom: ${padding}px`
-              }
-            }).range(endLine.from)
-          );
-        }
-      }
-    }
-
     // Check if output is empty (just whitespace)
     const trimmedContent = content.trim();
     const isEmpty = trimmedContent.length === 0;
 
-    // Add appropriate widget after opening fence line
-    if (isEmpty) {
-      // Empty output - show subtle indicator
-      decorations.push(
-        Decoration.widget({
-          widget: new EmptyOutputWidget(anyCollaboratorFocused, blockStart, execId),
-          side: 1,
-        }).range(startLine.to)
-      );
+    if (anyCollaboratorFocused) {
+      // EDITING MODE: Show raw text with visible ANSI codes
+      // Add line decorations for editing state visual feedback
+      for (let i = startLine.number; i <= endLine.number; i++) {
+        const line = doc.line(i);
+        decorations.push(
+          Decoration.line({
+            class: 'cm-output-line-editing',
+          }).range(line.from)
+        );
+      }
     } else {
-      // Has content - show output widget
+      // VIEWING MODE: Render ANSI colors inline, hide escape sequences
+      // This uses line-by-line rendering that works with CM6 virtualization
+
+      // Style the fence lines (opening and closing fences)
       decorations.push(
-        Decoration.widget({
-          widget: new OutputWidget(trimmedContent, anyCollaboratorFocused, blockStart, execId),
-          side: 1,
-        }).range(startLine.to)
+        Decoration.line({
+          class: 'cm-output-fence-line cm-output-fence-start',
+        }).range(startLine.from)
       );
+      decorations.push(
+        Decoration.line({
+          class: 'cm-output-fence-line cm-output-fence-end',
+        }).range(endLine.from)
+      );
+
+      // Style content lines with output block background
+      for (let i = startLine.number + 1; i < endLine.number; i++) {
+        const line = doc.line(i);
+        decorations.push(
+          Decoration.line({
+            class: 'cm-output-content-line',
+          }).range(line.from)
+        );
+      }
+
+      // Parse ANSI content and create decorations for escape sequences and styled text
+      // Content starts after the opening fence line
+      const contentStartLine = doc.line(startLine.number + 1);
+      const contentEndLine = doc.line(endLine.number - 1);
+
+      if (contentStartLine.number <= contentEndLine.number && !isEmpty) {
+        const contentStart = contentStartLine.from;
+        const { escapes, styles } = parseAnsiDecorations(content, contentStart);
+
+        // Replace escape sequences with zero-width element (Decoration.replace)
+        // This fully hides them, including CodeMirror's control character rendering
+        for (const esc of escapes) {
+          if (esc.from < esc.to && esc.from >= contentStart) {
+            decorations.push(
+              Decoration.replace({
+                widget: new HiddenWidget(),
+              }).range(esc.from, esc.to)
+            );
+          }
+        }
+
+        // Add decorations to style text with ANSI colors
+        for (const style of styles) {
+          if (style.from < style.to && style.classes && style.from >= contentStart) {
+            decorations.push(
+              Decoration.mark({
+                class: style.classes,
+              }).range(style.from, style.to)
+            );
+          }
+        }
+      }
+
+      // Add empty output indicator if needed
+      if (isEmpty) {
+        decorations.push(
+          Decoration.widget({
+            widget: new EmptyOutputWidget(false, blockStart, execId),
+            side: 1,
+          }).range(startLine.to)
+        );
+      }
     }
 
   }
 
-  // Find ```stdin:execId blocks
+  // Find ```stdin:execId blocks (supports 3+ backticks for nesting)
   // These are collaborative input blocks that appear when stdin is requested
-  const stdinBlockRegex = /```stdin:([^\n]*)\n([\s\S]*?)```/g;
+  // Group 1: backticks, Group 2: execId, Group 3: content
+  const stdinBlockRegex = /(`{3,})stdin:([^\n]*)\n([\s\S]*?)\1/g;
   let stdinMatch;
 
   while ((stdinMatch = stdinBlockRegex.exec(text)) !== null) {
-    const execId = stdinMatch[1];
-    const content = stdinMatch[2];
+    const execId = stdinMatch[2];
+    const content = stdinMatch[3];
     const blockStart = stdinMatch.index;
     const blockEnd = blockStart + stdinMatch[0].length;
 
@@ -55384,50 +55529,136 @@ const outputWidgetStyles = `
 }
 
 /* ==========================================================================
-   CRITICAL: Stable Layout Pattern
+   LINE-BASED OUTPUT RENDERING
 
-   The widget is position:absolute so it doesn't add to document flow.
-   Text lines ALWAYS provide the vertical space. Widget overlays on top.
+   Output blocks are rendered line-by-line with decorations:
+   - Fence lines (opening/closing) are hidden
+   - Content lines have background styling
+   - ANSI escape sequences are hidden (zero-width)
+   - Text is styled with ANSI color classes
 
-   Viewing mode: text transparent, widget visible (z-index: 1)
-   Editing mode: text visible (z-index: 2, opaque bg), widget hidden
+   This approach works with CM6 viewport virtualization.
    ========================================================================== */
 
-/* Hidden when cursor is in block (editing mode) */
-.cm-output-widget-hidden {
+/* Fence lines (opening and closing) - hidden in viewing mode */
+.cm-output-fence-line {
+  font-size: 0 !important;
+  line-height: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Hide CodeMirror's special character rendering (escape symbols) in output blocks */
+/* CM renders control chars like ESC as visible ␛ symbols - we hide these since ANSI is rendered via colors */
+.cm-output-content-line .cm-specialChar {
+  display: none !important;
+}
+.cm-output-content-line .cm-widgetBuffer {
   display: none !important;
 }
 
-/* Both states: lines always take same space */
-.cm-output-line-hidden,
-.cm-output-line-visible {
-  position: relative;
+/* ANSI colors must override CodeMirror's syntax highlighting in output blocks */
+/* CM adds nested spans with color styles that would otherwise override our ANSI classes */
+.cm-output-content-line [class*="ansi-fg-"],
+.cm-output-content-line [class*="ansi-fg-"] * {
+  color: inherit !important;
+}
+.cm-output-content-line [class*="ansi-bg-"],
+.cm-output-content-line [class*="ansi-bg-"] * {
+  background-color: inherit !important;
 }
 
-/* Hidden: text invisible but same space */
-.cm-output-line-hidden {
-  color: transparent !important;
-  user-select: none;
-}
-.cm-output-line-hidden > span {
-  visibility: hidden !important;
+/* Specific ANSI foreground colors with !important to override CM syntax */
+.cm-output-content-line .ansi-fg-black, .cm-output-content-line .ansi-fg-black * { color: var(--ansi-black, #1e1e1e) !important; }
+.cm-output-content-line .ansi-fg-red, .cm-output-content-line .ansi-fg-red * { color: var(--ansi-red, #dc2626) !important; }
+.cm-output-content-line .ansi-fg-green, .cm-output-content-line .ansi-fg-green * { color: var(--ansi-green, #16a34a) !important; }
+.cm-output-content-line .ansi-fg-yellow, .cm-output-content-line .ansi-fg-yellow * { color: var(--ansi-yellow, #ca8a04) !important; }
+.cm-output-content-line .ansi-fg-blue, .cm-output-content-line .ansi-fg-blue * { color: var(--ansi-blue, #2563eb) !important; }
+.cm-output-content-line .ansi-fg-magenta, .cm-output-content-line .ansi-fg-magenta * { color: var(--ansi-magenta, #c026d3) !important; }
+.cm-output-content-line .ansi-fg-cyan, .cm-output-content-line .ansi-fg-cyan * { color: var(--ansi-cyan, #0891b2) !important; }
+.cm-output-content-line .ansi-fg-white, .cm-output-content-line .ansi-fg-white * { color: var(--ansi-white, #e0e0e0) !important; }
+.cm-output-content-line .ansi-fg-bright-black, .cm-output-content-line .ansi-fg-bright-black * { color: var(--ansi-bright-black, #6b7280) !important; }
+.cm-output-content-line .ansi-fg-bright-red, .cm-output-content-line .ansi-fg-bright-red * { color: var(--ansi-bright-red, #ef4444) !important; }
+.cm-output-content-line .ansi-fg-bright-green, .cm-output-content-line .ansi-fg-bright-green * { color: var(--ansi-bright-green, #22c55e) !important; }
+.cm-output-content-line .ansi-fg-bright-yellow, .cm-output-content-line .ansi-fg-bright-yellow * { color: var(--ansi-bright-yellow, #eab308) !important; }
+.cm-output-content-line .ansi-fg-bright-blue, .cm-output-content-line .ansi-fg-bright-blue * { color: var(--ansi-bright-blue, #3b82f6) !important; }
+.cm-output-content-line .ansi-fg-bright-magenta, .cm-output-content-line .ansi-fg-bright-magenta * { color: var(--ansi-bright-magenta, #d946ef) !important; }
+.cm-output-content-line .ansi-fg-bright-cyan, .cm-output-content-line .ansi-fg-bright-cyan * { color: var(--ansi-bright-cyan, #06b6d4) !important; }
+.cm-output-content-line .ansi-fg-bright-white, .cm-output-content-line .ansi-fg-bright-white * { color: var(--ansi-bright-white, #ffffff) !important; }
+
+/* Start fence - add top border/padding for the output block */
+.cm-output-fence-start {
+  /* Visual marker for block start - could add border-top */
 }
 
-/* Collapse ANSI escape sequences in hidden output lines so they don't take space */
-/* This makes the raw text width match the rendered widget width for proper height alignment */
-.cm-ansi-escape-hidden {
-  font-size: 0 !important;
-  width: 0 !important;
-  display: inline-block !important;
-  overflow: hidden !important;
+/* End fence - add bottom spacing */
+.cm-output-fence-end {
+  /* Visual marker for block end */
 }
 
-/* Visible: text shown for editing - must cover the widget underneath */
-.cm-output-line-visible {
-  color: var(--widget-text, #e0e0e0);
-  position: relative;
-  z-index: 2;
+/* Content lines - terminal-style background for output block */
+.cm-output-content-line {
+  background: var(--output-background, #1a1a2e);
+  border-left: var(--widget-border-accent-width, 3px) solid var(--widget-border-accent, rgba(100, 149, 237, 0.6));
+  padding-left: var(--widget-padding-x, 12px);
+  padding-right: var(--widget-padding-x, 12px);
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Source Code Pro', 'Consolas', monospace;
+  font-size: 0.9em;
+  line-height: 1.4;
+  color: var(--output-text, #e0e0e0);
+}
+
+/* First content line - add top padding and rounded corners */
+.cm-output-content-line:first-of-type,
+.cm-output-fence-start + .cm-line {
+  padding-top: var(--widget-padding-y, 8px);
+  border-top-left-radius: var(--widget-border-radius, 6px);
+  border-top-right-radius: var(--widget-border-radius, 6px);
+}
+
+/* Last content line - add bottom padding and rounded corners */
+.cm-output-content-line:last-of-type {
+  padding-bottom: var(--widget-padding-y, 8px);
+  border-bottom-left-radius: var(--widget-border-radius, 6px);
+  border-bottom-right-radius: var(--widget-border-radius, 6px);
+}
+
+/* Preserve whitespace but allow wrapping */
+.cm-output-content-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  tab-size: 4;
+}
+
+/* Editing mode - show raw content with different styling */
+.cm-output-line-editing {
   background: var(--widget-surface-elevated, #1e1e1e);
+  border-left: var(--widget-border-accent-width, 3px) solid var(--widget-warning, #f59e0b);
+}
+
+/* ANSI escape sequences - hidden (zero-width) */
+.cm-ansi-escape-hidden {
+  display: inline !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  letter-spacing: 0 !important;
+  color: transparent !important;
+  width: 0 !important;
+  max-width: 0 !important;
+  overflow: hidden !important;
+  vertical-align: baseline !important;
+}
+
+/* Ensure the span itself doesn't take space */
+.cm-ansi-escape-hidden * {
+  display: none !important;
+}
+
+/* Legacy widget support (for transition period) */
+.cm-output-widget-hidden {
+  display: none !important;
 }
 
 /* Widget text color */
@@ -56433,12 +56664,13 @@ class ExecutionManager {
       // Handle Enter - submit stdin input
       if (e.key === 'Enter') {
         // Find any stdin block the cursor is in (even if we're not the owner)
-        const stdinBlockRegex = /```stdin:([^\n:]+)(?::password)?\n([\s\S]*?)```/g;
+        // Supports variable-length fences (3+ backticks) with backreference
+        const stdinBlockRegex = /(`{3,})stdin:([^\n:]+)(?::password)?\n([\s\S]*?)\1/g;
         let stdinMatch;
 
         while ((stdinMatch = stdinBlockRegex.exec(content)) !== null) {
-          const execId = stdinMatch[1];
-          const stdinContent = stdinMatch[2];
+          const execId = stdinMatch[2];
+          const stdinContent = stdinMatch[3];
           const blockStart = stdinMatch.index;
           const blockEnd = blockStart + stdinMatch[0].length;
 
@@ -57026,9 +57258,11 @@ class ExecutionManager {
 
       // Execute with streaming (pass onStdinRequest for input() support)
       // Pass execId so hub runtimes can find the output block
+      // Pass session name for named session support (e.g., ```js sandbox)
       const result = await this.registry.executeStreaming(code, language, onChunk, onStdinRequest, {
         execId,
         cellId: cell.id || `cell-${index}`,
+        session: cell.session,
       });
 
       // Final update - find output block by execId for robustness
@@ -77140,6 +77374,32 @@ function dedent(editor) {
 }
 
 /**
+ * View source code for symbol under cursor.
+ * Opens source panel with full source code and enables drill-down navigation.
+ * Bound to F12 by default.
+ *
+ * @param {Object} editor - Editor API instance
+ * @returns {(view: EditorView) => boolean}
+ */
+function viewSource(editor) {
+  return (view) => {
+    const content = view.state.doc.toString();
+    const pos = view.state.selection.main.head;
+    const cell = getCellAtCursor(content, pos);
+
+    // Only handle if cursor is in a cell
+    if (!cell) return false;
+
+    // Call viewSource asynchronously (command returns immediately)
+    editor.viewSource(pos).catch(e => {
+      console.error('[viewSource] Error:', e);
+    });
+
+    return true;
+  };
+}
+
+/**
  * All available commands.
  * Maps command names to factory functions.
  */
@@ -77158,6 +77418,7 @@ const commandRegistry = {
   formatDocument,
   indent,
   dedent,
+  viewSource,
 };
 
 /**
@@ -77195,6 +77456,9 @@ const defaultKeybindings = {
   // Indentation
   'Tab': 'indent',
   'Shift-Tab': 'dedent',
+
+  // Code intelligence
+  'F12': 'viewSource',
 };
 
 /**
@@ -77814,6 +78078,8 @@ function createRuntimeCompletionExtension({ providers, getContent, stateManager,
     override: [source],
     activateOnTyping: config.activateOnTyping ?? true,
     maxRenderedOptions: config.maxRenderedOptions ?? 50,
+    // Retrigger completions after accepting paths (ending with /) or dots (for chained access)
+    activateOnCompletion: config.activateOnCompletion ?? /[\/\.]$/,
     ...config,
   });
 }
@@ -115485,7 +115751,56 @@ function parseProgress(output) {
  */
 function createJavaScriptRuntime(options = {}) {
   const rt = createRuntime(options);
-  const session = rt.createSession({ language: 'javascript' });
+
+  // Track named sessions - each can have different isolation
+  // Session naming:
+  //   null/undefined/'default'/'main'/'none' → main context (no isolation)
+  //   'sandbox'/'iframe' → sandboxed iframe
+  //   other names → sandboxed iframe with separate scope
+  const sessions = new Map();
+  const defaultIsolation = options.defaultIsolation || 'iframe';
+
+  /**
+   * Get or create a session by name
+   * @param {string|null} sessionName
+   * @returns {Session}
+   */
+  function getOrCreateSession(sessionName) {
+    // Normalize session name
+    const name = sessionName || 'default';
+
+    // Return existing session
+    if (sessions.has(name)) {
+      return sessions.get(name);
+    }
+
+    // Determine isolation mode based on session name
+    let isolation;
+    if (!sessionName || sessionName === 'default' || sessionName === 'main' || sessionName === 'none') {
+      // Default session uses the configured default isolation
+      isolation = defaultIsolation;
+    } else if (sessionName === 'sandbox' || sessionName === 'iframe') {
+      // Explicit sandbox request
+      isolation = 'iframe';
+    } else {
+      // Named sessions are sandboxed by default (separate scope)
+      isolation = 'iframe';
+    }
+
+    // Create new session with appropriate isolation
+    const session = rt.createSession({
+      language: 'javascript',
+      isolation,
+      id: name,
+    });
+
+    sessions.set(name, session);
+    console.log(`[JS Runtime] Created session '${name}' with isolation: ${isolation}`);
+    return session;
+  }
+
+  // Create default session eagerly
+  const defaultSession = getOrCreateSession('default');
 
   // Languages supported by mrmd-js
   const supportedLanguages = {
@@ -115508,8 +115823,9 @@ function createJavaScriptRuntime(options = {}) {
     },
 
     /** Execute code (non-streaming) */
-    async execute(code, language) {
+    async execute(code, language, execOptions = {}) {
       const lang = supportedLanguages[language.toLowerCase()] || 'javascript';
+      const session = getOrCreateSession(execOptions.session);
       const result = await session.execute(code, { language: lang });
       return {
         success: result.success,
@@ -115522,8 +115838,9 @@ function createJavaScriptRuntime(options = {}) {
     },
 
     /** Execute code with streaming output */
-    async executeStreaming(code, language, onChunk, onStdinRequest) {
+    async executeStreaming(code, language, onChunk, onStdinRequest, execOptions = {}) {
       const lang = supportedLanguages[language.toLowerCase()] || 'javascript';
+      const session = getOrCreateSession(execOptions.session);
       const result = await session.execute(code, { language: lang });
 
       // Handle different output types
@@ -115560,9 +115877,19 @@ function createJavaScriptRuntime(options = {}) {
       };
     },
 
-    /** Reset the session (clear all variables) */
-    reset() {
-      session.reset();
+    /** Reset a session (clear all variables) */
+    reset(sessionName) {
+      const session = sessions.get(sessionName || 'default');
+      if (session) {
+        session.reset();
+      }
+    },
+
+    /** Reset all sessions */
+    resetAll() {
+      for (const session of sessions.values()) {
+        session.reset();
+      }
     },
 
     /** Get the underlying mrmd-js runtime */
@@ -115570,12 +115897,17 @@ function createJavaScriptRuntime(options = {}) {
       return rt;
     },
 
-    /** Get the underlying session */
-    getSession() {
-      return session;
+    /** Get a session by name (default if not specified) */
+    getSession(sessionName) {
+      return getOrCreateSession(sessionName);
     },
 
-    /** Destroy the runtime */
+    /** List all session names */
+    listSessions() {
+      return Array.from(sessions.keys());
+    },
+
+    /** Destroy the runtime and all sessions */
     destroy() {
       rt.destroy();
     },
@@ -115593,7 +115925,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {{found: boolean, name?: string, type?: string, value?: string, signature?: string}|null}
      */
     hover(code, cursor) {
-      return session.hover(code, cursor);
+      return defaultSession.hover(code, cursor);
     },
 
     /**
@@ -115605,7 +115937,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {{matches: Array, cursorStart: number, cursorEnd: number}}
      */
     complete(code, cursor) {
-      return session.complete(code, cursor);
+      return defaultSession.complete(code, cursor);
     },
 
     /**
@@ -115617,7 +115949,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {Object|null}
      */
     inspect(code, cursor, options = {}) {
-      return session.inspect(code, cursor, options);
+      return defaultSession.inspect(code, cursor, options);
     },
 
     /**
@@ -115626,7 +115958,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {Array<{name: string, type: string, value: string, expandable?: boolean}>}
      */
     listVariables() {
-      return session.listVariables();
+      return defaultSession.listVariables();
     },
 
     /**
@@ -115637,7 +115969,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {Object}
      */
     getVariable(name, options = {}) {
-      return session.getVariable(name, options);
+      return defaultSession.getVariable(name, options);
     },
 
     /**
@@ -115647,7 +115979,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {{status: 'complete'|'incomplete'|'invalid'|'unknown', indent?: string}}
      */
     isComplete(code) {
-      return session.isComplete(code);
+      return defaultSession.isComplete(code);
     },
 
     /**
@@ -115657,7 +115989,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {Promise<{formatted: string, changed: boolean}>}
      */
     format(code) {
-      return session.format(code);
+      return defaultSession.format(code);
     },
 
     /**
@@ -115843,6 +116175,8 @@ function create(target, options = {}) {
 
   // JavaScript runtime option (backward compat)
   const javascript = options.javascript !== undefined ? options.javascript : true;
+  // JavaScript isolation mode: 'iframe' (default, sandboxed) or 'none' (main window context)
+  const javascriptIsolation = options.javascriptIsolation || 'iframe';
 
   // System dark mode detection
   const getSystemDarkMode = () =>
@@ -116027,6 +116361,7 @@ function create(target, options = {}) {
   // Event handlers
   const changeHandlers = [];
   const saveHandlers = [];
+  const viewSourceHandlers = [];
 
   // Keyboard handler for save
   element.addEventListener('keydown', (e) => {
@@ -116051,7 +116386,7 @@ function create(target, options = {}) {
   // - object: use custom runtime (must implement supports/execute/executeStreaming)
   let jsRuntime = null;
   if (javascript === true) {
-    jsRuntime = createJavaScriptRuntime();
+    jsRuntime = createJavaScriptRuntime({ defaultIsolation: javascriptIsolation });
     registry.register('javascript', jsRuntime);
   } else if (javascript && typeof javascript === 'object') {
     // Custom runtime provided
@@ -116651,10 +116986,23 @@ function create(target, options = {}) {
     },
 
     /**
-     * Register a runtime
+     * Register a runtime.
+     *
+     * If the runtime is an MRPClient, automatically registers it as an LSP
+     * provider for hover, completions, and variable inspection.
+     *
+     * @param {string} name - Runtime name (e.g., 'python', 'julia')
+     * @param {Object} runtime - Runtime instance (MRPClient or custom)
      */
     registerRuntime(name, runtime) {
       registry.register(name, runtime);
+
+      // Auto-register LSP provider for MRPClient instances
+      if (runtime instanceof MRPClient) {
+        const provider = adaptMRPClient(runtime, [name.toLowerCase()]);
+        runtimeLspProviders.set(name, provider);
+        addLspExtensions();  // Ensure extensions exist (idempotent)
+      }
     },
 
     /**
@@ -116854,6 +117202,93 @@ function create(target, options = {}) {
 
       if (!provider) return { formatted: code, changed: false };
       return provider.format(code);
+    },
+
+    /**
+     * View source code for symbol at cursor position.
+     * Calls inspect with detail=2 to get full source code.
+     * Triggers registered onViewSource callbacks.
+     *
+     * @param {number} [pos] - Position (defaults to cursor)
+     * @returns {Promise<{found: boolean, name?: string, sourceCode?: string, file?: string, ...}|null>}
+     */
+    async viewSource(pos) {
+      const position = pos ?? view.state.selection.main.head;
+      const content = this.getContent();
+      const cell = getCellAtCursor(content, position);
+
+      if (!cell) return null;
+
+      const provider = runtimeLspProviders.get(cell.language) ||
+        Array.from(runtimeLspProviders.values()).find(p =>
+          p.languages.includes(cell.language.toLowerCase())
+        );
+
+      if (!provider) return null;
+
+      const offset = position - cell.codeStart;
+      const result = await provider.inspect(cell.code, offset, cell.language, { detail: 2 });
+
+      // Trigger callbacks if we got a result
+      if (result && result.found) {
+        viewSourceHandlers.forEach(handler => {
+          try {
+            handler(result);
+          } catch (e) {
+            console.error('[viewSource] Handler error:', e);
+          }
+        });
+      }
+
+      return result;
+    },
+
+    /**
+     * View source for a specific symbol by name.
+     * Useful for drilling into types from source code.
+     *
+     * @param {string} symbol - Full symbol path (e.g., 'dspy.LM', 'BaseLM')
+     * @param {string} [language='python'] - Language/runtime to query
+     * @returns {Promise<{found: boolean, name?: string, sourceCode?: string, file?: string, ...}|null>}
+     */
+    async viewSourceByName(symbol, language = 'python') {
+      const provider = runtimeLspProviders.get(language) ||
+        Array.from(runtimeLspProviders.values()).find(p =>
+          p.languages.includes(language.toLowerCase())
+        );
+
+      if (!provider) return null;
+
+      // Inspect at the end of the symbol name
+      const result = await provider.inspect(symbol, symbol.length, language, { detail: 2 });
+
+      // Trigger callbacks if we got a result
+      if (result && result.found) {
+        viewSourceHandlers.forEach(handler => {
+          try {
+            handler(result);
+          } catch (e) {
+            console.error('[viewSource] Handler error:', e);
+          }
+        });
+      }
+
+      return result;
+    },
+
+    /**
+     * Register callback for viewSource events.
+     * Called when user triggers "view source" (F12, Cmd+Click).
+     *
+     * @param {function} callback - Called with inspect result {found, name, sourceCode, file, ...}
+     * @returns {function} Unsubscribe function
+     */
+    onViewSource(callback) {
+      viewSourceHandlers.push(callback);
+      return () => {
+        const idx = viewSourceHandlers.indexOf(callback);
+        if (idx >= 0) viewSourceHandlers.splice(idx, 1);
+      };
     },
 
     /**

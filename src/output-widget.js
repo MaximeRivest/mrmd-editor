@@ -28,10 +28,32 @@
 
 import { WidgetType, Decoration, ViewPlugin, EditorView } from '@codemirror/view';
 import { Facet, Annotation } from '@codemirror/state';
-import { terminalToHtml, hasAnsi, stripAnsi, ansiStyles } from './terminal.js';
+import { terminalToHtml, hasAnsi, stripAnsi, ansiStyles, parseAnsiDecorations } from './terminal.js';
 
 // Regex to match ANSI escape sequences (same as in terminal.js)
 const ANSI_ESCAPE_REGEX = /\x1b\[[0-9;]*[a-zA-Z]/g;
+
+/**
+ * Zero-width widget used to completely hide ANSI escape sequences.
+ * Using Decoration.replace with this widget removes the escape codes
+ * from rendering, including CodeMirror's control character display.
+ */
+class HiddenWidget extends WidgetType {
+  toDOM() {
+    const span = document.createElement('span');
+    span.className = 'cm-ansi-hidden';
+    span.style.display = 'none';
+    return span;
+  }
+
+  eq() {
+    return true; // All hidden widgets are equal
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
 
 // =============================================================================
 // Height Cache for Stable Layout (prevents jitter when editing output blocks)
@@ -329,17 +351,18 @@ function buildDecorations(view, awarenessSystem) {
   const cursorLine = doc.lineAt(cursorPos).number;
   const text = doc.toString();
 
-  // Find ```output or ```output:execId blocks
-  // Group 1: optional execId, Group 2: content
-  const outputBlockRegex = /```output(?::([^\n]*))?\n([\s\S]*?)```/g;
+  // Find ```output or ```output:execId blocks (supports 3+ backticks for nesting)
+  // Group 1: backticks, Group 2: optional execId, Group 3: content
+  // Uses backreference \1 to match same number of closing backticks
+  const outputBlockRegex = /(`{3,})output(?::([^\n]*))?\n([\s\S]*?)\1/g;
   let match;
 
   // Track which execIds have output blocks (for stdin positioning)
   const outputBlocksByExecId = new Map();
 
   while ((match = outputBlockRegex.exec(text)) !== null) {
-    const execId = match[1] || null;  // May be undefined for legacy ```output blocks
-    const content = match[2];
+    const execId = match[2] || null;  // May be undefined for legacy ```output blocks
+    const content = match[3];
     const blockStart = match.index;
     const blockEnd = blockStart + match[0].length;
 
@@ -369,102 +392,102 @@ function buildDecorations(view, awarenessSystem) {
       }
     }
 
-    // ALWAYS add line decorations to hide raw text (widget overlays on top)
-    // When editing (anyCollaboratorFocused), lines become visible and widget hides
-    for (let i = startLine.number; i <= endLine.number; i++) {
-      const line = doc.line(i);
-      decorations.push(
-        Decoration.line({
-          class: anyCollaboratorFocused ? 'cm-output-line-visible' : 'cm-output-line-hidden',
-        }).range(line.from)
-      );
-    }
-
-    // When hidden, collapse ANSI escape sequences so raw text width matches rendered widget
-    // This prevents height mismatch between raw text (with escape codes) and widget (without)
-    if (!anyCollaboratorFocused) {
-      // Only process content lines (skip opening and closing fence lines)
-      let ansiCount = 0;
-      for (let i = startLine.number + 1; i < endLine.number; i++) {
-        const line = doc.line(i);
-        const lineText = line.text;
-
-        // Find all ANSI escape sequences in this line
-        let match;
-        ANSI_ESCAPE_REGEX.lastIndex = 0; // Reset regex state
-        while ((match = ANSI_ESCAPE_REGEX.exec(lineText)) !== null) {
-          const escapeStart = line.from + match.index;
-          const escapeEnd = escapeStart + match[0].length;
-          decorations.push(
-            Decoration.mark({
-              class: 'cm-ansi-escape-hidden',
-            }).range(escapeStart, escapeEnd)
-          );
-          ansiCount++;
-        }
-      }
-      if (ansiCount > 0) {
-        console.log(`[output-widget] Collapsed ${ansiCount} ANSI escape sequences in output block`);
-      }
-    }
-
-    // Stable layout: when editing, add spacer to prevent layout shift
-    if (anyCollaboratorFocused) {
-      const cachedHeight = getCachedOutputHeight(blockStart);
-      if (cachedHeight) {
-        // Calculate raw content height
-        const lineCount = endLine.number - startLine.number + 1;
-        const lineHeight = view.defaultLineHeight;
-        const rawHeight = lineCount * lineHeight;
-        const padding = cachedHeight - rawHeight;
-
-        if (padding > 0) {
-          // Add padding to the last line (closing fence)
-          decorations.push(
-            Decoration.line({
-              attributes: {
-                class: 'cm-output-spacer-line',
-                style: `padding-bottom: ${padding}px`
-              }
-            }).range(endLine.from)
-          );
-        }
-      }
-    }
-
     // Check if output is empty (just whitespace)
     const trimmedContent = content.trim();
     const isEmpty = trimmedContent.length === 0;
 
-    // Add appropriate widget after opening fence line
-    if (isEmpty) {
-      // Empty output - show subtle indicator
-      decorations.push(
-        Decoration.widget({
-          widget: new EmptyOutputWidget(anyCollaboratorFocused, blockStart, execId),
-          side: 1,
-        }).range(startLine.to)
-      );
+    if (anyCollaboratorFocused) {
+      // EDITING MODE: Show raw text with visible ANSI codes
+      // Add line decorations for editing state visual feedback
+      for (let i = startLine.number; i <= endLine.number; i++) {
+        const line = doc.line(i);
+        decorations.push(
+          Decoration.line({
+            class: 'cm-output-line-editing',
+          }).range(line.from)
+        );
+      }
     } else {
-      // Has content - show output widget
+      // VIEWING MODE: Render ANSI colors inline, hide escape sequences
+      // This uses line-by-line rendering that works with CM6 virtualization
+
+      // Style the fence lines (opening and closing fences)
       decorations.push(
-        Decoration.widget({
-          widget: new OutputWidget(trimmedContent, anyCollaboratorFocused, blockStart, execId),
-          side: 1,
-        }).range(startLine.to)
+        Decoration.line({
+          class: 'cm-output-fence-line cm-output-fence-start',
+        }).range(startLine.from)
       );
+      decorations.push(
+        Decoration.line({
+          class: 'cm-output-fence-line cm-output-fence-end',
+        }).range(endLine.from)
+      );
+
+      // Style content lines with output block background
+      for (let i = startLine.number + 1; i < endLine.number; i++) {
+        const line = doc.line(i);
+        decorations.push(
+          Decoration.line({
+            class: 'cm-output-content-line',
+          }).range(line.from)
+        );
+      }
+
+      // Parse ANSI content and create decorations for escape sequences and styled text
+      // Content starts after the opening fence line
+      const contentStartLine = doc.line(startLine.number + 1);
+      const contentEndLine = doc.line(endLine.number - 1);
+
+      if (contentStartLine.number <= contentEndLine.number && !isEmpty) {
+        const contentStart = contentStartLine.from;
+        const { escapes, styles } = parseAnsiDecorations(content, contentStart);
+
+        // Replace escape sequences with zero-width element (Decoration.replace)
+        // This fully hides them, including CodeMirror's control character rendering
+        for (const esc of escapes) {
+          if (esc.from < esc.to && esc.from >= contentStart) {
+            decorations.push(
+              Decoration.replace({
+                widget: new HiddenWidget(),
+              }).range(esc.from, esc.to)
+            );
+          }
+        }
+
+        // Add decorations to style text with ANSI colors
+        for (const style of styles) {
+          if (style.from < style.to && style.classes && style.from >= contentStart) {
+            decorations.push(
+              Decoration.mark({
+                class: style.classes,
+              }).range(style.from, style.to)
+            );
+          }
+        }
+      }
+
+      // Add empty output indicator if needed
+      if (isEmpty) {
+        decorations.push(
+          Decoration.widget({
+            widget: new EmptyOutputWidget(false, blockStart, execId),
+            side: 1,
+          }).range(startLine.to)
+        );
+      }
     }
 
   }
 
-  // Find ```stdin:execId blocks
+  // Find ```stdin:execId blocks (supports 3+ backticks for nesting)
   // These are collaborative input blocks that appear when stdin is requested
-  const stdinBlockRegex = /```stdin:([^\n]*)\n([\s\S]*?)```/g;
+  // Group 1: backticks, Group 2: execId, Group 3: content
+  const stdinBlockRegex = /(`{3,})stdin:([^\n]*)\n([\s\S]*?)\1/g;
   let stdinMatch;
 
   while ((stdinMatch = stdinBlockRegex.exec(text)) !== null) {
-    const execId = stdinMatch[1];
-    const content = stdinMatch[2];
+    const execId = stdinMatch[2];
+    const content = stdinMatch[3];
     const blockStart = stdinMatch.index;
     const blockEnd = blockStart + stdinMatch[0].length;
 
@@ -668,50 +691,136 @@ export const outputWidgetStyles = `
 }
 
 /* ==========================================================================
-   CRITICAL: Stable Layout Pattern
+   LINE-BASED OUTPUT RENDERING
 
-   The widget is position:absolute so it doesn't add to document flow.
-   Text lines ALWAYS provide the vertical space. Widget overlays on top.
+   Output blocks are rendered line-by-line with decorations:
+   - Fence lines (opening/closing) are hidden
+   - Content lines have background styling
+   - ANSI escape sequences are hidden (zero-width)
+   - Text is styled with ANSI color classes
 
-   Viewing mode: text transparent, widget visible (z-index: 1)
-   Editing mode: text visible (z-index: 2, opaque bg), widget hidden
+   This approach works with CM6 viewport virtualization.
    ========================================================================== */
 
-/* Hidden when cursor is in block (editing mode) */
-.cm-output-widget-hidden {
+/* Fence lines (opening and closing) - hidden in viewing mode */
+.cm-output-fence-line {
+  font-size: 0 !important;
+  line-height: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Hide CodeMirror's special character rendering (escape symbols) in output blocks */
+/* CM renders control chars like ESC as visible ␛ symbols - we hide these since ANSI is rendered via colors */
+.cm-output-content-line .cm-specialChar {
+  display: none !important;
+}
+.cm-output-content-line .cm-widgetBuffer {
   display: none !important;
 }
 
-/* Both states: lines always take same space */
-.cm-output-line-hidden,
-.cm-output-line-visible {
-  position: relative;
+/* ANSI colors must override CodeMirror's syntax highlighting in output blocks */
+/* CM adds nested spans with color styles that would otherwise override our ANSI classes */
+.cm-output-content-line [class*="ansi-fg-"],
+.cm-output-content-line [class*="ansi-fg-"] * {
+  color: inherit !important;
+}
+.cm-output-content-line [class*="ansi-bg-"],
+.cm-output-content-line [class*="ansi-bg-"] * {
+  background-color: inherit !important;
 }
 
-/* Hidden: text invisible but same space */
-.cm-output-line-hidden {
-  color: transparent !important;
-  user-select: none;
-}
-.cm-output-line-hidden > span {
-  visibility: hidden !important;
+/* Specific ANSI foreground colors with !important to override CM syntax */
+.cm-output-content-line .ansi-fg-black, .cm-output-content-line .ansi-fg-black * { color: var(--ansi-black, #1e1e1e) !important; }
+.cm-output-content-line .ansi-fg-red, .cm-output-content-line .ansi-fg-red * { color: var(--ansi-red, #dc2626) !important; }
+.cm-output-content-line .ansi-fg-green, .cm-output-content-line .ansi-fg-green * { color: var(--ansi-green, #16a34a) !important; }
+.cm-output-content-line .ansi-fg-yellow, .cm-output-content-line .ansi-fg-yellow * { color: var(--ansi-yellow, #ca8a04) !important; }
+.cm-output-content-line .ansi-fg-blue, .cm-output-content-line .ansi-fg-blue * { color: var(--ansi-blue, #2563eb) !important; }
+.cm-output-content-line .ansi-fg-magenta, .cm-output-content-line .ansi-fg-magenta * { color: var(--ansi-magenta, #c026d3) !important; }
+.cm-output-content-line .ansi-fg-cyan, .cm-output-content-line .ansi-fg-cyan * { color: var(--ansi-cyan, #0891b2) !important; }
+.cm-output-content-line .ansi-fg-white, .cm-output-content-line .ansi-fg-white * { color: var(--ansi-white, #e0e0e0) !important; }
+.cm-output-content-line .ansi-fg-bright-black, .cm-output-content-line .ansi-fg-bright-black * { color: var(--ansi-bright-black, #6b7280) !important; }
+.cm-output-content-line .ansi-fg-bright-red, .cm-output-content-line .ansi-fg-bright-red * { color: var(--ansi-bright-red, #ef4444) !important; }
+.cm-output-content-line .ansi-fg-bright-green, .cm-output-content-line .ansi-fg-bright-green * { color: var(--ansi-bright-green, #22c55e) !important; }
+.cm-output-content-line .ansi-fg-bright-yellow, .cm-output-content-line .ansi-fg-bright-yellow * { color: var(--ansi-bright-yellow, #eab308) !important; }
+.cm-output-content-line .ansi-fg-bright-blue, .cm-output-content-line .ansi-fg-bright-blue * { color: var(--ansi-bright-blue, #3b82f6) !important; }
+.cm-output-content-line .ansi-fg-bright-magenta, .cm-output-content-line .ansi-fg-bright-magenta * { color: var(--ansi-bright-magenta, #d946ef) !important; }
+.cm-output-content-line .ansi-fg-bright-cyan, .cm-output-content-line .ansi-fg-bright-cyan * { color: var(--ansi-bright-cyan, #06b6d4) !important; }
+.cm-output-content-line .ansi-fg-bright-white, .cm-output-content-line .ansi-fg-bright-white * { color: var(--ansi-bright-white, #ffffff) !important; }
+
+/* Start fence - add top border/padding for the output block */
+.cm-output-fence-start {
+  /* Visual marker for block start - could add border-top */
 }
 
-/* Collapse ANSI escape sequences in hidden output lines so they don't take space */
-/* This makes the raw text width match the rendered widget width for proper height alignment */
-.cm-ansi-escape-hidden {
-  font-size: 0 !important;
-  width: 0 !important;
-  display: inline-block !important;
-  overflow: hidden !important;
+/* End fence - add bottom spacing */
+.cm-output-fence-end {
+  /* Visual marker for block end */
 }
 
-/* Visible: text shown for editing - must cover the widget underneath */
-.cm-output-line-visible {
-  color: var(--widget-text, #e0e0e0);
-  position: relative;
-  z-index: 2;
+/* Content lines - terminal-style background for output block */
+.cm-output-content-line {
+  background: var(--output-background, #1a1a2e);
+  border-left: var(--widget-border-accent-width, 3px) solid var(--widget-border-accent, rgba(100, 149, 237, 0.6));
+  padding-left: var(--widget-padding-x, 12px);
+  padding-right: var(--widget-padding-x, 12px);
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Source Code Pro', 'Consolas', monospace;
+  font-size: 0.9em;
+  line-height: 1.4;
+  color: var(--output-text, #e0e0e0);
+}
+
+/* First content line - add top padding and rounded corners */
+.cm-output-content-line:first-of-type,
+.cm-output-fence-start + .cm-line {
+  padding-top: var(--widget-padding-y, 8px);
+  border-top-left-radius: var(--widget-border-radius, 6px);
+  border-top-right-radius: var(--widget-border-radius, 6px);
+}
+
+/* Last content line - add bottom padding and rounded corners */
+.cm-output-content-line:last-of-type {
+  padding-bottom: var(--widget-padding-y, 8px);
+  border-bottom-left-radius: var(--widget-border-radius, 6px);
+  border-bottom-right-radius: var(--widget-border-radius, 6px);
+}
+
+/* Preserve whitespace but allow wrapping */
+.cm-output-content-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  tab-size: 4;
+}
+
+/* Editing mode - show raw content with different styling */
+.cm-output-line-editing {
   background: var(--widget-surface-elevated, #1e1e1e);
+  border-left: var(--widget-border-accent-width, 3px) solid var(--widget-warning, #f59e0b);
+}
+
+/* ANSI escape sequences - hidden (zero-width) */
+.cm-ansi-escape-hidden {
+  display: inline !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  letter-spacing: 0 !important;
+  color: transparent !important;
+  width: 0 !important;
+  max-width: 0 !important;
+  overflow: hidden !important;
+  vertical-align: baseline !important;
+}
+
+/* Ensure the span itself doesn't take space */
+.cm-ansi-escape-hidden * {
+  display: none !important;
+}
+
+/* Legacy widget support (for transition period) */
+.cm-output-widget-hidden {
+  display: none !important;
 }
 
 /* Widget text color */

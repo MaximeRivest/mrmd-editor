@@ -127,6 +127,7 @@ import {
 import {
   markdown as markdownRendering,
   markdownRenderer,
+  assetResolverFacet,  // Facet for resolving asset URLs in Electron/desktop apps
   blockDecorations,  // StateField for tables, display math (multi-line replace)
   lineHeightTracker, // ViewPlugin for accurate line height tracking
   markdownStyles,
@@ -273,7 +274,56 @@ function parseProgress(output) {
  */
 function createJavaScriptRuntime(options = {}) {
   const rt = createMrmdJsRuntime(options);
-  const session = rt.createSession({ language: 'javascript' });
+
+  // Track named sessions - each can have different isolation
+  // Session naming:
+  //   null/undefined/'default'/'main'/'none' → main context (no isolation)
+  //   'sandbox'/'iframe' → sandboxed iframe
+  //   other names → sandboxed iframe with separate scope
+  const sessions = new Map();
+  const defaultIsolation = options.defaultIsolation || 'iframe';
+
+  /**
+   * Get or create a session by name
+   * @param {string|null} sessionName
+   * @returns {Session}
+   */
+  function getOrCreateSession(sessionName) {
+    // Normalize session name
+    const name = sessionName || 'default';
+
+    // Return existing session
+    if (sessions.has(name)) {
+      return sessions.get(name);
+    }
+
+    // Determine isolation mode based on session name
+    let isolation;
+    if (!sessionName || sessionName === 'default' || sessionName === 'main' || sessionName === 'none') {
+      // Default session uses the configured default isolation
+      isolation = defaultIsolation;
+    } else if (sessionName === 'sandbox' || sessionName === 'iframe') {
+      // Explicit sandbox request
+      isolation = 'iframe';
+    } else {
+      // Named sessions are sandboxed by default (separate scope)
+      isolation = 'iframe';
+    }
+
+    // Create new session with appropriate isolation
+    const session = rt.createSession({
+      language: 'javascript',
+      isolation,
+      id: name,
+    });
+
+    sessions.set(name, session);
+    console.log(`[JS Runtime] Created session '${name}' with isolation: ${isolation}`);
+    return session;
+  }
+
+  // Create default session eagerly
+  const defaultSession = getOrCreateSession('default');
 
   // Languages supported by mrmd-js
   const supportedLanguages = {
@@ -296,8 +346,9 @@ function createJavaScriptRuntime(options = {}) {
     },
 
     /** Execute code (non-streaming) */
-    async execute(code, language) {
+    async execute(code, language, execOptions = {}) {
       const lang = supportedLanguages[language.toLowerCase()] || 'javascript';
+      const session = getOrCreateSession(execOptions.session);
       const result = await session.execute(code, { language: lang });
       return {
         success: result.success,
@@ -310,8 +361,9 @@ function createJavaScriptRuntime(options = {}) {
     },
 
     /** Execute code with streaming output */
-    async executeStreaming(code, language, onChunk, onStdinRequest) {
+    async executeStreaming(code, language, onChunk, onStdinRequest, execOptions = {}) {
       const lang = supportedLanguages[language.toLowerCase()] || 'javascript';
+      const session = getOrCreateSession(execOptions.session);
       const result = await session.execute(code, { language: lang });
 
       // Handle different output types
@@ -348,9 +400,19 @@ function createJavaScriptRuntime(options = {}) {
       };
     },
 
-    /** Reset the session (clear all variables) */
-    reset() {
-      session.reset();
+    /** Reset a session (clear all variables) */
+    reset(sessionName) {
+      const session = sessions.get(sessionName || 'default');
+      if (session) {
+        session.reset();
+      }
+    },
+
+    /** Reset all sessions */
+    resetAll() {
+      for (const session of sessions.values()) {
+        session.reset();
+      }
     },
 
     /** Get the underlying mrmd-js runtime */
@@ -358,12 +420,17 @@ function createJavaScriptRuntime(options = {}) {
       return rt;
     },
 
-    /** Get the underlying session */
-    getSession() {
-      return session;
+    /** Get a session by name (default if not specified) */
+    getSession(sessionName) {
+      return getOrCreateSession(sessionName);
     },
 
-    /** Destroy the runtime */
+    /** List all session names */
+    listSessions() {
+      return Array.from(sessions.keys());
+    },
+
+    /** Destroy the runtime and all sessions */
     destroy() {
       rt.destroy();
     },
@@ -381,7 +448,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {{found: boolean, name?: string, type?: string, value?: string, signature?: string}|null}
      */
     hover(code, cursor) {
-      return session.hover(code, cursor);
+      return defaultSession.hover(code, cursor);
     },
 
     /**
@@ -393,7 +460,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {{matches: Array, cursorStart: number, cursorEnd: number}}
      */
     complete(code, cursor) {
-      return session.complete(code, cursor);
+      return defaultSession.complete(code, cursor);
     },
 
     /**
@@ -405,7 +472,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {Object|null}
      */
     inspect(code, cursor, options = {}) {
-      return session.inspect(code, cursor, options);
+      return defaultSession.inspect(code, cursor, options);
     },
 
     /**
@@ -414,7 +481,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {Array<{name: string, type: string, value: string, expandable?: boolean}>}
      */
     listVariables() {
-      return session.listVariables();
+      return defaultSession.listVariables();
     },
 
     /**
@@ -425,7 +492,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {Object}
      */
     getVariable(name, options = {}) {
-      return session.getVariable(name, options);
+      return defaultSession.getVariable(name, options);
     },
 
     /**
@@ -435,7 +502,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {{status: 'complete'|'incomplete'|'invalid'|'unknown', indent?: string}}
      */
     isComplete(code) {
-      return session.isComplete(code);
+      return defaultSession.isComplete(code);
     },
 
     /**
@@ -445,7 +512,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {Promise<{formatted: string, changed: boolean}>}
      */
     format(code) {
-      return session.format(code);
+      return defaultSession.format(code);
     },
 
     /**
@@ -631,6 +698,8 @@ function create(target, options = {}) {
 
   // JavaScript runtime option (backward compat)
   const javascript = options.javascript !== undefined ? options.javascript : true;
+  // JavaScript isolation mode: 'iframe' (default, sandboxed) or 'none' (main window context)
+  const javascriptIsolation = options.javascriptIsolation || 'iframe';
 
   // System dark mode detection
   const getSystemDarkMode = () =>
@@ -815,6 +884,7 @@ function create(target, options = {}) {
   // Event handlers
   const changeHandlers = [];
   const saveHandlers = [];
+  const viewSourceHandlers = [];
   const cellRunHandlers = [];
   const cellOutputHandlers = [];
   const cellCompleteHandlers = [];
@@ -843,7 +913,7 @@ function create(target, options = {}) {
   // - object: use custom runtime (must implement supports/execute/executeStreaming)
   let jsRuntime = null;
   if (javascript === true) {
-    jsRuntime = createJavaScriptRuntime();
+    jsRuntime = createJavaScriptRuntime({ defaultIsolation: javascriptIsolation });
     registry.register('javascript', jsRuntime);
   } else if (javascript && typeof javascript === 'object') {
     // Custom runtime provided
@@ -1443,10 +1513,23 @@ function create(target, options = {}) {
     },
 
     /**
-     * Register a runtime
+     * Register a runtime.
+     *
+     * If the runtime is an MRPClient, automatically registers it as an LSP
+     * provider for hover, completions, and variable inspection.
+     *
+     * @param {string} name - Runtime name (e.g., 'python', 'julia')
+     * @param {Object} runtime - Runtime instance (MRPClient or custom)
      */
     registerRuntime(name, runtime) {
       registry.register(name, runtime);
+
+      // Auto-register LSP provider for MRPClient instances
+      if (runtime instanceof MRPClient) {
+        const provider = adaptMRPClient(runtime, [name.toLowerCase()]);
+        runtimeLspProviders.set(name, provider);
+        addLspExtensions();  // Ensure extensions exist (idempotent)
+      }
     },
 
     /**
@@ -1646,6 +1729,93 @@ function create(target, options = {}) {
 
       if (!provider) return { formatted: code, changed: false };
       return provider.format(code);
+    },
+
+    /**
+     * View source code for symbol at cursor position.
+     * Calls inspect with detail=2 to get full source code.
+     * Triggers registered onViewSource callbacks.
+     *
+     * @param {number} [pos] - Position (defaults to cursor)
+     * @returns {Promise<{found: boolean, name?: string, sourceCode?: string, file?: string, ...}|null>}
+     */
+    async viewSource(pos) {
+      const position = pos ?? view.state.selection.main.head;
+      const content = this.getContent();
+      const cell = getCellAtCursor(content, position);
+
+      if (!cell) return null;
+
+      const provider = runtimeLspProviders.get(cell.language) ||
+        Array.from(runtimeLspProviders.values()).find(p =>
+          p.languages.includes(cell.language.toLowerCase())
+        );
+
+      if (!provider) return null;
+
+      const offset = position - cell.codeStart;
+      const result = await provider.inspect(cell.code, offset, cell.language, { detail: 2 });
+
+      // Trigger callbacks if we got a result
+      if (result && result.found) {
+        viewSourceHandlers.forEach(handler => {
+          try {
+            handler(result);
+          } catch (e) {
+            console.error('[viewSource] Handler error:', e);
+          }
+        });
+      }
+
+      return result;
+    },
+
+    /**
+     * View source for a specific symbol by name.
+     * Useful for drilling into types from source code.
+     *
+     * @param {string} symbol - Full symbol path (e.g., 'dspy.LM', 'BaseLM')
+     * @param {string} [language='python'] - Language/runtime to query
+     * @returns {Promise<{found: boolean, name?: string, sourceCode?: string, file?: string, ...}|null>}
+     */
+    async viewSourceByName(symbol, language = 'python') {
+      const provider = runtimeLspProviders.get(language) ||
+        Array.from(runtimeLspProviders.values()).find(p =>
+          p.languages.includes(language.toLowerCase())
+        );
+
+      if (!provider) return null;
+
+      // Inspect at the end of the symbol name
+      const result = await provider.inspect(symbol, symbol.length, language, { detail: 2 });
+
+      // Trigger callbacks if we got a result
+      if (result && result.found) {
+        viewSourceHandlers.forEach(handler => {
+          try {
+            handler(result);
+          } catch (e) {
+            console.error('[viewSource] Handler error:', e);
+          }
+        });
+      }
+
+      return result;
+    },
+
+    /**
+     * Register callback for viewSource events.
+     * Called when user triggers "view source" (F12, Cmd+Click).
+     *
+     * @param {function} callback - Called with inspect result {found, name, sourceCode, file, ...}
+     * @returns {function} Unsubscribe function
+     */
+    onViewSource(callback) {
+      viewSourceHandlers.push(callback);
+      return () => {
+        const idx = viewSourceHandlers.indexOf(callback);
+        if (idx >= 0) viewSourceHandlers.splice(idx, 1);
+      };
     },
 
     /**
@@ -2566,6 +2736,9 @@ const markdownExports = {
   markdown: markdownRendering,
   markdownRenderer,
 
+  // Asset resolver facet (for Electron/desktop apps)
+  assetResolverFacet,
+
   // Styles
   markdownStyles,
   injectMarkdownStyles,
@@ -2733,6 +2906,7 @@ export {
   markdownExports,
   markdownRendering as markdown,
   markdownRenderer,
+  assetResolverFacet,
   markdownStyles,
   injectMarkdownStyles,
   TaskCheckboxWidget,

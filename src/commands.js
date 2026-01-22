@@ -766,6 +766,32 @@ export function dedent(editor) {
 }
 
 /**
+ * View source code for symbol under cursor.
+ * Opens source panel with full source code and enables drill-down navigation.
+ * Bound to F12 by default.
+ *
+ * @param {Object} editor - Editor API instance
+ * @returns {(view: EditorView) => boolean}
+ */
+export function viewSource(editor) {
+  return (view) => {
+    const content = view.state.doc.toString();
+    const pos = view.state.selection.main.head;
+    const cell = getCellAtCursor(content, pos);
+
+    // Only handle if cursor is in a cell
+    if (!cell) return false;
+
+    // Call viewSource asynchronously (command returns immediately)
+    editor.viewSource(pos).catch(e => {
+      console.error('[viewSource] Error:', e);
+    });
+
+    return true;
+  };
+}
+
+/**
  * All available commands.
  * Maps command names to factory functions.
  */
@@ -784,4 +810,5 @@ export const commandRegistry = {
   formatDocument,
   indent,
   dedent,
+  viewSource,
 };

@@ -9,7 +9,7 @@
 import yaml from 'yaml';
 
 /** Supported runtime languages */
-const RUNTIME_LANGUAGES = ['python', 'node', 'julia', 'r', 'shell'];
+const RUNTIME_LANGUAGES = ['python', 'bash', 'node', 'julia', 'r', 'shell'];
 
 /**
  * @typedef {Object} RuntimeConfig
@@ -69,7 +69,9 @@ export function findYamlConfigBlocks(content) {
       if (closingPattern.test(line)) {
         // Parse the YAML content
         const yamlContent = blockContent.join('\n');
-        const runtimes = extractRuntimes(yamlContent);
+        // Content starts after the opening fence line + newline
+        const contentStartOffset = fenceLineEnd + 1;
+        const runtimes = extractRuntimes(yamlContent, contentStartOffset);
 
         // Only include if it has runtime config
         if (runtimes.length > 0) {
@@ -134,9 +136,10 @@ export function findSessionFrontmatter(content) {
 /**
  * Extract runtime configurations from YAML content
  * @param {string} yamlContent - Raw YAML string
+ * @param {number} [contentStartOffset=0] - Character offset where YAML content starts in document
  * @returns {RuntimeConfig[]}
  */
-export function extractRuntimes(yamlContent) {
+export function extractRuntimes(yamlContent, contentStartOffset = 0) {
   const runtimes = [];
 
   try {
@@ -149,12 +152,26 @@ export function extractRuntimes(yamlContent) {
     for (const language of RUNTIME_LANGUAGES) {
       const config = parsed.session[language];
       if (config) {
+        // Find the line where this runtime is declared (e.g., "  python:")
+        // Search for the pattern with proper indentation under session:
+        const pattern = new RegExp(`^(  ${language}:)`, 'm');
+        const match = yamlContent.match(pattern);
+        let lineOffset = null;
+
+        if (match) {
+          // Find the end of the line where this runtime key appears
+          const keyStart = match.index;
+          const lineEnd = yamlContent.indexOf('\n', keyStart);
+          lineOffset = contentStartOffset + (lineEnd !== -1 ? lineEnd : keyStart + match[1].length);
+        }
+
         runtimes.push({
           language,
           name: config.name || 'default',
           venv: config.venv,
           cwd: config.cwd,
           autoStart: config.auto_start ?? config.autoStart ?? true,
+          lineOffset, // Position to place widget for this runtime
         });
       }
     }

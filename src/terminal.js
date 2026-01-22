@@ -829,6 +829,214 @@ export function hasAnsi(text) {
   return /\x1b\[/.test(text);
 }
 
+// #region ANSI_DECORATIONS
+
+/**
+ * Parse ANSI content and return decoration ranges for CodeMirror.
+ *
+ * This enables line-by-line rendering of ANSI content without widgets:
+ * - Escape sequences are marked for hiding (zero-width)
+ * - Text between sequences is marked with style classes
+ *
+ * @param {string} content - Text with ANSI escape sequences
+ * @param {number} docOffset - Document position where content starts
+ * @returns {{escapes: Array<{from: number, to: number}>, styles: Array<{from: number, to: number, classes: string}>}}
+ */
+export function parseAnsiDecorations(content, docOffset = 0) {
+  const escapes = [];  // Ranges to hide (escape sequences)
+  const styles = [];   // Ranges to style (text with classes)
+
+  // Current style state (persists across the entire content)
+  let currentStyle = {
+    fg: null,
+    bg: null,
+    bold: false,
+    dim: false,
+    italic: false,
+    underline: false,
+    strikethrough: false,
+    inverse: false,
+  };
+
+  let i = 0;           // Position in content string
+  let docPos = docOffset;  // Position in document
+
+  while (i < content.length) {
+    // Check for escape sequence
+    if (content[i] === '\x1b' && content[i + 1] === '[') {
+      // Find end of escape sequence
+      let j = i + 2;
+
+      // Check for DEC private mode prefix '?'
+      const isPrivateMode = content[j] === '?';
+      if (isPrivateMode) j++;
+
+      // Collect parameter bytes (digits and semicolons)
+      while (j < content.length && /[0-9;]/.test(content[j])) {
+        j++;
+      }
+
+      // Include command byte
+      if (j < content.length) j++;
+
+      const escapeLen = j - i;
+
+      // Mark escape sequence for hiding
+      escapes.push({
+        from: docPos,
+        to: docPos + escapeLen,
+      });
+
+      // Parse and apply the escape sequence to current style (only SGR)
+      if (!isPrivateMode) {
+        const params = content.slice(i + 2, j - 1);
+        const cmd = content[j - 1];
+
+        if (cmd === 'm') {
+          // SGR - Select Graphic Rendition
+          const nums = params ? params.split(';').map(n => parseInt(n) || 0) : [0];
+          applyAnsiSgr(currentStyle, nums);
+        }
+      }
+
+      docPos += escapeLen;
+      i = j;
+    } else {
+      // Regular character or newline - find run of text until next escape
+      let runStart = i;
+      let runDocStart = docPos;
+
+      while (i < content.length && !(content[i] === '\x1b' && content[i + 1] === '[')) {
+        i++;
+        docPos++;
+      }
+
+      // If we have active styles, add a style range for this text
+      const classes = styleToClasses(currentStyle);
+      if (classes && i > runStart) {
+        styles.push({
+          from: runDocStart,
+          to: docPos,
+          classes: classes,
+        });
+      }
+    }
+  }
+
+  return { escapes, styles };
+}
+
+/**
+ * Apply SGR (Select Graphic Rendition) codes to a style object
+ * @param {Object} style - Style object to modify
+ * @param {number[]} codes - SGR codes
+ */
+function applyAnsiSgr(style, codes) {
+  let i = 0;
+  while (i < codes.length) {
+    const code = codes[i];
+
+    switch (code) {
+      case 0: // Reset
+        style.fg = null;
+        style.bg = null;
+        style.bold = false;
+        style.dim = false;
+        style.italic = false;
+        style.underline = false;
+        style.strikethrough = false;
+        style.inverse = false;
+        break;
+      case 1: style.bold = true; break;
+      case 2: style.dim = true; break;
+      case 3: style.italic = true; break;
+      case 4: style.underline = true; break;
+      case 7: style.inverse = true; break;
+      case 9: style.strikethrough = true; break;
+      case 22: style.bold = false; style.dim = false; break;
+      case 23: style.italic = false; break;
+      case 24: style.underline = false; break;
+      case 27: style.inverse = false; break;
+      case 29: style.strikethrough = false; break;
+      case 39: style.fg = null; break;
+      case 49: style.bg = null; break;
+      default:
+        // Standard foreground colors (30-37, 90-97)
+        if (code >= 30 && code <= 37) {
+          style.fg = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'][code - 30];
+        } else if (code >= 90 && code <= 97) {
+          style.fg = ['bright-black', 'bright-red', 'bright-green', 'bright-yellow', 'bright-blue', 'bright-magenta', 'bright-cyan', 'bright-white'][code - 90];
+        }
+        // Standard background colors (40-47, 100-107)
+        else if (code >= 40 && code <= 47) {
+          style.bg = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'][code - 40];
+        } else if (code >= 100 && code <= 107) {
+          style.bg = ['bright-black', 'bright-red', 'bright-green', 'bright-yellow', 'bright-blue', 'bright-magenta', 'bright-cyan', 'bright-white'][code - 100];
+        }
+        // 256-color: 38;5;n or 48;5;n
+        else if (code === 38 && codes[i + 1] === 5 && codes[i + 2] !== undefined) {
+          style.fg = `c256-${codes[i + 2]}`;
+          i += 2;
+        } else if (code === 48 && codes[i + 1] === 5 && codes[i + 2] !== undefined) {
+          style.bg = `c256-${codes[i + 2]}`;
+          i += 2;
+        }
+        // 24-bit RGB: 38;2;r;g;b or 48;2;r;g;b
+        else if (code === 38 && codes[i + 1] === 2 && codes[i + 4] !== undefined) {
+          style.fg = `rgb-${codes[i + 2]}-${codes[i + 3]}-${codes[i + 4]}`;
+          i += 4;
+        } else if (code === 48 && codes[i + 1] === 2 && codes[i + 4] !== undefined) {
+          style.bg = `rgb-${codes[i + 2]}-${codes[i + 3]}-${codes[i + 4]}`;
+          i += 4;
+        }
+    }
+    i++;
+  }
+}
+
+/**
+ * Convert style object to CSS class string
+ * @param {Object} style - Style object
+ * @returns {string} Space-separated CSS classes
+ */
+function styleToClasses(style) {
+  const classes = [];
+
+  if (style.bold) classes.push('ansi-bold');
+  if (style.dim) classes.push('ansi-dim');
+  if (style.italic) classes.push('ansi-italic');
+  if (style.underline) classes.push('ansi-underline');
+  if (style.strikethrough) classes.push('ansi-strikethrough');
+  if (style.inverse) classes.push('ansi-inverse');
+
+  if (style.fg) {
+    if (style.fg.startsWith('c256-')) {
+      // 256-color - use inline style via special class
+      classes.push(`ansi-fg-256-${style.fg.slice(5)}`);
+    } else if (style.fg.startsWith('rgb-')) {
+      // RGB - use inline style via special class
+      classes.push(`ansi-fg-${style.fg}`);
+    } else {
+      // Standard color
+      classes.push(`ansi-fg-${style.fg}`);
+    }
+  }
+
+  if (style.bg) {
+    if (style.bg.startsWith('c256-')) {
+      classes.push(`ansi-bg-256-${style.bg.slice(5)}`);
+    } else if (style.bg.startsWith('rgb-')) {
+      classes.push(`ansi-bg-${style.bg}`);
+    } else {
+      classes.push(`ansi-bg-${style.bg}`);
+    }
+  }
+
+  return classes.join(' ');
+}
+
+// #endregion ANSI_DECORATIONS
+
 /**
  * CSS styles for ANSI HTML output
  *

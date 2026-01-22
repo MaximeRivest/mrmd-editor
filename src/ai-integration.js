@@ -361,8 +361,15 @@ function buildDecorations(view) {
     }
   }
 
-  // Sort by position
-  decorations.sort((a, b) => a.from - b.from);
+  // Sort by position and startSide (required by CodeMirror)
+  decorations.sort((a, b) => {
+    const fromDiff = a.from - b.from;
+    if (fromDiff !== 0) return fromDiff;
+    // When same position, sort by startSide (widget side)
+    const aSide = a.value?.startSide ?? a.value?.spec?.side ?? 0;
+    const bSide = b.value?.startSide ?? b.value?.spec?.side ?? 0;
+    return aSide - bSide;
+  });
 
   return Decoration.set(decorations);
 }

@@ -268,7 +268,7 @@ export class MRPClient {
    *        - An options object with onStdinRequest property
    * @returns {Promise<ExecuteResult>}
    */
-  async executeStreaming(code, language, onChunk, optionsOrStdinHandler = {}) {
+  async executeStreaming(code, language, onChunk, optionsOrStdinHandler = {}, extraOptions = {}) {
     // Cancel any previous execution
     if (this.#currentExecution) {
       this.#currentExecution.abort();
@@ -278,14 +278,15 @@ export class MRPClient {
     this.#currentExecution = controller;
 
     // Handle both signatures:
-    // 1. executeStreaming(code, lang, onChunk, onStdinRequest) - Runtime interface
+    // 1. executeStreaming(code, lang, onChunk, onStdinRequest, options) - Runtime interface (5 params)
     // 2. executeStreaming(code, lang, onChunk, { onStdinRequest, ...options }) - Original MRP client
     let onStdinRequest;
     let executeOptions = {};
 
     if (typeof optionsOrStdinHandler === 'function') {
-      // Runtime interface: 4th param is the stdin handler directly
+      // Runtime interface: 4th param is the stdin handler, 5th is options
       onStdinRequest = optionsOrStdinHandler;
+      executeOptions = extraOptions;
     } else {
       // Options object
       ({ onStdinRequest, ...executeOptions } = optionsOrStdinHandler);

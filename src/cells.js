@@ -37,6 +37,7 @@ const RENDERED_LANGUAGES = new Set(['html', 'html-rendered']);
  * @param {string} content - Document content
  * @returns {Array<{
  *   language: string,
+ *   session: string|null, // session name if specified (e.g., ```js mysession)
  *   code: string,
  *   start: number,      // start of opening fence
  *   end: number,        // end of closing fence
@@ -54,6 +55,7 @@ export function findCodeBlocks(content) {
   let inBlock = false;
   let blockStart = 0;
   let blockLanguage = '';
+  let blockSession = null;
   let codeStart = 0;
   let blockLine = 0;
   let charOffset = 0;
@@ -63,12 +65,14 @@ export function findCodeBlocks(content) {
     const lineStart = charOffset;
 
     if (!inBlock) {
-      // Look for opening fence
-      const match = line.match(/^(`{3,})(\w*)/);
+      // Look for opening fence: ```language [session]
+      // Examples: ```js, ```js sandbox, ```python myenv
+      const match = line.match(/^(`{3,})(\w*)(?:\s+(\S+))?/);
       if (match) {
         inBlock = true;
         blockStart = lineStart;
         blockLanguage = match[2].toLowerCase();
+        blockSession = match[3] || null; // session name after language
         codeStart = lineStart + line.length + 1; // +1 for newline
         blockLine = i;
       }
@@ -80,6 +84,7 @@ export function findCodeBlocks(content) {
 
         blocks.push({
           language: blockLanguage,
+          session: blockSession,
           code: content.slice(codeStart, codeEnd),
           start: blockStart,
           end: blockEnd,
@@ -91,6 +96,7 @@ export function findCodeBlocks(content) {
         });
 
         inBlock = false;
+        blockSession = null;
       }
     }
 
@@ -114,7 +120,7 @@ export function findCodeBlockAtPosition(content, pos) {
 
 /**
  * Find the output block following a code block
- * Supports both ```output and ```output:execId formats
+ * Supports both ```output and ```output:execId formats (3+ backticks)
  *
  * @param {string} content - Document content
  * @param {number} codeBlockEnd - End position of the code block
@@ -122,18 +128,21 @@ export function findCodeBlockAtPosition(content, pos) {
  */
 export function findOutputBlock(content, codeBlockEnd) {
   // Look for ```output or ```output:execId immediately after the code block
+  // Supports variable-length fences (3+ backticks) with backreference for closing
   const after = content.slice(codeBlockEnd);
 
   // Allow for whitespace/newlines between blocks
-  // Group 1: gap, Group 2: full fence line, Group 3: execId (optional), Group 4: content, Group 5: closing
-  const match = after.match(/^(\s*\n)(```output(?::([^\n]*))?\n)([\s\S]*?)(```)/);
+  // Group 1: gap, Group 2: backticks, Group 3: rest of fence line, Group 4: execId (optional), Group 5: content
+  const match = after.match(/^(\s*\n)(`{3,})(output(?::([^\n]*))?\n)([\s\S]*?)\2/);
   if (!match) return null;
 
   const gapLength = match[1].length;
-  const fenceLength = match[2].length;
-  const execId = match[3] || null;
-  const outputContent = match[4];
-  const closingLength = match[5].length;
+  const backticks = match[2];
+  const fenceRestLength = match[3].length;
+  const fenceLength = backticks.length + fenceRestLength;
+  const execId = match[4] || null;
+  const outputContent = match[5];
+  const closingLength = backticks.length;
 
   return {
     start: codeBlockEnd + gapLength,
@@ -147,32 +156,36 @@ export function findOutputBlock(content, codeBlockEnd) {
 
 /**
  * Find an output block by its execution ID
- * Searches the entire document for ```output:execId
+ * Searches the entire document for ```output:execId (3+ backticks)
  *
  * @param {string} content - Document content
  * @param {string} execId - Execution ID to find
  * @returns {{start: number, end: number, contentStart: number, contentEnd: number, content: string, execId: string}|null}
  */
 export function findOutputBlockByExecId(content, execId) {
-  const marker = '```output:' + execId;
-  const pos = content.indexOf(marker);
-  if (pos === -1) return null;
+  // Use regex to find output block with variable-length fences
+  // Escape special regex characters in execId
+  const escapedExecId = execId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp('(`{3,})output:' + escapedExecId + '[^\\n]*\\n([\\s\\S]*?)\\1', 'g');
 
-  // Parse the block from that position
-  const after = content.slice(pos);
-  // Group 1: fence line with execId, Group 2: content, Group 3: closing
-  const match = after.match(/^(```output:[^\n]*\n)([\s\S]*?)(```)/);
+  const match = regex.exec(content);
   if (!match) return null;
 
-  const fenceLength = match[1].length;
+  const pos = match.index;
+  const fullMatch = match[0];
+  const backticks = match[1];
   const outputContent = match[2];
-  const closingLength = match[3].length;
+
+  // Find where content starts (after the first newline)
+  const fenceLineEndIndex = fullMatch.indexOf('\n') + 1;
+  const contentStart = pos + fenceLineEndIndex;
+  const contentEnd = contentStart + outputContent.length;
 
   return {
     start: pos,
-    end: pos + fenceLength + outputContent.length + closingLength,
-    contentStart: pos + fenceLength,
-    contentEnd: pos + fenceLength + outputContent.length,
+    end: pos + fullMatch.length,
+    contentStart,
+    contentEnd,
     content: outputContent,
     execId,
   };
@@ -180,32 +193,35 @@ export function findOutputBlockByExecId(content, execId) {
 
 /**
  * Find a stdin block by execution ID
- * Searches the entire document for ```stdin:execId
+ * Searches the entire document for ```stdin:execId (3+ backticks)
  *
  * @param {string} content - Document content
  * @param {string} execId - Execution ID to find
  * @returns {{start: number, end: number, contentStart: number, contentEnd: number, content: string, execId: string}|null}
  */
 export function findStdinBlockByExecId(content, execId) {
-  const marker = '```stdin:' + execId;
-  const pos = content.indexOf(marker);
-  if (pos === -1) return null;
+  // Use regex to find stdin block with variable-length fences
+  // Escape special regex characters in execId
+  const escapedExecId = execId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp('(`{3,})stdin:' + escapedExecId + '[^\\n]*\\n([\\s\\S]*?)\\1', 'g');
 
-  // Parse the block from that position
-  const after = content.slice(pos);
-  // Group 1: fence line with execId, Group 2: content, Group 3: closing
-  const match = after.match(/^(```stdin:[^\n]*\n)([\s\S]*?)(```)/);
+  const match = regex.exec(content);
   if (!match) return null;
 
-  const fenceLength = match[1].length;
+  const pos = match.index;
+  const fullMatch = match[0];
   const stdinContent = match[2];
-  const closingLength = match[3].length;
+
+  // Find where content starts (after the first newline)
+  const fenceLineEndIndex = fullMatch.indexOf('\n') + 1;
+  const contentStart = pos + fenceLineEndIndex;
+  const contentEnd = contentStart + stdinContent.length;
 
   return {
     start: pos,
-    end: pos + fenceLength + stdinContent.length + closingLength,
-    contentStart: pos + fenceLength,
-    contentEnd: pos + fenceLength + stdinContent.length,
+    end: pos + fullMatch.length,
+    contentStart,
+    contentEnd,
     content: stdinContent,
     execId,
   };

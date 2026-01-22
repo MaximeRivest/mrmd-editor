@@ -7,6 +7,7 @@
 
 import { keymap } from '@codemirror/view';
 import { Prec } from '@codemirror/state';
+import { acceptCompletion } from '@codemirror/autocomplete';
 import { commandRegistry } from './commands.js';
 
 /**
@@ -33,10 +34,27 @@ export const defaultKeybindings = {
   'Mod-Shift-f': 'formatCell',
   'Mod-Alt-Shift-f': 'formatDocument',
 
-  // Indentation
-  'Tab': 'indent',
+  // Indentation (handled specially - see createKeymap)
+  // Tab first tries to accept completion, then indents
+  'Tab': 'indentOrAcceptCompletion',
   'Shift-Tab': 'dedent',
+
+  // Code intelligence
+  'F12': 'viewSource',
 };
+
+/**
+ * Special command: Accept completion if active, otherwise indent
+ */
+function indentOrAcceptCompletion(editor) {
+  const indentCmd = commandRegistry.indent(editor);
+  return (view) => {
+    // Try to accept completion first
+    if (acceptCompletion(view)) return true;
+    // Fall back to indent
+    return indentCmd(view);
+  };
+}
 
 /**
  * Create a CodeMirror keymap extension from keybinding config.
@@ -59,6 +77,11 @@ export const defaultKeybindings = {
 export function createKeymap(editor, bindings = defaultKeybindings) {
   const keymapEntries = [];
 
+  // Special commands that aren't in the registry
+  const specialCommands = {
+    'indentOrAcceptCompletion': indentOrAcceptCompletion,
+  };
+
   for (const [key, commandName] of Object.entries(bindings)) {
     // Skip disabled bindings
     if (commandName === false || commandName === null) continue;
@@ -68,6 +91,15 @@ export function createKeymap(editor, bindings = defaultKeybindings) {
       keymapEntries.push({
         key,
         run: (view) => commandName(editor, view),
+      });
+      continue;
+    }
+
+    // Check special commands first
+    if (specialCommands[commandName]) {
+      keymapEntries.push({
+        key,
+        run: specialCommands[commandName](editor),
       });
       continue;
     }
@@ -128,5 +160,6 @@ export function listCommands() {
     { name: 'formatDocument', description: 'Format entire document (all sections)' },
     { name: 'indent', description: 'Indent current line or selection' },
     { name: 'dedent', description: 'Dedent current line or selection' },
+    { name: 'viewSource', description: 'View source code for symbol under cursor' },
   ];
 }

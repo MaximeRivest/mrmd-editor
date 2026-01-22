@@ -13,6 +13,7 @@ import { WidgetType } from '@codemirror/view';
 /** Language display labels */
 const LANGUAGE_LABELS = {
   python: '🐍 Python',
+  bash: '$ Bash',
   node: '⬢ Node',
   julia: '◐ Julia',
   r: '📊 R',

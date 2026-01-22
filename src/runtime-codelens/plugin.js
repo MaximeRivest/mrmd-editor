@@ -66,38 +66,40 @@ function buildDecorations(state) {
   const decorations = [];
 
   for (const block of blocks) {
-    // Enrich runtimes with status
-    const runtimesWithStatus = block.runtimes.map((runtime) => {
+    // Create a separate widget for each runtime at its line position
+    for (const runtime of block.runtimes) {
       const sessionName = getSessionName(runtime.name, context.projectName);
       const status = context.getSessionStatus?.(sessionName) || null;
-      return {
+
+      const runtimeWithStatus = {
         ...runtime,
         name: sessionName,
         status,
       };
-    });
 
-    // Create widget
-    const widget = new RuntimeCodeLensWidget({
-      runtimes: runtimesWithStatus,
-      callbacks: {
-        onStart: (runtime) => context.onStart?.(runtime),
-        onStop: (name) => context.onStop?.(name),
-        onRestart: (name) => context.onRestart?.(name),
-        onRestartAll: () => context.onRestartAll?.(),
-      },
-      blockType: block.type,
-    });
+      // Create widget for this single runtime
+      const widget = new RuntimeCodeLensWidget({
+        runtimes: [runtimeWithStatus],
+        callbacks: {
+          onStart: (rt) => context.onStart?.(rt),
+          onStop: (name) => context.onStop?.(name),
+          onRestart: (name) => context.onRestart?.(name),
+          onRestartAll: () => context.onRestartAll?.(),
+        },
+        blockType: block.type,
+      });
 
-    // Place widget after the opening fence/delimiter line
-    // Using block: true makes it render on its own line
-    decorations.push(
-      Decoration.widget({
-        widget,
-        side: 1, // After the position
-        block: true, // Render as block element (requires StateField)
-      }).range(block.fenceLineEnd)
-    );
+      // Place widget at the runtime's line position, or fallback to block start
+      const position = runtime.lineOffset ?? block.fenceLineEnd;
+
+      decorations.push(
+        Decoration.widget({
+          widget,
+          side: 1, // After the position
+          block: true, // Render as block element (requires StateField)
+        }).range(position)
+      );
+    }
   }
 
   return Decoration.set(decorations, true);

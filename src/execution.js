@@ -250,12 +250,13 @@ export class ExecutionManager {
       // Handle Enter - submit stdin input
       if (e.key === 'Enter') {
         // Find any stdin block the cursor is in (even if we're not the owner)
-        const stdinBlockRegex = /```stdin:([^\n:]+)(?::password)?\n([\s\S]*?)```/g;
+        // Supports variable-length fences (3+ backticks) with backreference
+        const stdinBlockRegex = /(`{3,})stdin:([^\n:]+)(?::password)?\n([\s\S]*?)\1/g;
         let stdinMatch;
 
         while ((stdinMatch = stdinBlockRegex.exec(content)) !== null) {
-          const execId = stdinMatch[1];
-          const stdinContent = stdinMatch[2];
+          const execId = stdinMatch[2];
+          const stdinContent = stdinMatch[3];
           const blockStart = stdinMatch.index;
           const blockEnd = blockStart + stdinMatch[0].length;
 
@@ -843,9 +844,11 @@ export class ExecutionManager {
 
       // Execute with streaming (pass onStdinRequest for input() support)
       // Pass execId so hub runtimes can find the output block
+      // Pass session name for named session support (e.g., ```js sandbox)
       const result = await this.registry.executeStreaming(code, language, onChunk, onStdinRequest, {
         execId,
         cellId: cell.id || `cell-${index}`,
+        session: cell.session,
       });
 
       // Final update - find output block by execId for robustness

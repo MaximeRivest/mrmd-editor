@@ -56,7 +56,7 @@ export function markdown() {
 }
 
 // Export individual pieces for advanced use
-export { markdownRenderer } from './renderer.js';
+export { markdownRenderer, assetResolverFacet } from './renderer.js';
 export { blockDecorations, lineHeightTracker, cacheWidgetHeight, getCachedHeight, clearHeightCache } from './block-decorations.js';
 export { markdownStyles, injectMarkdownStyles } from './styles.js';
 

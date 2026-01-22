@@ -565,6 +565,8 @@ export function createRuntimeCompletionExtension({ providers, getContent, stateM
     override: [source],
     activateOnTyping: config.activateOnTyping ?? true,
     maxRenderedOptions: config.maxRenderedOptions ?? 50,
+    // Retrigger completions after accepting paths (ending with /) or dots (for chained access)
+    activateOnCompletion: config.activateOnCompletion ?? /[\/\.]$/,
     ...config,
   });
 }
