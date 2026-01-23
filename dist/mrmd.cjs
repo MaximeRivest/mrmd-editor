@@ -26486,11 +26486,13 @@ function createCodemirrorTheme(theme) {
     '&': {
       backgroundColor: theme['--editor-background'] || '#1e1e1e',
       color: theme['--editor-foreground'] || '#d4d4d4',
+      fontFamily: theme['--editor-font-family'] || 'inherit',
     },
 
     // Content area
     '.cm-content': {
       caretColor: theme['--editor-cursor'] || '#aeafad',
+      fontFamily: theme['--editor-font-family'] || 'inherit',
     },
 
     // Cursor
@@ -55602,16 +55604,17 @@ const outputWidgetStyles = `
   /* Visual marker for block end */
 }
 
-/* Content lines - terminal-style background for output block */
+/* Content lines - typewriter console style for output block */
 .cm-output-content-line {
-  background: var(--output-background, #1a1a2e);
-  border-left: var(--widget-border-accent-width, 3px) solid var(--widget-border-accent, rgba(100, 149, 237, 0.6));
-  padding-left: var(--widget-padding-x, 12px);
-  padding-right: var(--widget-padding-x, 12px);
-  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Source Code Pro', 'Consolas', monospace;
-  font-size: 0.9em;
-  line-height: 1.4;
-  color: var(--output-text, #e0e0e0);
+  background: var(--widget-surface, rgba(0, 0, 0, 0.35));
+  border-left: var(--widget-border-accent-width, 0) solid var(--widget-border-accent, transparent);
+  margin-left: var(--widget-inset-left, 0);
+  padding-left: var(--widget-padding-x, 16px);
+  padding-right: var(--widget-padding-x, 16px);
+  font-family: var(--widget-font-mono, 'Roboto Mono', 'SF Mono', Monaco, Consolas, monospace);
+  font-size: var(--widget-font-size, 0.85em);
+  line-height: var(--widget-line-height, 1.6);
+  color: var(--widget-text, #37474f);
 }
 
 /* First content line - add top padding and rounded corners */
@@ -62949,20 +62952,20 @@ ${studioStyles}
 // STYLE INJECTION
 // =============================================================================
 
-let stylesInjected$4 = false;
+let stylesInjected$5 = false;
 
 /**
  * Inject shell styles into the document
  */
 function injectShellStyles$1() {
-  if (stylesInjected$4) return;
+  if (stylesInjected$5) return;
 
   const style = document.createElement('style');
   style.id = 'mrmd-shell-styles';
   style.textContent = shellStyles;
   document.head.appendChild(style);
 
-  stylesInjected$4 = true;
+  stylesInjected$5 = true;
 }
 
 /**
@@ -65188,8 +65191,77 @@ var shellModule = /*#__PURE__*/Object.freeze({
  * - Pending change decorations (shimmer on new text)
  * - Accept/reject flow for AI suggestions
  * - Spark widget for cursor-based AI menu
+ * - ResponsePicker widget for multi-model responses
  */
 
+
+// ===========================================================================
+// Simple Markdown Renderer (for ResponsePicker)
+// ===========================================================================
+
+/**
+ * Convert markdown to HTML for display in ResponsePicker.
+ * Handles: code blocks, inline code, bold, italic, links, headers, lists.
+ * @param {string} md - Markdown text
+ * @returns {string} HTML string
+ */
+function renderMarkdownToHtml(md) {
+  if (!md) return '';
+
+  let html = md;
+
+  // Escape HTML first
+  html = html
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Code blocks (```lang\ncode\n```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    const langClass = lang ? ` class="language-${lang}"` : '';
+    return `<pre><code${langClass}>${code.trim()}</code></pre>`;
+  });
+
+  // Inline code (`code`)
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // Bold (**text** or __text__)
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+
+  // Italic (*text* or _text_)
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
+
+  // Headers (# to ######)
+  html = html.replace(/^###### (.+)$/gm, '<h6>$1</h6>');
+  html = html.replace(/^##### (.+)$/gm, '<h5>$1</h5>');
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Links [text](url)
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+
+  // Unordered lists (- item or * item)
+  html = html.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+
+  // Ordered lists (1. item)
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+
+  // Paragraphs (double newline)
+  html = html.replace(/\n\n+/g, '</p><p>');
+  html = '<p>' + html + '</p>';
+
+  // Clean up empty paragraphs
+  html = html.replace(/<p><\/p>/g, '');
+  html = html.replace(/<p>(<(?:pre|ul|ol|h[1-6])>)/g, '$1');
+  html = html.replace(/(<\/(?:pre|ul|ol|h[1-6])>)<\/p>/g, '$1');
+
+  return html;
+}
 
 // ===========================================================================
 // State Effects
@@ -65231,8 +65303,51 @@ const acceptAllAiChanges = StateEffect.define();
 const rejectAllAiChanges = StateEffect.define();
 
 // ===========================================================================
+// Multi-Response (ResponsePicker) State Effects
+// ===========================================================================
+
+/**
+ * Start an AI operation with multi-response picker support
+ * @type {StateEffect<{id: string, from: number, to: number, type: 'insert'|'replace', originalText?: string, onCancel?: function}>}
+ */
+const startAiOperationMulti = StateEffect.define();
+
+/**
+ * Add a response to an existing multi-response operation
+ * @type {StateEffect<{id: string, model: string, response: string|null, error?: string, isSynthesized?: boolean, status: 'pending'|'loading'|'complete'|'error'}>}
+ */
+const addAiResponse = StateEffect.define();
+
+/**
+ * Update response status (e.g., loading -> complete)
+ * @type {StateEffect<{id: string, model: string, response?: string, error?: string, status: 'complete'|'error'}>}
+ */
+const updateAiResponse = StateEffect.define();
+
+/**
+ * Set the selected response index in the picker
+ * @type {StateEffect<{id: string, index: number}>}
+ */
+const setSelectedResponse = StateEffect.define();
+
+/**
+ * Accept the currently selected response
+ * @type {StateEffect<{id: string}>}
+ */
+const acceptSelectedResponse = StateEffect.define();
+
+// ===========================================================================
 // AI Operation Types
 // ===========================================================================
+
+/**
+ * @typedef {Object} ResponseOption
+ * @property {string} model - Model name (e.g., 'grok-4', 'Synthesized')
+ * @property {string|null} response - Response text (null while loading)
+ * @property {string|null} error - Error message if failed
+ * @property {boolean} isSynthesized - True for the merged/synthesized result
+ * @property {'pending'|'loading'|'complete'|'error'} status - Response status
+ */
 
 /**
  * @typedef {Object} AiOperation
@@ -65242,9 +65357,12 @@ const rejectAllAiChanges = StateEffect.define();
  * @property {number} to - End position (same as from for inserts)
  * @property {string} [originalText] - Original text being replaced
  * @property {string} [newText] - AI-generated text (when complete)
- * @property {string} status - 'loading', 'pending', 'accepted', 'rejected'
+ * @property {string} status - 'loading', 'pending', 'accepted', 'rejected', 'multi'
  * @property {number} startTime - When operation started
  * @property {function} [onCancel] - Callback when cancelled
+ * @property {boolean} [isMultiMode] - True if using ResponsePicker
+ * @property {ResponseOption[]} [responses] - Array of responses for multi-mode
+ * @property {number} [selectedIndex] - Currently selected response index
  */
 
 // ===========================================================================
@@ -65323,6 +65441,90 @@ const aiState = StateField.define({
       if (effect.is(rejectAllAiChanges)) {
         newState = { ...state, operations: new Map() };
       }
+
+      // Multi-response operations
+      if (effect.is(startAiOperationMulti)) {
+        const op = effect.value;
+        const operations = new Map(state.operations);
+        operations.set(op.id, {
+          ...op,
+          status: 'multi',
+          startTime: Date.now(),
+          isMultiMode: true,
+          responses: [],
+          selectedIndex: 0,
+        });
+        newState = { ...state, operations };
+      }
+
+      if (effect.is(addAiResponse)) {
+        const { id, model, response, error, isSynthesized, status } = effect.value;
+        const operations = new Map(state.operations);
+        const op = operations.get(id);
+        if (op && op.isMultiMode) {
+          const responses = [...(op.responses || [])];
+          // Check if model already exists (update it)
+          const existingIdx = responses.findIndex(r => r.model === model);
+          const newResponse = { model, response, error: error || null, isSynthesized: isSynthesized || false, status };
+          if (existingIdx >= 0) {
+            responses[existingIdx] = newResponse;
+          } else {
+            responses.push(newResponse);
+          }
+          // Auto-select synthesized response if it arrives
+          let selectedIndex = op.selectedIndex;
+          if (isSynthesized && status === 'complete') {
+            selectedIndex = responses.length - 1;
+          }
+          operations.set(id, { ...op, responses, selectedIndex });
+          newState = { ...state, operations };
+        }
+      }
+
+      if (effect.is(updateAiResponse)) {
+        const { id, model, response, error, status } = effect.value;
+        const operations = new Map(state.operations);
+        const op = operations.get(id);
+        if (op && op.isMultiMode) {
+          const responses = [...(op.responses || [])];
+          const idx = responses.findIndex(r => r.model === model);
+          if (idx >= 0) {
+            responses[idx] = { ...responses[idx], response, error: error || null, status };
+            operations.set(id, { ...op, responses });
+            newState = { ...state, operations };
+          }
+        }
+      }
+
+      if (effect.is(setSelectedResponse)) {
+        const { id, index } = effect.value;
+        const operations = new Map(state.operations);
+        const op = operations.get(id);
+        if (op && op.isMultiMode) {
+          const maxIndex = (op.responses?.length || 1) - 1;
+          const clampedIndex = Math.max(0, Math.min(index, maxIndex));
+          operations.set(id, { ...op, selectedIndex: clampedIndex });
+          newState = { ...state, operations };
+        }
+      }
+
+      if (effect.is(acceptSelectedResponse)) {
+        const { id } = effect.value;
+        const operations = new Map(state.operations);
+        const op = operations.get(id);
+        if (op && op.isMultiMode && op.responses?.length > 0) {
+          const selectedResponse = op.responses[op.selectedIndex];
+          if (selectedResponse?.response) {
+            // Mark with the selected response text for insertion
+            operations.set(id, {
+              ...op,
+              newText: selectedResponse.response,
+              status: 'accepted',
+            });
+            newState = { ...state, operations };
+          }
+        }
+      }
     }
 
     // Adjust positions for document changes
@@ -65339,6 +65541,135 @@ const aiState = StateField.define({
     return newState;
   },
 });
+
+// ===========================================================================
+// ResponsePicker StateField (for block decorations)
+// Block widgets must be provided via StateField with EditorView.decorations
+// ===========================================================================
+
+/**
+ * Stored callbacks for ResponsePicker widgets
+ * Keyed by operation ID, contains view reference and callbacks
+ */
+const responsePickerCallbacks = new Map();
+
+/**
+ * StateField that provides ResponsePicker block decorations
+ */
+const responsePickerField = StateField.define({
+  create() {
+    return Decoration.none;
+  },
+
+  update(decorations, tr) {
+    const state = tr.state.field(aiState);
+    const widgets = [];
+
+    for (const [id, op] of state.operations) {
+      if (op.status === 'multi' && op.isMultiMode) {
+        const responses = op.responses || [];
+        const selectedIndex = op.selectedIndex || 0;
+
+        // Get or create callbacks for this operation
+        let callbacks = responsePickerCallbacks.get(id);
+        if (!callbacks) {
+          callbacks = {
+            navigate: null,
+            accept: null,
+            reject: null,
+          };
+          responsePickerCallbacks.set(id, callbacks);
+        }
+
+        // Create widget with placeholder callbacks (will be bound when view is available)
+        const widget = new ResponsePickerWidget(
+          id,
+          responses,
+          selectedIndex,
+          (delta) => callbacks.navigate?.(delta),
+          () => callbacks.accept?.(),
+          () => callbacks.reject?.()
+        );
+
+        widgets.push(
+          Decoration.widget({
+            widget,
+            block: true,
+            side: 1,
+          }).range(op.from)
+        );
+      }
+    }
+
+    // Clean up callbacks for removed operations
+    for (const id of responsePickerCallbacks.keys()) {
+      if (!state.operations.has(id)) {
+        responsePickerCallbacks.delete(id);
+      }
+    }
+
+    return Decoration.set(widgets, true);
+  },
+
+  provide: field => EditorView.decorations.from(field),
+});
+
+/**
+ * ViewPlugin to bind ResponsePicker callbacks to the view
+ */
+const responsePickerCallbackPlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.bindCallbacks(view);
+    }
+
+    bindCallbacks(view) {
+      const state = view.state.field(aiState);
+      for (const [id, op] of state.operations) {
+        if (op.status === 'multi' && op.isMultiMode) {
+          const callbacks = responsePickerCallbacks.get(id);
+          if (callbacks) {
+            const responses = op.responses || [];
+            const selectedIndex = op.selectedIndex || 0;
+
+            callbacks.navigate = (delta) => {
+              const newIndex = selectedIndex + delta;
+              view.dispatch({ effects: setSelectedResponse.of({ id, index: newIndex }) });
+            };
+
+            callbacks.accept = () => {
+              const selected = responses[selectedIndex];
+              if (selected?.response) {
+                if (op.type === 'insert') {
+                  view.dispatch({
+                    changes: { from: op.from, insert: selected.response },
+                    effects: [acceptSelectedResponse.of({ id }), cancelAiOperation.of({ id })],
+                  });
+                } else {
+                  view.dispatch({
+                    changes: { from: op.from, to: op.to, insert: selected.response },
+                    effects: [acceptSelectedResponse.of({ id }), cancelAiOperation.of({ id })],
+                  });
+                }
+              }
+            };
+
+            callbacks.reject = () => {
+              op.onCancel?.();
+              view.dispatch({ effects: cancelAiOperation.of({ id }) });
+            };
+          }
+        }
+      }
+    }
+
+    update(update) {
+      if (update.state.field(aiState) !== update.startState.field(aiState)) {
+        this.bindCallbacks(update.view);
+      }
+    }
+  }
+);
 
 // ===========================================================================
 // Loading Placeholder Widget
@@ -65470,6 +65801,199 @@ class SparkWidget extends WidgetType {
 }
 
 // ===========================================================================
+// ResponsePicker Widget (Multi-Response Selector)
+// ===========================================================================
+
+/**
+ * Block widget for selecting between multiple AI responses.
+ * Shows responses as they stream in, allows navigation, renders markdown.
+ */
+class ResponsePickerWidget extends WidgetType {
+  /**
+   * @param {string} operationId
+   * @param {ResponseOption[]} responses
+   * @param {number} selectedIndex
+   * @param {function} onNavigate - (delta: number) => void
+   * @param {function} onAccept - () => void
+   * @param {function} onReject - () => void
+   */
+  constructor(operationId, responses, selectedIndex, onNavigate, onAccept, onReject) {
+    super();
+    this.operationId = operationId;
+    this.responses = responses;
+    this.selectedIndex = selectedIndex;
+    this.onNavigate = onNavigate;
+    this.onAccept = onAccept;
+    this.onReject = onReject;
+  }
+
+  eq(other) {
+    return (
+      other.operationId === this.operationId &&
+      other.selectedIndex === this.selectedIndex &&
+      other.responses.length === this.responses.length &&
+      other.responses.every((r, i) =>
+        r.model === this.responses[i].model &&
+        r.status === this.responses[i].status &&
+        r.response === this.responses[i].response
+      )
+    );
+  }
+
+  toDOM(view) {
+    const container = document.createElement('div');
+    container.className = 'cm-ai-response-picker';
+    container.setAttribute('data-operation-id', this.operationId);
+
+    // Header with navigation
+    const header = document.createElement('div');
+    header.className = 'cm-ai-picker-header';
+
+    const prevBtn = document.createElement('button');
+    prevBtn.className = 'cm-ai-picker-nav cm-ai-picker-prev';
+    prevBtn.textContent = '◀';
+    prevBtn.title = 'Previous response (←)';
+    prevBtn.disabled = this.selectedIndex <= 0;
+    prevBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onNavigate?.(-1);
+    };
+    header.appendChild(prevBtn);
+
+    const title = document.createElement('span');
+    title.className = 'cm-ai-picker-title';
+    const current = this.responses[this.selectedIndex];
+    const modelName = current?.model || 'Loading...';
+    const count = `${this.selectedIndex + 1} / ${this.responses.length || '?'}`;
+    title.innerHTML = `<span class="cm-ai-picker-model">${modelName}</span> <span class="cm-ai-picker-count">${count}</span>`;
+    header.appendChild(title);
+
+    const nextBtn = document.createElement('button');
+    nextBtn.className = 'cm-ai-picker-nav cm-ai-picker-next';
+    nextBtn.textContent = '▶';
+    nextBtn.title = 'Next response (→)';
+    nextBtn.disabled = this.selectedIndex >= this.responses.length - 1;
+    nextBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onNavigate?.(1);
+    };
+    header.appendChild(nextBtn);
+
+    container.appendChild(header);
+
+    // Content area (markdown rendered)
+    const content = document.createElement('div');
+    content.className = 'cm-ai-picker-content';
+
+    if (!current) {
+      content.innerHTML = '<div class="cm-ai-picker-loading">Waiting for responses...</div>';
+    } else if (current.status === 'loading' || current.status === 'pending') {
+      content.innerHTML = `<div class="cm-ai-picker-loading"><span class="cm-ai-picker-spinner"></span> ${current.model} is thinking...</div>`;
+    } else if (current.status === 'error') {
+      content.innerHTML = `<div class="cm-ai-picker-error">Error: ${current.error || 'Unknown error'}</div>`;
+    } else if (current.response) {
+      // Render markdown
+      const rendered = renderMarkdownToHtml(current.response);
+      content.innerHTML = `<div class="cm-ai-picker-markdown">${rendered}</div>`;
+
+      // Setup copy on selection
+      content.addEventListener('copy', (e) => {
+        // Copy raw markdown instead of rendered HTML
+        const selection = window.getSelection();
+        if (selection && selection.toString()) ;
+      });
+
+      // Click to copy whole response
+      const copyHint = document.createElement('div');
+      copyHint.className = 'cm-ai-picker-copy-hint';
+      copyHint.textContent = 'Click to copy markdown';
+      content.appendChild(copyHint);
+
+      content.onclick = (e) => {
+        // Only copy if not selecting text
+        const selection = window.getSelection();
+        if (selection && selection.toString()) return;
+
+        navigator.clipboard.writeText(current.response).then(() => {
+          copyHint.textContent = 'Copied!';
+          setTimeout(() => {
+            copyHint.textContent = 'Click to copy markdown';
+          }, 1500);
+        });
+      };
+    } else {
+      content.innerHTML = '<div class="cm-ai-picker-empty">No response yet</div>';
+    }
+
+    container.appendChild(content);
+
+    // Model indicator dots
+    const dots = document.createElement('div');
+    dots.className = 'cm-ai-picker-dots';
+    this.responses.forEach((resp, idx) => {
+      const dot = document.createElement('span');
+      dot.className = 'cm-ai-picker-dot';
+      if (idx === this.selectedIndex) dot.classList.add('selected');
+      if (resp.status === 'complete') dot.classList.add('complete');
+      if (resp.status === 'loading' || resp.status === 'pending') dot.classList.add('loading');
+      if (resp.status === 'error') dot.classList.add('error');
+      if (resp.isSynthesized) dot.classList.add('synthesized');
+      dot.title = `${resp.model} (${resp.status})`;
+      dot.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const delta = idx - this.selectedIndex;
+        if (delta !== 0) this.onNavigate?.(delta);
+      };
+      dots.appendChild(dot);
+    });
+    container.appendChild(dots);
+
+    // Footer with actions
+    const footer = document.createElement('div');
+    footer.className = 'cm-ai-picker-footer';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'cm-ai-picker-btn cm-ai-picker-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.title = 'Cancel (Escape)';
+    cancelBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onReject?.();
+    };
+    footer.appendChild(cancelBtn);
+
+    const acceptBtn = document.createElement('button');
+    acceptBtn.className = 'cm-ai-picker-btn cm-ai-picker-accept';
+    acceptBtn.textContent = 'Use This';
+    acceptBtn.title = 'Accept selected response (Enter)';
+    acceptBtn.disabled = !current || current.status !== 'complete' || !current.response;
+    acceptBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onAccept?.();
+    };
+    footer.appendChild(acceptBtn);
+
+    container.appendChild(footer);
+
+    return container;
+  }
+
+  ignoreEvent(event) {
+    // Don't ignore click events - we handle them
+    return false;
+  }
+
+  get estimatedHeight() {
+    return 300; // Approximate height for layout
+  }
+}
+
+// ===========================================================================
 // Decorations
 // ===========================================================================
 
@@ -65490,6 +66014,8 @@ const pendingActionsDecoration = (opId, onAccept, onReject) => Decoration.widget
 const replacedMarkDecoration = Decoration.mark({
   class: 'cm-ai-replaced',
 });
+
+// ResponsePicker decoration is handled by responsePickerField below (block widgets need StateField)
 
 // ===========================================================================
 // Decoration Plugin
@@ -65535,6 +66061,14 @@ function buildDecorations$3(view) {
             }
           }
         ).range(textEnd));
+      }
+    }
+
+    // Multi-response mode (ResponsePicker) - handled by responsePickerField StateField
+    // Only add the replaced text decoration here
+    if (op.status === 'multi' && op.isMultiMode) {
+      if (op.type === 'replace' && op.to > op.from) {
+        decorations.push(replacedMarkDecoration.range(op.from, op.to));
       }
     }
   }
@@ -65615,9 +66149,37 @@ const aiKeymap = keymap.of([
     key: 'Enter',
     run(view) {
       const state = view.state.field(aiState);
-      // Find pending operation at cursor
       const cursor = view.state.selection.main.head;
+
       for (const [id, op] of state.operations) {
+        // Handle multi-mode ResponsePicker
+        if (op.status === 'multi' && op.isMultiMode) {
+          const responses = op.responses || [];
+          const selected = responses[op.selectedIndex || 0];
+          if (selected?.response && selected.status === 'complete') {
+            // Insert the selected response text
+            if (op.type === 'insert') {
+              view.dispatch({
+                changes: { from: op.from, insert: selected.response },
+                effects: [
+                  acceptSelectedResponse.of({ id }),
+                  cancelAiOperation.of({ id }),
+                ],
+              });
+            } else {
+              view.dispatch({
+                changes: { from: op.from, to: op.to, insert: selected.response },
+                effects: [
+                  acceptSelectedResponse.of({ id }),
+                  cancelAiOperation.of({ id }),
+                ],
+              });
+            }
+            return true;
+          }
+        }
+
+        // Handle regular pending operation at cursor
         if (op.status === 'pending' && op.newText) {
           const textEnd = op.from + op.newText.length;
           if (cursor >= op.from && cursor <= textEnd) {
@@ -65633,11 +66195,18 @@ const aiKeymap = keymap.of([
     key: 'Escape',
     run(view) {
       const state = view.state.field(aiState);
-      // Find pending or loading operation at cursor
       const cursor = view.state.selection.main.head;
+
       for (const [id, op] of state.operations) {
+        // Handle multi-mode ResponsePicker - always cancel on Escape
+        if (op.status === 'multi' && op.isMultiMode) {
+          op.onCancel?.();
+          view.dispatch({ effects: cancelAiOperation.of({ id }) });
+          return true;
+        }
+
         if (op.status === 'loading') {
-          if (cursor >= op.from && cursor <= op.to + 10) { // Near loading indicator
+          if (cursor >= op.from && cursor <= op.to + 10) {
             view.dispatch({ effects: cancelAiOperation.of({ id }) });
             return true;
           }
@@ -65645,7 +66214,6 @@ const aiKeymap = keymap.of([
         if (op.status === 'pending' && op.newText) {
           const textEnd = op.from + op.newText.length;
           if (cursor >= op.from && cursor <= textEnd) {
-            // Reject and restore
             const currentText = view.state.doc.sliceString(op.from, textEnd);
             if (currentText === op.newText) {
               view.dispatch({
@@ -65663,9 +66231,41 @@ const aiKeymap = keymap.of([
     },
   },
   {
+    key: 'ArrowLeft',
+    run(view) {
+      const state = view.state.field(aiState);
+      for (const [id, op] of state.operations) {
+        if (op.status === 'multi' && op.isMultiMode) {
+          const currentIndex = op.selectedIndex || 0;
+          if (currentIndex > 0) {
+            view.dispatch({ effects: setSelectedResponse.of({ id, index: currentIndex - 1 }) });
+            return true;
+          }
+        }
+      }
+      return false;
+    },
+  },
+  {
+    key: 'ArrowRight',
+    run(view) {
+      const state = view.state.field(aiState);
+      for (const [id, op] of state.operations) {
+        if (op.status === 'multi' && op.isMultiMode) {
+          const currentIndex = op.selectedIndex || 0;
+          const maxIndex = (op.responses?.length || 1) - 1;
+          if (currentIndex < maxIndex) {
+            view.dispatch({ effects: setSelectedResponse.of({ id, index: currentIndex + 1 }) });
+            return true;
+          }
+        }
+      }
+      return false;
+    },
+  },
+  {
     key: 'Mod-Shift-Enter',
     run(view) {
-      // Accept all pending changes
       const state = view.state.field(aiState);
       if (state.operations.size > 0) {
         view.dispatch({ effects: acceptAllAiChanges.of(null) });
@@ -65677,7 +66277,6 @@ const aiKeymap = keymap.of([
   {
     key: 'Mod-Shift-Escape',
     run(view) {
-      // Reject all pending changes
       const state = view.state.field(aiState);
       const changes = [];
 
@@ -65689,7 +66288,7 @@ const aiKeymap = keymap.of([
             changes.push({ from: op.from, to: textEnd, insert: op.originalText || '' });
           }
         }
-        if (op.status === 'loading') {
+        if (op.status === 'loading' || (op.status === 'multi' && op.isMultiMode)) {
           op.onCancel?.();
         }
       }
@@ -65808,6 +66407,275 @@ const aiStyles = EditorView.baseTheme({
     '0%, 100%': { opacity: '0.4' },
     '50%': { opacity: '1' },
   },
+
+  // ===========================================================================
+  // ResponsePicker Widget Styles
+  // ===========================================================================
+
+  '.cm-ai-response-picker': {
+    // Display as block to break out of inline flow
+    display: 'flex !important',
+    flexDirection: 'column',
+    // Position as block element
+    position: 'relative',
+    width: '100%',
+    margin: '8px 0',
+    // Styling
+    background: 'var(--widget-surface, rgba(0, 0, 0, 0.35))',
+    borderRadius: 'var(--widget-border-radius, 6px)',
+    borderLeft: '3px solid var(--widget-border-accent, rgba(100, 149, 237, 0.6))',
+    overflow: 'hidden',
+    fontFamily: 'var(--widget-font-mono, "SF Mono", Monaco, "Cascadia Code", monospace)',
+    fontSize: 'var(--widget-font-size, 0.9em)',
+    maxHeight: 'calc(100vh - 150px)',
+    // Break out of line
+    clear: 'both',
+  },
+  // Ensure the widget wrapper also displays as block
+  '.cm-widgetBuffer + .cm-ai-response-picker, .cm-line .cm-ai-response-picker': {
+    display: 'flex !important',
+  },
+
+  // Header
+  '.cm-ai-picker-header': {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '8px 12px',
+    background: 'var(--widget-surface-elevated, rgba(0, 0, 0, 0.5))',
+    borderBottom: '1px solid var(--widget-border, rgba(255, 255, 255, 0.1))',
+    flexShrink: '0',
+  },
+
+  '.cm-ai-picker-nav': {
+    background: 'transparent',
+    border: 'none',
+    color: 'var(--widget-text-muted, rgba(255, 255, 255, 0.6))',
+    cursor: 'pointer',
+    padding: '4px 8px',
+    borderRadius: '4px',
+    fontSize: '1em',
+    transition: 'background 0.15s, color 0.15s',
+    '&:hover:not(:disabled)': {
+      background: 'var(--widget-surface-hover, rgba(255, 255, 255, 0.1))',
+      color: 'var(--widget-text, #e0e0e0)',
+    },
+    '&:disabled': {
+      opacity: '0.3',
+      cursor: 'not-allowed',
+    },
+  },
+
+  '.cm-ai-picker-title': {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+
+  '.cm-ai-picker-model': {
+    color: 'var(--widget-text-accent, #6495ed)',
+    fontWeight: '500',
+  },
+
+  '.cm-ai-picker-count': {
+    color: 'var(--widget-text-muted, rgba(255, 255, 255, 0.5))',
+    fontSize: '0.85em',
+  },
+
+  // Content area
+  '.cm-ai-picker-content': {
+    flex: '1',
+    overflow: 'auto',
+    padding: '12px 16px',
+    minHeight: '100px',
+    maxHeight: '400px',
+    position: 'relative',
+    cursor: 'pointer',
+  },
+
+  '.cm-ai-picker-loading': {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    color: 'var(--widget-text-muted, rgba(255, 255, 255, 0.6))',
+    fontStyle: 'italic',
+  },
+
+  '.cm-ai-picker-spinner': {
+    display: 'inline-block',
+    width: '14px',
+    height: '14px',
+    border: '2px solid var(--widget-text-muted, rgba(255, 255, 255, 0.3))',
+    borderTopColor: 'var(--widget-text-accent, #6495ed)',
+    borderRadius: '50%',
+    animation: 'cm-ai-spin 0.8s linear infinite',
+  },
+
+  '.cm-ai-picker-error': {
+    color: 'var(--widget-error, #ef4444)',
+    padding: '8px',
+    background: 'rgba(239, 68, 68, 0.1)',
+    borderRadius: '4px',
+  },
+
+  '.cm-ai-picker-empty': {
+    color: 'var(--widget-text-muted, rgba(255, 255, 255, 0.5))',
+    fontStyle: 'italic',
+  },
+
+  // Markdown content
+  '.cm-ai-picker-markdown': {
+    color: 'var(--widget-text, #e0e0e0)',
+    lineHeight: '1.5',
+    '& h1, & h2, & h3, & h4, & h5, & h6': {
+      marginTop: '0.5em',
+      marginBottom: '0.3em',
+      color: 'var(--widget-text, #e0e0e0)',
+    },
+    '& p': {
+      margin: '0.5em 0',
+    },
+    '& pre': {
+      background: 'var(--widget-surface-inset, rgba(0, 0, 0, 0.3))',
+      padding: '8px 12px',
+      borderRadius: '4px',
+      overflow: 'auto',
+      margin: '0.5em 0',
+    },
+    '& code': {
+      background: 'var(--widget-surface-inset, rgba(0, 0, 0, 0.3))',
+      padding: '2px 4px',
+      borderRadius: '3px',
+      fontSize: '0.9em',
+    },
+    '& pre code': {
+      background: 'transparent',
+      padding: '0',
+    },
+    '& a': {
+      color: 'var(--widget-text-accent, #6495ed)',
+      textDecoration: 'none',
+      '&:hover': {
+        textDecoration: 'underline',
+      },
+    },
+    '& ul, & ol': {
+      marginLeft: '1.5em',
+      margin: '0.5em 0',
+    },
+    '& strong': {
+      fontWeight: '600',
+    },
+    '& em': {
+      fontStyle: 'italic',
+    },
+  },
+
+  '.cm-ai-picker-copy-hint': {
+    position: 'absolute',
+    bottom: '4px',
+    right: '8px',
+    fontSize: '0.75em',
+    color: 'var(--widget-text-muted, rgba(255, 255, 255, 0.4))',
+    opacity: '0',
+    transition: 'opacity 0.15s',
+  },
+
+  '.cm-ai-picker-content:hover .cm-ai-picker-copy-hint': {
+    opacity: '1',
+  },
+
+  // Model indicator dots
+  '.cm-ai-picker-dots': {
+    display: 'flex',
+    justifyContent: 'center',
+    gap: '6px',
+    padding: '8px',
+    background: 'var(--widget-surface-elevated, rgba(0, 0, 0, 0.5))',
+    borderTop: '1px solid var(--widget-border, rgba(255, 255, 255, 0.1))',
+    flexShrink: '0',
+  },
+
+  '.cm-ai-picker-dot': {
+    width: '8px',
+    height: '8px',
+    borderRadius: '50%',
+    background: 'var(--widget-text-muted, rgba(255, 255, 255, 0.3))',
+    cursor: 'pointer',
+    transition: 'transform 0.15s, background 0.15s',
+    '&:hover': {
+      transform: 'scale(1.3)',
+    },
+    '&.selected': {
+      background: 'var(--widget-text-accent, #6495ed)',
+      transform: 'scale(1.2)',
+    },
+    '&.complete': {
+      background: 'var(--widget-success, #22c55e)',
+    },
+    '&.loading': {
+      background: 'var(--widget-warning, #f59e0b)',
+      animation: 'cm-ai-pulse 1s infinite',
+    },
+    '&.error': {
+      background: 'var(--widget-error, #ef4444)',
+    },
+    '&.synthesized': {
+      background: 'var(--widget-text-accent, #6495ed)',
+      boxShadow: '0 0 4px var(--widget-text-accent, #6495ed)',
+    },
+    '&.selected.complete': {
+      background: 'var(--widget-success, #22c55e)',
+      boxShadow: '0 0 4px var(--widget-success, #22c55e)',
+    },
+  },
+
+  // Footer with actions
+  '.cm-ai-picker-footer': {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: '8px',
+    padding: '8px 12px',
+    background: 'var(--widget-surface-elevated, rgba(0, 0, 0, 0.5))',
+    borderTop: '1px solid var(--widget-border, rgba(255, 255, 255, 0.1))',
+    flexShrink: '0',
+  },
+
+  '.cm-ai-picker-btn': {
+    padding: '6px 12px',
+    borderRadius: '4px',
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: '0.9em',
+    fontWeight: '500',
+    transition: 'background 0.15s, opacity 0.15s',
+  },
+
+  '.cm-ai-picker-cancel': {
+    background: 'var(--widget-surface-inset, rgba(255, 255, 255, 0.1))',
+    color: 'var(--widget-text-muted, rgba(255, 255, 255, 0.7))',
+    '&:hover': {
+      background: 'var(--widget-surface-hover, rgba(255, 255, 255, 0.15))',
+    },
+  },
+
+  '.cm-ai-picker-accept': {
+    background: 'var(--widget-success, #22c55e)',
+    color: 'white',
+    '&:hover:not(:disabled)': {
+      background: 'var(--widget-success-hover, #16a34a)',
+    },
+    '&:disabled': {
+      opacity: '0.5',
+      cursor: 'not-allowed',
+    },
+  },
+
+  // Spinner animation
+  '@keyframes cm-ai-spin': {
+    '0%': { transform: 'rotate(0deg)' },
+    '100%': { transform: 'rotate(360deg)' },
+  },
 });
 
 // ===========================================================================
@@ -65823,6 +66691,8 @@ const aiStyles = EditorView.baseTheme({
 function aiIntegration(options = {}) {
   const extensions = [
     aiState,
+    responsePickerField,
+    responsePickerCallbackPlugin,
     aiDecorations,
     aiKeymap,
     aiStyles,
@@ -65894,6 +66764,747 @@ function getAiContext(view, contextSize = 500) {
     selectionTo,
     documentContext: content, // Full document for AI context
   };
+}
+
+// ===========================================================================
+// Long-Press 'j' Detection & AI Command Palette
+// ===========================================================================
+
+/**
+ * Default command key mappings for the AI palette
+ */
+const AI_PALETTE_COMMANDS = {
+  'g': { id: 'fix-grammar', label: 'Fix Grammar', hint: 'selection' },
+  't': { id: 'fix-transcription', label: 'Fix Transcription', hint: 'selection' },
+  's': { id: 'finish-sentence', label: 'Complete Sentence', hint: 'cursor' },
+  'p': { id: 'finish-paragraph', label: 'Complete Paragraph', hint: 'cursor' },
+  'l': { id: 'finish-code-line', label: 'Complete Line', hint: 'code' },
+  'c': { id: 'finish-code-section', label: 'Complete Section', hint: 'code' },
+  'd': { id: 'document-code', label: 'Add Docstrings', hint: 'selection' },
+  'y': { id: 'add-types', label: 'Add Type Hints', hint: 'selection' },
+  'n': { id: 'improve-names', label: 'Improve Names', hint: 'selection' },
+  'r': { id: 'refactor', label: 'Refactor Code', hint: 'selection' },
+  'o': { id: 'document-continue', label: 'Continue Document', hint: 'append' },
+};
+
+/**
+ * Long-press state for 'j' key detection
+ */
+let longPressState = null;
+
+/**
+ * Currently active AI palette instance
+ */
+let activePalette = null;
+
+/**
+ * Long-press timing configuration
+ */
+const LONG_PRESS_CONFIG = {
+  quickPhaseMs: 100,    // Time before showing loading indicator
+  triggerMs: 1500,      // Time to trigger palette
+};
+
+/**
+ * Loading indicator widget shown during long-press
+ */
+class LongPressIndicatorWidget extends WidgetType {
+  constructor(progress) {
+    super();
+    this.progress = progress; // 0-1
+  }
+
+  toDOM() {
+    const wrapper = document.createElement('span');
+    wrapper.className = 'cm-ai-longpress-indicator';
+
+    // Circular progress indicator
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    svg.setAttribute('viewBox', '0 0 16 16');
+
+    // Background circle
+    const bgCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    bgCircle.setAttribute('cx', '8');
+    bgCircle.setAttribute('cy', '8');
+    bgCircle.setAttribute('r', '6');
+    bgCircle.setAttribute('fill', 'none');
+    bgCircle.setAttribute('stroke', 'rgba(100, 149, 237, 0.3)');
+    bgCircle.setAttribute('stroke-width', '2');
+    svg.appendChild(bgCircle);
+
+    // Progress circle
+    const progressCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    progressCircle.setAttribute('cx', '8');
+    progressCircle.setAttribute('cy', '8');
+    progressCircle.setAttribute('r', '6');
+    progressCircle.setAttribute('fill', 'none');
+    progressCircle.setAttribute('stroke', 'rgba(100, 149, 237, 1)');
+    progressCircle.setAttribute('stroke-width', '2');
+    progressCircle.setAttribute('stroke-linecap', 'round');
+    // Calculate stroke-dasharray for progress
+    const circumference = 2 * Math.PI * 6;
+    const dashOffset = circumference * (1 - this.progress);
+    progressCircle.setAttribute('stroke-dasharray', `${circumference}`);
+    progressCircle.setAttribute('stroke-dashoffset', `${dashOffset}`);
+    progressCircle.setAttribute('transform', 'rotate(-90 8 8)');
+    svg.appendChild(progressCircle);
+
+    wrapper.appendChild(svg);
+    return wrapper;
+  }
+
+  eq(other) {
+    // Always update to show progress
+    return false;
+  }
+}
+
+/**
+ * StateField for long-press indicator
+ */
+const longPressIndicatorState = StateField.define({
+  create() {
+    return { active: false, pos: 0, progress: 0 };
+  },
+  update(state, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(showLongPressIndicator)) {
+        return { active: true, pos: effect.value.pos, progress: effect.value.progress };
+      }
+      if (effect.is(hideLongPressIndicator)) {
+        return { active: false, pos: 0, progress: 0 };
+      }
+      if (effect.is(updateLongPressProgress)) {
+        if (state.active) {
+          return { ...state, progress: effect.value };
+        }
+      }
+    }
+    return state;
+  },
+});
+
+const showLongPressIndicator = StateEffect.define();
+const hideLongPressIndicator = StateEffect.define();
+const updateLongPressProgress = StateEffect.define();
+
+/**
+ * ViewPlugin for long-press indicator decorations
+ */
+const longPressIndicatorPlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = this.buildDecorations(view);
+    }
+
+    buildDecorations(view) {
+      const state = view.state.field(longPressIndicatorState);
+      if (!state.active) {
+        return Decoration.set([]);
+      }
+      return Decoration.set([
+        Decoration.widget({
+          widget: new LongPressIndicatorWidget(state.progress),
+          side: 1,
+        }).range(state.pos),
+      ]);
+    }
+
+    update(update) {
+      if (update.state.field(longPressIndicatorState) !== update.startState.field(longPressIndicatorState)) {
+        this.decorations = this.buildDecorations(update.view);
+      }
+    }
+  },
+  { decorations: (v) => v.decorations }
+);
+
+/**
+ * AI Command Palette class
+ */
+class AiCommandPalette {
+  constructor(view, options = {}) {
+    this.view = view;
+    this.onCommand = options.onCommand;
+    this.onJuiceLevelChange = options.onJuiceLevelChange;
+    this.onReasoningLevelChange = options.onReasoningLevelChange;
+    this.juiceLevel = options.juiceLevel ?? 1;
+    this.reasoningLevel = options.reasoningLevel ?? 1;
+    this.overlay = null;
+    this.keyHandler = null;
+  }
+
+  show() {
+    if (this.overlay) return;
+
+    // Create overlay
+    this.overlay = document.createElement('div');
+    this.overlay.className = 'cm-ai-palette-overlay';
+
+    // Create palette container
+    const palette = document.createElement('div');
+    palette.className = 'cm-ai-palette';
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'cm-ai-palette-header';
+    header.innerHTML = `
+      <span class="cm-ai-palette-title">AI Commands</span>
+      <span class="cm-ai-palette-hint">ESC to close</span>
+    `;
+    palette.appendChild(header);
+
+    // Level controls
+    const levels = document.createElement('div');
+    levels.className = 'cm-ai-palette-levels';
+
+    // Juice level (1-5)
+    const juiceRow = document.createElement('div');
+    juiceRow.className = 'cm-ai-palette-level-row';
+    juiceRow.innerHTML = `<span class="cm-ai-palette-level-label">Quality:</span>`;
+    for (let i = 0; i < 5; i++) {
+      const btn = document.createElement('button');
+      btn.className = 'cm-ai-palette-level-btn' + (i === this.juiceLevel ? ' selected' : '');
+      btn.dataset.juice = i;
+      btn.textContent = i + 1;
+      btn.title = `Juice Level ${i + 1} (press ${i + 1})`;
+      juiceRow.appendChild(btn);
+    }
+    levels.appendChild(juiceRow);
+
+    // Reasoning level (Shift+0-5)
+    const reasoningRow = document.createElement('div');
+    reasoningRow.className = 'cm-ai-palette-level-row';
+    reasoningRow.innerHTML = `<span class="cm-ai-palette-level-label">Reasoning:</span>`;
+    for (let i = 0; i <= 5; i++) {
+      const btn = document.createElement('button');
+      btn.className = 'cm-ai-palette-level-btn' + (i === this.reasoningLevel ? ' selected' : '');
+      btn.dataset.reasoning = i;
+      btn.textContent = i;
+      btn.title = `Reasoning Level ${i} (press Shift+${i})`;
+      reasoningRow.appendChild(btn);
+    }
+    levels.appendChild(reasoningRow);
+
+    palette.appendChild(levels);
+
+    // Commands list
+    const commands = document.createElement('div');
+    commands.className = 'cm-ai-palette-commands';
+
+    for (const [key, cmd] of Object.entries(AI_PALETTE_COMMANDS)) {
+      const item = document.createElement('div');
+      item.className = 'cm-ai-palette-item';
+      item.innerHTML = `
+        <span class="cm-ai-palette-key">${key}</span>
+        <span class="cm-ai-palette-label">${cmd.label}</span>
+        <span class="cm-ai-palette-item-hint">${cmd.hint}</span>
+      `;
+      item.dataset.cmdId = cmd.id;
+      item.dataset.key = key;
+      commands.appendChild(item);
+    }
+
+    palette.appendChild(commands);
+    this.overlay.appendChild(palette);
+    document.body.appendChild(this.overlay);
+
+    // Capture all keyboard input
+    this.keyHandler = (e) => this.handleKey(e);
+    document.addEventListener('keydown', this.keyHandler, { capture: true });
+
+    // Click outside to close
+    this.overlay.addEventListener('click', (e) => {
+      if (e.target === this.overlay) {
+        this.hide();
+      }
+    });
+
+    // Click on command
+    commands.addEventListener('click', (e) => {
+      const item = e.target.closest('.cm-ai-palette-item');
+      if (item) {
+        const cmdId = item.dataset.cmdId;
+        this.executeCommand(cmdId);
+      }
+    });
+
+    // Click on level buttons
+    levels.addEventListener('click', (e) => {
+      const btn = e.target.closest('.cm-ai-palette-level-btn');
+      if (btn) {
+        if (btn.dataset.juice !== undefined) {
+          this.setJuiceLevel(parseInt(btn.dataset.juice, 10));
+        } else if (btn.dataset.reasoning !== undefined) {
+          this.setReasoningLevel(parseInt(btn.dataset.reasoning, 10));
+        }
+      }
+    });
+
+    activePalette = this;
+  }
+
+  hide() {
+    if (!this.overlay) return;
+
+    document.removeEventListener('keydown', this.keyHandler, { capture: true });
+    this.overlay.remove();
+    this.overlay = null;
+    this.keyHandler = null;
+    activePalette = null;
+
+    // Return focus to editor
+    this.view.focus();
+  }
+
+  handleKey(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+
+    const key = e.key.toLowerCase();
+
+    // Escape to close
+    if (e.key === 'Escape') {
+      this.hide();
+      return;
+    }
+
+    // Shift+0-5 for reasoning level
+    if (e.shiftKey && key >= '0' && key <= '5') {
+      this.setReasoningLevel(parseInt(key, 10));
+      return;
+    }
+
+    // 1-5 for juice level (without shift)
+    if (!e.shiftKey && key >= '1' && key <= '5') {
+      this.setJuiceLevel(parseInt(key, 10) - 1); // 1-5 maps to 0-4
+      return;
+    }
+
+    // Command keys
+    if (AI_PALETTE_COMMANDS[key]) {
+      this.executeCommand(AI_PALETTE_COMMANDS[key].id);
+      return;
+    }
+  }
+
+  setJuiceLevel(level) {
+    this.juiceLevel = level;
+    this.onJuiceLevelChange?.(level);
+    this.updateLevelUI();
+  }
+
+  setReasoningLevel(level) {
+    this.reasoningLevel = level;
+    this.onReasoningLevelChange?.(level);
+    this.updateLevelUI();
+  }
+
+  updateLevelUI() {
+    if (!this.overlay) return;
+
+    // Update juice buttons
+    this.overlay.querySelectorAll('[data-juice]').forEach((btn) => {
+      btn.classList.toggle('selected', parseInt(btn.dataset.juice, 10) === this.juiceLevel);
+    });
+
+    // Update reasoning buttons
+    this.overlay.querySelectorAll('[data-reasoning]').forEach((btn) => {
+      btn.classList.toggle('selected', parseInt(btn.dataset.reasoning, 10) === this.reasoningLevel);
+    });
+  }
+
+  executeCommand(cmdId) {
+    this.hide();
+    this.onCommand?.(cmdId, {
+      juiceLevel: this.juiceLevel,
+      reasoningLevel: this.reasoningLevel,
+    });
+  }
+}
+
+/**
+ * Show the AI command palette
+ * @param {EditorView} view
+ * @param {Object} options
+ * @param {function} options.onCommand - Called with (cmdId, {juiceLevel, reasoningLevel})
+ * @param {function} options.onJuiceLevelChange - Called when juice level changes
+ * @param {function} options.onReasoningLevelChange - Called when reasoning level changes
+ * @param {number} options.juiceLevel - Initial juice level
+ * @param {number} options.reasoningLevel - Initial reasoning level
+ */
+function showAiPalette(view, options = {}) {
+  if (activePalette) {
+    activePalette.hide();
+  }
+  const palette = new AiCommandPalette(view, options);
+  palette.show();
+  return palette;
+}
+
+/**
+ * Hide the AI command palette if open
+ */
+function hideAiPalette() {
+  if (activePalette) {
+    activePalette.hide();
+  }
+}
+
+/**
+ * Check if AI palette is currently open
+ */
+function isAiPaletteOpen() {
+  return activePalette !== null;
+}
+
+/**
+ * Start long-press detection for 'j' key
+ */
+function startLongPress(view, onTrigger, onCancel) {
+  const startTime = Date.now();
+  const startPos = view.state.selection.main.head;
+
+  // Show indicator after quick phase
+  const phaseTimer = setTimeout(() => {
+    if (longPressState) {
+      longPressState.phase = 'loading';
+      view.dispatch({
+        effects: showLongPressIndicator.of({ pos: startPos, progress: 0 }),
+      });
+      // Start progress animation
+      startProgressAnimation(view, startTime);
+    }
+  }, LONG_PRESS_CONFIG.quickPhaseMs);
+
+  // Trigger palette after full duration
+  const paletteTimer = setTimeout(() => {
+    if (longPressState) {
+      view.dispatch({ effects: hideLongPressIndicator.of(null) });
+      longPressState = null;
+      onTrigger();
+    }
+  }, LONG_PRESS_CONFIG.triggerMs);
+
+  longPressState = {
+    startTime,
+    startPos,
+    phase: 'quick',
+    phaseTimer,
+    paletteTimer,
+    animationFrame: null,
+    onCancel,
+  };
+}
+
+/**
+ * Animate the progress indicator
+ */
+function startProgressAnimation(view, startTime) {
+  const animate = () => {
+    if (!longPressState || longPressState.phase !== 'loading') return;
+
+    const elapsed = Date.now() - startTime - LONG_PRESS_CONFIG.quickPhaseMs;
+    const duration = LONG_PRESS_CONFIG.triggerMs - LONG_PRESS_CONFIG.quickPhaseMs;
+    const progress = Math.min(1, elapsed / duration);
+
+    view.dispatch({ effects: updateLongPressProgress.of(progress) });
+
+    if (progress < 1 && longPressState) {
+      longPressState.animationFrame = requestAnimationFrame(animate);
+    }
+  };
+
+  if (longPressState) {
+    longPressState.animationFrame = requestAnimationFrame(animate);
+  }
+}
+
+/**
+ * Cancel long-press detection
+ */
+function cancelLongPress(view, insertJ = true) {
+  if (!longPressState) return;
+
+  clearTimeout(longPressState.phaseTimer);
+  clearTimeout(longPressState.paletteTimer);
+  if (longPressState.animationFrame) {
+    cancelAnimationFrame(longPressState.animationFrame);
+  }
+
+  view.dispatch({ effects: hideLongPressIndicator.of(null) });
+
+  if (insertJ) {
+    // Insert 'j' at the original position
+    const pos = longPressState.startPos;
+    view.dispatch({
+      changes: { from: pos, insert: 'j' },
+      selection: { anchor: pos + 1 },
+    });
+  }
+
+  longPressState.onCancel?.();
+  longPressState = null;
+}
+
+/**
+ * Check if a key event has modifiers
+ */
+function hasModifiers(e) {
+  return e.ctrlKey || e.metaKey || e.altKey;
+}
+
+/**
+ * Cooldown timestamp - blocks 'j' input for a period after panel opens
+ * This prevents 'j' from being typed if user releases key slightly late
+ */
+let jCooldownUntil = 0;
+
+/**
+ * Cooldown duration in ms after panel opens
+ */
+const J_COOLDOWN_MS = 2000;
+
+/**
+ * Create the long-press 'j' detection extension
+ * @param {Object} options
+ * @param {function} options.onTrigger - Called when long-press threshold is reached
+ * @param {function} [options.onCancel] - Called when long-press is cancelled (j released early)
+ */
+function createLongPressExtension(options = {}) {
+  return [
+    longPressIndicatorState,
+    longPressIndicatorPlugin,
+    EditorView.domEventHandlers({
+      keydown(event, view) {
+        // Handle 'j' key without modifiers
+        if (event.key === 'j' && !hasModifiers(event) && !event.shiftKey) {
+          // If already in long-press state, block ALL 'j' keydowns (including repeats)
+          if (longPressState) {
+            event.preventDefault();
+            return true;
+          }
+
+          // If in cooldown period (just triggered panel), block 'j'
+          if (Date.now() < jCooldownUntil) {
+            event.preventDefault();
+            return true;
+          }
+
+          // Don't start new long-press on repeated keys
+          if (event.repeat) {
+            return false;
+          }
+
+          event.preventDefault();
+
+          startLongPress(
+            view,
+            () => {
+              // Set cooldown to prevent 'j' from being typed after panel opens
+              jCooldownUntil = Date.now() + J_COOLDOWN_MS;
+              // Trigger callback (e.g., open AI panel)
+              options.onTrigger?.(view);
+            },
+            () => {
+              // Cancelled
+              options.onCancel?.(view);
+            }
+          );
+
+          return true;
+        }
+        return false;
+      },
+      keyup(event, view) {
+        if (event.key === 'j') {
+          // Handle keyup during long-press state
+          if (longPressState) {
+            cancelLongPress(view, true);
+            return true;
+          }
+          // Also consume keyup during cooldown to prevent issues
+          if (Date.now() < jCooldownUntil) {
+            return true;
+          }
+        }
+        return false;
+      },
+    }),
+  ];
+}
+
+// ===========================================================================
+// Long-Press Indicator & Palette Styles
+// ===========================================================================
+
+const aiPaletteStyles = EditorView.baseTheme({
+  // Long-press indicator
+  '.cm-ai-longpress-indicator': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: '2px',
+    verticalAlign: 'middle',
+  },
+  '.cm-ai-longpress-indicator svg': {
+    display: 'block',
+  },
+});
+
+/**
+ * CSS styles for the AI palette (injected into document)
+ */
+const AI_PALETTE_CSS = `
+.cm-ai-palette-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  backdrop-filter: blur(2px);
+}
+
+.cm-ai-palette {
+  background: var(--bg-secondary, #161b22);
+  border: 1px solid var(--border, #30363d);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  min-width: 320px;
+  max-width: 400px;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--text, #c9d1d9);
+}
+
+.cm-ai-palette-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #30363d);
+  background: var(--bg-tertiary, #21262d);
+}
+
+.cm-ai-palette-title {
+  font-weight: 600;
+  color: var(--accent, #58a6ff);
+}
+
+.cm-ai-palette-hint {
+  font-size: 11px;
+  color: var(--text-muted, #8b949e);
+}
+
+.cm-ai-palette-levels {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #30363d);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cm-ai-palette-level-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cm-ai-palette-level-label {
+  font-size: 11px;
+  color: var(--text-muted, #8b949e);
+  width: 70px;
+  flex-shrink: 0;
+}
+
+.cm-ai-palette-level-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 4px;
+  background: var(--bg, #0d1117);
+  color: var(--text-muted, #8b949e);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.cm-ai-palette-level-btn:hover {
+  border-color: var(--accent, #58a6ff);
+  color: var(--text, #c9d1d9);
+}
+
+.cm-ai-palette-level-btn.selected {
+  background: var(--accent, #58a6ff);
+  border-color: var(--accent, #58a6ff);
+  color: white;
+}
+
+.cm-ai-palette-commands {
+  padding: 8px 0;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.cm-ai-palette-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.cm-ai-palette-item:hover {
+  background: var(--hover-bg, rgba(255, 255, 255, 0.04));
+}
+
+.cm-ai-palette-key {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary, #21262d);
+  border: 1px solid var(--border, #30363d);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent, #58a6ff);
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+
+.cm-ai-palette-label {
+  flex: 1;
+}
+
+.cm-ai-palette-item-hint {
+  font-size: 11px;
+  color: var(--text-dim, #6e7681);
+  margin-left: 8px;
+}
+`;
+
+/**
+ * Inject AI palette styles into document
+ */
+function injectAiPaletteStyles() {
+  if (document.querySelector('#cm-ai-palette-styles')) return;
+
+  const style = document.createElement('style');
+  style.id = 'cm-ai-palette-styles';
+  style.textContent = AI_PALETTE_CSS;
+  document.head.appendChild(style);
 }
 
 /**
@@ -65983,22 +67594,36 @@ async function executeAiOperation(view, aiClient, options) {
 
 var aiIntegrationModule = /*#__PURE__*/Object.freeze({
   __proto__: null,
+  AI_PALETTE_COMMANDS: AI_PALETTE_COMMANDS,
+  AI_PALETTE_CSS: AI_PALETTE_CSS,
   acceptAiChange: acceptAiChange,
   acceptAllAiChanges: acceptAllAiChanges,
+  acceptSelectedResponse: acceptSelectedResponse,
+  addAiResponse: addAiResponse,
   aiDecorations: aiDecorations,
   aiIntegration: aiIntegration,
   aiKeymap: aiKeymap,
+  aiPaletteStyles: aiPaletteStyles,
   aiState: aiState,
   aiStyles: aiStyles,
   cancelAiOperation: cancelAiOperation,
   completeAiOperation: completeAiOperation,
+  createLongPressExtension: createLongPressExtension,
   createSparkPlugin: createSparkPlugin,
   executeAiOperation: executeAiOperation,
   generateOperationId: generateOperationId,
   getAiContext: getAiContext,
+  hideAiPalette: hideAiPalette,
+  injectAiPaletteStyles: injectAiPaletteStyles,
+  isAiPaletteOpen: isAiPaletteOpen,
   rejectAiChange: rejectAiChange,
   rejectAllAiChanges: rejectAllAiChanges,
-  startAiOperation: startAiOperation
+  responsePickerField: responsePickerField,
+  setSelectedResponse: setSelectedResponse,
+  showAiPalette: showAiPalette,
+  startAiOperation: startAiOperation,
+  startAiOperationMulti: startAiOperationMulti,
+  updateAiResponse: updateAiResponse
 });
 
 /**
@@ -67005,62 +68630,62 @@ function injectCellControlsStyles() {
       font-family: var(--widget-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
     }
 
-    /* Buttons - use widget theme surface colors */
+    /* Buttons - minimal, icon only */
     .${PREFIX}-btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 22px;
-      height: 22px;
+      width: 18px;
+      height: 18px;
       padding: 0;
       border: none;
-      border-radius: var(--widget-border-radius, 4px);
-      background: var(--widget-surface, rgba(128, 128, 128, 0.1));
-      color: var(--widget-text-muted, inherit);
+      border-radius: 0;
+      background: transparent;
+      color: var(--widget-text-muted, #9e9e9e);
       cursor: pointer;
-      opacity: 0.7;
-      transition: all 0.15s ease;
+      opacity: 0.6;
+      transition: opacity 0.15s ease;
     }
 
     .${PREFIX}-btn:hover {
       opacity: 1;
-      background: var(--widget-surface-hover, rgba(128, 128, 128, 0.2));
+      background: transparent;
     }
 
     .${PREFIX}-btn:active {
       transform: scale(0.95);
     }
 
-    /* Play button - use success color */
+    /* Play button - success color */
     .${PREFIX}-btn-play {
-      color: var(--widget-success, #22c55e);
+      color: var(--widget-success, #4caf50);
     }
 
     .${PREFIX}-btn-play:hover {
-      background: color-mix(in srgb, var(--widget-success, #22c55e) 15%, transparent);
+      background: transparent;
     }
 
-    /* Stop button - use error color */
+    /* Stop button - error color */
     .${PREFIX}-btn-stop {
-      color: var(--widget-error, #ef4444);
+      color: var(--widget-error, #f44336);
     }
 
     .${PREFIX}-btn-stop:hover {
-      background: color-mix(in srgb, var(--widget-error, #ef4444) 15%, transparent);
+      background: transparent;
     }
 
-    /* Copy button - use muted text */
+    /* Copy button */
     .${PREFIX}-btn-copy {
-      color: var(--widget-text-muted, #6b7280);
+      color: var(--widget-text-muted, #9e9e9e);
     }
 
     .${PREFIX}-btn-copied {
-      color: var(--widget-success, #22c55e);
+      color: var(--widget-success, #4caf50);
     }
 
-    /* Clear button - use muted text */
+    /* Clear button */
     .${PREFIX}-btn-clear {
-      color: var(--widget-text-muted, #6b7280);
+      color: var(--widget-text-muted, #9e9e9e);
     }
 
     /* Status indicators */
@@ -75807,7 +77432,7 @@ const runtimeCodeLensPlugin = runtimeCodeLensField;
  * Uses CSS variables for theming compatibility.
  */
 
-let stylesInjected$3 = false;
+let stylesInjected$4 = false;
 
 const STYLES$1 = `
 /* Runtime CodeLens Container */
@@ -75964,14 +77589,14 @@ const STYLES$1 = `
  * Safe to call multiple times - will only inject once
  */
 function injectRuntimeCodeLensStyles() {
-  if (stylesInjected$3) return;
+  if (stylesInjected$4) return;
 
   const style = document.createElement('style');
   style.id = 'cm-runtime-codelens-styles';
   style.textContent = STYLES$1;
   document.head.appendChild(style);
 
-  stylesInjected$3 = true;
+  stylesInjected$4 = true;
 }
 
 /**
@@ -75981,7 +77606,7 @@ function removeRuntimeCodeLensStyles() {
   const existing = document.getElementById('cm-runtime-codelens-styles');
   if (existing) {
     existing.remove();
-    stylesInjected$3 = false;
+    stylesInjected$4 = false;
   }
 }
 
@@ -77457,13 +79082,42 @@ const defaultKeybindings = {
   'Mod-Shift-f': 'formatCell',
   'Mod-Alt-Shift-f': 'formatDocument',
 
-  // Indentation
-  'Tab': 'indent',
+  // Indentation (handled specially - see createKeymap)
+  // Tab first tries to accept completion, then indents
+  'Tab': 'indentOrAcceptCompletion',
   'Shift-Tab': 'dedent',
 
   // Code intelligence
   'F12': 'viewSource',
+
+  // Enter accepts completion if active, otherwise inserts newline
+  'Enter': 'acceptCompletionOrNewline',
 };
+
+/**
+ * Special command: Accept completion if active, otherwise indent
+ */
+function indentOrAcceptCompletion(editor) {
+  const indentCmd = commandRegistry.indent(editor);
+  return (view) => {
+    // Try to accept completion first
+    if (acceptCompletion(view)) return true;
+    // Fall back to indent
+    return indentCmd(view);
+  };
+}
+
+/**
+ * Special command: Accept completion if active, otherwise insert newline
+ */
+function acceptCompletionOrNewline(editor) {
+  return (view) => {
+    // Try to accept completion first
+    if (acceptCompletion(view)) return true;
+    // Fall back to default behavior (let CodeMirror handle newline)
+    return false;
+  };
+}
 
 /**
  * Create a CodeMirror keymap extension from keybinding config.
@@ -77486,6 +79140,12 @@ const defaultKeybindings = {
 function createKeymap(editor, bindings = defaultKeybindings) {
   const keymapEntries = [];
 
+  // Special commands that aren't in the registry
+  const specialCommands = {
+    'indentOrAcceptCompletion': indentOrAcceptCompletion,
+    'acceptCompletionOrNewline': acceptCompletionOrNewline,
+  };
+
   for (const [key, commandName] of Object.entries(bindings)) {
     // Skip disabled bindings
     if (commandName === false || commandName === null) continue;
@@ -77495,6 +79155,15 @@ function createKeymap(editor, bindings = defaultKeybindings) {
       keymapEntries.push({
         key,
         run: (view) => commandName(editor, view),
+      });
+      continue;
+    }
+
+    // Check special commands first
+    if (specialCommands[commandName]) {
+      keymapEntries.push({
+        key,
+        run: specialCommands[commandName](editor),
       });
       continue;
     }
@@ -78030,14 +79699,29 @@ function createRuntimeCompletionSource({ providers, getContent, stateManager, yT
     return {
       from: codeInfo.cell.codeStart + result.cursorStart,
       to: codeInfo.cell.codeStart + result.cursorEnd,
-      options: result.matches.map(match => ({
-        label: match.label,
-        type: mapCompletionKind(match.kind),
-        detail: match.valuePreview || match.detail,
-        info: match.documentation,
-        apply: match.insertText || match.label,
-        boost: match.kind === 'property' || match.kind === 'method' ? 1 : 0,
-      })),
+      options: result.matches.map(match => {
+        const insertText = match.insertText || match.label;
+        const shouldRetrigger = /[\/\.]$/.test(insertText);
+
+        return {
+          label: match.label,
+          type: mapCompletionKind(match.kind),
+          detail: match.valuePreview || match.detail,
+          info: match.documentation,
+          // Use custom apply to retrigger completions for paths and chained access
+          apply: shouldRetrigger
+            ? (view, completion, from, to) => {
+                view.dispatch({
+                  changes: { from, to, insert: insertText },
+                  selection: { anchor: from + insertText.length },
+                });
+                // Schedule new completion after the change is applied
+                setTimeout(() => startCompletion(view), 0);
+              }
+            : insertText,
+          boost: match.kind === 'property' || match.kind === 'method' ? 1 : 0,
+        };
+      }),
     };
   };
 }
@@ -78073,17 +79757,19 @@ function mapCompletionKind(kind) {
  * @param {import('./awareness/state.js').AwarenessStateManager} [options.stateManager]
  * @param {import('yjs').Text} [options.yText]
  * @param {Object} [options.config] - Autocompletion config overrides
+ * @param {Array<import('@codemirror/autocomplete').CompletionSource>} [options.additionalSources] - Additional completion sources to include
  * @returns {import('@codemirror/state').Extension}
  */
-function createRuntimeCompletionExtension({ providers, getContent, stateManager, yText, config = {} }) {
+function createRuntimeCompletionExtension({ providers, getContent, stateManager, yText, config = {}, additionalSources = [] }) {
   const source = createRuntimeCompletionSource({ providers, getContent, stateManager, yText });
 
+  // Combine runtime source with any additional sources (like wiki-link)
+  const allSources = [source, ...additionalSources];
+
   return autocompletion({
-    override: [source],
+    override: allSources,
     activateOnTyping: config.activateOnTyping ?? true,
     maxRenderedOptions: config.maxRenderedOptions ?? 50,
-    // Retrigger completions after accepting paths (ending with /) or dots (for chained access)
-    activateOnCompletion: config.activateOnCompletion ?? /[\/\.]$/,
     ...config,
   });
 }
@@ -78314,17 +80000,361 @@ const runtimeLspStyles = `
 }
 `;
 
-let stylesInjected$2 = false;
+let stylesInjected$3 = false;
 
 /**
  * Inject runtime LSP styles into document.
  */
 function injectRuntimeLspStyles() {
-  if (stylesInjected$2 || typeof document === 'undefined') return;
+  if (stylesInjected$3 || typeof document === 'undefined') return;
 
   const style = document.createElement('style');
   style.id = 'mrmd-runtime-lsp-styles';
   style.textContent = runtimeLspStyles;
+  document.head.appendChild(style);
+  stylesInjected$3 = true;
+}
+
+// #endregion EXPORTS
+
+/**
+ * Wiki-link autocomplete for [[internal-links]]
+ *
+ * Provides autocomplete suggestions when typing [[filename]] style links
+ * in markdown content. Integrates with FSML project structure.
+ *
+ * Usage:
+ *   // In editor setup:
+ *   const wikiLinkExt = createWikiLinkCompletionExtension();
+ *   view.dispatch({ effects: StateEffect.appendConfig.of(wikiLinkExt) });
+ *
+ *   // To provide project files:
+ *   view.dispatch({ effects: StateEffect.appendConfig.of(
+ *     projectFilesFacet.of(files)
+ *   )});
+ *
+ * @module wiki-link-completion
+ */
+
+
+// #region FACET
+
+/**
+ * @typedef {Object} ProjectFile
+ * @property {string} path - Relative path from project root (e.g., '02-getting-started/01-setup.md')
+ * @property {string} title - Human-readable title (e.g., 'Setup')
+ * @property {string} name - Filename without order prefix or extension (e.g., 'setup')
+ */
+
+/**
+ * Facet to provide project files for wiki-link completion.
+ *
+ * The value should be an array of ProjectFile objects.
+ *
+ * @example
+ * // Provide project files to editor
+ * view.dispatch({
+ *   effects: StateEffect.appendConfig.of(
+ *     projectFilesFacet.of([
+ *       { path: '01-intro.md', title: 'Introduction', name: 'intro' },
+ *       { path: '02-setup.md', title: 'Setup', name: 'setup' },
+ *     ])
+ *   )
+ * });
+ *
+ * @type {Facet<ProjectFile[], ProjectFile[]>}
+ */
+const projectFilesFacet = Facet.define({
+  combine: (values) => values[values.length - 1] || [],
+});
+
+// #endregion FACET
+
+// #region DETECTION
+
+/**
+ * Check if cursor position is inside a code block.
+ *
+ * We only want wiki-link completion in markdown prose, not in code blocks.
+ *
+ * @param {CompletionContext} context
+ * @returns {boolean}
+ */
+function isInCodeBlock(context) {
+  const tree = syntaxTree(context.state);
+  let node = tree.resolveInner(context.pos, -1);
+
+  while (node) {
+    const name = node.type.name;
+    // Check for fenced code blocks and inline code
+    if (
+      name === 'FencedCode' ||
+      name === 'CodeBlock' ||
+      name === 'CodeText' ||
+      name === 'InlineCode' ||
+      name.startsWith('CodeInfo') ||
+      name.startsWith('CodeMark')
+    ) {
+      return true;
+    }
+    node = node.parent;
+  }
+
+  return false;
+}
+
+/**
+ * Detect [[ trigger and extract the query.
+ *
+ * @param {CompletionContext} context
+ * @returns {{ from: number, query: string } | null}
+ */
+function detectWikiLinkTrigger(context) {
+  const line = context.state.doc.lineAt(context.pos);
+  const textBefore = line.text.slice(0, context.pos - line.from);
+
+  // Match [[ followed by optional partial text (not containing ] or |)
+  // This handles: [[, [[s, [[setup, [[getting-started
+  const match = textBefore.match(/\[\[([^\]|#]*)$/);
+
+  if (!match) return null;
+
+  return {
+    from: context.pos - match[1].length,
+    query: match[1],
+  };
+}
+
+// #endregion DETECTION
+
+// #region SPECIAL_LINKS
+
+/**
+ * Special wiki-links defined in the FSML spec.
+ * These navigate relative to the current document.
+ */
+const SPECIAL_LINKS = [
+  { name: 'next', title: 'Next Document', description: 'Navigate to the next document in order' },
+  { name: 'prev', title: 'Previous Document', description: 'Navigate to the previous document in order' },
+  { name: 'home', title: 'Home', description: 'Navigate to the first document in project' },
+  { name: 'up', title: 'Up', description: 'Navigate to parent section' },
+  { name: 'toc', title: 'Table of Contents', description: 'Insert table of contents for current section' },
+];
+
+// #endregion SPECIAL_LINKS
+
+// #region COMPLETION_SOURCE
+
+/**
+ * Create a wiki-link completion source.
+ *
+ * @returns {import('@codemirror/autocomplete').CompletionSource}
+ */
+function createWikiLinkCompletionSource() {
+  return (context) => {
+    // Don't complete in code blocks
+    if (isInCodeBlock(context)) {
+      return null;
+    }
+
+    // Detect [[ trigger
+    const trigger = detectWikiLinkTrigger(context);
+    if (!trigger) {
+      return null;
+    }
+
+    // Get project files from facet
+    const files = context.state.facet(projectFilesFacet);
+
+    // Filter and score files
+    const query = trigger.query.toLowerCase();
+    const scored = [];
+
+    // Add special links
+    for (const special of SPECIAL_LINKS) {
+      if (!query || special.name.startsWith(query)) {
+        scored.push({
+          file: { path: special.name, title: special.title, name: special.name },
+          score: query && special.name === query ? 2000 : 1500, // Special links have high priority
+          isSpecial: true,
+          description: special.description,
+        });
+      }
+    }
+
+    // If no project files, return just special links
+    if (!files || files.length === 0) {
+      if (scored.length === 0) return null;
+      return {
+        from: trigger.from,
+        options: scored.map(({ file, description }) => ({
+          label: file.title,
+          detail: `[[${file.name}]]`,
+          info: description,
+          apply: (view, completion, from, to) => {
+            view.dispatch({
+              changes: { from, to, insert: file.name + ']]' },
+              selection: { anchor: from + file.name.length + 2 },
+            });
+          },
+          type: 'keyword',
+          boost: 10,
+        })),
+        validFor: /^[^\]|#]*$/,
+      };
+    }
+
+    for (const file of files) {
+      // Skip non-markdown or special files
+      if (!file.path.endsWith('.md')) continue;
+      if (file.path === 'mrmd.md') continue;
+      if (file.name === 'index') continue; // Skip index files, use folder name instead
+
+      const pathLower = file.path.toLowerCase();
+      const titleLower = file.title.toLowerCase();
+      const nameLower = file.name.toLowerCase();
+
+      // Calculate match score
+      let score = 0;
+
+      if (!query) {
+        // Empty query - show all files, prioritize by depth
+        score = 100 - file.path.split('/').length * 10;
+      } else if (nameLower === query) {
+        // Exact name match
+        score = 1000;
+      } else if (nameLower.startsWith(query)) {
+        // Name starts with query
+        score = 500 + (100 - nameLower.length);
+      } else if (titleLower.startsWith(query)) {
+        // Title starts with query
+        score = 400 + (100 - titleLower.length);
+      } else if (nameLower.includes(query)) {
+        // Name contains query
+        score = 200 + (100 - nameLower.indexOf(query));
+      } else if (titleLower.includes(query)) {
+        // Title contains query
+        score = 150 + (100 - titleLower.indexOf(query));
+      } else if (pathLower.includes(query)) {
+        // Path contains query
+        score = 100 + (100 - pathLower.indexOf(query));
+      }
+
+      if (score > 0) {
+        scored.push({ file, score });
+      }
+    }
+
+    // Sort by score descending
+    scored.sort((a, b) => b.score - a.score);
+
+    // Convert to completion options
+    const options = scored.slice(0, 50).map(({ file, isSpecial, description }) => ({
+      label: file.title,
+      detail: isSpecial ? `[[${file.name}]]` : file.path,
+      info: description || undefined,
+      // Insert just the filename (FSML-style link)
+      apply: (view, completion, from, to) => {
+        // Insert the name followed by ]]
+        view.dispatch({
+          changes: { from, to, insert: file.name + ']]' },
+          selection: { anchor: from + file.name.length + 2 },
+        });
+      },
+      type: isSpecial ? 'keyword' : 'file',
+      boost: isSpecial ? 10 : 0,
+    }));
+
+    if (options.length === 0) {
+      return null;
+    }
+
+    return {
+      from: trigger.from,
+      options,
+      validFor: /^[^\]|#]*$/,
+    };
+  };
+}
+
+// #endregion COMPLETION_SOURCE
+
+// #region EXTENSION
+
+/**
+ * Create the wiki-link completion extension.
+ *
+ * This creates a standalone autocompletion extension that will work
+ * when no other completion sources are active (e.g., before runtime providers
+ * are connected).
+ *
+ * When runtime-lsp completion is added later, it includes wiki-link source
+ * via the `additionalSources` parameter, so both work together.
+ *
+ * @returns {import('@codemirror/state').Extension}
+ *
+ * @example
+ * const editor = mrmd.create('#editor', { doc: '# Test' });
+ * editor.view.dispatch({
+ *   effects: StateEffect.appendConfig.of([
+ *     createWikiLinkCompletionExtension(),
+ *     projectFilesFacet.of(projectFiles),
+ *   ])
+ * });
+ */
+function createWikiLinkCompletionExtension() {
+  const source = createWikiLinkCompletionSource();
+
+  return autocompletion({
+    override: [source],
+    activateOnTyping: true,
+    defaultKeymap: true,
+    closeOnBlur: true,
+    interactionDelay: 75,
+  });
+}
+
+/**
+ * Get just the completion source (for combining with other sources).
+ *
+ * Use this when you need to add wiki-link completion to an existing
+ * autocompletion setup with other sources.
+ *
+ * @returns {import('@codemirror/autocomplete').CompletionSource}
+ */
+function getWikiLinkCompletionSource() {
+  return createWikiLinkCompletionSource();
+}
+
+// #endregion EXTENSION
+
+// #region STYLES
+
+/**
+ * CSS styles for wiki-link completion items.
+ */
+const wikiLinkCompletionStyles = `
+/* Wiki-link completion styling */
+.cm-tooltip-autocomplete ul li[aria-selected] .cm-completionLabel {
+  /* Selected item label color */
+}
+
+.cm-tooltip-autocomplete .cm-completionIcon-file::after {
+  content: '📄';
+}
+`;
+
+let stylesInjected$2 = false;
+
+/**
+ * Inject wiki-link completion styles into document.
+ */
+function injectWikiLinkCompletionStyles() {
+  if (stylesInjected$2 || typeof document === 'undefined') return;
+
+  const style = document.createElement('style');
+  style.id = 'mrmd-wiki-link-completion-styles';
+  style.textContent = wikiLinkCompletionStyles;
   document.head.appendChild(style);
   stylesInjected$2 = true;
 }
@@ -104027,6 +106057,237 @@ class DisplayMathWidget extends WidgetType {
 }
 
 /**
+ * Link widgets for rendering clickable links in markdown.
+ *
+ * Includes:
+ * - WikiLinkWidget: [[internal-link]] style links
+ * - ExternalLinkWidget: [text](https://...) style links
+ * - FileLinkWidget: [text](./relative/path) style links
+ *
+ * @module markdown/widgets/link
+ */
+
+
+// #region WIKI_LINK_WIDGET
+
+/**
+ * Widget for rendering [[wiki-links]].
+ *
+ * Dispatches a custom 'wiki-link-navigate' event when clicked,
+ * allowing the host application to handle navigation.
+ */
+class WikiLinkWidget extends WidgetType {
+  /**
+   * @param {string} target - The link target (e.g., 'installation', 'setup/config')
+   * @param {string} displayText - Text to display (from [[target|display]] or derived from target)
+   * @param {boolean} [exists=true] - Whether the target exists (for broken link styling)
+   */
+  constructor(target, displayText, exists = true) {
+    super();
+    this.target = target;
+    this.displayText = displayText;
+    this.exists = exists;
+  }
+
+  eq(other) {
+    return (
+      this.target === other.target &&
+      this.displayText === other.displayText &&
+      this.exists === other.exists
+    );
+  }
+
+  toDOM(view) {
+    const span = document.createElement('span');
+    span.className = this.exists ? 'cm-wiki-link' : 'cm-wiki-link cm-broken-link';
+    span.textContent = this.displayText;
+    span.setAttribute('data-target', this.target);
+
+    // Click handler - dispatch custom event for host app
+    span.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      view.dom.dispatchEvent(
+        new CustomEvent('wiki-link-navigate', {
+          detail: { target: this.target },
+          bubbles: true,
+        })
+      );
+    });
+
+    // Prevent editor from losing focus
+    span.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+    });
+
+    return span;
+  }
+
+  ignoreEvent() {
+    return false; // Allow click events
+  }
+}
+
+// #endregion WIKI_LINK_WIDGET
+
+// #region EXTERNAL_LINK_WIDGET
+
+/**
+ * Widget for rendering external links [text](https://...).
+ *
+ * Opens in a new browser tab.
+ */
+class ExternalLinkWidget extends WidgetType {
+  /**
+   * @param {string} url - The URL to open
+   * @param {string} text - Display text
+   */
+  constructor(url, text) {
+    super();
+    this.url = url;
+    this.text = text;
+  }
+
+  eq(other) {
+    return this.url === other.url && this.text === other.text;
+  }
+
+  toDOM() {
+    const link = document.createElement('a');
+    link.className = 'cm-external-link';
+    link.href = this.url;
+    link.textContent = this.text;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+
+    // Prevent editor from losing focus on mousedown
+    // but allow the click to propagate to the <a> tag
+    link.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+    });
+
+    return link;
+  }
+
+  ignoreEvent() {
+    return false; // Allow click events
+  }
+}
+
+// #endregion EXTERNAL_LINK_WIDGET
+
+// #region FILE_LINK_WIDGET
+
+/**
+ * Widget for rendering relative file links [text](./path).
+ *
+ * Dispatches a custom 'file-link-navigate' event when clicked,
+ * allowing the host application to handle navigation.
+ */
+class FileLinkWidget extends WidgetType {
+  /**
+   * @param {string} path - Relative file path
+   * @param {string} text - Display text
+   */
+  constructor(path, text) {
+    super();
+    this.path = path;
+    this.text = text;
+  }
+
+  eq(other) {
+    return this.path === other.path && this.text === other.text;
+  }
+
+  toDOM(view) {
+    const span = document.createElement('span');
+    span.className = 'cm-file-link';
+    span.textContent = this.text;
+    span.setAttribute('data-path', this.path);
+
+    // Click handler - dispatch custom event for host app
+    span.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      view.dom.dispatchEvent(
+        new CustomEvent('file-link-navigate', {
+          detail: { path: this.path },
+          bubbles: true,
+        })
+      );
+    });
+
+    // Prevent editor from losing focus
+    span.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+    });
+
+    return span;
+  }
+
+  ignoreEvent() {
+    return false; // Allow click events
+  }
+}
+
+// #endregion FILE_LINK_WIDGET
+
+// #region HELPERS
+
+/**
+ * Determine link type from URL.
+ *
+ * @param {string} url
+ * @returns {'external' | 'file' | 'anchor'}
+ */
+function getLinkType(url) {
+  if (!url) return 'file';
+
+  // External URLs
+  if (
+    url.startsWith('http://') ||
+    url.startsWith('https://') ||
+    url.startsWith('mailto:') ||
+    url.startsWith('tel:')
+  ) {
+    return 'external';
+  }
+
+  // Anchor links
+  if (url.startsWith('#')) {
+    return 'anchor';
+  }
+
+  // Everything else is a file link
+  return 'file';
+}
+
+/**
+ * Derive display text from a wiki-link target.
+ * Converts 'getting-started' to 'Getting Started'.
+ *
+ * @param {string} target
+ * @returns {string}
+ */
+function wikiLinkDisplayText(target) {
+  if (!target) return '';
+
+  // Remove path prefix (keep last segment)
+  const name = target.split('/').pop();
+
+  // Convert kebab-case/snake_case to Title Case
+  return name
+    .replace(/[-_]/g, ' ')
+    .split(' ')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+// #endregion HELPERS
+
+/**
  * Table Widget and Parser
  *
  * Renders markdown tables as HTML tables with Tufte Markdown extensions.
@@ -105301,6 +107562,41 @@ function hashContent(content) {
   return hash.toString(36);
 }
 
+// =============================================================================
+// Wiki-Link Extraction
+// =============================================================================
+
+/**
+ * Extract wiki-links from a line of text.
+ * Matches [[target]] or [[target|display text]] syntax.
+ *
+ * @param {string} text - Line text
+ * @returns {Array<{start: number, end: number, target: string, display: string}>}
+ */
+function extractWikiLinks(text) {
+  const results = [];
+  // Match [[target]] or [[target|display]]
+  // target can include path segments (e.g., setup/config)
+  // but not | or ] or #
+  const regex = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g;
+
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const target = match[1].trim();
+    const display = match[2]?.trim() || wikiLinkDisplayText(target);
+
+    results.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      target,
+      display,
+      raw: match[0],
+    });
+  }
+
+  return results;
+}
+
 /**
  * BlockImageWidget wrapper that caches its rendered height for stable layout.
  */
@@ -105517,29 +107813,78 @@ function buildDecorations(view) {
           return;
         }
 
-        // Process regular links
-        cursor.moveTo(node.from);
-        if (cursor.firstChild()) {
-          do {
-            const childLine = doc.lineAt(cursor.from).number;
-            const childHidden = childLine === cursorLine ? 'cm-md-marker' : 'cm-md-hidden';
+        // Extract link text and URL from the raw markdown text
+        const rawLink = doc.sliceString(node.from, node.to);
+        // Match [text](url) pattern
+        const linkMatch = rawLink.match(/^\[([^\]]*)\]\(([^)]*)\)$/);
 
-            if (cursor.name === 'LinkMark') {
-              decorations.push(
-                Decoration.mark({ class: childHidden }).range(cursor.from, cursor.to)
-              );
-            }
-            if (cursor.name === 'LinkLabel') {
-              decorations.push(
-                Decoration.mark({ class: 'cm-md-link-text' }).range(cursor.from, cursor.to)
-              );
-            }
-            if (cursor.name === 'URL') {
-              decorations.push(
-                Decoration.mark({ class: childHidden }).range(cursor.from, cursor.to)
-              );
-            }
-          } while (cursor.nextSibling());
+        if (!linkMatch) {
+          // Might be a reference-style link [text][ref] - skip for now
+          return;
+        }
+
+        const linkText = linkMatch[1];
+        const linkUrl = linkMatch[2];
+
+        const linkLine = doc.lineAt(node.from).number;
+        const isLinkActive = linkLine === cursorLine;
+
+        if (isLinkActive) {
+          // Show raw markdown with styling on active line
+          // Find positions of [ ] ( ) in the raw text
+          const textStart = node.from + 1; // After [
+          const textEnd = node.from + 1 + linkText.length; // Before ]
+          const urlStart = textEnd + 2; // After ](
+          const urlEnd = node.to - 1; // Before )
+
+          // Style the brackets as markers
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-marker' }).range(node.from, node.from + 1) // [
+          );
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-link-text' }).range(textStart, textEnd) // text
+          );
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-marker' }).range(textEnd, urlStart) // ](
+          );
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-marker' }).range(urlStart, urlEnd) // url
+          );
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-marker' }).range(urlEnd, node.to) // )
+          );
+        } else {
+          // Replace with clickable widget on inactive line
+          const linkType = getLinkType(linkUrl);
+
+          if (linkType === 'external') {
+            decorations.push(
+              Decoration.replace({
+                widget: new ExternalLinkWidget(linkUrl, linkText),
+              }).range(node.from, node.to)
+            );
+          } else if (linkType === 'anchor') {
+            // Anchor links - hide brackets and URL, style text
+            const textStart = node.from + 1;
+            const textEnd = node.from + 1 + linkText.length;
+
+            decorations.push(
+              Decoration.mark({ class: 'cm-md-hidden' }).range(node.from, textStart) // [
+            );
+            decorations.push(
+              Decoration.mark({ class: 'cm-md-link-text cm-anchor-link' }).range(textStart, textEnd) // text
+            );
+            decorations.push(
+              Decoration.mark({ class: 'cm-md-hidden' }).range(textEnd, node.to) // ](url)
+            );
+          } else {
+            // File link
+            decorations.push(
+              Decoration.replace({
+                widget: new FileLinkWidget(linkUrl, linkText),
+              }).range(node.from, node.to)
+            );
+          }
         }
       }
 
@@ -105838,6 +108183,38 @@ function buildDecorations(view) {
     }
   }
 
+  // ==========================================================================
+  // Wiki-links [[target]] - process line by line
+  // ==========================================================================
+  for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
+    const line = doc.line(i);
+    const isActiveLine = i === cursorLine;
+
+    // Skip lines inside code blocks (rough check)
+    if (line.text.trimStart().startsWith('```')) continue;
+
+    const wikiLinks = extractWikiLinks(line.text);
+
+    for (const link of wikiLinks) {
+      const from = line.from + link.start;
+      const to = line.from + link.end;
+
+      if (isActiveLine) {
+        // Show raw wiki-link syntax with styling
+        decorations.push(
+          Decoration.mark({ class: 'cm-wiki-link-syntax' }).range(from, to)
+        );
+      } else {
+        // Replace with clickable widget
+        decorations.push(
+          Decoration.replace({
+            widget: new WikiLinkWidget(link.target, link.display),
+          }).range(from, to)
+        );
+      }
+    }
+  }
+
   // Sort decorations by position and return
   return Decoration.set(decorations, true);
 }
@@ -105916,36 +108293,42 @@ const markdownStyles = `
   font-size: var(--md-heading-1-size);
   font-weight: var(--md-heading-weight);
   line-height: var(--md-heading-line-height);
+  color: var(--md-heading-color, inherit);
 }
 
 .cm-md-h2 {
   font-size: var(--md-heading-2-size);
   font-weight: var(--md-heading-weight);
   line-height: var(--md-heading-line-height);
+  color: var(--md-heading-color, inherit);
 }
 
 .cm-md-h3 {
   font-size: var(--md-heading-3-size);
   font-weight: var(--md-heading-weight);
   line-height: var(--md-heading-line-height);
+  color: var(--md-heading-color, inherit);
 }
 
 .cm-md-h4 {
   font-size: var(--md-heading-4-size);
   font-weight: var(--md-heading-weight);
   line-height: var(--md-heading-line-height);
+  color: var(--md-heading-color, inherit);
 }
 
 .cm-md-h5 {
   font-size: var(--md-heading-5-size);
   font-weight: var(--md-heading-weight);
   line-height: var(--md-heading-line-height);
+  color: var(--md-heading-color, inherit);
 }
 
 .cm-md-h6 {
   font-size: var(--md-heading-6-size);
   font-weight: var(--md-heading-weight);
   line-height: var(--md-heading-line-height);
+  color: var(--md-heading-color, inherit);
 }
 
 /* ==========================================================================
@@ -105978,6 +108361,69 @@ const markdownStyles = `
 
 .cm-md-link-text:hover {
   opacity: 0.8;
+}
+
+/* Wiki-links [[target]] */
+.cm-wiki-link {
+  color: var(--md-link-color);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cm-wiki-link:hover {
+  opacity: 0.8;
+}
+
+/* Wiki-link syntax (when editing) */
+.cm-wiki-link-syntax {
+  color: var(--md-link-color);
+}
+
+/* Broken wiki-link (target doesn't exist) */
+.cm-broken-link {
+  color: var(--text-muted, #6b7280);
+  text-decoration: underline dashed;
+  text-decoration-thickness: 1px;
+}
+
+/* External links [text](https://...) */
+.cm-external-link {
+  color: var(--md-link-color);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cm-external-link::after {
+  content: ' \\2197';
+  font-size: 0.75em;
+  opacity: 0.6;
+}
+
+.cm-external-link:hover {
+  opacity: 0.8;
+}
+
+/* File links [text](./path) */
+.cm-file-link {
+  color: var(--md-link-color);
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cm-file-link:hover {
+  opacity: 0.8;
+}
+
+/* Anchor links [text](#heading) */
+.cm-anchor-link {
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
 }
 
 /* ==========================================================================
@@ -112138,195 +114584,203 @@ const midnightTheme = {
 /**
  * Daylight Theme (Default Light)
  *
- * Clean light theme for well-lit environments.
- * Good contrast without being harsh.
+ * Clean light theme inspired by Material for MkDocs.
+ * Professional documentation-style appearance.
  */
 const daylightTheme = {
   name: 'daylight',
-  description: 'Clean light theme. Default for light mode.',
+  description: 'Clean light theme inspired by Material for MkDocs.',
   isDark: false,  // Controls CodeMirror editor theme
 
-  // Spacing (same as midnight)
-  '--widget-line-height': 'inherit',
-  '--widget-padding-x': '12px',
-  '--widget-padding-y': '8px',
+  // Spacing
+  '--widget-line-height': '1.6',
+  '--widget-padding-x': '16px',
+  '--widget-padding-y': '12px',
   '--widget-margin-y': '4px',
-  '--widget-border-radius': '6px',
-  '--widget-border-width': '1px',
-  '--widget-border-accent-width': '3px',
+  '--widget-border-radius': '4px',
+  '--widget-border-width': '0',
+  '--widget-border-accent-width': '0',
 
-  // Text layout (same as midnight)
+  // Output styling - typewriter/console feel
+  '--widget-inset-left': '24px',
+  '--widget-offset-top': '0',
+
+  // Text layout
   '--widget-white-space': 'pre-wrap',
   '--widget-word-break': 'break-word',
 
-  // Typography (same as midnight)
-  '--widget-font-mono': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
-  '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-  '--widget-font-size': '0.9em',
-  '--widget-font-size-small': '0.8em',
+  // Typography
+  '--widget-font-mono': "'Roboto Mono', 'SF Mono', Monaco, Consolas, monospace",
+  '--widget-font-sans': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  '--widget-font-size': '0.85em',
+
+  // Main editor font - sans-serif for body text
+  '--editor-font-family': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  '--widget-font-size-small': '0.75em',
   '--widget-font-size-label': '11px',
 
-  // Surfaces (light backgrounds)
-  '--widget-surface': 'rgba(0, 0, 0, 0.04)',
-  '--widget-surface-hover': 'rgba(0, 0, 0, 0.07)',
+  // Surfaces - light gray code background like Material
+  '--widget-surface': '#f5f5f5',
+  '--widget-surface-hover': '#eeeeee',
   '--widget-surface-elevated': '#ffffff',
-  '--widget-surface-inset': 'rgba(0, 0, 0, 0.03)',
+  '--widget-surface-inset': '#fafafa',
 
-  // Borders
-  '--widget-border': 'rgba(0, 0, 0, 0.1)',
-  '--widget-border-accent': 'rgba(59, 130, 246, 0.5)',
-  '--widget-border-focus': '#3b82f6',
+  // Borders - subtle
+  '--widget-border': 'rgba(0, 0, 0, 0.08)',
+  '--widget-border-accent': 'rgba(0, 0, 0, 0.12)',
+  '--widget-border-focus': '#1976d2',
 
   // Text (dark text on light backgrounds)
-  '--widget-text': '#1a1a1a',
-  '--widget-text-muted': '#666666',
-  '--widget-text-accent': '#2563eb',
+  '--widget-text': '#37474f',
+  '--widget-text-muted': '#78909c',
+  '--widget-text-accent': '#1976d2',
 
-  // Semantic (slightly darker for light backgrounds)
-  '--widget-success': '#16a34a',
-  '--widget-warning': '#d97706',
-  '--widget-error': '#dc2626',
-  '--widget-info': '#2563eb',
+  // Semantic colors (Material palette)
+  '--widget-success': '#4caf50',
+  '--widget-warning': '#ff9800',
+  '--widget-error': '#f44336',
+  '--widget-info': '#2196f3',
 
-  // ANSI colors (darker for light backgrounds)
-  '--ansi-black': '#1e1e1e',
-  '--ansi-red': '#dc2626',
-  '--ansi-green': '#16a34a',
-  '--ansi-yellow': '#ca8a04',
-  '--ansi-blue': '#2563eb',
-  '--ansi-magenta': '#9333ea',
-  '--ansi-cyan': '#0891b2',
-  '--ansi-white': '#f5f5f5',
-  '--ansi-bright-black': '#6b7280',
-  '--ansi-bright-red': '#ef4444',
-  '--ansi-bright-green': '#22c55e',
-  '--ansi-bright-yellow': '#eab308',
-  '--ansi-bright-blue': '#3b82f6',
-  '--ansi-bright-magenta': '#a855f7',
-  '--ansi-bright-cyan': '#06b6d4',
+  // ANSI colors (Material-inspired, darker for light backgrounds)
+  '--ansi-black': '#263238',
+  '--ansi-red': '#f44336',
+  '--ansi-green': '#4caf50',
+  '--ansi-yellow': '#ff9800',
+  '--ansi-blue': '#2196f3',
+  '--ansi-magenta': '#9c27b0',
+  '--ansi-cyan': '#00bcd4',
+  '--ansi-white': '#fafafa',
+  '--ansi-bright-black': '#546e7a',
+  '--ansi-bright-red': '#e57373',
+  '--ansi-bright-green': '#81c784',
+  '--ansi-bright-yellow': '#ffb74d',
+  '--ansi-bright-blue': '#64b5f6',
+  '--ansi-bright-magenta': '#ba68c8',
+  '--ansi-bright-cyan': '#4dd0e1',
   '--ansi-bright-white': '#ffffff',
 
-  // Collaborator defaults (same as midnight, work well on light)
-  '--collab-human': '#3b82f6',
-  '--collab-ai': '#8b5cf6',
-  '--collab-runtime': '#10b981',
+  // Collaborator defaults
+  '--collab-human': '#1976d2',
+  '--collab-ai': '#7b1fa2',
+  '--collab-runtime': '#388e3c',
 
-  // Editor (VS Code Light inspired)
+  // Editor - clean white background
   '--editor-background': '#ffffff',
-  '--editor-foreground': '#1e1e1e',
-  '--editor-line-number': '#6e7681',
-  '--editor-line-number-active': '#1e1e1e',
-  '--editor-selection': '#add6ff',
-  '--editor-selection-match': '#e8e8e8',
-  '--editor-cursor': '#1e1e1e',
-  '--editor-active-line': 'rgba(0, 0, 0, 0.04)',
+  '--editor-foreground': '#37474f',
+  '--editor-line-number': '#90a4ae',
+  '--editor-line-number-active': '#546e7a',
+  '--editor-selection': '#e3f2fd',
+  '--editor-selection-match': '#fff9c4',
+  '--editor-cursor': '#37474f',
+  '--editor-active-line': 'rgba(0, 0, 0, 0.02)',
   '--editor-gutter': '#ffffff',
-  '--editor-matching-bracket': 'rgba(0, 0, 0, 0.1)',
+  '--editor-matching-bracket': '#c8e6c9',
 
-  // Syntax highlighting (VS Code Light inspired)
-  '--syntax-keyword': '#0000ff',
-  '--syntax-control': '#af00db',
-  '--syntax-string': '#a31515',
-  '--syntax-number': '#098658',
-  '--syntax-comment': '#008000',
-  '--syntax-function': '#795e26',
-  '--syntax-variable': '#001080',
-  '--syntax-variable-special': '#0000ff',
-  '--syntax-property': '#001080',
-  '--syntax-operator': '#1e1e1e',
-  '--syntax-punctuation': '#1e1e1e',
-  '--syntax-type': '#267f99',
-  '--syntax-class': '#267f99',
-  '--syntax-constant': '#0000ff',
-  '--syntax-parameter': '#001080',
-  '--syntax-regexp': '#811f3f',
-  '--syntax-escape': '#ee0000',
-  '--syntax-tag': '#800000',
-  '--syntax-attribute': '#ff0000',
-  '--syntax-attribute-value': '#0000ff',
-  '--syntax-heading': '#0000ff',
-  '--syntax-link': '#0000ff',
-  '--syntax-link-text': '#a31515',
-  '--syntax-emphasis': '#0000ff',
-  '--syntax-strong': '#0000ff',
-  '--syntax-strikethrough': '#6e7681',
-  '--syntax-quote': '#008000',
-  '--syntax-code': '#a31515',
-  '--syntax-code-background': 'rgba(175, 184, 193, 0.2)',
-  '--syntax-meta': '#6e7681',
-  '--syntax-inserted': '#098658',
-  '--syntax-deleted': '#a31515',
-  '--syntax-changed': '#0000ff',
+  // Syntax highlighting - Material for MkDocs inspired
+  '--syntax-keyword': '#0d47a1',      // Blue for keywords (from, import, def, class)
+  '--syntax-control': '#0d47a1',      // Blue for control flow
+  '--syntax-string': '#2e7d32',       // Green for strings
+  '--syntax-number': '#e65100',       // Orange for numbers
+  '--syntax-comment': '#757575',      // Gray for comments
+  '--syntax-function': '#6a1b9a',     // Purple for functions
+  '--syntax-variable': '#37474f',     // Dark gray for variables
+  '--syntax-variable-special': '#0d47a1',  // Blue for self/this
+  '--syntax-property': '#0d47a1',     // Blue for properties/keys (YAML keys)
+  '--syntax-operator': '#37474f',     // Dark for operators
+  '--syntax-punctuation': '#37474f',  // Dark for punctuation
+  '--syntax-type': '#00695c',         // Teal for types
+  '--syntax-class': '#00695c',        // Teal for class names
+  '--syntax-constant': '#0d47a1',     // Blue for constants
+  '--syntax-parameter': '#37474f',    // Dark for parameters
+  '--syntax-regexp': '#c62828',       // Red for regex
+  '--syntax-escape': '#e65100',       // Orange for escapes
+  '--syntax-tag': '#c62828',          // Red for HTML tags
+  '--syntax-attribute': '#6a1b9a',    // Purple for attributes
+  '--syntax-attribute-value': '#2e7d32',  // Green for attribute values
+  '--syntax-heading': '#000000',      // Black for headings
+  '--syntax-link': '#1976d2',         // Blue for links
+  '--syntax-link-text': '#1976d2',    // Blue for link text
+  '--syntax-emphasis': '#37474f',     // Dark for emphasis
+  '--syntax-strong': '#000000',       // Black for strong/bold
+  '--syntax-strikethrough': '#757575',
+  '--syntax-quote': '#757575',
+  '--syntax-code': '#c62828',         // Red for inline code (like Material)
+  '--syntax-code-background': '#f5f5f5',
+  '--syntax-meta': '#757575',
+  '--syntax-inserted': '#2e7d32',
+  '--syntax-deleted': '#c62828',
+  '--syntax-changed': '#1565c0',
 
-  // Markdown rendering
-  '--md-heading-1-size': '1.75em',
-  '--md-heading-2-size': '1.4em',
-  '--md-heading-3-size': '1.2em',
-  '--md-heading-4-size': '1.1em',
-  '--md-heading-5-size': '1.05em',
-  '--md-heading-6-size': '1em',
-  '--md-heading-weight': '600',
-  '--md-heading-line-height': '1.3',
-  '--md-heading-margin-top': '0.5em',
-  '--md-marker-color': '#9ca3af',
-  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
-  '--md-link-color': '#2563eb',
-  '--md-link-decoration': 'underline',
-  '--md-code-background': 'rgba(175, 184, 193, 0.2)',
-  '--md-code-color': '#a31515',
-  '--md-code-padding': '0.15em 0.35em',
-  '--md-code-radius': '3px',
-  '--md-blockquote-border': 'rgba(59, 130, 246, 0.4)',
-  '--md-blockquote-border-width': '3px',
-  '--md-blockquote-color': '#666666',
+  // Markdown rendering - Material for MkDocs style headings
+  '--md-heading-1-size': '2em',
+  '--md-heading-2-size': '1.5625em',
+  '--md-heading-3-size': '1.25em',
+  '--md-heading-4-size': '1em',
+  '--md-heading-5-size': '0.875em',
+  '--md-heading-6-size': '0.75em',
+  '--md-heading-weight': '700',
+  '--md-heading-line-height': '1.4',
+  '--md-heading-margin-top': '0.8em',
+  '--md-heading-color': '#000000',
+  '--md-marker-color': '#90a4ae',
+  '--md-marker-font': "'Roboto Mono', 'SF Mono', Monaco, monospace",
+  '--md-link-color': '#1976d2',
+  '--md-link-decoration': 'none',
+  '--md-code-background': '#f5f5f5',
+  '--md-code-color': '#c62828',
+  '--md-code-padding': '0.2em 0.4em',
+  '--md-code-radius': '4px',
+  '--md-blockquote-border': '#e0e0e0',
+  '--md-blockquote-border-width': '4px',
+  '--md-blockquote-color': '#78909c',
   '--md-blockquote-padding': '1em',
-  '--md-list-marker-color': '#666666',
-  '--md-hr-color': 'rgba(0, 0, 0, 0.1)',
+  '--md-list-marker-color': '#78909c',
+  '--md-hr-color': '#e0e0e0',
   '--md-hr-height': '1px',
-  '--md-hr-margin': '1.5em 0',
-  '--md-table-border': 'rgba(0, 0, 0, 0.1)',
-  '--md-table-header-bg': 'rgba(0, 0, 0, 0.04)',
-  '--md-table-header-weight': '600',
-  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-hr-margin': '2em 0',
+  '--md-table-border': '#e0e0e0',
+  '--md-table-header-bg': '#fafafa',
+  '--md-table-header-weight': '500',
+  '--md-table-cell-padding': '0.75em 1em',
   '--md-table-stripe-bg': 'transparent',
   '--md-image-max-width': '100%',
-  '--md-image-border-radius': '6px',
-  '--md-checkbox-size': '1em',
-  '--md-checkbox-color': '#2563eb',
-  '--md-alert-note-color': '#2563eb',
-  '--md-alert-tip-color': '#16a34a',
-  '--md-alert-important-color': '#0000ff',
-  '--md-alert-warning-color': '#d97706',
-  '--md-alert-caution-color': '#dc2626',
+  '--md-image-border-radius': '4px',
+  '--md-checkbox-size': '1.1em',
+  '--md-checkbox-color': '#1976d2',
+  '--md-alert-note-color': '#1976d2',
+  '--md-alert-tip-color': '#388e3c',
+  '--md-alert-important-color': '#7b1fa2',
+  '--md-alert-warning-color': '#f57c00',
+  '--md-alert-caution-color': '#d32f2f',
 
-  // Shell (status bar, menus, dialogs) - Light theme
-  '--mrmd-ui-font': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-  '--mrmd-ui-font-size': '13px',
-  '--mrmd-ui-font-size-sm': '11px',
-  '--mrmd-panel-bg': '#f5f5f5',
+  // Shell (status bar, menus, dialogs) - Material Light
+  '--mrmd-ui-font': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  '--mrmd-ui-font-size': '14px',
+  '--mrmd-ui-font-size-sm': '12px',
+  '--mrmd-panel-bg': '#fafafa',
   '--mrmd-popup-bg': '#ffffff',
   '--mrmd-bg': '#ffffff',
-  '--mrmd-fg': '#333333',
-  '--mrmd-fg-muted': '#666666',
+  '--mrmd-fg': '#37474f',
+  '--mrmd-fg-muted': '#78909c',
   '--mrmd-border': '#e0e0e0',
   '--mrmd-hover-bg': 'rgba(0, 0, 0, 0.04)',
   '--mrmd-active-bg': 'rgba(0, 0, 0, 0.08)',
-  '--mrmd-selection-bg': 'rgba(37, 99, 235, 0.15)',
-  '--mrmd-accent': '#2563eb',
-  '--mrmd-accent-hover': '#1d4ed8',
-  '--mrmd-success': '#16a34a',
-  '--mrmd-warning': '#d97706',
-  '--mrmd-error': '#dc2626',
-  '--mrmd-shadow-md': '0 4px 12px rgba(0, 0, 0, 0.1)',
-  '--mrmd-shadow-lg': '0 8px 32px rgba(0, 0, 0, 0.15)',
-  '--mrmd-shadow-xl': '0 16px 48px rgba(0, 0, 0, 0.2)',
-  '--mrmd-menu-border': '#d0d0d0',
-  '--mrmd-dialog-border': '#d0d0d0',
-  '--mrmd-input-border': '#d0d0d0',
-  '--mrmd-button-bg': '#f0f0f0',
-  '--mrmd-button-border': '#d0d0d0',
-  '--mrmd-button-hover': '#e8e8e8',
-  '--mrmd-button-active': '#e0e0e0',
+  '--mrmd-selection-bg': 'rgba(25, 118, 210, 0.12)',
+  '--mrmd-accent': '#1976d2',
+  '--mrmd-accent-hover': '#1565c0',
+  '--mrmd-success': '#4caf50',
+  '--mrmd-warning': '#ff9800',
+  '--mrmd-error': '#f44336',
+  '--mrmd-shadow-md': '0 2px 4px rgba(0, 0, 0, 0.1)',
+  '--mrmd-shadow-lg': '0 4px 8px rgba(0, 0, 0, 0.12)',
+  '--mrmd-shadow-xl': '0 8px 16px rgba(0, 0, 0, 0.15)',
+  '--mrmd-menu-border': '#e0e0e0',
+  '--mrmd-dialog-border': '#e0e0e0',
+  '--mrmd-input-border': '#e0e0e0',
+  '--mrmd-button-bg': '#fafafa',
+  '--mrmd-button-border': '#e0e0e0',
+  '--mrmd-button-hover': '#f5f5f5',
+  '--mrmd-button-active': '#eeeeee',
 };
 
 /**
@@ -116083,6 +118537,81 @@ const languageSupportExtensions = [
 ];
 // #endregion CODE_BLOCK_LANGUAGES
 
+// #region CODE_BLOCK_BACKGROUND
+/**
+ * ViewPlugin that adds background styling to fenced code blocks.
+ * Gives code cells the light gray background like Material for MkDocs.
+ * Fence lines (``` markers) get smaller/lighter styling to fade away.
+ */
+const codeBlockBackground = ViewPlugin.fromClass(class {
+  constructor(view) {
+    this.decorations = this.buildDecorations(view);
+  }
+
+  update(update) {
+    if (update.docChanged || update.viewportChanged || update.selectionSet) {
+      this.decorations = this.buildDecorations(update.view);
+    }
+  }
+
+  buildDecorations(view) {
+    const decorations = [];
+    const tree = syntaxTree(view.state);
+
+    tree.iterate({
+      enter: (node) => {
+        if (node.name === 'FencedCode') {
+          const from = node.from;
+          const to = node.to;
+          const firstLine = view.state.doc.lineAt(from);
+          const lastLine = view.state.doc.lineAt(to);
+
+          // Iterate through each line in the code block
+          for (let pos = from; pos < to;) {
+            const line = view.state.doc.lineAt(pos);
+            const isFirstLine = line.number === firstLine.number;
+            const isLastLine = line.number === lastLine.number;
+
+            if (isFirstLine || isLastLine) {
+              // Fence lines - subtle styling
+              decorations.push(
+                Decoration.line({ class: 'cm-codeblock-fence' }).range(line.from)
+              );
+            } else {
+              // Content lines - normal code block styling
+              decorations.push(
+                Decoration.line({ class: 'cm-codeblock-line' }).range(line.from)
+              );
+            }
+            pos = line.to + 1;
+          }
+        }
+      }
+    });
+
+    return Decoration.set(decorations, true);
+  }
+}, {
+  decorations: v => v.decorations
+});
+
+/**
+ * CSS styles for code block backgrounds
+ */
+const codeBlockStyles = EditorView.theme({
+  // Content lines - gray background
+  '.cm-codeblock-line': {
+    backgroundColor: 'var(--widget-surface, #f5f5f5)',
+  },
+  // Fence lines (``` markers) - same background, smaller/faded text (no opacity to preserve bg)
+  '.cm-codeblock-fence': {
+    backgroundColor: 'var(--widget-surface, #f5f5f5)',
+    fontSize: '0.6em',
+    color: '#c0c0c0',
+  },
+});
+// #endregion CODE_BLOCK_BACKGROUND
+
 // #region WRITER
 /**
  * Writer for streaming content into the editor.
@@ -116225,6 +118754,7 @@ function create(target, options = {}) {
   const themeCompartment = new Compartment();
   const readonlyCompartment = new Compartment();
   const keymapCompartment = new Compartment();
+  const projectFilesCompartment = new Compartment();
 
   // Create UndoManager for undo/redo tracking
   // We create it ourselves so we can listen to stack changes
@@ -116282,6 +118812,8 @@ function create(target, options = {}) {
     markdownWithCodeBlocks,
     ...languageSupportExtensions,
     documentTheme,
+    codeBlockBackground,  // Add gray background to code blocks
+    codeBlockStyles,
     EditorView.lineWrapping, // Always wrap markdown text
     themeCompartment.of(initialCMTheme),
     readonlyCompartment.of(readonly ? EditorState.readOnly.of(true) : []),
@@ -116298,10 +118830,17 @@ function create(target, options = {}) {
     lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
     blockDecorations,   // StateField for tables, display math (multi-line)
     markdownRenderer,   // ViewPlugin for everything else (inline)
+    // Wiki-link completion - just the facet for project files
+    // The actual completion is provided by runtime-lsp (via additionalSources)
+    // or by a standalone autocompletion added below if no runtime providers exist
+    projectFilesCompartment.of(projectFilesFacet.of([])),
   ];
 
   // Inject markdown styles
   injectMarkdownStyles();
+
+  // Inject wiki-link completion styles
+  injectWikiLinkCompletionStyles();
 
   const view = new EditorView({
     state: EditorState.create({ doc: initialContent, extensions }),
@@ -116451,6 +118990,8 @@ function create(target, options = {}) {
     runtimeLspExtensions.push(hoverExt);
 
     // Create completion extension with awareness integration
+    // Include wiki-link source so both work together
+    const wikiLinkSource = getWikiLinkCompletionSource();
     const completionExt = createRuntimeCompletionExtension({
       providers: runtimeLspProviders,
       getContent: () => view.state.doc.toString(),
@@ -116460,6 +119001,7 @@ function create(target, options = {}) {
         activateOnTyping: config.completion?.activateOnTyping ?? true,
         maxRenderedOptions: config.completion?.maxRenderedOptions ?? 50,
       },
+      additionalSources: [wikiLinkSource],
     });
     runtimeLspExtensions.push(completionExt);
 
@@ -116472,6 +119014,11 @@ function create(target, options = {}) {
   // Add runtime LSP extensions at init if we have providers
   if (runtimeLspProviders.size > 0) {
     addLspExtensions();
+  } else {
+    // No runtime providers - add standalone wiki-link completion
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(createWikiLinkCompletionExtension()),
+    });
   }
 
   // Create editor API object first (needed by ExecutionManager)
@@ -116618,6 +119165,44 @@ function create(target, options = {}) {
      */
     getThemeNames() {
       return getThemeNames();
+    },
+
+    // ===========================================================================
+    // Wiki-link completion
+    // ===========================================================================
+
+    /**
+     * Set project files for [[wiki-link]] autocomplete.
+     *
+     * Call this when opening a project or when files change.
+     * The files array should contain objects with { path, title, name }.
+     *
+     * @param {Array<{path: string, title: string, name: string}>} files - Project files
+     *
+     * @example
+     * // Set files from FSML-parsed project
+     * editor.setProjectFiles(
+     *   project.files.map(path => FSML.parsePath(path))
+     * );
+     *
+     * @example
+     * // Clear files (disables wiki-link completion)
+     * editor.setProjectFiles([]);
+     */
+    setProjectFiles(files) {
+      view.dispatch({
+        effects: projectFilesCompartment.reconfigure(
+          projectFilesFacet.of(files || [])
+        ),
+      });
+    },
+
+    /**
+     * Get current project files.
+     * @returns {Array<{path: string, title: string, name: string}>}
+     */
+    getProjectFiles() {
+      return view.state.facet(projectFilesFacet);
     },
 
     focus() {
@@ -118234,6 +120819,19 @@ const markdownExports = {
 };
 // #endregion MARKDOWN_EXPORTS
 
+// #region WIKI_LINK_EXPORTS
+const wikiLinkExports = {
+  // Facet for providing project files
+  projectFilesFacet,
+  // Completion source and extension
+  createWikiLinkCompletionSource,
+  createWikiLinkCompletionExtension,
+  getWikiLinkCompletionSource,
+  // Styles
+  injectWikiLinkCompletionStyles,
+};
+// #endregion WIKI_LINK_EXPORTS
+
 // #region EXPORTS
 const mrmd = {
   version: VERSION,
@@ -118255,6 +120853,8 @@ const mrmd = {
   runtimeCodeLens: runtimeCodeLensExports,
   // Runtime LSP (hover, completions, variables)
   runtimeLsp: runtimeLspExports,
+  // Wiki-link completion ([[internal-links]])
+  wikiLink: wikiLinkExports,
   // Markdown rendering (blur→render, focus→source)
   markdown: markdownExports,
   // Shell (status bar, file management, studio layout)
@@ -118344,6 +120944,8 @@ var index = /*#__PURE__*/Object.freeze({
   createStudio: createStudio,
   createTheme: createTheme,
   createVariableExplorer: createVariableExplorer,
+  createWikiLinkCompletionExtension: createWikiLinkCompletionExtension,
+  createWikiLinkCompletionSource: createWikiLinkCompletionSource,
   daylightTheme: daylightTheme,
   default: mrmd,
   defaultAwarenessConfig: defaultAwarenessConfig,
@@ -118357,6 +120959,7 @@ var index = /*#__PURE__*/Object.freeze({
   generateThemeCSS: generateThemeCSS,
   getTheme: getTheme,
   getThemeNames: getThemeNames,
+  getWikiLinkCompletionSource: getWikiLinkCompletionSource,
   githubTheme: githubTheme,
   hasAnsi: hasAnsi,
   initTheme: initTheme,
@@ -118366,6 +120969,7 @@ var index = /*#__PURE__*/Object.freeze({
   injectRuntimeCodeLensStyles: injectRuntimeCodeLensStyles,
   injectRuntimeLspStyles: injectRuntimeLspStyles,
   injectShellStyles: injectShellStyles,
+  injectWikiLinkCompletionStyles: injectWikiLinkCompletionStyles,
   isFullySerializable: isFullySerializable,
   isTableDelimiter: isTableDelimiter,
   isTableLine: isTableLine,
@@ -118379,6 +120983,7 @@ var index = /*#__PURE__*/Object.freeze({
   parseImageMarkdown: parseImageMarkdown,
   parseTable: parseTable,
   processTerminalOutput: processTerminalOutput,
+  projectFilesFacet: projectFilesFacet,
   rebuildRuntimeCodeLens: rebuildRuntimeCodeLens,
   rebuildRuntimeCodeLensEffect: rebuildRuntimeCodeLensEffect,
   registerTheme: registerTheme,
@@ -118398,6 +121003,7 @@ var index = /*#__PURE__*/Object.freeze({
   toggleDevPanel: toggleDevPanel,
   watchTheme: watchTheme,
   widgets: widgets,
+  wikiLinkExports: wikiLinkExports,
   yjs: yjs
 });
 
@@ -118452,6 +121058,8 @@ exports.createStatusBar = createStatusBar;
 exports.createStudio = createStudio;
 exports.createTheme = createTheme;
 exports.createVariableExplorer = createVariableExplorer;
+exports.createWikiLinkCompletionExtension = createWikiLinkCompletionExtension;
+exports.createWikiLinkCompletionSource = createWikiLinkCompletionSource;
 exports.daylightTheme = daylightTheme;
 exports.default = mrmd;
 exports.defaultAwarenessConfig = defaultAwarenessConfig;
@@ -118465,6 +121073,7 @@ exports.generateTableId = generateTableId;
 exports.generateThemeCSS = generateThemeCSS;
 exports.getTheme = getTheme;
 exports.getThemeNames = getThemeNames;
+exports.getWikiLinkCompletionSource = getWikiLinkCompletionSource;
 exports.githubTheme = githubTheme;
 exports.hasAnsi = hasAnsi;
 exports.initTheme = initTheme;
@@ -118474,6 +121083,7 @@ exports.injectMarkdownStyles = injectMarkdownStyles;
 exports.injectRuntimeCodeLensStyles = injectRuntimeCodeLensStyles;
 exports.injectRuntimeLspStyles = injectRuntimeLspStyles;
 exports.injectShellStyles = injectShellStyles;
+exports.injectWikiLinkCompletionStyles = injectWikiLinkCompletionStyles;
 exports.isFullySerializable = isFullySerializable;
 exports.isTableDelimiter = isTableDelimiter;
 exports.isTableLine = isTableLine;
@@ -118487,6 +121097,7 @@ exports.normalizeOptions = normalizeOptions;
 exports.parseImageMarkdown = parseImageMarkdown;
 exports.parseTable = parseTable;
 exports.processTerminalOutput = processTerminalOutput;
+exports.projectFilesFacet = projectFilesFacet;
 exports.rebuildRuntimeCodeLens = rebuildRuntimeCodeLens;
 exports.rebuildRuntimeCodeLensEffect = rebuildRuntimeCodeLensEffect;
 exports.registerTheme = registerTheme;
@@ -118506,5 +121117,6 @@ exports.terminalToHtml = terminalToHtml;
 exports.toggleDevPanel = toggleDevPanel;
 exports.watchTheme = watchTheme;
 exports.widgets = widgets;
+exports.wikiLinkExports = wikiLinkExports;
 exports.yjs = yjs;
 //# sourceMappingURL=mrmd.cjs.map

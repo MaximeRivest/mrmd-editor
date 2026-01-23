@@ -300,62 +300,62 @@ export function injectCellControlsStyles() {
       font-family: var(--widget-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
     }
 
-    /* Buttons - use widget theme surface colors */
+    /* Buttons - minimal, icon only */
     .${PREFIX}-btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 22px;
-      height: 22px;
+      width: 18px;
+      height: 18px;
       padding: 0;
       border: none;
-      border-radius: var(--widget-border-radius, 4px);
-      background: var(--widget-surface, rgba(128, 128, 128, 0.1));
-      color: var(--widget-text-muted, inherit);
+      border-radius: 0;
+      background: transparent;
+      color: var(--widget-text-muted, #9e9e9e);
       cursor: pointer;
-      opacity: 0.7;
-      transition: all 0.15s ease;
+      opacity: 0.6;
+      transition: opacity 0.15s ease;
     }
 
     .${PREFIX}-btn:hover {
       opacity: 1;
-      background: var(--widget-surface-hover, rgba(128, 128, 128, 0.2));
+      background: transparent;
     }
 
     .${PREFIX}-btn:active {
       transform: scale(0.95);
     }
 
-    /* Play button - use success color */
+    /* Play button - success color */
     .${PREFIX}-btn-play {
-      color: var(--widget-success, #22c55e);
+      color: var(--widget-success, #4caf50);
     }
 
     .${PREFIX}-btn-play:hover {
-      background: color-mix(in srgb, var(--widget-success, #22c55e) 15%, transparent);
+      background: transparent;
     }
 
-    /* Stop button - use error color */
+    /* Stop button - error color */
     .${PREFIX}-btn-stop {
-      color: var(--widget-error, #ef4444);
+      color: var(--widget-error, #f44336);
     }
 
     .${PREFIX}-btn-stop:hover {
-      background: color-mix(in srgb, var(--widget-error, #ef4444) 15%, transparent);
+      background: transparent;
     }
 
-    /* Copy button - use muted text */
+    /* Copy button */
     .${PREFIX}-btn-copy {
-      color: var(--widget-text-muted, #6b7280);
+      color: var(--widget-text-muted, #9e9e9e);
     }
 
     .${PREFIX}-btn-copied {
-      color: var(--widget-success, #22c55e);
+      color: var(--widget-success, #4caf50);
     }
 
-    /* Clear button - use muted text */
+    /* Clear button */
     .${PREFIX}-btn-clear {
-      color: var(--widget-text-muted, #6b7280);
+      color: var(--widget-text-muted, #9e9e9e);
     }
 
     /* Status indicators */

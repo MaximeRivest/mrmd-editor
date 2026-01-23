@@ -47,3 +47,11 @@ export {
   getKaTeXVersion,
   injectKaTeXStyles,
 } from './math.js';
+export {
+  WikiLinkWidget,
+  ExternalLinkWidget,
+  FileLinkWidget,
+  getLinkType,
+  isExternalUrl,
+  wikiLinkDisplayText,
+} from './link.js';

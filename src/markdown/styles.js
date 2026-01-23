@@ -52,36 +52,42 @@ export const markdownStyles = `
   font-size: var(--md-heading-1-size);
   font-weight: var(--md-heading-weight);
   line-height: var(--md-heading-line-height);
+  color: var(--md-heading-color, inherit);
 }
 
 .cm-md-h2 {
   font-size: var(--md-heading-2-size);
   font-weight: var(--md-heading-weight);
   line-height: var(--md-heading-line-height);
+  color: var(--md-heading-color, inherit);
 }
 
 .cm-md-h3 {
   font-size: var(--md-heading-3-size);
   font-weight: var(--md-heading-weight);
   line-height: var(--md-heading-line-height);
+  color: var(--md-heading-color, inherit);
 }
 
 .cm-md-h4 {
   font-size: var(--md-heading-4-size);
   font-weight: var(--md-heading-weight);
   line-height: var(--md-heading-line-height);
+  color: var(--md-heading-color, inherit);
 }
 
 .cm-md-h5 {
   font-size: var(--md-heading-5-size);
   font-weight: var(--md-heading-weight);
   line-height: var(--md-heading-line-height);
+  color: var(--md-heading-color, inherit);
 }
 
 .cm-md-h6 {
   font-size: var(--md-heading-6-size);
   font-weight: var(--md-heading-weight);
   line-height: var(--md-heading-line-height);
+  color: var(--md-heading-color, inherit);
 }
 
 /* ==========================================================================
@@ -114,6 +120,69 @@ export const markdownStyles = `
 
 .cm-md-link-text:hover {
   opacity: 0.8;
+}
+
+/* Wiki-links [[target]] */
+.cm-wiki-link {
+  color: var(--md-link-color);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cm-wiki-link:hover {
+  opacity: 0.8;
+}
+
+/* Wiki-link syntax (when editing) */
+.cm-wiki-link-syntax {
+  color: var(--md-link-color);
+}
+
+/* Broken wiki-link (target doesn't exist) */
+.cm-broken-link {
+  color: var(--text-muted, #6b7280);
+  text-decoration: underline dashed;
+  text-decoration-thickness: 1px;
+}
+
+/* External links [text](https://...) */
+.cm-external-link {
+  color: var(--md-link-color);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cm-external-link::after {
+  content: ' \\2197';
+  font-size: 0.75em;
+  opacity: 0.6;
+}
+
+.cm-external-link:hover {
+  opacity: 0.8;
+}
+
+/* File links [text](./path) */
+.cm-file-link {
+  color: var(--md-link-color);
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cm-file-link:hover {
+  opacity: 0.8;
+}
+
+/* Anchor links [text](#heading) */
+.cm-anchor-link {
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
 }
 
 /* ==========================================================================

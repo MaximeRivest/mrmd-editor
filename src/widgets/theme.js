@@ -619,195 +619,203 @@ export const midnightTheme = {
 /**
  * Daylight Theme (Default Light)
  *
- * Clean light theme for well-lit environments.
- * Good contrast without being harsh.
+ * Clean light theme inspired by Material for MkDocs.
+ * Professional documentation-style appearance.
  */
 export const daylightTheme = {
   name: 'daylight',
-  description: 'Clean light theme. Default for light mode.',
+  description: 'Clean light theme inspired by Material for MkDocs.',
   isDark: false,  // Controls CodeMirror editor theme
 
-  // Spacing (same as midnight)
-  '--widget-line-height': 'inherit',
-  '--widget-padding-x': '12px',
-  '--widget-padding-y': '8px',
+  // Spacing
+  '--widget-line-height': '1.6',
+  '--widget-padding-x': '16px',
+  '--widget-padding-y': '12px',
   '--widget-margin-y': '4px',
-  '--widget-border-radius': '6px',
-  '--widget-border-width': '1px',
-  '--widget-border-accent-width': '3px',
+  '--widget-border-radius': '4px',
+  '--widget-border-width': '0',
+  '--widget-border-accent-width': '0',
 
-  // Text layout (same as midnight)
+  // Output styling - typewriter/console feel
+  '--widget-inset-left': '24px',
+  '--widget-offset-top': '0',
+
+  // Text layout
   '--widget-white-space': 'pre-wrap',
   '--widget-word-break': 'break-word',
 
-  // Typography (same as midnight)
-  '--widget-font-mono': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
-  '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-  '--widget-font-size': '0.9em',
-  '--widget-font-size-small': '0.8em',
+  // Typography
+  '--widget-font-mono': "'Roboto Mono', 'SF Mono', Monaco, Consolas, monospace",
+  '--widget-font-sans': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  '--widget-font-size': '0.85em',
+
+  // Main editor font - sans-serif for body text
+  '--editor-font-family': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  '--widget-font-size-small': '0.75em',
   '--widget-font-size-label': '11px',
 
-  // Surfaces (light backgrounds)
-  '--widget-surface': 'rgba(0, 0, 0, 0.04)',
-  '--widget-surface-hover': 'rgba(0, 0, 0, 0.07)',
+  // Surfaces - light gray code background like Material
+  '--widget-surface': '#f5f5f5',
+  '--widget-surface-hover': '#eeeeee',
   '--widget-surface-elevated': '#ffffff',
-  '--widget-surface-inset': 'rgba(0, 0, 0, 0.03)',
+  '--widget-surface-inset': '#fafafa',
 
-  // Borders
-  '--widget-border': 'rgba(0, 0, 0, 0.1)',
-  '--widget-border-accent': 'rgba(59, 130, 246, 0.5)',
-  '--widget-border-focus': '#3b82f6',
+  // Borders - subtle
+  '--widget-border': 'rgba(0, 0, 0, 0.08)',
+  '--widget-border-accent': 'rgba(0, 0, 0, 0.12)',
+  '--widget-border-focus': '#1976d2',
 
   // Text (dark text on light backgrounds)
-  '--widget-text': '#1a1a1a',
-  '--widget-text-muted': '#666666',
-  '--widget-text-accent': '#2563eb',
+  '--widget-text': '#37474f',
+  '--widget-text-muted': '#78909c',
+  '--widget-text-accent': '#1976d2',
 
-  // Semantic (slightly darker for light backgrounds)
-  '--widget-success': '#16a34a',
-  '--widget-warning': '#d97706',
-  '--widget-error': '#dc2626',
-  '--widget-info': '#2563eb',
+  // Semantic colors (Material palette)
+  '--widget-success': '#4caf50',
+  '--widget-warning': '#ff9800',
+  '--widget-error': '#f44336',
+  '--widget-info': '#2196f3',
 
-  // ANSI colors (darker for light backgrounds)
-  '--ansi-black': '#1e1e1e',
-  '--ansi-red': '#dc2626',
-  '--ansi-green': '#16a34a',
-  '--ansi-yellow': '#ca8a04',
-  '--ansi-blue': '#2563eb',
-  '--ansi-magenta': '#9333ea',
-  '--ansi-cyan': '#0891b2',
-  '--ansi-white': '#f5f5f5',
-  '--ansi-bright-black': '#6b7280',
-  '--ansi-bright-red': '#ef4444',
-  '--ansi-bright-green': '#22c55e',
-  '--ansi-bright-yellow': '#eab308',
-  '--ansi-bright-blue': '#3b82f6',
-  '--ansi-bright-magenta': '#a855f7',
-  '--ansi-bright-cyan': '#06b6d4',
+  // ANSI colors (Material-inspired, darker for light backgrounds)
+  '--ansi-black': '#263238',
+  '--ansi-red': '#f44336',
+  '--ansi-green': '#4caf50',
+  '--ansi-yellow': '#ff9800',
+  '--ansi-blue': '#2196f3',
+  '--ansi-magenta': '#9c27b0',
+  '--ansi-cyan': '#00bcd4',
+  '--ansi-white': '#fafafa',
+  '--ansi-bright-black': '#546e7a',
+  '--ansi-bright-red': '#e57373',
+  '--ansi-bright-green': '#81c784',
+  '--ansi-bright-yellow': '#ffb74d',
+  '--ansi-bright-blue': '#64b5f6',
+  '--ansi-bright-magenta': '#ba68c8',
+  '--ansi-bright-cyan': '#4dd0e1',
   '--ansi-bright-white': '#ffffff',
 
-  // Collaborator defaults (same as midnight, work well on light)
-  '--collab-human': '#3b82f6',
-  '--collab-ai': '#8b5cf6',
-  '--collab-runtime': '#10b981',
+  // Collaborator defaults
+  '--collab-human': '#1976d2',
+  '--collab-ai': '#7b1fa2',
+  '--collab-runtime': '#388e3c',
 
-  // Editor (VS Code Light inspired)
+  // Editor - clean white background
   '--editor-background': '#ffffff',
-  '--editor-foreground': '#1e1e1e',
-  '--editor-line-number': '#6e7681',
-  '--editor-line-number-active': '#1e1e1e',
-  '--editor-selection': '#add6ff',
-  '--editor-selection-match': '#e8e8e8',
-  '--editor-cursor': '#1e1e1e',
-  '--editor-active-line': 'rgba(0, 0, 0, 0.04)',
+  '--editor-foreground': '#37474f',
+  '--editor-line-number': '#90a4ae',
+  '--editor-line-number-active': '#546e7a',
+  '--editor-selection': '#e3f2fd',
+  '--editor-selection-match': '#fff9c4',
+  '--editor-cursor': '#37474f',
+  '--editor-active-line': 'rgba(0, 0, 0, 0.02)',
   '--editor-gutter': '#ffffff',
-  '--editor-matching-bracket': 'rgba(0, 0, 0, 0.1)',
+  '--editor-matching-bracket': '#c8e6c9',
 
-  // Syntax highlighting (VS Code Light inspired)
-  '--syntax-keyword': '#0000ff',
-  '--syntax-control': '#af00db',
-  '--syntax-string': '#a31515',
-  '--syntax-number': '#098658',
-  '--syntax-comment': '#008000',
-  '--syntax-function': '#795e26',
-  '--syntax-variable': '#001080',
-  '--syntax-variable-special': '#0000ff',
-  '--syntax-property': '#001080',
-  '--syntax-operator': '#1e1e1e',
-  '--syntax-punctuation': '#1e1e1e',
-  '--syntax-type': '#267f99',
-  '--syntax-class': '#267f99',
-  '--syntax-constant': '#0000ff',
-  '--syntax-parameter': '#001080',
-  '--syntax-regexp': '#811f3f',
-  '--syntax-escape': '#ee0000',
-  '--syntax-tag': '#800000',
-  '--syntax-attribute': '#ff0000',
-  '--syntax-attribute-value': '#0000ff',
-  '--syntax-heading': '#0000ff',
-  '--syntax-link': '#0000ff',
-  '--syntax-link-text': '#a31515',
-  '--syntax-emphasis': '#0000ff',
-  '--syntax-strong': '#0000ff',
-  '--syntax-strikethrough': '#6e7681',
-  '--syntax-quote': '#008000',
-  '--syntax-code': '#a31515',
-  '--syntax-code-background': 'rgba(175, 184, 193, 0.2)',
-  '--syntax-meta': '#6e7681',
-  '--syntax-inserted': '#098658',
-  '--syntax-deleted': '#a31515',
-  '--syntax-changed': '#0000ff',
+  // Syntax highlighting - Material for MkDocs inspired
+  '--syntax-keyword': '#0d47a1',      // Blue for keywords (from, import, def, class)
+  '--syntax-control': '#0d47a1',      // Blue for control flow
+  '--syntax-string': '#2e7d32',       // Green for strings
+  '--syntax-number': '#e65100',       // Orange for numbers
+  '--syntax-comment': '#757575',      // Gray for comments
+  '--syntax-function': '#6a1b9a',     // Purple for functions
+  '--syntax-variable': '#37474f',     // Dark gray for variables
+  '--syntax-variable-special': '#0d47a1',  // Blue for self/this
+  '--syntax-property': '#0d47a1',     // Blue for properties/keys (YAML keys)
+  '--syntax-operator': '#37474f',     // Dark for operators
+  '--syntax-punctuation': '#37474f',  // Dark for punctuation
+  '--syntax-type': '#00695c',         // Teal for types
+  '--syntax-class': '#00695c',        // Teal for class names
+  '--syntax-constant': '#0d47a1',     // Blue for constants
+  '--syntax-parameter': '#37474f',    // Dark for parameters
+  '--syntax-regexp': '#c62828',       // Red for regex
+  '--syntax-escape': '#e65100',       // Orange for escapes
+  '--syntax-tag': '#c62828',          // Red for HTML tags
+  '--syntax-attribute': '#6a1b9a',    // Purple for attributes
+  '--syntax-attribute-value': '#2e7d32',  // Green for attribute values
+  '--syntax-heading': '#000000',      // Black for headings
+  '--syntax-link': '#1976d2',         // Blue for links
+  '--syntax-link-text': '#1976d2',    // Blue for link text
+  '--syntax-emphasis': '#37474f',     // Dark for emphasis
+  '--syntax-strong': '#000000',       // Black for strong/bold
+  '--syntax-strikethrough': '#757575',
+  '--syntax-quote': '#757575',
+  '--syntax-code': '#c62828',         // Red for inline code (like Material)
+  '--syntax-code-background': '#f5f5f5',
+  '--syntax-meta': '#757575',
+  '--syntax-inserted': '#2e7d32',
+  '--syntax-deleted': '#c62828',
+  '--syntax-changed': '#1565c0',
 
-  // Markdown rendering
-  '--md-heading-1-size': '1.75em',
-  '--md-heading-2-size': '1.4em',
-  '--md-heading-3-size': '1.2em',
-  '--md-heading-4-size': '1.1em',
-  '--md-heading-5-size': '1.05em',
-  '--md-heading-6-size': '1em',
-  '--md-heading-weight': '600',
-  '--md-heading-line-height': '1.3',
-  '--md-heading-margin-top': '0.5em',
-  '--md-marker-color': '#9ca3af',
-  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
-  '--md-link-color': '#2563eb',
-  '--md-link-decoration': 'underline',
-  '--md-code-background': 'rgba(175, 184, 193, 0.2)',
-  '--md-code-color': '#a31515',
-  '--md-code-padding': '0.15em 0.35em',
-  '--md-code-radius': '3px',
-  '--md-blockquote-border': 'rgba(59, 130, 246, 0.4)',
-  '--md-blockquote-border-width': '3px',
-  '--md-blockquote-color': '#666666',
+  // Markdown rendering - Material for MkDocs style headings
+  '--md-heading-1-size': '2em',
+  '--md-heading-2-size': '1.5625em',
+  '--md-heading-3-size': '1.25em',
+  '--md-heading-4-size': '1em',
+  '--md-heading-5-size': '0.875em',
+  '--md-heading-6-size': '0.75em',
+  '--md-heading-weight': '700',
+  '--md-heading-line-height': '1.4',
+  '--md-heading-margin-top': '0.8em',
+  '--md-heading-color': '#000000',
+  '--md-marker-color': '#90a4ae',
+  '--md-marker-font': "'Roboto Mono', 'SF Mono', Monaco, monospace",
+  '--md-link-color': '#1976d2',
+  '--md-link-decoration': 'none',
+  '--md-code-background': '#f5f5f5',
+  '--md-code-color': '#c62828',
+  '--md-code-padding': '0.2em 0.4em',
+  '--md-code-radius': '4px',
+  '--md-blockquote-border': '#e0e0e0',
+  '--md-blockquote-border-width': '4px',
+  '--md-blockquote-color': '#78909c',
   '--md-blockquote-padding': '1em',
-  '--md-list-marker-color': '#666666',
-  '--md-hr-color': 'rgba(0, 0, 0, 0.1)',
+  '--md-list-marker-color': '#78909c',
+  '--md-hr-color': '#e0e0e0',
   '--md-hr-height': '1px',
-  '--md-hr-margin': '1.5em 0',
-  '--md-table-border': 'rgba(0, 0, 0, 0.1)',
-  '--md-table-header-bg': 'rgba(0, 0, 0, 0.04)',
-  '--md-table-header-weight': '600',
-  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-hr-margin': '2em 0',
+  '--md-table-border': '#e0e0e0',
+  '--md-table-header-bg': '#fafafa',
+  '--md-table-header-weight': '500',
+  '--md-table-cell-padding': '0.75em 1em',
   '--md-table-stripe-bg': 'transparent',
   '--md-image-max-width': '100%',
-  '--md-image-border-radius': '6px',
-  '--md-checkbox-size': '1em',
-  '--md-checkbox-color': '#2563eb',
-  '--md-alert-note-color': '#2563eb',
-  '--md-alert-tip-color': '#16a34a',
-  '--md-alert-important-color': '#0000ff',
-  '--md-alert-warning-color': '#d97706',
-  '--md-alert-caution-color': '#dc2626',
+  '--md-image-border-radius': '4px',
+  '--md-checkbox-size': '1.1em',
+  '--md-checkbox-color': '#1976d2',
+  '--md-alert-note-color': '#1976d2',
+  '--md-alert-tip-color': '#388e3c',
+  '--md-alert-important-color': '#7b1fa2',
+  '--md-alert-warning-color': '#f57c00',
+  '--md-alert-caution-color': '#d32f2f',
 
-  // Shell (status bar, menus, dialogs) - Light theme
-  '--mrmd-ui-font': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-  '--mrmd-ui-font-size': '13px',
-  '--mrmd-ui-font-size-sm': '11px',
-  '--mrmd-panel-bg': '#f5f5f5',
+  // Shell (status bar, menus, dialogs) - Material Light
+  '--mrmd-ui-font': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  '--mrmd-ui-font-size': '14px',
+  '--mrmd-ui-font-size-sm': '12px',
+  '--mrmd-panel-bg': '#fafafa',
   '--mrmd-popup-bg': '#ffffff',
   '--mrmd-bg': '#ffffff',
-  '--mrmd-fg': '#333333',
-  '--mrmd-fg-muted': '#666666',
+  '--mrmd-fg': '#37474f',
+  '--mrmd-fg-muted': '#78909c',
   '--mrmd-border': '#e0e0e0',
   '--mrmd-hover-bg': 'rgba(0, 0, 0, 0.04)',
   '--mrmd-active-bg': 'rgba(0, 0, 0, 0.08)',
-  '--mrmd-selection-bg': 'rgba(37, 99, 235, 0.15)',
-  '--mrmd-accent': '#2563eb',
-  '--mrmd-accent-hover': '#1d4ed8',
-  '--mrmd-success': '#16a34a',
-  '--mrmd-warning': '#d97706',
-  '--mrmd-error': '#dc2626',
-  '--mrmd-shadow-md': '0 4px 12px rgba(0, 0, 0, 0.1)',
-  '--mrmd-shadow-lg': '0 8px 32px rgba(0, 0, 0, 0.15)',
-  '--mrmd-shadow-xl': '0 16px 48px rgba(0, 0, 0, 0.2)',
-  '--mrmd-menu-border': '#d0d0d0',
-  '--mrmd-dialog-border': '#d0d0d0',
-  '--mrmd-input-border': '#d0d0d0',
-  '--mrmd-button-bg': '#f0f0f0',
-  '--mrmd-button-border': '#d0d0d0',
-  '--mrmd-button-hover': '#e8e8e8',
-  '--mrmd-button-active': '#e0e0e0',
+  '--mrmd-selection-bg': 'rgba(25, 118, 210, 0.12)',
+  '--mrmd-accent': '#1976d2',
+  '--mrmd-accent-hover': '#1565c0',
+  '--mrmd-success': '#4caf50',
+  '--mrmd-warning': '#ff9800',
+  '--mrmd-error': '#f44336',
+  '--mrmd-shadow-md': '0 2px 4px rgba(0, 0, 0, 0.1)',
+  '--mrmd-shadow-lg': '0 4px 8px rgba(0, 0, 0, 0.12)',
+  '--mrmd-shadow-xl': '0 8px 16px rgba(0, 0, 0, 0.15)',
+  '--mrmd-menu-border': '#e0e0e0',
+  '--mrmd-dialog-border': '#e0e0e0',
+  '--mrmd-input-border': '#e0e0e0',
+  '--mrmd-button-bg': '#fafafa',
+  '--mrmd-button-border': '#e0e0e0',
+  '--mrmd-button-hover': '#f5f5f5',
+  '--mrmd-button-active': '#eeeeee',
 };
 
 /**

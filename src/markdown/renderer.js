@@ -53,6 +53,13 @@ import {
   InlineMathWidget,
   extractInlineMath,
 } from './widgets/math.js';
+import {
+  WikiLinkWidget,
+  ExternalLinkWidget,
+  FileLinkWidget,
+  getLinkType,
+  wikiLinkDisplayText,
+} from './widgets/link.js';
 // Display math handled by StateField (block-decorations.js) - multi-line replace not allowed in ViewPlugin
 
 // Import height caching for stable layout
@@ -73,6 +80,41 @@ function hashContent(content) {
     hash = hash & hash;
   }
   return hash.toString(36);
+}
+
+// =============================================================================
+// Wiki-Link Extraction
+// =============================================================================
+
+/**
+ * Extract wiki-links from a line of text.
+ * Matches [[target]] or [[target|display text]] syntax.
+ *
+ * @param {string} text - Line text
+ * @returns {Array<{start: number, end: number, target: string, display: string}>}
+ */
+function extractWikiLinks(text) {
+  const results = [];
+  // Match [[target]] or [[target|display]]
+  // target can include path segments (e.g., setup/config)
+  // but not | or ] or #
+  const regex = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g;
+
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const target = match[1].trim();
+    const display = match[2]?.trim() || wikiLinkDisplayText(target);
+
+    results.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      target,
+      display,
+      raw: match[0],
+    });
+  }
+
+  return results;
 }
 
 /**
@@ -326,29 +368,78 @@ function buildDecorations(view) {
           return;
         }
 
-        // Process regular links
-        cursor.moveTo(node.from);
-        if (cursor.firstChild()) {
-          do {
-            const childLine = doc.lineAt(cursor.from).number;
-            const childHidden = childLine === cursorLine ? 'cm-md-marker' : 'cm-md-hidden';
+        // Extract link text and URL from the raw markdown text
+        const rawLink = doc.sliceString(node.from, node.to);
+        // Match [text](url) pattern
+        const linkMatch = rawLink.match(/^\[([^\]]*)\]\(([^)]*)\)$/);
 
-            if (cursor.name === 'LinkMark') {
-              decorations.push(
-                Decoration.mark({ class: childHidden }).range(cursor.from, cursor.to)
-              );
-            }
-            if (cursor.name === 'LinkLabel') {
-              decorations.push(
-                Decoration.mark({ class: 'cm-md-link-text' }).range(cursor.from, cursor.to)
-              );
-            }
-            if (cursor.name === 'URL') {
-              decorations.push(
-                Decoration.mark({ class: childHidden }).range(cursor.from, cursor.to)
-              );
-            }
-          } while (cursor.nextSibling());
+        if (!linkMatch) {
+          // Might be a reference-style link [text][ref] - skip for now
+          return;
+        }
+
+        const linkText = linkMatch[1];
+        const linkUrl = linkMatch[2];
+
+        const linkLine = doc.lineAt(node.from).number;
+        const isLinkActive = linkLine === cursorLine;
+
+        if (isLinkActive) {
+          // Show raw markdown with styling on active line
+          // Find positions of [ ] ( ) in the raw text
+          const textStart = node.from + 1; // After [
+          const textEnd = node.from + 1 + linkText.length; // Before ]
+          const urlStart = textEnd + 2; // After ](
+          const urlEnd = node.to - 1; // Before )
+
+          // Style the brackets as markers
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-marker' }).range(node.from, node.from + 1) // [
+          );
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-link-text' }).range(textStart, textEnd) // text
+          );
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-marker' }).range(textEnd, urlStart) // ](
+          );
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-marker' }).range(urlStart, urlEnd) // url
+          );
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-marker' }).range(urlEnd, node.to) // )
+          );
+        } else {
+          // Replace with clickable widget on inactive line
+          const linkType = getLinkType(linkUrl);
+
+          if (linkType === 'external') {
+            decorations.push(
+              Decoration.replace({
+                widget: new ExternalLinkWidget(linkUrl, linkText),
+              }).range(node.from, node.to)
+            );
+          } else if (linkType === 'anchor') {
+            // Anchor links - hide brackets and URL, style text
+            const textStart = node.from + 1;
+            const textEnd = node.from + 1 + linkText.length;
+
+            decorations.push(
+              Decoration.mark({ class: 'cm-md-hidden' }).range(node.from, textStart) // [
+            );
+            decorations.push(
+              Decoration.mark({ class: 'cm-md-link-text cm-anchor-link' }).range(textStart, textEnd) // text
+            );
+            decorations.push(
+              Decoration.mark({ class: 'cm-md-hidden' }).range(textEnd, node.to) // ](url)
+            );
+          } else {
+            // File link
+            decorations.push(
+              Decoration.replace({
+                widget: new FileLinkWidget(linkUrl, linkText),
+              }).range(node.from, node.to)
+            );
+          }
         }
       }
 
@@ -641,6 +732,38 @@ function buildDecorations(view) {
         decorations.push(
           Decoration.replace({
             widget: new InlineMathWidget(math.latex, math.raw),
+          }).range(from, to)
+        );
+      }
+    }
+  }
+
+  // ==========================================================================
+  // Wiki-links [[target]] - process line by line
+  // ==========================================================================
+  for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
+    const line = doc.line(i);
+    const isActiveLine = i === cursorLine;
+
+    // Skip lines inside code blocks (rough check)
+    if (line.text.trimStart().startsWith('```')) continue;
+
+    const wikiLinks = extractWikiLinks(line.text);
+
+    for (const link of wikiLinks) {
+      const from = line.from + link.start;
+      const to = line.from + link.end;
+
+      if (isActiveLine) {
+        // Show raw wiki-link syntax with styling
+        decorations.push(
+          Decoration.mark({ class: 'cm-wiki-link-syntax' }).range(from, to)
+        );
+      } else {
+        // Replace with clickable widget
+        decorations.push(
+          Decoration.replace({
+            widget: new WikiLinkWidget(link.target, link.display),
           }).range(from, to)
         );
       }

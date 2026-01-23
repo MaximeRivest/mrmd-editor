@@ -41,6 +41,9 @@ export const defaultKeybindings = {
 
   // Code intelligence
   'F12': 'viewSource',
+
+  // Enter accepts completion if active, otherwise inserts newline
+  'Enter': 'acceptCompletionOrNewline',
 };
 
 /**
@@ -53,6 +56,18 @@ function indentOrAcceptCompletion(editor) {
     if (acceptCompletion(view)) return true;
     // Fall back to indent
     return indentCmd(view);
+  };
+}
+
+/**
+ * Special command: Accept completion if active, otherwise insert newline
+ */
+function acceptCompletionOrNewline(editor) {
+  return (view) => {
+    // Try to accept completion first
+    if (acceptCompletion(view)) return true;
+    // Fall back to default behavior (let CodeMirror handle newline)
+    return false;
   };
 }
 
@@ -80,6 +95,7 @@ export function createKeymap(editor, bindings = defaultKeybindings) {
   // Special commands that aren't in the registry
   const specialCommands = {
     'indentOrAcceptCompletion': indentOrAcceptCompletion,
+    'acceptCompletionOrNewline': acceptCompletionOrNewline,
   };
 
   for (const [key, commandName] of Object.entries(bindings)) {

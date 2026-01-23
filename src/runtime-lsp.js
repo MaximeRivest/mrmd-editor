@@ -17,7 +17,7 @@
  */
 
 import { hoverTooltip } from '@codemirror/view';
-import { autocompletion, CompletionContext } from '@codemirror/autocomplete';
+import { autocompletion, CompletionContext, startCompletion } from '@codemirror/autocomplete';
 import { getCellAtCursor, findCells } from './cells.js';
 
 // #region INTERFACES
@@ -513,14 +513,29 @@ export function createRuntimeCompletionSource({ providers, getContent, stateMana
     return {
       from: codeInfo.cell.codeStart + result.cursorStart,
       to: codeInfo.cell.codeStart + result.cursorEnd,
-      options: result.matches.map(match => ({
-        label: match.label,
-        type: mapCompletionKind(match.kind),
-        detail: match.valuePreview || match.detail,
-        info: match.documentation,
-        apply: match.insertText || match.label,
-        boost: match.kind === 'property' || match.kind === 'method' ? 1 : 0,
-      })),
+      options: result.matches.map(match => {
+        const insertText = match.insertText || match.label;
+        const shouldRetrigger = /[\/\.]$/.test(insertText);
+
+        return {
+          label: match.label,
+          type: mapCompletionKind(match.kind),
+          detail: match.valuePreview || match.detail,
+          info: match.documentation,
+          // Use custom apply to retrigger completions for paths and chained access
+          apply: shouldRetrigger
+            ? (view, completion, from, to) => {
+                view.dispatch({
+                  changes: { from, to, insert: insertText },
+                  selection: { anchor: from + insertText.length },
+                });
+                // Schedule new completion after the change is applied
+                setTimeout(() => startCompletion(view), 0);
+              }
+            : insertText,
+          boost: match.kind === 'property' || match.kind === 'method' ? 1 : 0,
+        };
+      }),
     };
   };
 }
@@ -556,17 +571,19 @@ function mapCompletionKind(kind) {
  * @param {import('./awareness/state.js').AwarenessStateManager} [options.stateManager]
  * @param {import('yjs').Text} [options.yText]
  * @param {Object} [options.config] - Autocompletion config overrides
+ * @param {Array<import('@codemirror/autocomplete').CompletionSource>} [options.additionalSources] - Additional completion sources to include
  * @returns {import('@codemirror/state').Extension}
  */
-export function createRuntimeCompletionExtension({ providers, getContent, stateManager, yText, config = {} }) {
+export function createRuntimeCompletionExtension({ providers, getContent, stateManager, yText, config = {}, additionalSources = [] }) {
   const source = createRuntimeCompletionSource({ providers, getContent, stateManager, yText });
 
+  // Combine runtime source with any additional sources (like wiki-link)
+  const allSources = [source, ...additionalSources];
+
   return autocompletion({
-    override: [source],
+    override: allSources,
     activateOnTyping: config.activateOnTyping ?? true,
     maxRenderedOptions: config.maxRenderedOptions ?? 50,
-    // Retrigger completions after accepting paths (ending with /) or dots (for chained access)
-    activateOnCompletion: config.activateOnCompletion ?? /[\/\.]$/,
     ...config,
   });
 }

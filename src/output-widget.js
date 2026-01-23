@@ -760,16 +760,17 @@ export const outputWidgetStyles = `
   /* Visual marker for block end */
 }
 
-/* Content lines - terminal-style background for output block */
+/* Content lines - typewriter console style for output block */
 .cm-output-content-line {
-  background: var(--output-background, #1a1a2e);
-  border-left: var(--widget-border-accent-width, 3px) solid var(--widget-border-accent, rgba(100, 149, 237, 0.6));
-  padding-left: var(--widget-padding-x, 12px);
-  padding-right: var(--widget-padding-x, 12px);
-  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Source Code Pro', 'Consolas', monospace;
-  font-size: 0.9em;
-  line-height: 1.4;
-  color: var(--output-text, #e0e0e0);
+  background: var(--widget-surface, rgba(0, 0, 0, 0.35));
+  border-left: var(--widget-border-accent-width, 0) solid var(--widget-border-accent, transparent);
+  margin-left: var(--widget-inset-left, 0);
+  padding-left: var(--widget-padding-x, 16px);
+  padding-right: var(--widget-padding-x, 16px);
+  font-family: var(--widget-font-mono, 'Roboto Mono', 'SF Mono', Monaco, Consolas, monospace);
+  font-size: var(--widget-font-size, 0.85em);
+  line-height: var(--widget-line-height, 1.6);
+  color: var(--widget-text, #37474f);
 }
 
 /* First content line - add top padding and rounded corners */

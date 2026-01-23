@@ -105,6 +105,15 @@ import {
   injectRuntimeLspStyles,
 } from './runtime-lsp.js';
 
+// Wiki-link completion ([[internal-links]])
+import {
+  projectFilesFacet,
+  createWikiLinkCompletionSource,
+  createWikiLinkCompletionExtension,
+  getWikiLinkCompletionSource,
+  injectWikiLinkCompletionStyles,
+} from './wiki-link-completion.js';
+
 // Built-in JavaScript runtime
 import { createRuntime as createMrmdJsRuntime } from 'mrmd-js';
 import {
@@ -602,6 +611,81 @@ const languageSupportExtensions = [
 ];
 // #endregion CODE_BLOCK_LANGUAGES
 
+// #region CODE_BLOCK_BACKGROUND
+/**
+ * ViewPlugin that adds background styling to fenced code blocks.
+ * Gives code cells the light gray background like Material for MkDocs.
+ * Fence lines (``` markers) get smaller/lighter styling to fade away.
+ */
+const codeBlockBackground = ViewPlugin.fromClass(class {
+  constructor(view) {
+    this.decorations = this.buildDecorations(view);
+  }
+
+  update(update) {
+    if (update.docChanged || update.viewportChanged || update.selectionSet) {
+      this.decorations = this.buildDecorations(update.view);
+    }
+  }
+
+  buildDecorations(view) {
+    const decorations = [];
+    const tree = syntaxTree(view.state);
+
+    tree.iterate({
+      enter: (node) => {
+        if (node.name === 'FencedCode') {
+          const from = node.from;
+          const to = node.to;
+          const firstLine = view.state.doc.lineAt(from);
+          const lastLine = view.state.doc.lineAt(to);
+
+          // Iterate through each line in the code block
+          for (let pos = from; pos < to;) {
+            const line = view.state.doc.lineAt(pos);
+            const isFirstLine = line.number === firstLine.number;
+            const isLastLine = line.number === lastLine.number;
+
+            if (isFirstLine || isLastLine) {
+              // Fence lines - subtle styling
+              decorations.push(
+                Decoration.line({ class: 'cm-codeblock-fence' }).range(line.from)
+              );
+            } else {
+              // Content lines - normal code block styling
+              decorations.push(
+                Decoration.line({ class: 'cm-codeblock-line' }).range(line.from)
+              );
+            }
+            pos = line.to + 1;
+          }
+        }
+      }
+    });
+
+    return Decoration.set(decorations, true);
+  }
+}, {
+  decorations: v => v.decorations
+});
+
+/**
+ * CSS styles for code block backgrounds
+ */
+const codeBlockStyles = EditorView.theme({
+  // Content lines - gray background
+  '.cm-codeblock-line': {
+    backgroundColor: 'var(--widget-surface, #f5f5f5)',
+  },
+  // Fence lines (``` markers) - same background, smaller/faded text (no opacity to preserve bg)
+  '.cm-codeblock-fence': {
+    backgroundColor: 'var(--widget-surface, #f5f5f5)',
+    fontSize: '0.6em',
+    color: '#c0c0c0',
+  },
+});
+// #endregion CODE_BLOCK_BACKGROUND
+
 // #region WRITER
 /**
  * Writer for streaming content into the editor.
@@ -744,6 +828,7 @@ function create(target, options = {}) {
   const themeCompartment = new Compartment();
   const readonlyCompartment = new Compartment();
   const keymapCompartment = new Compartment();
+  const projectFilesCompartment = new Compartment();
 
   // Create UndoManager for undo/redo tracking
   // We create it ourselves so we can listen to stack changes
@@ -801,6 +886,8 @@ function create(target, options = {}) {
     markdownWithCodeBlocks,
     ...languageSupportExtensions,
     documentTheme,
+    codeBlockBackground,  // Add gray background to code blocks
+    codeBlockStyles,
     EditorView.lineWrapping, // Always wrap markdown text
     themeCompartment.of(initialCMTheme),
     readonlyCompartment.of(readonly ? EditorState.readOnly.of(true) : []),
@@ -817,10 +904,17 @@ function create(target, options = {}) {
     lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
     blockDecorations,   // StateField for tables, display math (multi-line)
     markdownRenderer,   // ViewPlugin for everything else (inline)
+    // Wiki-link completion - just the facet for project files
+    // The actual completion is provided by runtime-lsp (via additionalSources)
+    // or by a standalone autocompletion added below if no runtime providers exist
+    projectFilesCompartment.of(projectFilesFacet.of([])),
   ];
 
   // Inject markdown styles
   injectMarkdownStyles();
+
+  // Inject wiki-link completion styles
+  injectWikiLinkCompletionStyles();
 
   const view = new EditorView({
     state: EditorState.create({ doc: initialContent, extensions }),
@@ -974,6 +1068,8 @@ function create(target, options = {}) {
     runtimeLspExtensions.push(hoverExt);
 
     // Create completion extension with awareness integration
+    // Include wiki-link source so both work together
+    const wikiLinkSource = getWikiLinkCompletionSource();
     const completionExt = createRuntimeCompletionExtension({
       providers: runtimeLspProviders,
       getContent: () => view.state.doc.toString(),
@@ -983,6 +1079,7 @@ function create(target, options = {}) {
         activateOnTyping: config.completion?.activateOnTyping ?? true,
         maxRenderedOptions: config.completion?.maxRenderedOptions ?? 50,
       },
+      additionalSources: [wikiLinkSource],
     });
     runtimeLspExtensions.push(completionExt);
 
@@ -995,6 +1092,11 @@ function create(target, options = {}) {
   // Add runtime LSP extensions at init if we have providers
   if (runtimeLspProviders.size > 0) {
     addLspExtensions();
+  } else {
+    // No runtime providers - add standalone wiki-link completion
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(createWikiLinkCompletionExtension()),
+    });
   }
 
   // Create editor API object first (needed by ExecutionManager)
@@ -1141,6 +1243,44 @@ function create(target, options = {}) {
      */
     getThemeNames() {
       return getThemeNames();
+    },
+
+    // ===========================================================================
+    // Wiki-link completion
+    // ===========================================================================
+
+    /**
+     * Set project files for [[wiki-link]] autocomplete.
+     *
+     * Call this when opening a project or when files change.
+     * The files array should contain objects with { path, title, name }.
+     *
+     * @param {Array<{path: string, title: string, name: string}>} files - Project files
+     *
+     * @example
+     * // Set files from FSML-parsed project
+     * editor.setProjectFiles(
+     *   project.files.map(path => FSML.parsePath(path))
+     * );
+     *
+     * @example
+     * // Clear files (disables wiki-link completion)
+     * editor.setProjectFiles([]);
+     */
+    setProjectFiles(files) {
+      view.dispatch({
+        effects: projectFilesCompartment.reconfigure(
+          projectFilesFacet.of(files || [])
+        ),
+      });
+    },
+
+    /**
+     * Get current project files.
+     * @returns {Array<{path: string, title: string, name: string}>}
+     */
+    getProjectFiles() {
+      return view.state.facet(projectFilesFacet);
     },
 
     focus() {
@@ -2757,6 +2897,19 @@ const markdownExports = {
 };
 // #endregion MARKDOWN_EXPORTS
 
+// #region WIKI_LINK_EXPORTS
+const wikiLinkExports = {
+  // Facet for providing project files
+  projectFilesFacet,
+  // Completion source and extension
+  createWikiLinkCompletionSource,
+  createWikiLinkCompletionExtension,
+  getWikiLinkCompletionSource,
+  // Styles
+  injectWikiLinkCompletionStyles,
+};
+// #endregion WIKI_LINK_EXPORTS
+
 // #region EXPORTS
 const mrmd = {
   version: VERSION,
@@ -2778,6 +2931,8 @@ const mrmd = {
   runtimeCodeLens: runtimeCodeLensExports,
   // Runtime LSP (hover, completions, variables)
   runtimeLsp: runtimeLspExports,
+  // Wiki-link completion ([[internal-links]])
+  wikiLink: wikiLinkExports,
   // Markdown rendering (blur→render, focus→source)
   markdown: markdownExports,
   // Shell (status bar, file management, studio layout)
@@ -2919,6 +3074,13 @@ export {
   isTableDelimiter,
   generateTableId,
   AlertTitleWidget,
+  // Wiki-link completion exports
+  wikiLinkExports,
+  projectFilesFacet,
+  createWikiLinkCompletionSource,
+  createWikiLinkCompletionExtension,
+  getWikiLinkCompletionSource,
+  injectWikiLinkCompletionStyles,
   // Shell module exports
   shellModule as shell,
 };
