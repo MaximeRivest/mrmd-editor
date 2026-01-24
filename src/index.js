@@ -61,7 +61,7 @@ import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import { WebsocketProvider } from 'y-websocket';
 
 // Internal modules
-import { findCells, getCellAtCursor, countCells } from './cells.js';
+import { findCells, getCellAtCursor, countCells, findTerminalBlocks, isTerminalLanguage } from './cells.js';
 import { RuntimeRegistry, createRuntimeRegistry } from './runtime.js';
 import { ExecutionManager, createExecutionManager } from './execution.js';
 import { MonitorCoordination, EXECUTION_STATUS, createMonitorCoordination } from './monitor-coordination.js';
@@ -130,6 +130,18 @@ import {
   hasAnsi,
   ansiStyles,
 } from './terminal.js';
+// Terminal portal (```term blocks with xterm.js)
+import { TermBlock, termBlockRegistry, TermBlockRegistry } from './term-block.js';
+import { PtyClient, createPtyClient, listTerminalSessions, createTerminalSession } from './term-pty-client.js';
+import {
+  terminalWidget,
+  launchTerminal,
+  closeTerminal,
+  isTerminalVisible,
+  terminalOverlay,
+  injectTermWidgetStyles,
+  termOverlayStyles,
+} from './term-widget.js';
 import {
   outputWidget,
   outputWidgetPlugin,
@@ -2788,6 +2800,7 @@ const codemirror = {
 
 // #region TERMINAL_EXPORTS
 const terminal = {
+  // Terminal buffer (ANSI processing for output blocks)
   TerminalBuffer,
   processTerminalOutput,
   terminalToHtml,
@@ -2799,6 +2812,23 @@ const terminal = {
   outputWidgetPlugin,
   injectOutputWidgetStyles,
   outputWidgetStyles,
+  // Terminal portal (```term blocks with xterm.js)
+  TermBlock,
+  termBlockRegistry,
+  TermBlockRegistry,
+  PtyClient,
+  createPtyClient,
+  listTerminalSessions,
+  createTerminalSession,
+  terminalWidget,
+  launchTerminal,
+  closeTerminal,
+  isTerminalVisible,
+  terminalOverlay,
+  injectTermWidgetStyles,
+  termOverlayStyles,
+  findTerminalBlocks,
+  isTerminalLanguage,
 };
 // #endregion TERMINAL_EXPORTS
 
@@ -3013,6 +3043,23 @@ export {
   stripAnsi,
   hasAnsi,
   ansiStyles,
+  // Terminal portal exports (```term blocks)
+  TermBlock,
+  termBlockRegistry,
+  TermBlockRegistry,
+  PtyClient,
+  createPtyClient,
+  listTerminalSessions,
+  createTerminalSession,
+  terminalWidget,
+  launchTerminal,
+  closeTerminal,
+  isTerminalVisible,
+  terminalOverlay,
+  injectTermWidgetStyles,
+  termOverlayStyles,
+  findTerminalBlocks,
+  isTerminalLanguage,
   // Awareness exports
   createAwareness,
   AwarenessSystem,

@@ -20,6 +20,55 @@ import { WidgetType } from '@codemirror/view';
 const PREFIX = 'cm-cell-controls';
 
 /**
+ * Terminal controls widget - button to launch terminal for ```term blocks
+ */
+export class TerminalControlsWidget extends WidgetType {
+  constructor(options) {
+    super();
+    this.blockIndex = options.blockIndex;
+    this.block = options.block;
+    this.callbacks = options.callbacks;
+  }
+
+  eq(other) {
+    return (
+      other instanceof TerminalControlsWidget &&
+      this.blockIndex === other.blockIndex &&
+      this.block.start === other.block.start
+    );
+  }
+
+  toDOM() {
+    const container = document.createElement('span');
+    container.className = `${PREFIX} ${PREFIX}-terminal`;
+    container.dataset.blockIndex = String(this.blockIndex);
+
+    // Terminal launch button
+    const btn = document.createElement('button');
+    btn.className = `${PREFIX}-btn ${PREFIX}-btn-terminal`;
+    btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="4 17 10 11 4 5"></polyline>
+      <line x1="12" y1="19" x2="20" y2="19"></line>
+    </svg>`;
+    btn.title = 'Launch Terminal';
+    btn.setAttribute('aria-label', `Launch terminal for block ${this.blockIndex + 1}`);
+
+    btn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.callbacks.onLaunchTerminal?.(this.block, this.blockIndex);
+    };
+
+    container.appendChild(btn);
+    return container;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+/**
  * Main cell controls widget - container for buttons and status
  */
 export class CellControlsWidget extends WidgetType {
@@ -433,6 +482,15 @@ export function injectCellControlsStyles() {
     @keyframes ${PREFIX}-pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.4; }
+    }
+
+    /* Terminal button */
+    .${PREFIX}-btn-terminal {
+      color: var(--widget-info, #3b82f6);
+    }
+
+    .${PREFIX}-btn-terminal:hover {
+      color: var(--widget-info, #60a5fa);
     }
   `;
 

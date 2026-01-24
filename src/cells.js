@@ -32,6 +32,11 @@ const EXECUTABLE_LANGUAGES = new Set([
 const RENDERED_LANGUAGES = new Set(['html', 'html-rendered']);
 
 /**
+ * Terminal portal languages - interactive PTY sessions embedded in document
+ */
+const TERMINAL_LANGUAGES = new Set(['term', 'terminal']);
+
+/**
  * Find all code blocks in the document
  *
  * @param {string} content - Document content
@@ -46,6 +51,7 @@ const RENDERED_LANGUAGES = new Set(['html', 'html-rendered']);
  *   line: number,       // 0-indexed line number
  *   executable: boolean,
  *   rendered: boolean,
+ *   terminal: boolean,  // true for ```term blocks (interactive PTY)
  * }>}
  */
 export function findCodeBlocks(content) {
@@ -93,6 +99,7 @@ export function findCodeBlocks(content) {
           line: blockLine,
           executable: EXECUTABLE_LANGUAGES.has(blockLanguage),
           rendered: RENDERED_LANGUAGES.has(blockLanguage),
+          terminal: TERMINAL_LANGUAGES.has(blockLanguage),
         });
 
         inBlock = false;
@@ -282,4 +289,24 @@ export function getCellAtCursor(content, pos) {
  */
 export function countCells(content) {
   return findCells(content).length;
+}
+
+/**
+ * Find terminal blocks (```term or ```terminal)
+ *
+ * @param {string} content - Document content
+ * @returns {Array} - Terminal code blocks
+ */
+export function findTerminalBlocks(content) {
+  return findCodeBlocks(content).filter(b => b.terminal);
+}
+
+/**
+ * Check if a language is a terminal portal
+ *
+ * @param {string} language - Language identifier
+ * @returns {boolean}
+ */
+export function isTerminalLanguage(language) {
+  return TERMINAL_LANGUAGES.has(language?.toLowerCase());
 }

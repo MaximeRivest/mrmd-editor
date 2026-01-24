@@ -53387,6 +53387,11 @@ const EXECUTABLE_LANGUAGES = new Set([
 const RENDERED_LANGUAGES = new Set(['html', 'html-rendered']);
 
 /**
+ * Terminal portal languages - interactive PTY sessions embedded in document
+ */
+const TERMINAL_LANGUAGES = new Set(['term', 'terminal']);
+
+/**
  * Find all code blocks in the document
  *
  * @param {string} content - Document content
@@ -53401,6 +53406,7 @@ const RENDERED_LANGUAGES = new Set(['html', 'html-rendered']);
  *   line: number,       // 0-indexed line number
  *   executable: boolean,
  *   rendered: boolean,
+ *   terminal: boolean,  // true for ```term blocks (interactive PTY)
  * }>}
  */
 function findCodeBlocks(content) {
@@ -53448,6 +53454,7 @@ function findCodeBlocks(content) {
           line: blockLine,
           executable: EXECUTABLE_LANGUAGES.has(blockLanguage),
           rendered: RENDERED_LANGUAGES.has(blockLanguage),
+          terminal: TERMINAL_LANGUAGES.has(blockLanguage),
         });
 
         inBlock = false;
@@ -53637,6 +53644,26 @@ function getCellAtCursor(content, pos) {
  */
 function countCells(content) {
   return findCells(content).length;
+}
+
+/**
+ * Find terminal blocks (```term or ```terminal)
+ *
+ * @param {string} content - Document content
+ * @returns {Array} - Terminal code blocks
+ */
+function findTerminalBlocks(content) {
+  return findCodeBlocks(content).filter(b => b.terminal);
+}
+
+/**
+ * Check if a language is a terminal portal
+ *
+ * @param {string} language - Language identifier
+ * @returns {boolean}
+ */
+function isTerminalLanguage(language) {
+  return TERMINAL_LANGUAGES.has(language?.toLowerCase());
 }
 
 /**
@@ -67958,12 +67985,6 @@ function showCtrlKModal(view) {
   const header = document.createElement('div');
   header.className = 'cm-ctrl-k-header';
 
-  // Drag handle
-  const dragHandle = document.createElement('span');
-  dragHandle.className = 'cm-ctrl-k-drag';
-  dragHandle.textContent = '⋮⋮';
-  header.appendChild(dragHandle);
-
   // Toggle button for settings
   const toggleBtn = document.createElement('button');
   toggleBtn.className = 'cm-ctrl-k-toggle';
@@ -68209,19 +68230,12 @@ function injectCtrlKStyles() {
 .cm-ctrl-k-header {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 4px;
-  padding: 6px 8px;
+  padding: 4px 6px;
   background: var(--bg-tertiary, #252525);
   border-bottom: 1px solid var(--border, #333);
   cursor: grab;
-}
-
-.cm-ctrl-k-drag {
-  color: var(--text-dim, #666);
-  font-size: 10px;
-  letter-spacing: -2px;
-  margin-right: auto;
-  user-select: none;
 }
 
 .cm-ctrl-k-toggle,
@@ -70140,6 +70154,55 @@ class ExecutionQueue {
 const PREFIX = 'cm-cell-controls';
 
 /**
+ * Terminal controls widget - button to launch terminal for ```term blocks
+ */
+class TerminalControlsWidget extends WidgetType {
+  constructor(options) {
+    super();
+    this.blockIndex = options.blockIndex;
+    this.block = options.block;
+    this.callbacks = options.callbacks;
+  }
+
+  eq(other) {
+    return (
+      other instanceof TerminalControlsWidget &&
+      this.blockIndex === other.blockIndex &&
+      this.block.start === other.block.start
+    );
+  }
+
+  toDOM() {
+    const container = document.createElement('span');
+    container.className = `${PREFIX} ${PREFIX}-terminal`;
+    container.dataset.blockIndex = String(this.blockIndex);
+
+    // Terminal launch button
+    const btn = document.createElement('button');
+    btn.className = `${PREFIX}-btn ${PREFIX}-btn-terminal`;
+    btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="4 17 10 11 4 5"></polyline>
+      <line x1="12" y1="19" x2="20" y2="19"></line>
+    </svg>`;
+    btn.title = 'Launch Terminal';
+    btn.setAttribute('aria-label', `Launch terminal for block ${this.blockIndex + 1}`);
+
+    btn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.callbacks.onLaunchTerminal?.(this.block, this.blockIndex);
+    };
+
+    container.appendChild(btn);
+    return container;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+/**
  * Main cell controls widget - container for buttons and status
  */
 class CellControlsWidget extends WidgetType {
@@ -70554,6 +70617,15 @@ function injectCellControlsStyles() {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.4; }
     }
+
+    /* Terminal button */
+    .${PREFIX}-btn-terminal {
+      color: var(--widget-info, #3b82f6);
+    }
+
+    .${PREFIX}-btn-terminal:hover {
+      color: var(--widget-info, #60a5fa);
+    }
   `;
 
   document.head.appendChild(style);
@@ -70599,8 +70671,9 @@ function buildDecorations$2(view, context) {
   const content = view.state.doc.toString();
   const codeBlocks = findCodeBlocks(content);
 
-  // Filter to executable blocks only
+  // Filter to executable OR terminal blocks
   const executableBlocks = codeBlocks.filter(b => b.executable);
+  const terminalBlocks = codeBlocks.filter(b => b.terminal);
 
   // Get queue state
   const queueState = stateManager?.getQueue() || { entries: [], runningByLanguage: {}};
@@ -70681,6 +70754,35 @@ function buildDecorations$2(view, context) {
         widget,
         side: 1 // After the position
       }).range(pos)
+    );
+  }
+
+  // Add terminal block controls
+  for (let i = 0; i < terminalBlocks.length; i++) {
+    const block = terminalBlocks[i];
+
+    // Skip if position is 'none' or 'gutter'
+    if (config.position === 'none' || config.position === 'gutter') {
+      continue;
+    }
+
+    // Find the line containing the opening fence
+    const line = view.state.doc.lineAt(block.start);
+
+    // Create terminal widget
+    const widget = new TerminalControlsWidget({
+      blockIndex: i,
+      block: block,
+      callbacks: {
+        onLaunchTerminal: callbacks?.onLaunchTerminal,
+      }
+    });
+
+    decorations.push(
+      Decoration.widget({
+        widget,
+        side: 1
+      }).range(line.to)
     );
   }
 
@@ -70971,13 +71073,16 @@ class CellControlsSystem {
     });
 
     // Set up callbacks for widgets
+    // Merge built-in callbacks with any custom callbacks from config
     this.callbacks = {
       onRun: (cellIndex) => this.runCell(cellIndex),
       onStop: (cellIndex, execId) => this.cancelCell(cellIndex, execId),
       onClear: (cellIndex) => this.clearOutput(cellIndex),
       onCopy: (cellIndex) => this.copyCode(cellIndex),
       onCopyOutput: (cellIndex) => this.copyOutput(cellIndex),
-      onCopyBoth: (cellIndex) => this.copyBoth(cellIndex)
+      onCopyBoth: (cellIndex) => this.copyBoth(cellIndex),
+      // Include custom callbacks from config (e.g., onLaunchTerminal)
+      ...(config.callbacks || {})
     };
 
     // Inject styles
@@ -88422,6 +88527,1173 @@ class MrpRuntime {
 function createRuntime(options) {
   return new MrpRuntime(options);
 }
+
+/**
+ * Terminal Block Model
+ *
+ * Represents an embedded terminal emulator (```term ... ```) in a document.
+ * Uses xterm.js for full terminal emulation with PTY backend.
+ *
+ * Modes:
+ * - 'view': Frozen snapshot of terminal as plain text (default)
+ * - 'terminal': Live xterm.js terminal connected to PTY
+ * - 'edit': Edit the frozen text directly as markdown
+ *
+ * Lifecycle:
+ * 1. Block starts in 'view' mode showing any saved content
+ * 2. Click activates 'terminal' mode, connecting to PTY
+ * 3. Click outside or blur snapshots buffer back to document
+ * 4. Double-click in 'view' mode enters 'edit' mode for manual editing
+ *
+ * @module term-block
+ */
+
+/**
+ * Terminal block modes
+ * @typedef {'view' | 'terminal' | 'edit'} TermBlockMode
+ */
+
+/**
+ * Terminal block state
+ * @typedef {Object} TermBlockState
+ * @property {TermBlockMode} mode - Current mode
+ * @property {string} sessionId - PTY session identifier
+ * @property {any} xtermInstance - xterm.js Terminal instance
+ * @property {WebSocket|null} wsConnection - WebSocket to PTY backend
+ * @property {any} fitAddon - xterm-addon-fit instance
+ * @property {ResizeObserver|null} resizeObserver - For auto-fitting terminal
+ * @property {Function|null} clickOutsideHandler - Handler for click-outside detection
+ */
+
+/**
+ * TermBlock class - represents a terminal portal in the document
+ */
+class TermBlock {
+  /**
+   * Create a new TermBlock
+   *
+   * @param {Object} blockInfo - Block info from findCodeBlocks()
+   * @param {number} blockInfo.start - Start position of opening fence
+   * @param {number} blockInfo.end - End position of closing fence
+   * @param {number} blockInfo.codeStart - Start of content
+   * @param {number} blockInfo.codeEnd - End of content
+   * @param {string} blockInfo.code - Content (frozen terminal state)
+   * @param {number} blockInfo.line - Line number
+   * @param {string} [filePath] - File path for session ID generation
+   * @param {number} [blockIndex] - Index of this block in document
+   */
+  constructor(blockInfo, filePath = 'untitled', blockIndex = 0) {
+    // Position info
+    this.start = blockInfo.start;
+    this.end = blockInfo.end;
+    this.codeStart = blockInfo.codeStart;
+    this.codeEnd = blockInfo.codeEnd;
+    this.line = blockInfo.line;
+
+    // Content (frozen state when not in terminal mode)
+    this.content = blockInfo.code;
+
+    // Session identification
+    this.filePath = filePath;
+    this.blockIndex = blockIndex;
+    this.sessionId = `term:${filePath}:${blockIndex}`;
+
+    // Runtime state (not persisted)
+    /** @type {TermBlockMode} */
+    this.mode = 'view';
+
+    /** @type {any} xterm.js Terminal instance */
+    this.xtermInstance = null;
+
+    /** @type {WebSocket|null} */
+    this.wsConnection = null;
+
+    /** @type {any} xterm-addon-fit */
+    this.fitAddon = null;
+
+    /** @type {ResizeObserver|null} */
+    this.resizeObserver = null;
+
+    /** @type {Function|null} */
+    this.clickOutsideHandler = null;
+
+    /** @type {boolean} Whether PTY session exists on server */
+    this.hasServerSession = false;
+  }
+
+  /**
+   * Get the full markdown for this block
+   * @returns {string}
+   */
+  toMarkdown() {
+    return '```term\n' + this.content + '\n```';
+  }
+
+  /**
+   * Get the current terminal buffer as text (for snapshots)
+   * @returns {string}
+   */
+  getBufferText() {
+    if (!this.xtermInstance) {
+      return this.content;
+    }
+
+    const buffer = this.xtermInstance.buffer.active;
+    const lines = [];
+
+    for (let i = 0; i < buffer.length; i++) {
+      const line = buffer.getLine(i);
+      if (line) {
+        lines.push(line.translateToString(true)); // true = trim trailing whitespace
+      }
+    }
+
+    // Trim trailing empty lines
+    while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
+      lines.pop();
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Snapshot the terminal buffer to content
+   * Call this when exiting terminal mode
+   * @returns {string} The snapshotted content
+   */
+  snapshot() {
+    if (this.xtermInstance) {
+      this.content = this.getBufferText();
+    }
+    return this.content;
+  }
+
+  /**
+   * Update content (for edit mode sync)
+   * @param {string} newContent
+   */
+  setContent(newContent) {
+    this.content = newContent;
+  }
+
+  /**
+   * Check if terminal is currently connected
+   * @returns {boolean}
+   */
+  isConnected() {
+    return this.wsConnection !== null && this.wsConnection.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Dispose of runtime resources
+   * Call this when block is removed or mode changes away from terminal
+   */
+  dispose() {
+    // Remove click-outside handler
+    if (this.clickOutsideHandler) {
+      document.removeEventListener('mousedown', this.clickOutsideHandler, true);
+      this.clickOutsideHandler = null;
+    }
+
+    // Disconnect resize observer
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = null;
+    }
+
+    // Disconnect PtyClient (but PTY stays alive on server for reconnect)
+    if (this.wsConnection) {
+      this.wsConnection.disconnect();
+      this.wsConnection = null;
+    }
+
+    // Dispose xterm.js instance
+    if (this.xtermInstance) {
+      this.xtermInstance.dispose();
+      this.xtermInstance = null;
+    }
+
+    this.fitAddon = null;
+  }
+}
+
+/**
+ * Registry of active TermBlocks by session ID
+ * Allows reconnection to existing PTY sessions
+ */
+class TermBlockRegistry {
+  constructor() {
+    /** @type {Map<string, TermBlock>} */
+    this.blocks = new Map();
+  }
+
+  /**
+   * Register a TermBlock
+   * @param {TermBlock} block
+   */
+  register(block) {
+    this.blocks.set(block.sessionId, block);
+  }
+
+  /**
+   * Unregister a TermBlock
+   * @param {string} sessionId
+   */
+  unregister(sessionId) {
+    const block = this.blocks.get(sessionId);
+    if (block) {
+      block.dispose();
+      this.blocks.delete(sessionId);
+    }
+  }
+
+  /**
+   * Get a TermBlock by session ID
+   * @param {string} sessionId
+   * @returns {TermBlock|undefined}
+   */
+  get(sessionId) {
+    return this.blocks.get(sessionId);
+  }
+
+  /**
+   * Check if a session exists
+   * @param {string} sessionId
+   * @returns {boolean}
+   */
+  has(sessionId) {
+    return this.blocks.has(sessionId);
+  }
+
+  /**
+   * Dispose all blocks
+   */
+  disposeAll() {
+    for (const block of this.blocks.values()) {
+      block.dispose();
+    }
+    this.blocks.clear();
+  }
+
+  /**
+   * Get all blocks for a file
+   * @param {string} filePath
+   * @returns {TermBlock[]}
+   */
+  getBlocksForFile(filePath) {
+    const result = [];
+    for (const block of this.blocks.values()) {
+      if (block.filePath === filePath) {
+        result.push(block);
+      }
+    }
+    return result;
+  }
+}
+
+// Global registry instance
+const termBlockRegistry = new TermBlockRegistry();
+
+/**
+ * PTY WebSocket Client
+ *
+ * Handles WebSocket communication with the PTY server for terminal blocks.
+ * Supports reconnection, session persistence, and multiple concurrent terminals.
+ *
+ * @module term-pty-client
+ */
+
+/**
+ * Configuration for PTY client
+ * @typedef {Object} PtyClientConfig
+ * @property {string} [baseUrl] - Base URL for PTY server (default: current host)
+ * @property {string} [sessionId] - Session identifier
+ * @property {string} [cwd] - Working directory
+ * @property {string} [venv] - Virtual environment path
+ * @property {string} [filePath] - Associated file path
+ * @property {Function} [onData] - Callback for data from PTY
+ * @property {Function} [onConnect] - Callback when connected
+ * @property {Function} [onDisconnect] - Callback when disconnected
+ * @property {Function} [onError] - Callback for errors
+ */
+
+/**
+ * PTY WebSocket Client
+ */
+class PtyClient {
+  /**
+   * Create a new PTY client
+   * @param {PtyClientConfig} config
+   */
+  constructor(config = {}) {
+    this.config = {
+      baseUrl: config.baseUrl || null, // null = use current host
+      sessionId: config.sessionId || `term-${Date.now()}`,
+      cwd: config.cwd || null,
+      venv: config.venv || null,
+      filePath: config.filePath || null,
+      onData: config.onData || (() => {}),
+      onConnect: config.onConnect || (() => {}),
+      onDisconnect: config.onDisconnect || (() => {}),
+      onError: config.onError || ((err) => console.error('[PtyClient]', err)),
+    };
+
+    /** @type {WebSocket|null} */
+    this.ws = null;
+
+    /** @type {boolean} */
+    this.connected = false;
+
+    /** @type {boolean} */
+    this.intentionallyClosed = false;
+
+    // Reconnection state
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 10;
+    this.baseReconnectDelay = 1000;
+    this.reconnectTimeout = null;
+  }
+
+  /**
+   * Build WebSocket URL with query parameters
+   * @returns {string}
+   */
+  buildUrl() {
+    let base = this.config.baseUrl;
+
+    // Handle Electron/file:// context - baseUrl must be provided
+    if (!base || base.startsWith('file://')) {
+      // In Electron, window.location.origin is file://, so we need explicit baseUrl
+      throw new Error('PtyClient requires baseUrl to be set (e.g., http://127.0.0.1:PORT)');
+    }
+
+    // Determine WebSocket protocol from base URL
+    const protocol = base.startsWith('https') ? 'wss:' : 'ws:';
+    // Extract host:port from base URL
+    const host = base.replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+    const params = new URLSearchParams();
+    params.set('session_id', this.config.sessionId);
+
+    if (this.config.cwd) {
+      params.set('cwd', this.config.cwd);
+    }
+    if (this.config.venv) {
+      params.set('venv', this.config.venv);
+    }
+    if (this.config.filePath) {
+      params.set('file_path', this.config.filePath);
+    }
+
+    return `${protocol}//${host}/api/pty?${params.toString()}`;
+  }
+
+  /**
+   * Connect to the PTY server
+   * @returns {Promise<void>}
+   */
+  connect() {
+    return new Promise((resolve, reject) => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        resolve();
+        return;
+      }
+
+      this.intentionallyClosed = false;
+      const url = this.buildUrl();
+
+      console.log('[PtyClient] Connecting to:', url);
+
+      try {
+        this.ws = new WebSocket(url);
+      } catch (err) {
+        reject(err);
+        return;
+      }
+
+      this.ws.onopen = () => {
+        console.log('[PtyClient] Connected');
+        this.connected = true;
+        this.reconnectAttempts = 0;
+        this.config.onConnect();
+        resolve();
+      };
+
+      this.ws.onmessage = (event) => {
+        this.config.onData(event.data);
+      };
+
+      this.ws.onerror = (event) => {
+        console.error('[PtyClient] WebSocket error:', event);
+        this.config.onError(new Error('WebSocket error'));
+      };
+
+      this.ws.onclose = (event) => {
+        console.log('[PtyClient] Disconnected, code:', event.code);
+        this.connected = false;
+        this.ws = null;
+        this.config.onDisconnect(event.code, event.reason);
+
+        // Attempt reconnection if not intentionally closed
+        if (!this.intentionallyClosed) {
+          this.scheduleReconnect();
+        }
+      };
+    });
+  }
+
+  /**
+   * Schedule a reconnection attempt with exponential backoff
+   */
+  scheduleReconnect() {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.error('[PtyClient] Max reconnect attempts reached');
+      this.config.onError(new Error('Max reconnect attempts reached'));
+      return;
+    }
+
+    this.reconnectAttempts++;
+    const delay = Math.min(
+      this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+      30000 // Max 30 seconds
+    );
+
+    console.log(`[PtyClient] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+
+    this.reconnectTimeout = setTimeout(() => {
+      this.connect().catch((err) => {
+        console.error('[PtyClient] Reconnect failed:', err);
+      });
+    }, delay);
+  }
+
+  /**
+   * Send data to the PTY (user input)
+   * @param {string} data - Input data
+   */
+  write(data) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        type: 'input',
+        data: data,
+      }));
+    }
+  }
+
+  /**
+   * Resize the PTY
+   * @param {number} cols - Number of columns
+   * @param {number} rows - Number of rows
+   */
+  resize(cols, rows) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        type: 'resize',
+        cols: cols,
+        rows: rows,
+      }));
+    }
+  }
+
+  /**
+   * Disconnect from the PTY server
+   * Note: The PTY session may stay alive on the server for reconnection
+   */
+  disconnect() {
+    this.intentionallyClosed = true;
+
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+
+    this.connected = false;
+  }
+
+  /**
+   * Kill the PTY session on the server
+   * @returns {Promise<void>}
+   */
+  async kill() {
+    this.disconnect();
+
+    const base = this.config.baseUrl || window.location.origin;
+    try {
+      await fetch(`${base}/api/pty/kill`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: this.config.sessionId }),
+      });
+      console.log('[PtyClient] Session killed:', this.config.sessionId);
+    } catch (err) {
+      console.error('[PtyClient] Failed to kill session:', err);
+    }
+  }
+
+  /**
+   * Check if connected
+   * @returns {boolean}
+   */
+  isConnected() {
+    return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+}
+
+/**
+ * Create a PTY client and connect
+ * @param {PtyClientConfig} config
+ * @returns {Promise<PtyClient>}
+ */
+async function createPtyClient(config) {
+  const client = new PtyClient(config);
+  await client.connect();
+  return client;
+}
+
+/**
+ * List all active terminal sessions from the server
+ * @param {string} [baseUrl] - Base URL (default: current host)
+ * @returns {Promise<Array<{session_id: string, name: string, cwd: string}>>}
+ */
+async function listTerminalSessions(baseUrl = null) {
+  const base = baseUrl || window.location.origin;
+  try {
+    const response = await fetch(`${base}/api/terminals`);
+    const data = await response.json();
+    return data.terminals || [];
+  } catch (err) {
+    console.error('[PtyClient] Failed to list sessions:', err);
+    return [];
+  }
+}
+
+/**
+ * Create a new terminal session on the server
+ * @param {Object} options
+ * @param {string} [options.name] - Display name
+ * @param {string} [options.cwd] - Working directory
+ * @param {string} [options.venv] - Virtual environment path
+ * @param {string} [options.filePath] - Associated file path
+ * @param {string} [baseUrl] - Base URL (default: current host)
+ * @returns {Promise<{session_id: string, name: string}>}
+ */
+async function createTerminalSession(options = {}, baseUrl = null) {
+  const base = baseUrl || window.location.origin;
+  const response = await fetch(`${base}/api/terminals`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: options.name,
+      cwd: options.cwd,
+      venv: options.venv,
+      file_path: options.filePath,
+    }),
+  });
+  return response.json();
+}
+
+/**
+ * Terminal Widget for CodeMirror
+ *
+ * Provides an inline terminal overlay that can be activated for ```term blocks.
+ * The blocks remain editable by default - the terminal is shown as an
+ * inline overlay (same position as the code block) when launched.
+ *
+ * @module term-widget
+ */
+
+
+// #region STATE
+
+/**
+ * Effect to show/hide terminal overlay for a block
+ */
+StateEffect.define();
+StateEffect.define();
+
+// #endregion STATE
+
+// #region OVERLAY
+
+/**
+ * Terminal overlay manager
+ * Creates an inline terminal that overlays the code block in the editor
+ */
+class TerminalOverlayManager {
+  constructor() {
+    this.overlay = null;
+    this.currentBlock = null;
+    this.blockInfo = null;
+    this.xtermInstance = null;
+    this.fitAddon = null;
+    this.wsConnection = null;
+    this.resizeObserver = null;
+    this.scrollHandler = null;
+    this.config = null;
+    this.view = null;
+  }
+
+  /**
+   * Show terminal overlay for a block (inline, not modal)
+   */
+  show(blockInfo, config, view) {
+    // Close any existing overlay
+    this.hide(false); // Don't snapshot when switching blocks
+
+    this.config = config;
+    this.view = view;
+    this.blockInfo = blockInfo;
+
+    // Create or get TermBlock
+    const sessionId = `term:${config.filePath || 'untitled'}:${blockInfo.line}`;
+    let block = termBlockRegistry.get(sessionId);
+
+    if (!block) {
+      block = new TermBlock(blockInfo, config.filePath, blockInfo.line);
+      termBlockRegistry.register(block);
+    } else {
+      // Update positions
+      block.start = blockInfo.start;
+      block.end = blockInfo.end;
+      block.codeStart = blockInfo.codeStart;
+      block.codeEnd = blockInfo.codeEnd;
+      block.content = blockInfo.code;
+    }
+
+    this.currentBlock = block;
+    block.mode = 'terminal';
+
+    // Create overlay element (will be positioned inline)
+    this.overlay = document.createElement('div');
+    this.overlay.className = 'term-inline-overlay';
+    this.overlay.innerHTML = `
+      <div class="term-inline-header">
+        <span class="term-inline-title">terminal</span>
+        <span class="term-inline-status">connecting...</span>
+        <button class="term-inline-close" title="Close (Esc)">×</button>
+      </div>
+      <div class="term-inline-content"></div>
+    `;
+
+    // Find the editor's scroll container and content area
+    const editorDom = view.dom;
+    const scrollDom = view.scrollDOM;
+
+    // Get the position of the code block in the editor
+    const blockRect = this._getBlockRect(view, blockInfo);
+    if (!blockRect) {
+      console.error('[TermOverlay] Could not get block position');
+      return;
+    }
+
+    // Position overlay relative to editor
+    editorDom.getBoundingClientRect();
+    scrollDom.getBoundingClientRect();
+
+    // Insert overlay into the editor DOM (so it scrolls with content)
+    this.overlay.style.position = 'absolute';
+    this.overlay.style.left = '0';
+    this.overlay.style.right = '0';
+    this.overlay.style.top = `${blockRect.top}px`;
+    this.overlay.style.height = `${Math.max(blockRect.height, 200)}px`;
+    this.overlay.style.zIndex = '100';
+
+    // Add to scroller so it moves with content
+    scrollDom.style.position = 'relative';
+    scrollDom.appendChild(this.overlay);
+
+    // Setup close handlers
+    const closeBtn = this.overlay.querySelector('.term-inline-close');
+    closeBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.hide(true);
+    };
+
+    // Click outside handler
+    this._clickOutsideHandler = (e) => {
+      if (this.overlay && !this.overlay.contains(e.target)) {
+        this.hide(true);
+      }
+    };
+    // Delay adding click handler to avoid immediate trigger
+    setTimeout(() => {
+      document.addEventListener('mousedown', this._clickOutsideHandler, true);
+    }, 100);
+
+    // Escape key handler
+    this._escHandler = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.hide(true);
+      }
+    };
+    document.addEventListener('keydown', this._escHandler);
+
+    // Initialize xterm.js
+    const termContainer = this.overlay.querySelector('.term-inline-content');
+    this._initXterm(termContainer);
+  }
+
+  /**
+   * Get the bounding rect of a code block in editor coordinates
+   */
+  _getBlockRect(view, blockInfo) {
+    try {
+      // Get the line positions
+      const startLine = view.state.doc.lineAt(blockInfo.start);
+      const endLine = view.state.doc.lineAt(blockInfo.end);
+
+      // Get the visual positions using coordsAtPos
+      const startCoords = view.coordsAtPos(startLine.from);
+      const endCoords = view.coordsAtPos(endLine.to);
+
+      if (!startCoords || !endCoords) return null;
+
+      // Convert to scroll-relative coordinates
+      const scrollTop = view.scrollDOM.scrollTop;
+      const scrollRect = view.scrollDOM.getBoundingClientRect();
+
+      return {
+        top: startCoords.top - scrollRect.top + scrollTop,
+        height: endCoords.bottom - startCoords.top,
+      };
+    } catch (e) {
+      console.error('[TermOverlay] Error getting block rect:', e);
+      return null;
+    }
+  }
+
+  /**
+   * Initialize xterm.js in the overlay
+   */
+  _initXterm(container) {
+    if (typeof Terminal === 'undefined') {
+      container.innerHTML = '<div class="term-error">xterm.js not loaded</div>';
+      return;
+    }
+
+    const theme = this._getTheme();
+
+    const term = new Terminal({
+      cursorBlink: true,
+      fontSize: 14,
+      fontFamily: '"SF Mono", "Fira Code", "Monaco", "Inconsolata", monospace',
+      scrollback: 10000,
+      convertEol: true,
+      theme: theme,
+    });
+
+    this.xtermInstance = term;
+    this.currentBlock.xtermInstance = term;
+
+    // Add fit addon
+    if (typeof FitAddon !== 'undefined') {
+      this.fitAddon = new FitAddon.FitAddon();
+      term.loadAddon(this.fitAddon);
+      this.currentBlock.fitAddon = this.fitAddon;
+    }
+
+    // Add web links addon
+    if (typeof WebLinksAddon !== 'undefined') {
+      const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+      term.loadAddon(webLinksAddon);
+    }
+
+    // Open terminal
+    term.open(container);
+
+    // Fit to container
+    if (this.fitAddon) {
+      setTimeout(() => {
+        try {
+          this.fitAddon.fit();
+        } catch (e) {
+          console.warn('[TermOverlay] Initial fit failed:', e);
+        }
+      }, 50);
+    }
+
+    // Setup resize observer
+    this.resizeObserver = new ResizeObserver(() => {
+      if (this.fitAddon && term.element) {
+        try {
+          this.fitAddon.fit();
+          if (this.wsConnection?.isConnected()) {
+            this.wsConnection.resize(term.cols, term.rows);
+          }
+        } catch (e) {
+          // Ignore resize errors
+        }
+      }
+    });
+    this.resizeObserver.observe(container);
+
+    // Connect to PTY
+    this._connectToPty(term);
+
+    // Focus terminal
+    term.focus();
+  }
+
+  /**
+   * Connect to PTY backend
+   */
+  _connectToPty(term) {
+    if (!this.config.baseUrl) {
+      term.write('\x1b[33m[PTY server not running]\x1b[0m\r\n');
+      this._updateStatus('offline');
+      return;
+    }
+
+    const client = new PtyClient({
+      baseUrl: this.config.baseUrl,
+      sessionId: this.currentBlock.sessionId,
+      cwd: this.config.cwd,
+      venv: this.config.venv,
+      filePath: this.currentBlock.filePath,
+      onData: (data) => {
+        term.write(data);
+      },
+      onConnect: () => {
+        console.log('[TermOverlay] PTY connected');
+        this._updateStatus('connected');
+      },
+      onDisconnect: (code, reason) => {
+        console.log('[TermOverlay] PTY disconnected:', code, reason);
+        this._updateStatus('disconnected');
+      },
+      onError: (err) => {
+        console.error('[TermOverlay] PTY error:', err);
+        term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n');
+        this._updateStatus('error');
+      },
+    });
+
+    this.wsConnection = client;
+    this.currentBlock.wsConnection = client;
+
+    client.connect().then(() => {
+      if (this.fitAddon) {
+        client.resize(term.cols, term.rows);
+      }
+    }).catch((err) => {
+      console.error('[TermOverlay] Failed to connect:', err);
+      term.write('\x1b[31m[Failed to connect to PTY server]\x1b[0m\r\n');
+      this._updateStatus('error');
+    });
+
+    // Forward input to PTY
+    term.onData((data) => {
+      client.write(data);
+    });
+  }
+
+  /**
+   * Update status indicator
+   */
+  _updateStatus(status) {
+    const statusEl = this.overlay?.querySelector('.term-inline-status');
+    if (statusEl) {
+      const statusMap = {
+        'connecting': '○ connecting...',
+        'connected': '● connected',
+        'disconnected': '○ disconnected',
+        'offline': '○ offline',
+        'error': '✕ error',
+      };
+      statusEl.textContent = statusMap[status] || status;
+      statusEl.className = `term-inline-status term-inline-status-${status}`;
+    }
+  }
+
+  /**
+   * Get terminal theme
+   */
+  _getTheme() {
+    const isDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true;
+
+    if (isDark) {
+      return {
+        background: '#1a1a1a',
+        foreground: '#d4d4d4',
+        cursor: '#aeafad',
+        cursorAccent: '#000000',
+        selectionBackground: '#264f78',
+      };
+    } else {
+      return {
+        background: '#fafafa',
+        foreground: '#2c2c2c',
+        cursor: '#333333',
+        cursorAccent: '#ffffff',
+        selectionBackground: '#b5d5ff',
+      };
+    }
+  }
+
+  /**
+   * Hide overlay and optionally snapshot content
+   * @param {boolean} shouldSnapshot - Whether to snapshot and update document
+   */
+  hide(shouldSnapshot = true) {
+    if (!this.overlay) return;
+
+    // Snapshot terminal buffer and update document
+    if (shouldSnapshot && this.currentBlock && this.xtermInstance && this.view) {
+      const content = this.currentBlock.snapshot();
+      console.log('[TermOverlay] Snapshotted content length:', content.length);
+
+      // Re-find the block to get current positions (document may have changed)
+      const doc = this.view.state.doc.toString();
+      const blocks = findTerminalBlocks(doc);
+      const currentBlockLine = this.blockInfo?.line;
+
+      // Find the block by line number
+      const updatedBlock = blocks.find(b => b.line === currentBlockLine);
+
+      if (updatedBlock) {
+        // Replace only the CODE content (between fences), not the whole block
+        const from = updatedBlock.codeStart;
+        const to = updatedBlock.codeEnd;
+
+        try {
+          this.view.dispatch({
+            changes: { from, to, insert: content },
+          });
+          console.log('[TermOverlay] Document updated (code content replaced)');
+        } catch (e) {
+          console.error('[TermOverlay] Failed to update document:', e);
+        }
+      } else {
+        console.warn('[TermOverlay] Could not find block to update');
+      }
+    }
+
+    // Cleanup event handlers
+    if (this._escHandler) {
+      document.removeEventListener('keydown', this._escHandler);
+      this._escHandler = null;
+    }
+
+    if (this._clickOutsideHandler) {
+      document.removeEventListener('mousedown', this._clickOutsideHandler, true);
+      this._clickOutsideHandler = null;
+    }
+
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = null;
+    }
+
+    if (this.wsConnection) {
+      this.wsConnection.disconnect();
+      this.wsConnection = null;
+    }
+
+    if (this.xtermInstance) {
+      this.xtermInstance.dispose();
+      this.xtermInstance = null;
+    }
+
+    if (this.currentBlock) {
+      this.currentBlock.mode = 'view';
+      this.currentBlock.xtermInstance = null;
+      this.currentBlock.wsConnection = null;
+      this.currentBlock.fitAddon = null;
+      this.currentBlock = null;
+    }
+
+    if (this.overlay) {
+      this.overlay.remove();
+      this.overlay = null;
+    }
+
+    this.fitAddon = null;
+    this.blockInfo = null;
+    this.config = null;
+    this.view = null;
+  }
+
+  /**
+   * Check if overlay is visible
+   */
+  isVisible() {
+    return this.overlay !== null;
+  }
+}
+
+// Singleton overlay manager
+const terminalOverlay = new TerminalOverlayManager();
+
+// #endregion OVERLAY
+
+// #region STYLES
+
+/**
+ * CSS styles for inline terminal overlay
+ */
+const termOverlayStyles = `
+/* Inline Terminal Overlay - positioned over the code block */
+.term-inline-overlay {
+  background: var(--term-bg, #1a1a1a);
+  border: 1px solid var(--term-border, #3c3c3c);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.term-inline-header {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  background: var(--term-header-bg, #252526);
+  border-bottom: 1px solid var(--term-border, #3c3c3c);
+  font-size: 12px;
+}
+
+.term-inline-title {
+  font-weight: 500;
+  color: var(--term-header-fg, #888);
+  flex: 1;
+}
+
+.term-inline-status {
+  font-size: 11px;
+  color: var(--term-status-fg, #888);
+  margin-right: 8px;
+}
+
+.term-inline-status-connected {
+  color: #4ade80;
+}
+
+.term-inline-status-error {
+  color: #f87171;
+}
+
+.term-inline-close {
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--term-header-fg, #888);
+  font-size: 16px;
+  cursor: pointer;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.term-inline-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.term-inline-content {
+  flex: 1;
+  padding: 4px;
+  overflow: hidden;
+  min-height: 150px;
+}
+
+.term-inline-content .xterm {
+  height: 100%;
+}
+
+.term-inline-content .xterm-viewport {
+  overflow-y: auto !important;
+}
+
+.term-error {
+  padding: 20px;
+  color: #f87171;
+  font-family: monospace;
+}
+
+/* Light mode */
+@media (prefers-color-scheme: light) {
+  .term-inline-overlay {
+    --term-bg: #fafafa;
+    --term-header-bg: #f0f0f0;
+    --term-border: #e0e0e0;
+    --term-header-fg: #333;
+  }
+}
+`;
+
+/**
+ * Inject terminal overlay styles
+ */
+function injectTermWidgetStyles() {
+  if (document.getElementById('term-overlay-styles')) return;
+
+  const style = document.createElement('style');
+  style.id = 'term-overlay-styles';
+  style.textContent = termOverlayStyles;
+  document.head.appendChild(style);
+}
+
+// #endregion STYLES
+
+// #region PUBLIC API
+
+/**
+ * Launch terminal for a code block
+ *
+ * @param {Object} blockInfo - Block info from findTerminalBlocks()
+ * @param {Object} config - Terminal config { baseUrl, cwd, venv, filePath }
+ * @param {EditorView} view - CodeMirror EditorView
+ */
+function launchTerminal(blockInfo, config, view) {
+  terminalOverlay.show(blockInfo, config, view);
+}
+
+/**
+ * Close the terminal overlay
+ */
+function closeTerminal() {
+  terminalOverlay.hide(true);
+}
+
+/**
+ * Check if terminal overlay is visible
+ */
+function isTerminalVisible() {
+  return terminalOverlay.isVisible();
+}
+
+/**
+ * Create terminal widget extension (now just provides styles and callbacks)
+ *
+ * @param {Object} config
+ * @param {string} [config.filePath] - Current file path
+ * @param {string} [config.cwd] - Working directory for PTY
+ * @param {string} [config.venv] - Virtual environment path
+ * @param {string} [config.baseUrl] - PTY server base URL
+ * @returns {Object} Config object (no extensions needed - blocks are editable by default)
+ */
+function terminalWidget(config = {}) {
+  // Inject styles
+  injectTermWidgetStyles();
+
+  // Return config for use by cell controls callback
+  return {
+    ...config,
+    launchTerminal: (blockInfo, view) => launchTerminal(blockInfo, config, view),
+  };
+}
+
+// #endregion PUBLIC API
 
 /**
  * Image Widget
@@ -122886,6 +124158,7 @@ const codemirror = {
 
 // #region TERMINAL_EXPORTS
 const terminal = {
+  // Terminal buffer (ANSI processing for output blocks)
   TerminalBuffer,
   processTerminalOutput,
   terminalToHtml,
@@ -122897,6 +124170,23 @@ const terminal = {
   outputWidgetPlugin,
   injectOutputWidgetStyles,
   outputWidgetStyles,
+  // Terminal portal (```term blocks with xterm.js)
+  TermBlock,
+  termBlockRegistry,
+  TermBlockRegistry,
+  PtyClient,
+  createPtyClient,
+  listTerminalSessions,
+  createTerminalSession,
+  terminalWidget,
+  launchTerminal,
+  closeTerminal,
+  isTerminalVisible,
+  terminalOverlay,
+  injectTermWidgetStyles,
+  termOverlayStyles,
+  findTerminalBlocks,
+  isTerminalLanguage,
 };
 // #endregion TERMINAL_EXPORTS
 
@@ -123108,11 +124398,14 @@ var index = /*#__PURE__*/Object.freeze({
   MRPClient: MRPClient,
   MonitorCoordination: MonitorCoordination,
   OrchestratorClient: OrchestratorClient,
+  PtyClient: PtyClient,
   RuntimeCodeLensWidget: RuntimeCodeLensWidget,
   RuntimeRegistry: RuntimeRegistry,
   ShellStateManager: ShellStateManager,
   TableWidget: TableWidget,
   TaskCheckboxWidget: TaskCheckboxWidget,
+  TermBlock: TermBlock,
+  TermBlockRegistry: TermBlockRegistry,
   TerminalBuffer: TerminalBuffer,
   adaptMRPClient: adaptMRPClient,
   adaptMrmdJsSession: adaptMrmdJsSession,
@@ -123121,6 +124414,7 @@ var index = /*#__PURE__*/Object.freeze({
   assetResolverFacet: assetResolverFacet,
   awareness: awarenessExports,
   cellControlsExports: cellControlsExports,
+  closeTerminal: closeTerminal,
   codemirror: codemirror,
   configExports: configExports,
   create: create,
@@ -123137,6 +124431,7 @@ var index = /*#__PURE__*/Object.freeze({
   createIndicatorExtensions: createIndicatorExtensions,
   createJavaScriptRuntime: createJavaScriptRuntime,
   createMonitorCoordination: createMonitorCoordination,
+  createPtyClient: createPtyClient,
   createReactiveConfig: createReactiveConfig,
   createRuntimeCodeLensExtensions: createRuntimeCodeLensExtensions,
   createRuntimeCompletionExtension: createRuntimeCompletionExtension,
@@ -123146,6 +124441,7 @@ var index = /*#__PURE__*/Object.freeze({
   createStateManager: createStateManager,
   createStatusBar: createStatusBar,
   createStudio: createStudio,
+  createTerminalSession: createTerminalSession,
   createTheme: createTheme,
   createVariableExplorer: createVariableExplorer,
   createWikiLinkCompletionExtension: createWikiLinkCompletionExtension,
@@ -123158,6 +124454,7 @@ var index = /*#__PURE__*/Object.freeze({
   drive: drive,
   findRuntimeBlocks: findRuntimeBlocks,
   findSessionFrontmatter: findSessionFrontmatter,
+  findTerminalBlocks: findTerminalBlocks,
   findYamlConfigBlocks: findYamlConfigBlocks,
   generateTableId: generateTableId,
   generateThemeCSS: generateThemeCSS,
@@ -123173,10 +124470,15 @@ var index = /*#__PURE__*/Object.freeze({
   injectRuntimeCodeLensStyles: injectRuntimeCodeLensStyles,
   injectRuntimeLspStyles: injectRuntimeLspStyles,
   injectShellStyles: injectShellStyles,
+  injectTermWidgetStyles: injectTermWidgetStyles,
   injectWikiLinkCompletionStyles: injectWikiLinkCompletionStyles,
   isFullySerializable: isFullySerializable,
   isTableDelimiter: isTableDelimiter,
   isTableLine: isTableLine,
+  isTerminalLanguage: isTerminalLanguage,
+  isTerminalVisible: isTerminalVisible,
+  launchTerminal: launchTerminal,
+  listTerminalSessions: listTerminalSessions,
   markdown: markdown,
   markdownExports: markdownExports,
   markdownRenderer: markdownRenderer,
@@ -123202,8 +124504,12 @@ var index = /*#__PURE__*/Object.freeze({
   shell: shellModule,
   stateExports: stateExports,
   stripAnsi: stripAnsi,
+  termBlockRegistry: termBlockRegistry,
+  termOverlayStyles: termOverlayStyles,
   terminal: terminal,
+  terminalOverlay: terminalOverlay,
   terminalToHtml: terminalToHtml,
+  terminalWidget: terminalWidget,
   toggleDevPanel: toggleDevPanel,
   watchTheme: watchTheme,
   widgets: widgets,
@@ -123222,11 +124528,14 @@ exports.ImageWidget = ImageWidget;
 exports.MRPClient = MRPClient;
 exports.MonitorCoordination = MonitorCoordination;
 exports.OrchestratorClient = OrchestratorClient;
+exports.PtyClient = PtyClient;
 exports.RuntimeCodeLensWidget = RuntimeCodeLensWidget;
 exports.RuntimeRegistry = RuntimeRegistry;
 exports.ShellStateManager = ShellStateManager;
 exports.TableWidget = TableWidget;
 exports.TaskCheckboxWidget = TaskCheckboxWidget;
+exports.TermBlock = TermBlock;
+exports.TermBlockRegistry = TermBlockRegistry;
 exports.TerminalBuffer = TerminalBuffer;
 exports.adaptMRPClient = adaptMRPClient;
 exports.adaptMrmdJsSession = adaptMrmdJsSession;
@@ -123235,6 +124544,7 @@ exports.applyTheme = applyTheme;
 exports.assetResolverFacet = assetResolverFacet;
 exports.awareness = awarenessExports;
 exports.cellControlsExports = cellControlsExports;
+exports.closeTerminal = closeTerminal;
 exports.codemirror = codemirror;
 exports.configExports = configExports;
 exports.create = create;
@@ -123251,6 +124561,7 @@ exports.createHumanState = createHumanState;
 exports.createIndicatorExtensions = createIndicatorExtensions;
 exports.createJavaScriptRuntime = createJavaScriptRuntime;
 exports.createMonitorCoordination = createMonitorCoordination;
+exports.createPtyClient = createPtyClient;
 exports.createReactiveConfig = createReactiveConfig;
 exports.createRuntimeCodeLensExtensions = createRuntimeCodeLensExtensions;
 exports.createRuntimeCompletionExtension = createRuntimeCompletionExtension;
@@ -123260,6 +124571,7 @@ exports.createRuntimeState = createRuntimeState;
 exports.createStateManager = createStateManager;
 exports.createStatusBar = createStatusBar;
 exports.createStudio = createStudio;
+exports.createTerminalSession = createTerminalSession;
 exports.createTheme = createTheme;
 exports.createVariableExplorer = createVariableExplorer;
 exports.createWikiLinkCompletionExtension = createWikiLinkCompletionExtension;
@@ -123272,6 +124584,7 @@ exports.devPanelExtension = devPanelExtension;
 exports.drive = drive;
 exports.findRuntimeBlocks = findRuntimeBlocks;
 exports.findSessionFrontmatter = findSessionFrontmatter;
+exports.findTerminalBlocks = findTerminalBlocks;
 exports.findYamlConfigBlocks = findYamlConfigBlocks;
 exports.generateTableId = generateTableId;
 exports.generateThemeCSS = generateThemeCSS;
@@ -123287,10 +124600,15 @@ exports.injectMarkdownStyles = injectMarkdownStyles;
 exports.injectRuntimeCodeLensStyles = injectRuntimeCodeLensStyles;
 exports.injectRuntimeLspStyles = injectRuntimeLspStyles;
 exports.injectShellStyles = injectShellStyles;
+exports.injectTermWidgetStyles = injectTermWidgetStyles;
 exports.injectWikiLinkCompletionStyles = injectWikiLinkCompletionStyles;
 exports.isFullySerializable = isFullySerializable;
 exports.isTableDelimiter = isTableDelimiter;
 exports.isTableLine = isTableLine;
+exports.isTerminalLanguage = isTerminalLanguage;
+exports.isTerminalVisible = isTerminalVisible;
+exports.launchTerminal = launchTerminal;
+exports.listTerminalSessions = listTerminalSessions;
 exports.markdown = markdown;
 exports.markdownExports = markdownExports;
 exports.markdownRenderer = markdownRenderer;
@@ -123316,8 +124634,12 @@ exports.session = session;
 exports.shell = shellModule;
 exports.stateExports = stateExports;
 exports.stripAnsi = stripAnsi;
+exports.termBlockRegistry = termBlockRegistry;
+exports.termOverlayStyles = termOverlayStyles;
 exports.terminal = terminal;
+exports.terminalOverlay = terminalOverlay;
 exports.terminalToHtml = terminalToHtml;
+exports.terminalWidget = terminalWidget;
 exports.toggleDevPanel = toggleDevPanel;
 exports.watchTheme = watchTheme;
 exports.widgets = widgets;

@@ -8,7 +8,7 @@
 import { ViewPlugin, Decoration, gutter, GutterMarker } from '@codemirror/view';
 import { StateField, StateEffect, Facet } from '@codemirror/state';
 import { findCodeBlocks } from '../cells.js';
-import { CellControlsWidget, CellControlsGutterMarker, injectCellControlsStyles } from './widgets.js';
+import { CellControlsWidget, CellControlsGutterMarker, TerminalControlsWidget, injectCellControlsStyles } from './widgets.js';
 
 /**
  * @typedef {import('../config/schema.js').CellControlsConfig} CellControlsConfig
@@ -42,8 +42,9 @@ function buildDecorations(view, context) {
   const content = view.state.doc.toString();
   const codeBlocks = findCodeBlocks(content);
 
-  // Filter to executable blocks only
+  // Filter to executable OR terminal blocks
   const executableBlocks = codeBlocks.filter(b => b.executable);
+  const terminalBlocks = codeBlocks.filter(b => b.terminal);
 
   // Get queue state
   const queueState = stateManager?.getQueue() || { entries: [], running: null, runningByLanguage: {}, total: 0 };
@@ -124,6 +125,35 @@ function buildDecorations(view, context) {
         widget,
         side: 1 // After the position
       }).range(pos)
+    );
+  }
+
+  // Add terminal block controls
+  for (let i = 0; i < terminalBlocks.length; i++) {
+    const block = terminalBlocks[i];
+
+    // Skip if position is 'none' or 'gutter'
+    if (config.position === 'none' || config.position === 'gutter') {
+      continue;
+    }
+
+    // Find the line containing the opening fence
+    const line = view.state.doc.lineAt(block.start);
+
+    // Create terminal widget
+    const widget = new TerminalControlsWidget({
+      blockIndex: i,
+      block: block,
+      callbacks: {
+        onLaunchTerminal: callbacks?.onLaunchTerminal,
+      }
+    });
+
+    decorations.push(
+      Decoration.widget({
+        widget,
+        side: 1
+      }).range(line.to)
     );
   }
 

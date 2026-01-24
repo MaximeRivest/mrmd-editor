@@ -93,12 +93,6 @@ function showCtrlKModal(view) {
   const header = document.createElement('div');
   header.className = 'cm-ctrl-k-header';
 
-  // Drag handle
-  const dragHandle = document.createElement('span');
-  dragHandle.className = 'cm-ctrl-k-drag';
-  dragHandle.textContent = '⋮⋮';
-  header.appendChild(dragHandle);
-
   // Toggle button for settings
   const toggleBtn = document.createElement('button');
   toggleBtn.className = 'cm-ctrl-k-toggle';
@@ -344,19 +338,12 @@ function injectCtrlKStyles() {
 .cm-ctrl-k-header {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 4px;
-  padding: 6px 8px;
+  padding: 4px 6px;
   background: var(--bg-tertiary, #252525);
   border-bottom: 1px solid var(--border, #333);
   cursor: grab;
-}
-
-.cm-ctrl-k-drag {
-  color: var(--text-dim, #666);
-  font-size: 10px;
-  letter-spacing: -2px;
-  margin-right: auto;
-  user-select: none;
 }
 
 .cm-ctrl-k-toggle,

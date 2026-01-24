@@ -93,13 +93,16 @@ export class CellControlsSystem {
     });
 
     // Set up callbacks for widgets
+    // Merge built-in callbacks with any custom callbacks from config
     this.callbacks = {
       onRun: (cellIndex) => this.runCell(cellIndex),
       onStop: (cellIndex, execId) => this.cancelCell(cellIndex, execId),
       onClear: (cellIndex) => this.clearOutput(cellIndex),
       onCopy: (cellIndex) => this.copyCode(cellIndex),
       onCopyOutput: (cellIndex) => this.copyOutput(cellIndex),
-      onCopyBoth: (cellIndex) => this.copyBoth(cellIndex)
+      onCopyBoth: (cellIndex) => this.copyBoth(cellIndex),
+      // Include custom callbacks from config (e.g., onLaunchTerminal)
+      ...(config.callbacks || {})
     };
 
     // Inject styles
