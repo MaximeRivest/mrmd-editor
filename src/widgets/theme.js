@@ -241,6 +241,18 @@ export const tokenDefinitions = {
   '--ansi-bright-white': { description: 'ANSI bright white', category: 'ansi', default: '#ffffff' },
 
   // ===========================================================================
+  // TERMINAL (xterm.js terminal widget)
+  // ===========================================================================
+  '--term-background': { description: 'Terminal background color', category: 'terminal', default: 'var(--editor-background)' },
+  '--term-foreground': { description: 'Terminal text color', category: 'terminal', default: 'var(--editor-foreground)' },
+  '--term-cursor': { description: 'Terminal cursor color', category: 'terminal', default: 'var(--editor-cursor)' },
+  '--term-cursor-accent': { description: 'Terminal cursor text color', category: 'terminal', default: 'var(--editor-background)' },
+  '--term-selection': { description: 'Terminal selection background', category: 'terminal', default: 'var(--editor-selection)' },
+  '--term-border': { description: 'Terminal border color', category: 'terminal', default: 'var(--widget-border)' },
+  '--term-header-bg': { description: 'Terminal header background', category: 'terminal', default: 'var(--mrmd-popup-bg, #252526)' },
+  '--term-header-fg': { description: 'Terminal header text color', category: 'terminal', default: 'var(--widget-text-muted)' },
+
+  // ===========================================================================
   // COLLABORATOR COLORS (used by awareness system)
   // ===========================================================================
   '--collab-human': { description: 'Default color for human collaborators', category: 'collab', default: '#3b82f6' },
@@ -500,6 +512,16 @@ export const midnightTheme = {
   '--ansi-bright-cyan': '#67e8f9',
   '--ansi-bright-white': '#ffffff',
 
+  // Terminal colors
+  '--term-background': '#1e1e1e',
+  '--term-foreground': '#d4d4d4',
+  '--term-cursor': '#aeafad',
+  '--term-cursor-accent': '#1e1e1e',
+  '--term-selection': '#37608c',
+  '--term-border': 'rgba(255, 255, 255, 0.1)',
+  '--term-header-bg': '#252526',
+  '--term-header-fg': '#888888',
+
   // Collaborator defaults
   '--collab-human': '#3b82f6',
   '--collab-ai': '#8b5cf6',
@@ -693,6 +715,16 @@ export const daylightTheme = {
   '--ansi-bright-magenta': '#ba68c8',
   '--ansi-bright-cyan': '#4dd0e1',
   '--ansi-bright-white': '#ffffff',
+
+  // Terminal colors (light theme)
+  '--term-background': '#fafafa',
+  '--term-foreground': '#37474f',
+  '--term-cursor': '#37474f',
+  '--term-cursor-accent': '#ffffff',
+  '--term-selection': '#bbdefb',
+  '--term-border': 'rgba(0, 0, 0, 0.12)',
+  '--term-header-bg': '#f5f5f5',
+  '--term-header-fg': '#78909c',
 
   // Collaborator defaults
   '--collab-human': '#1976d2',
@@ -888,6 +920,16 @@ export const githubTheme = {
   '--ansi-bright-magenta': '#d2a8ff',
   '--ansi-bright-cyan': '#b6e3ff',
   '--ansi-bright-white': '#ffffff',
+
+  // Terminal colors (GitHub Dark)
+  '--term-background': '#0d1117',
+  '--term-foreground': '#c9d1d9',
+  '--term-cursor': '#c9d1d9',
+  '--term-cursor-accent': '#0d1117',
+  '--term-selection': '#3a6ea5',
+  '--term-border': '#30363d',
+  '--term-header-bg': '#161b22',
+  '--term-header-fg': '#8b949e',
 
   // Collaborator defaults
   '--collab-human': '#58a6ff',
@@ -1187,6 +1229,16 @@ export const nordTheme = {
   '--ansi-bright-cyan': '#8fbcbb',         // nord7
   '--ansi-bright-white': '#eceff4',        // nord6
 
+  // Terminal colors (using Nord Polar Night for bg, Snow Storm for text)
+  '--term-background': '#2e3440',          // nord0 - matches editor
+  '--term-foreground': '#d8dee9',          // nord4
+  '--term-cursor': '#d8dee9',              // nord4
+  '--term-cursor-accent': '#2e3440',       // nord0
+  '--term-selection': '#5e81ac',           // nord10
+  '--term-border': '#3b4252',              // nord1
+  '--term-header-bg': '#3b4252',           // nord1
+  '--term-header-fg': '#4c566a',           // nord3
+
   // ===========================================================================
   // COLLABORATOR COLORS
   //
@@ -1464,6 +1516,16 @@ export const grayscaleDarkTheme = {
   '--ansi-bright-cyan': '#b0b0b0',
   '--ansi-bright-white': '#e8e8e8',
 
+  // Terminal colors (grayscale dark)
+  '--term-background': '#1a1a1a',
+  '--term-foreground': '#c8c8c8',
+  '--term-cursor': '#a0a0a0',
+  '--term-cursor-accent': '#1a1a1a',
+  '--term-selection': '#404040',
+  '--term-border': '#333333',
+  '--term-header-bg': '#252525',
+  '--term-header-fg': '#707070',
+
   // Collaborator - grayscale
   '--collab-human': '#909090',
   '--collab-ai': '#707070',
@@ -1657,6 +1719,16 @@ export const grayscaleLightTheme = {
   '--ansi-bright-cyan': '#3a3a3a',
   '--ansi-bright-white': '#777777',
 
+  // Terminal colors (grayscale light)
+  '--term-background': '#fafafa',
+  '--term-foreground': '#333333',
+  '--term-cursor': '#333333',
+  '--term-cursor-accent': '#fafafa',
+  '--term-selection': '#d0d0d0',
+  '--term-border': '#e0e0e0',
+  '--term-header-bg': '#f0f0f0',
+  '--term-header-fg': '#888888',
+
   // Collaborator - grayscale
   '--collab-human': '#555555',
   '--collab-ai': '#666666',
@@ -1776,6 +1848,321 @@ export const grayscaleLightTheme = {
   '--mrmd-shadow-xl': '0 16px 48px rgba(0, 0, 0, 0.15)',
 };
 
+// ===========================================================================
+// OPEN RESPONSES THEME
+// ===========================================================================
+/**
+ * Open Responses Theme
+ *
+ * A clean, professional light theme inspired by openresponses.org.
+ * Uses the Tailwind slate color palette with orange accents.
+ *
+ * Key characteristics:
+ * - White background (matches openresponses.org)
+ * - Slate text colors for excellent readability
+ * - Orange accent color for interactive elements (cursor, active TOC item)
+ * - Dark code blocks (slate-800) for contrast
+ * - Clean, minimal aesthetic with subtle borders
+ */
+export const openresponsesTheme = {
+  name: 'openresponses',
+  description: 'Clean, professional light theme inspired by openresponses.org',
+  isDark: false,
+
+  // ===========================================================================
+  // FONT FACE (injected separately)
+  // ===========================================================================
+  fontFace: `@font-face {
+    font-family: 'OpenAI Sans';
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url(https://www.openresponses.org/fonts/openaiSansVariableVF.woff2) format('woff2-variations');
+  }`,
+
+  // ===========================================================================
+  // SPACING
+  // ===========================================================================
+  '--widget-line-height': '1.75',
+  '--widget-padding-x': '16px',
+  '--widget-padding-y': '12px',
+  '--widget-margin-y': '4px',
+  '--widget-border-radius': '6px',
+  '--widget-border-width': '1px',
+  '--widget-border-accent-width': '3px',
+
+  // Text layout
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
+
+  // ===========================================================================
+  // TYPOGRAPHY - OpenAI Sans
+  // ===========================================================================
+  '--widget-font-mono': "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+  '--widget-font-sans': "'OpenAI Sans', system-ui, sans-serif",
+  '--widget-font-size': '1rem',
+  '--widget-font-size-small': '0.875rem',
+  '--widget-font-size-label': '0.75rem',
+  '--widget-font-weight': '300',
+  '--widget-font-weight-medium': '500',
+  '--widget-font-weight-semibold': '600',
+  '--widget-font-weight-bold': '700',
+
+  // ===========================================================================
+  // SURFACES (Tailwind slate palette like openresponses.org)
+  // ===========================================================================
+  '--widget-surface': '#f8fafc',           // slate-50 (main background like openresponses.org)
+  '--widget-surface-hover': '#f1f5f9',     // slate-100
+  '--widget-surface-elevated': '#ffffff',  // white for popups
+  '--widget-surface-inset': '#e2e8f0',     // slate-200 for inputs
+
+  // ===========================================================================
+  // BORDERS
+  // ===========================================================================
+  '--widget-border': '#e2e8f0',            // slate-200
+  '--widget-border-accent': '#ea580c',     // orange-600 accent
+  '--widget-border-focus': '#ea580c',      // orange-600
+
+  // ===========================================================================
+  // TEXT COLORS
+  // ===========================================================================
+  '--widget-text': '#0f172a',              // slate-900 (darker for better contrast)
+  '--widget-text-muted': '#64748b',        // slate-500
+  '--widget-text-accent': '#ea580c',       // orange-600
+
+  // ===========================================================================
+  // SEMANTIC COLORS
+  // ===========================================================================
+  '--widget-success': '#16a34a',           // green-600
+  '--widget-warning': '#d97706',           // amber-600
+  '--widget-error': '#dc2626',             // red-600
+  '--widget-info': '#2563eb',              // blue-600
+
+  // ===========================================================================
+  // ANSI COLORS (optimized for light background)
+  // ===========================================================================
+  '--ansi-black': '#0f172a',               // slate-900
+  '--ansi-red': '#dc2626',                 // red-600
+  '--ansi-green': '#16a34a',               // green-600
+  '--ansi-yellow': '#d97706',              // amber-600
+  '--ansi-blue': '#2563eb',                // blue-600
+  '--ansi-magenta': '#9333ea',             // purple-600
+  '--ansi-cyan': '#0891b2',                // cyan-600
+  '--ansi-white': '#f1f5f9',               // slate-100
+  '--ansi-bright-black': '#64748b',        // slate-500
+  '--ansi-bright-red': '#ef4444',          // red-500
+  '--ansi-bright-green': '#22c55e',        // green-500
+  '--ansi-bright-yellow': '#f59e0b',       // amber-500
+  '--ansi-bright-blue': '#3b82f6',         // blue-500
+  '--ansi-bright-magenta': '#a855f7',      // purple-500
+  '--ansi-bright-cyan': '#06b6d4',         // cyan-500
+  '--ansi-bright-white': '#ffffff',        // white
+
+  // ===========================================================================
+  // TERMINAL COLORS
+  // ===========================================================================
+  '--term-background': '#1e293b',          // slate-800 (dark for contrast)
+  '--term-foreground': '#e2e8f0',          // slate-200
+  '--term-cursor': '#f97316',              // orange-500 accent
+  '--term-cursor-accent': '#1e293b',       // slate-800
+  '--term-selection': '#334155',           // slate-700
+  '--term-border': '#e2e8f0',              // slate-200
+  '--term-header-bg': '#f1f5f9',           // slate-100
+  '--term-header-fg': '#64748b',           // slate-500
+
+  // ===========================================================================
+  // COLLABORATOR COLORS
+  // ===========================================================================
+  '--collab-human': '#3b82f6',             // blue-500
+  '--collab-ai': '#a855f7',                // purple-500
+  '--collab-runtime': '#22c55e',           // green-500
+
+  // ===========================================================================
+  // EDITOR
+  // ===========================================================================
+  '--editor-background': '#f8fafc',        // slate-50 (matches openresponses.org)
+  '--editor-foreground': '#0f172a',        // slate-900
+  '--editor-font-family': "'OpenAI Sans', system-ui, sans-serif",
+  '--editor-font-size': '1rem',
+  '--editor-line-height': '1.75',
+  '--editor-line-number': '#94a3b8',       // slate-400
+  '--editor-line-number-active': '#64748b',// slate-500
+  '--editor-selection': '#e2e8f0',         // slate-200
+  '--editor-selection-match': '#f1f5f9',   // slate-100
+  '--editor-cursor': '#ea580c',            // orange-600 (accent)
+  '--editor-active-line': 'rgba(241, 245, 249, 0.5)', // slate-100 semi
+  '--editor-gutter': '#f8fafc',            // slate-50
+  '--editor-matching-bracket': '#e2e8f0',  // slate-200
+
+  // ===========================================================================
+  // SYNTAX HIGHLIGHTING (Professional, readable)
+  // ===========================================================================
+  '--syntax-keyword': '#7c3aed',           // violet-600
+  '--syntax-control': '#7c3aed',           // violet-600
+  '--syntax-string': '#059669',            // emerald-600
+  '--syntax-number': '#2563eb',            // blue-600
+  '--syntax-comment': '#94a3b8',           // slate-400
+  '--syntax-function': '#c2410c',          // orange-700
+  '--syntax-variable': '#334155',          // slate-700
+  '--syntax-variable-special': '#dc2626',  // red-600
+  '--syntax-property': '#0891b2',          // cyan-600
+  '--syntax-operator': '#64748b',          // slate-500
+  '--syntax-punctuation': '#94a3b8',       // slate-400
+  '--syntax-type': '#0d9488',              // teal-600
+  '--syntax-class': '#c2410c',             // orange-700
+  '--syntax-constant': '#7c3aed',          // violet-600
+  '--syntax-parameter': '#0891b2',         // cyan-600
+  '--syntax-regexp': '#be185d',            // pink-700
+  '--syntax-escape': '#be185d',            // pink-700
+  '--syntax-tag': '#c2410c',               // orange-700
+  '--syntax-attribute': '#0891b2',         // cyan-600
+  '--syntax-attribute-value': '#059669',   // emerald-600
+  '--syntax-heading': '#0f172a',           // slate-900
+  '--syntax-link': '#2563eb',              // blue-600
+  '--syntax-link-text': '#334155',         // slate-700
+  '--syntax-emphasis': '#334155',          // slate-700
+  '--syntax-strong': '#0f172a',            // slate-900
+  '--syntax-strikethrough': '#94a3b8',     // slate-400
+  '--syntax-quote': '#64748b',             // slate-500
+  '--syntax-code': '#c2410c',              // orange-700
+  '--syntax-code-background': '#f1f5f9',   // slate-100
+  '--syntax-meta': '#64748b',              // slate-500
+  '--syntax-inserted': '#16a34a',          // green-600
+  '--syntax-deleted': '#dc2626',           // red-600
+  '--syntax-changed': '#d97706',           // amber-600
+
+  // ===========================================================================
+  // MARKDOWN RENDERING
+  // ===========================================================================
+  '--md-heading-1-size': '2em',
+  '--md-heading-2-size': '1.5em',
+  '--md-heading-3-size': '1.25em',
+  '--md-heading-4-size': '1.1em',
+  '--md-heading-5-size': '1em',
+  '--md-heading-6-size': '0.9em',
+  '--md-heading-weight': '600',
+  '--md-heading-line-height': '1.3',
+  '--md-heading-margin-top': '1.5em',
+  '--md-marker-color': '#94a3b8',          // slate-400
+  '--md-marker-font': "ui-monospace, SFMono-Regular, monospace",
+  '--md-link-color': '#2563eb',            // blue-600
+  '--md-link-decoration': 'underline',
+  '--md-code-background': '#f1f5f9',       // slate-100
+  '--md-code-color': '#c2410c',            // orange-700
+  '--md-code-padding': '0.2em 0.4em',
+  '--md-code-radius': '4px',
+  '--md-blockquote-border': '#e2e8f0',     // slate-200
+  '--md-blockquote-border-width': '4px',
+  '--md-blockquote-color': '#64748b',      // slate-500
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#94a3b8',     // slate-400
+  '--md-hr-color': '#e2e8f0',              // slate-200
+  '--md-table-header-bg': '#f1f5f9',       // slate-100
+  '--md-table-header-border': '#cbd5e1',   // slate-300
+  '--md-table-row-border': '#e2e8f0',      // slate-200
+  '--md-table-stripe-bg': '#f8fafc',       // slate-50
+  '--md-image-border-radius': '8px',
+  '--md-checkbox-size': '1.1em',
+  '--md-checkbox-color': '#f97316',        // orange-500
+  '--md-alert-note-color': '#2563eb',      // blue-600
+  '--md-alert-tip-color': '#16a34a',       // green-600
+  '--md-alert-important-color': '#7c3aed', // violet-600
+  '--md-alert-warning-color': '#d97706',   // amber-600
+  '--md-alert-caution-color': '#dc2626',   // red-600
+
+  // ===========================================================================
+  // SHELL/UI
+  // ===========================================================================
+  '--mrmd-ui-font': "'OpenAI Sans', system-ui, sans-serif",
+  '--mrmd-ui-font-size': '14px',
+  '--mrmd-ui-font-size-sm': '12px',
+  '--mrmd-ui-font-size-xs': '10px',
+  '--mrmd-panel-bg': '#f8fafc',            // slate-50 like openresponses.org
+  '--mrmd-popup-bg': '#ffffff',            // white for popups
+  '--mrmd-bg': '#f8fafc',                  // slate-50 (main background like openresponses.org)
+  '--mrmd-fg': '#0f172a',                  // slate-900
+  '--mrmd-fg-muted': '#64748b',            // slate-500
+  '--mrmd-fg-dim': '#94a3b8',              // slate-400
+  '--mrmd-border': '#e2e8f0',              // slate-200
+  '--mrmd-hover-bg': '#f1f5f9',            // slate-100
+  '--mrmd-active-bg': '#e2e8f0',           // slate-200
+  '--mrmd-selection-bg': '#cbd5e1',        // slate-300
+  '--mrmd-accent': '#ea580c',              // orange-600
+  '--mrmd-accent-hover': '#c2410c',        // orange-700
+  '--mrmd-success': '#16a34a',             // green-600
+  '--mrmd-warning': '#d97706',             // amber-600
+  '--mrmd-error': '#dc2626',               // red-600
+  '--mrmd-shadow-md': '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1)',
+  '--mrmd-shadow-lg': '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1)',
+  '--mrmd-shadow-xl': '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+  '--mrmd-button-bg': '#f1f5f9',           // slate-100
+  '--mrmd-button-fg': '#334155',           // slate-700
+  '--mrmd-button-hover': '#e2e8f0',        // slate-200
+  '--mrmd-button-active': '#cbd5e1',       // slate-300
+
+  // ===========================================================================
+  // DOCS LAYOUT - Grid structure like openresponses.org
+  // ===========================================================================
+  '--docs-layout-max-width': '72rem',      // max-w-6xl (1152px)
+  '--docs-layout-gap': '2.5rem',           // gap-10
+  '--docs-layout-padding-x': '1rem',       // px-4
+  '--docs-layout-padding-y': '2.5rem',     // py-10
+  '--docs-sidebar-width': '200px',
+  '--docs-toc-width': '220px',
+  '--docs-content-max-width': '65ch',      // prose max-width
+
+  // ===========================================================================
+  // LEFT SIDEBAR / NAVIGATION
+  // ===========================================================================
+  '--sidebar-bg': 'transparent',
+  '--sidebar-fg': '#334155',               // slate-700
+  '--sidebar-fg-muted': '#64748b',         // slate-500
+  '--sidebar-font': "'OpenAI Sans', system-ui, sans-serif",
+  '--sidebar-font-size': '0.875rem',       // text-sm
+  '--sidebar-font-weight': '400',
+  '--sidebar-item-padding-x': '0.75rem',   // px-3
+  '--sidebar-item-padding-y': '0.5rem',    // py-2
+  '--sidebar-item-radius': '0.75rem',      // rounded-xl
+  '--sidebar-item-hover-bg': '#f1f5f9',    // slate-100
+  '--sidebar-item-active-bg': '#f1f5f9',   // slate-100
+  '--sidebar-item-active-fg': '#0f172a',   // slate-900
+  '--sidebar-group-label-size': '0.625rem', // text-[10px]
+  '--sidebar-group-label-weight': '600',   // font-semibold
+  '--sidebar-group-label-spacing': '0.08em', // tracking-[0.08em]
+  '--sidebar-group-label-color': '#94a3b8', // slate-400
+  '--sidebar-border': '#e2e8f0',           // slate-200
+
+  // ===========================================================================
+  // RIGHT TABLE OF CONTENTS (TOC)
+  // ===========================================================================
+  '--toc-bg': 'transparent',
+  '--toc-fg': '#64748b',                   // slate-500
+  '--toc-fg-active': '#ea580c',            // orange-600
+  '--toc-font': "'OpenAI Sans', system-ui, sans-serif",
+  '--toc-font-size': '0.875rem',           // text-sm
+  '--toc-font-weight': '400',
+  '--toc-title-size': '0.625rem',          // text-[10px]
+  '--toc-title-weight': '600',             // font-semibold
+  '--toc-title-spacing': '0.2em',          // tracking-[0.2em]
+  '--toc-title-color': '#94a3b8',          // slate-400
+  '--toc-item-padding-y': '0.25rem',       // py-1
+  '--toc-item-hover-color': '#334155',     // slate-700
+  '--toc-border-left': '1px solid #e2e8f0', // border-l slate-200
+  '--toc-indicator-color': '#ea580c',      // orange-600
+  '--toc-indicator-width': '2px',
+  '--toc-depth-indent': '0.75rem',         // indent per depth level
+
+  // ===========================================================================
+  // HEADER
+  // ===========================================================================
+  '--header-height': '4rem',               // h-16
+  '--header-bg': 'transparent',
+  '--header-bg-scrolled': 'rgba(248, 250, 252, 0.9)', // slate-50 with opacity
+  '--header-border': '#e2e8f0',            // slate-200
+  '--header-fg': '#334155',                // slate-700
+  '--header-fg-hover': '#0f172a',          // slate-900
+};
+
 // #endregion BUILT_IN_THEMES
 
 // #region THEME_REGISTRY
@@ -1792,6 +2179,7 @@ const themeRegistry = new Map([
   ['nord-outputs', nordOutputsTheme],
   ['grayscale-dark', grayscaleDarkTheme],
   ['grayscale-light', grayscaleLightTheme],
+  ['openresponses', openresponsesTheme],
 ]);
 
 /**

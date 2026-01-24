@@ -135,6 +135,7 @@ import { TermBlock, termBlockRegistry, TermBlockRegistry } from './term-block.js
 import { PtyClient, createPtyClient, listTerminalSessions, createTerminalSession } from './term-pty-client.js';
 import {
   terminalWidget,
+  terminalKeymap,
   launchTerminal,
   closeTerminal,
   isTerminalVisible,
@@ -1709,6 +1710,23 @@ function create(target, options = {}) {
     },
 
     /**
+     * Unregister a runtime.
+     * Call this when a runtime is stopped/killed to prevent stale client usage.
+     *
+     * @param {string} name - Runtime name (e.g., 'python', 'julia')
+     */
+    unregisterRuntime(name) {
+      registry.unregister(name);
+
+      // Also remove LSP provider if present
+      if (runtimeLspProviders.has(name)) {
+        runtimeLspProviders.delete(name);
+      }
+
+      console.log(`[editor] Unregistered runtime: ${name}`);
+    },
+
+    /**
      * Check if a language is supported
      */
     supportsLanguage(language) {
@@ -2821,6 +2839,7 @@ const terminal = {
   listTerminalSessions,
   createTerminalSession,
   terminalWidget,
+  terminalKeymap,
   launchTerminal,
   closeTerminal,
   isTerminalVisible,
@@ -3052,6 +3071,7 @@ export {
   listTerminalSessions,
   createTerminalSession,
   terminalWidget,
+  terminalKeymap,
   launchTerminal,
   closeTerminal,
   isTerminalVisible,

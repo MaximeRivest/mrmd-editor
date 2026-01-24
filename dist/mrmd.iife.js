@@ -53387,8 +53387,34 @@ var mrmd = (function (exports) {
 
   /**
    * Terminal portal languages - interactive PTY sessions embedded in document
+   * Supports: term, terminal, term:session1, terminal:mysession
    */
   const TERMINAL_LANGUAGES = new Set(['term', 'terminal']);
+
+  /**
+   * Check if language is a terminal type (with optional session suffix)
+   * @param {string} lang - Language string (e.g., 'term', 'term:session1')
+   * @returns {{isTerminal: boolean, sessionName: string|null}}
+   */
+  function parseTerminalLanguage(lang) {
+    if (!lang) return { isTerminal: false, sessionName: null };
+    const lower = lang.toLowerCase();
+
+    // Check for term:sessionname or terminal:sessionname format
+    if (lower.startsWith('term:')) {
+      return { isTerminal: true, sessionName: lower.slice(5) || null };
+    }
+    if (lower.startsWith('terminal:')) {
+      return { isTerminal: true, sessionName: lower.slice(9) || null };
+    }
+
+    // Plain term or terminal
+    if (TERMINAL_LANGUAGES.has(lower)) {
+      return { isTerminal: true, sessionName: null };
+    }
+
+    return { isTerminal: false, sessionName: null };
+  }
 
   /**
    * Find all code blocks in the document
@@ -53442,6 +53468,11 @@ var mrmd = (function (exports) {
           const codeEnd = lineStart;
           const blockEnd = lineStart + line.length;
 
+          // Parse terminal language for session support
+          const terminalInfo = parseTerminalLanguage(blockLanguage);
+          // Terminal session can come from term:session or from space-separated session
+          const terminalSession = terminalInfo.sessionName || (terminalInfo.isTerminal ? blockSession : null);
+
           blocks.push({
             language: blockLanguage,
             session: blockSession,
@@ -53453,7 +53484,8 @@ var mrmd = (function (exports) {
             line: blockLine,
             executable: EXECUTABLE_LANGUAGES.has(blockLanguage),
             rendered: RENDERED_LANGUAGES.has(blockLanguage),
-            terminal: TERMINAL_LANGUAGES.has(blockLanguage),
+            terminal: terminalInfo.isTerminal,
+            terminalSession: terminalSession, // Named terminal session (e.g., 'session1' from term:session1)
           });
 
           inBlock = false;
@@ -53658,11 +53690,11 @@ var mrmd = (function (exports) {
   /**
    * Check if a language is a terminal portal
    *
-   * @param {string} language - Language identifier
+   * @param {string} language - Language identifier (e.g., 'term', 'term:session1')
    * @returns {boolean}
    */
   function isTerminalLanguage(language) {
-    return TERMINAL_LANGUAGES.has(language?.toLowerCase());
+    return parseTerminalLanguage(language).isTerminal;
   }
 
   /**
@@ -56645,8 +56677,20 @@ ${ansiStyles}
         cellOutput: [],
         cellComplete: [],
         cellError: [],
+        cellAsset: [], // Called when a rich output (plot, image) is received
         stdinRequest: [], // Called when input() is invoked
+        noRuntime: [], // Called when no runtime is available for a language
       };
+
+      /**
+       * Asset handler for saving generated plots/images to _assets/.
+       * Set by consuming code (e.g., mrmd-electron) to integrate with asset service.
+       *
+       * @type {function(Object): Promise<{assetPath: string, relativePath: string}>|null}
+       * Called with: { execId, url, mimeType, assetType, runtimeUrl }
+       * Should return: { assetPath: '/project/_assets/generated/...', relativePath: '../_assets/generated/...' }
+       */
+      this.assetHandler = null;
 
       // Monitor mode state
       /** @type {MonitorCoordination|null} */
@@ -57160,6 +57204,25 @@ ${ansiStyles}
       return this.running.has(execId);
     }
 
+    /**
+     * Check if a runtime is available for a language
+     *
+     * @param {string} language - Language identifier
+     * @returns {boolean}
+     */
+    hasRuntime(language) {
+      return this.registry.supports(language);
+    }
+
+    /**
+     * Get list of languages that have runtimes registered
+     *
+     * @returns {string[]}
+     */
+    getAvailableLanguages() {
+      return this.registry.supportedLanguages();
+    }
+
     // ===========================================================================
     // Events
     // ===========================================================================
@@ -57214,8 +57277,18 @@ ${ansiStyles}
       // Check runtime support (for direct execution)
       if (!this.registry.supports(language)) {
         console.warn(`No runtime for language: ${language}`);
+        // Emit noRuntime event - allows UI to handle setup and retry
+        // The event includes a retry callback that can be called after runtime is registered
+        const retryPromise = new Promise((resolve) => {
+          this._emit('noRuntime', index, cell, language, async () => {
+            // Retry callback - called by UI after runtime is set up
+            const result = await this._executeCell(cell, index);
+            resolve(result);
+          });
+        });
+        // Also emit error for backwards compatibility
         this._emit('cellError', index, `No runtime registered for ${language}`);
-        return null;
+        return retryPromise;
       }
 
       // Cancel any existing execution for this cell
@@ -57438,6 +57511,42 @@ ${ansiStyles}
           });
         };
 
+        // Collect asset promises during execution (async callbacks need to be awaited later)
+        const assetPromises = [];
+
+        // Handle rich output (plots, images, HTML)
+        const onAsset = (assetData, eventType) => {
+          console.log('[execution] Asset received:', eventType, assetData);
+          this._emit('cellAsset', index, assetData, eventType, execId);
+
+          // If we have an asset handler, create a promise for processing
+          if (this.assetHandler) {
+            const promise = (async () => {
+              try {
+                // Get runtime URL from registry (the MRPClient stores it)
+                const runtime = this.registry.getRuntime(language);
+                const runtimeUrl = runtime?.runtimeUrl || this._defaultRuntimeUrl;
+
+                const result = await this.assetHandler({
+                  execId,
+                  cellIndex: index,
+                  data: assetData,
+                  eventType,
+                  runtimeUrl,
+                  mimeType: assetData.mimeType,
+                  url: assetData.url,
+                });
+
+                return result;
+              } catch (err) {
+                console.error('[execution] Asset handler error:', err);
+                return null;
+              }
+            })();
+            assetPromises.push(promise);
+          }
+        };
+
         // Execute with streaming (pass onStdinRequest for input() support)
         // Pass execId so hub runtimes can find the output block
         // Pass session name for named session support (e.g., ```js sandbox)
@@ -57445,6 +57554,7 @@ ${ansiStyles}
           execId,
           cellId: cell.id || `cell-${index}`,
           session: cell.session,
+          onAsset,
         });
 
         // Final update - find output block by execId for robustness
@@ -57475,6 +57585,52 @@ ${ansiStyles}
               insert: outputWithError
             },
           });
+
+          // Wait for all asset processing to complete and collect results
+          const collectedAssets = (await Promise.all(assetPromises)).filter(Boolean);
+
+          // Insert markdown images for collected assets (plots, images)
+          if (collectedAssets.length > 0) {
+            // Build markdown for all assets
+            const imageMarkdown = collectedAssets
+              .map((asset, i) => {
+                const alt = `plot-${i + 1}`;
+                return `![${alt}](${asset.relativePath})`;
+              })
+              .join('\n');
+
+            // Get FRESH content right before dispatch to avoid stale positions
+            // (Yjs sync may have changed the document during async asset processing)
+            const freshContent = this.editor.view.state.doc.toString();
+            const freshOutputBlock = findOutputBlockByExecId(freshContent, execId);
+
+            if (freshOutputBlock) {
+              // Check if there are existing images after the output block that we should replace
+              const afterBlock = freshContent.slice(freshOutputBlock.blockEnd);
+              const existingImageMatch = afterBlock.match(/^\n*(?:!\[[^\]]*\]\([^)]*\)\n*)+/);
+
+              let insertPos = freshOutputBlock.blockEnd;
+              let deleteLength = 0;
+
+              if (existingImageMatch) {
+                // Replace existing images
+                deleteLength = existingImageMatch[0].length;
+              }
+
+              // Insert after output block (with newline)
+              this.editor.view.dispatch({
+                changes: {
+                  from: insertPos,
+                  to: insertPos + deleteLength,
+                  insert: '\n\n' + imageMarkdown + '\n',
+                },
+              });
+
+              console.log('[execution] Inserted', collectedAssets.length, 'plot image(s) after output block');
+            } else {
+              console.warn('[execution] Could not find output block for image insertion, execId:', execId);
+            }
+          }
         }
 
         this._emit('cellComplete', index, result, execId);
@@ -58049,10 +58205,10 @@ ${ansiStyles}
      * @param {string} code - Code to execute
      * @param {string} [language] - Language (for mrmd Runtime interface compatibility)
      * @param {function(string, string, boolean): void} onChunk - Callback (chunk, accumulated, done)
-     * @param {function(StdinRequest): Promise<string> | Partial<ExecuteRequest> & { onStdinRequest?: function }} [optionsOrStdinHandler]
+     * @param {function(StdinRequest): Promise<string> | Partial<ExecuteRequest> & { onStdinRequest?: function, onAsset?: function }} [optionsOrStdinHandler]
      *        Can be either:
      *        - A function to handle stdin requests (for Runtime interface compatibility)
-     *        - An options object with onStdinRequest property
+     *        - An options object with onStdinRequest and onAsset properties
      * @returns {Promise<ExecuteResult>}
      */
     async executeStreaming(code, language, onChunk, optionsOrStdinHandler = {}, extraOptions = {}) {
@@ -58066,17 +58222,19 @@ ${ansiStyles}
 
       // Handle both signatures:
       // 1. executeStreaming(code, lang, onChunk, onStdinRequest, options) - Runtime interface (5 params)
-      // 2. executeStreaming(code, lang, onChunk, { onStdinRequest, ...options }) - Original MRP client
+      // 2. executeStreaming(code, lang, onChunk, { onStdinRequest, onAsset, ...options }) - Original MRP client
       let onStdinRequest;
+      let onAsset;
       let executeOptions = {};
 
       if (typeof optionsOrStdinHandler === 'function') {
         // Runtime interface: 4th param is the stdin handler, 5th is options
         onStdinRequest = optionsOrStdinHandler;
         executeOptions = extraOptions;
+        onAsset = extraOptions.onAsset;
       } else {
         // Options object
-        ({ onStdinRequest, ...executeOptions } = optionsOrStdinHandler);
+        ({ onStdinRequest, onAsset, ...executeOptions } = optionsOrStdinHandler);
       }
 
       try {
@@ -58141,8 +58299,30 @@ ${ansiStyles}
                         });
                       });
                   }
+                } else if (currentEvent === 'asset' || currentEvent === 'display') {
+                  // Rich output: images, plots, HTML, etc.
+                  // data contains: { path, url, mimeType, assetType, size } for assets
+                  // or { data: { 'image/png': base64, ... }, metadata } for display
+                  if (onAsset) {
+                    onAsset(data, currentEvent);
+                  }
                 } else if (currentEvent === 'result') {
                   finalResult = data;
+
+                  // Extract assets from result and notify callback
+                  if (onAsset && data.assets && data.assets.length > 0) {
+                    for (const asset of data.assets) {
+                      onAsset(asset, 'asset');
+                    }
+                  }
+                  // Also handle displayData with images
+                  if (onAsset && data.displayData && data.displayData.length > 0) {
+                    for (const display of data.displayData) {
+                      if (display.data && (display.data['image/png'] || display.data['image/jpeg'] || display.data['image/svg+xml'])) {
+                        onAsset(display, 'display');
+                      }
+                    }
+                  }
                 } else if (currentEvent === 'error') {
                   finalResult = { success: false, error: data, stdout: '', stderr: '' };
                 } else if (currentEvent === 'done') {
@@ -78887,6 +79067,12 @@ ${studioStyles}
 
   /**
    * Extract runtime configurations from YAML content
+   *
+   * Supports both verbose and minimal syntax:
+   * - Verbose: session: { python: { venv: .venv } }
+   * - Minimal: python: .venv
+   * - Minimal object: python: { venv: .venv }
+   *
    * @param {string} yamlContent - Raw YAML string
    * @param {number} [contentStartOffset=0] - Character offset where YAML content starts in document
    * @returns {RuntimeConfig[]}
@@ -78896,25 +79082,42 @@ ${studioStyles}
 
     try {
       const parsed = YAML.parse(yamlContent);
-      if (!parsed?.session) {
+      if (!parsed) return runtimes;
+
+      // Normalize: check for minimal syntax first, then verbose
+      // This matches the normalization in mrmd-project
+      const sessionConfig = normalizeToSessionConfig(parsed);
+
+      if (!sessionConfig) {
         return runtimes;
       }
 
       // Check for each supported runtime language
       for (const language of RUNTIME_LANGUAGES) {
-        const config = parsed.session[language];
+        const config = sessionConfig[language];
         if (config) {
-          // Find the line where this runtime is declared (e.g., "  python:")
-          // Search for the pattern with proper indentation under session:
-          const pattern = new RegExp(`^(  ${language}:)`, 'm');
-          const match = yamlContent.match(pattern);
+          // Find the line where this runtime is declared
+          // Try both minimal (python:) and verbose (  python: under session:)
           let lineOffset = null;
 
-          if (match) {
-            // Find the end of the line where this runtime key appears
-            const keyStart = match.index;
+          // Try minimal syntax first (top-level python:)
+          const minimalPattern = new RegExp(`^(${language}:)`, 'm');
+          const minimalMatch = yamlContent.match(minimalPattern);
+
+          if (minimalMatch) {
+            const keyStart = minimalMatch.index;
             const lineEnd = yamlContent.indexOf('\n', keyStart);
-            lineOffset = contentStartOffset + (lineEnd !== -1 ? lineEnd : keyStart + match[1].length);
+            lineOffset = contentStartOffset + (lineEnd !== -1 ? lineEnd : keyStart + minimalMatch[1].length);
+          } else {
+            // Try verbose syntax (indented under session:)
+            const verbosePattern = new RegExp(`^(  ${language}:)`, 'm');
+            const verboseMatch = yamlContent.match(verbosePattern);
+
+            if (verboseMatch) {
+              const keyStart = verboseMatch.index;
+              const lineEnd = yamlContent.indexOf('\n', keyStart);
+              lineOffset = contentStartOffset + (lineEnd !== -1 ? lineEnd : keyStart + verboseMatch[1].length);
+            }
           }
 
           runtimes.push({
@@ -78933,6 +79136,49 @@ ${studioStyles}
     }
 
     return runtimes;
+  }
+
+  /**
+   * Normalize parsed YAML to session config format.
+   * Handles both minimal syntax (python: .venv) and verbose (session: { python: { venv: .venv } })
+   *
+   * @param {object} parsed - Parsed YAML object
+   * @returns {object | null} Session config object or null if no runtime config found
+   */
+  function normalizeToSessionConfig(parsed) {
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+
+    // If already has session key, use it directly
+    if (parsed.session && typeof parsed.session === 'object') {
+      return parsed.session;
+    }
+
+    // Check for minimal syntax (python:, bash:, etc. at top level)
+    const sessionConfig = {};
+    let hasRuntime = false;
+
+    for (const language of RUNTIME_LANGUAGES) {
+      if (language in parsed) {
+        const value = parsed[language];
+        hasRuntime = true;
+
+        if (typeof value === 'string') {
+          // Minimal string form: python: .venv -> { venv: '.venv' }
+          if (language === 'python') {
+            sessionConfig[language] = { venv: value };
+          } else {
+            sessionConfig[language] = { cwd: value };
+          }
+        } else if (typeof value === 'object' && value !== null) {
+          // Minimal object form: python: { venv: .venv }
+          sessionConfig[language] = value;
+        }
+      }
+    }
+
+    return hasRuntime ? sessionConfig : null;
   }
 
   /**
@@ -89099,9 +89345,9 @@ $1 $2
   /**
    * Terminal Widget for CodeMirror
    *
-   * Provides an inline terminal overlay that can be activated for ```term blocks.
-   * The blocks remain editable by default - the terminal is shown as an
-   * inline overlay (same position as the code block) when launched.
+   * Provides an inline terminal widget for ```term blocks.
+   * When activated, the terminal replaces the code block content inline
+   * (part of document flow, not an overlay).
    *
    * @module term-widget
    */
@@ -89110,175 +89356,137 @@ $1 $2
   // #region STATE
 
   /**
-   * Effect to show/hide terminal overlay for a block
+   * Effect to activate/deactivate terminal for a block
    */
-  StateEffect.define();
-  StateEffect.define();
+  const setTerminalActive = StateEffect.define({
+    map: (value, change) => ({
+      ...value,
+      pos: change.mapPos(value.pos, 1),
+    }),
+  });
+
+  /**
+   * State field tracking active terminal block position
+   * Only one terminal can be active at a time
+   */
+  const activeTerminalState = StateField.define({
+    create() {
+      return null; // { pos, blockInfo, config } or null
+    },
+    update(state, tr) {
+      // Map position through changes
+      if (state && tr.docChanged) {
+        state = {
+          ...state,
+          pos: tr.changes.mapPos(state.pos, 1),
+        };
+      }
+
+      // Apply effects
+      for (const effect of tr.effects) {
+        if (effect.is(setTerminalActive)) {
+          if (effect.value.active) {
+            return {
+              pos: effect.value.pos,
+              blockInfo: effect.value.blockInfo,
+              config: effect.value.config,
+            };
+          } else {
+            return null;
+          }
+        }
+      }
+
+      return state;
+    },
+  });
 
   // #endregion STATE
 
-  // #region OVERLAY
+  // #region WIDGET
 
   /**
-   * Terminal overlay manager
-   * Creates an inline terminal that overlays the code block in the editor
+   * Terminal widget that replaces the code block when active
    */
-  class TerminalOverlayManager {
-    constructor() {
-      this.overlay = null;
-      this.currentBlock = null;
-      this.blockInfo = null;
+  class TerminalWidget extends WidgetType {
+    constructor(blockInfo, config) {
+      super();
+      this.blockInfo = blockInfo;
+      this.config = config;
+      this.block = null;
       this.xtermInstance = null;
       this.fitAddon = null;
       this.wsConnection = null;
       this.resizeObserver = null;
-      this.scrollHandler = null;
-      this.config = null;
-      this.view = null;
     }
 
-    /**
-     * Show terminal overlay for a block (inline, not modal)
-     */
-    show(blockInfo, config, view) {
-      // Close any existing overlay
-      this.hide(false); // Don't snapshot when switching blocks
+    eq(other) {
+      return (
+        other instanceof TerminalWidget &&
+        this.blockInfo.start === other.blockInfo.start
+      );
+    }
 
-      this.config = config;
-      this.view = view;
-      this.blockInfo = blockInfo;
+    toDOM(view) {
+      const container = document.createElement('div');
+      container.className = 'term-widget-inline';
 
-      // Create or get TermBlock
-      const sessionId = `term:${config.filePath || 'untitled'}:${blockInfo.line}`;
-      let block = termBlockRegistry.get(sessionId);
+      // Fixed height at 60% of viewport
+      const height = Math.floor(window.innerHeight * 0.6);
+      container.style.height = `${height}px`;
 
-      if (!block) {
-        block = new TermBlock(blockInfo, config.filePath, blockInfo.line);
-        termBlockRegistry.register(block);
-      } else {
-        // Update positions
-        block.start = blockInfo.start;
-        block.end = blockInfo.end;
-        block.codeStart = blockInfo.codeStart;
-        block.codeEnd = blockInfo.codeEnd;
-        block.content = blockInfo.code;
-      }
-
-      this.currentBlock = block;
-      block.mode = 'terminal';
-
-      // Create overlay element (will be positioned inline)
-      this.overlay = document.createElement('div');
-      this.overlay.className = 'term-inline-overlay';
-      this.overlay.innerHTML = `
-      <div class="term-inline-header">
-        <span class="term-inline-title">terminal</span>
-        <span class="term-inline-status">connecting...</span>
-        <button class="term-inline-close" title="Close (Esc)">×</button>
-      </div>
-      <div class="term-inline-content"></div>
+      // Header
+      const header = document.createElement('div');
+      header.className = 'term-widget-header';
+      header.innerHTML = `
+      <span class="term-widget-title">terminal</span>
+      <span class="term-widget-status">connecting...</span>
+      <button class="term-widget-close" title="Close (Esc/Ctrl+Enter)">×</button>
     `;
+      container.appendChild(header);
 
-      // Find the editor's scroll container and content area
-      const editorDom = view.dom;
-      const scrollDom = view.scrollDOM;
+      // Terminal content area
+      const content = document.createElement('div');
+      content.className = 'term-widget-content';
+      container.appendChild(content);
 
-      // Get the position of the code block in the editor
-      const blockRect = this._getBlockRect(view, blockInfo);
-      if (!blockRect) {
-        console.error('[TermOverlay] Could not get block position');
-        return;
-      }
-
-      // Position overlay relative to editor
-      editorDom.getBoundingClientRect();
-      scrollDom.getBoundingClientRect();
-
-      // Insert overlay into the editor DOM (so it scrolls with content)
-      this.overlay.style.position = 'absolute';
-      this.overlay.style.left = '0';
-      this.overlay.style.right = '0';
-      this.overlay.style.top = `${blockRect.top}px`;
-      this.overlay.style.height = `${Math.max(blockRect.height, 200)}px`;
-      this.overlay.style.zIndex = '100';
-
-      // Add to scroller so it moves with content
-      scrollDom.style.position = 'relative';
-      scrollDom.appendChild(this.overlay);
-
-      // Setup close handlers
-      const closeBtn = this.overlay.querySelector('.term-inline-close');
+      // Close button handler
+      const closeBtn = header.querySelector('.term-widget-close');
       closeBtn.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
-        this.hide(true);
+        deactivateTerminal(view);
       };
 
-      // Click outside handler
-      this._clickOutsideHandler = (e) => {
-        if (this.overlay && !this.overlay.contains(e.target)) {
-          this.hide(true);
-        }
-      };
-      // Delay adding click handler to avoid immediate trigger
-      setTimeout(() => {
-        document.addEventListener('mousedown', this._clickOutsideHandler, true);
-      }, 100);
+      // Initialize terminal after DOM is ready
+      requestAnimationFrame(() => {
+        this._initTerminal(content, view);
+      });
 
-      // Escape key handler
-      this._escHandler = (e) => {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          this.hide(true);
-        }
-      };
-      document.addEventListener('keydown', this._escHandler);
-
-      // Initialize xterm.js
-      const termContainer = this.overlay.querySelector('.term-inline-content');
-      this._initXterm(termContainer);
+      return container;
     }
 
-    /**
-     * Get the bounding rect of a code block in editor coordinates
-     */
-    _getBlockRect(view, blockInfo) {
-      try {
-        // Get the line positions
-        const startLine = view.state.doc.lineAt(blockInfo.start);
-        const endLine = view.state.doc.lineAt(blockInfo.end);
-
-        // Get the visual positions using coordsAtPos
-        const startCoords = view.coordsAtPos(startLine.from);
-        const endCoords = view.coordsAtPos(endLine.to);
-
-        if (!startCoords || !endCoords) return null;
-
-        // Convert to scroll-relative coordinates
-        const scrollTop = view.scrollDOM.scrollTop;
-        const scrollRect = view.scrollDOM.getBoundingClientRect();
-
-        return {
-          top: startCoords.top - scrollRect.top + scrollTop,
-          height: endCoords.bottom - startCoords.top,
-        };
-      } catch (e) {
-        console.error('[TermOverlay] Error getting block rect:', e);
-        return null;
-      }
-    }
-
-    /**
-     * Initialize xterm.js in the overlay
-     */
-    _initXterm(container) {
+    _initTerminal(container, view) {
       if (typeof Terminal === 'undefined') {
         container.innerHTML = '<div class="term-error">xterm.js not loaded</div>';
         return;
       }
 
-      const theme = this._getTheme();
+      // Create or get TermBlock
+      const sessionName = this.blockInfo.terminalSession || `line${this.blockInfo.line}`;
+      const sessionId = `term:${this.config.filePath || 'untitled'}:${sessionName}`;
+      let block = termBlockRegistry.get(sessionId);
 
+      if (!block) {
+        block = new TermBlock(this.blockInfo, this.config.filePath, this.blockInfo.line);
+        termBlockRegistry.register(block);
+      }
+      this.block = block;
+
+      // Get theme from CSS variables
+      const theme = this._getThemeFromCSS();
+
+      // Create terminal
       const term = new Terminal({
         cursorBlink: true,
         fontSize: 14,
@@ -89289,13 +89497,13 @@ $1 $2
       });
 
       this.xtermInstance = term;
-      this.currentBlock.xtermInstance = term;
+      block.xtermInstance = term;
 
       // Add fit addon
       if (typeof FitAddon !== 'undefined') {
         this.fitAddon = new FitAddon.FitAddon();
         term.loadAddon(this.fitAddon);
-        this.currentBlock.fitAddon = this.fitAddon;
+        block.fitAddon = this.fitAddon;
       }
 
       // Add web links addon
@@ -89313,7 +89521,7 @@ $1 $2
           try {
             this.fitAddon.fit();
           } catch (e) {
-            console.warn('[TermOverlay] Initial fit failed:', e);
+            console.warn('[TermWidget] Initial fit failed:', e);
           }
         }, 50);
       }
@@ -89334,57 +89542,98 @@ $1 $2
       this.resizeObserver.observe(container);
 
       // Connect to PTY
-      this._connectToPty(term);
+      this._connectToPty(term, view);
 
       // Focus terminal
       term.focus();
+
+      // Listen for theme changes to update terminal colors dynamically
+      this._setupThemeListener(term);
     }
 
     /**
-     * Connect to PTY backend
+     * Setup listener for theme changes
      */
-    _connectToPty(term) {
+    _setupThemeListener(term) {
+      // Watch for class changes on document element (theme switching)
+      this._themeObserver = new MutationObserver(() => {
+        this._updateTerminalTheme(term);
+      });
+
+      this._themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-theme'],
+      });
+
+      // Also watch the body
+      this._themeObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-theme'],
+      });
+
+      // Listen for custom theme change events
+      this._themeChangeHandler = () => {
+        this._updateTerminalTheme(term);
+      };
+      document.addEventListener('mrmd-theme-change', this._themeChangeHandler);
+      window.addEventListener('mrmd-theme-change', this._themeChangeHandler);
+    }
+
+    /**
+     * Update terminal theme from current CSS variables
+     */
+    _updateTerminalTheme(term) {
+      if (!term) return;
+
+      // Small delay to let CSS variables update
+      requestAnimationFrame(() => {
+        const newTheme = this._getThemeFromCSS();
+        term.options.theme = newTheme;
+      });
+    }
+
+    _connectToPty(term, view) {
       if (!this.config.baseUrl) {
         term.write('\x1b[33m[PTY server not running]\x1b[0m\r\n');
-        this._updateStatus('offline');
+        this._updateStatus(view, 'offline');
         return;
       }
 
       const client = new PtyClient({
         baseUrl: this.config.baseUrl,
-        sessionId: this.currentBlock.sessionId,
+        sessionId: this.block.sessionId,
         cwd: this.config.cwd,
         venv: this.config.venv,
-        filePath: this.currentBlock.filePath,
+        filePath: this.block.filePath,
         onData: (data) => {
           term.write(data);
         },
         onConnect: () => {
-          console.log('[TermOverlay] PTY connected');
-          this._updateStatus('connected');
+          console.log('[TermWidget] PTY connected');
+          this._updateStatus(view, 'connected');
         },
         onDisconnect: (code, reason) => {
-          console.log('[TermOverlay] PTY disconnected:', code, reason);
-          this._updateStatus('disconnected');
+          console.log('[TermWidget] PTY disconnected:', code, reason);
+          this._updateStatus(view, 'disconnected');
         },
         onError: (err) => {
-          console.error('[TermOverlay] PTY error:', err);
+          console.error('[TermWidget] PTY error:', err);
           term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n');
-          this._updateStatus('error');
+          this._updateStatus(view, 'error');
         },
       });
 
       this.wsConnection = client;
-      this.currentBlock.wsConnection = client;
+      this.block.wsConnection = client;
 
       client.connect().then(() => {
         if (this.fitAddon) {
           client.resize(term.cols, term.rows);
         }
       }).catch((err) => {
-        console.error('[TermOverlay] Failed to connect:', err);
+        console.error('[TermWidget] Failed to connect:', err);
         term.write('\x1b[31m[Failed to connect to PTY server]\x1b[0m\r\n');
-        this._updateStatus('error');
+        this._updateStatus(view, 'error');
       });
 
       // Forward input to PTY
@@ -89393,11 +89642,9 @@ $1 $2
       });
     }
 
-    /**
-     * Update status indicator
-     */
-    _updateStatus(status) {
-      const statusEl = this.overlay?.querySelector('.term-inline-status');
+    _updateStatus(view, status) {
+      const widget = view.dom.querySelector('.term-widget-inline');
+      const statusEl = widget?.querySelector('.term-widget-status');
       if (statusEl) {
         const statusMap = {
           'connecting': '○ connecting...',
@@ -89407,82 +89654,83 @@ $1 $2
           'error': '✕ error',
         };
         statusEl.textContent = statusMap[status] || status;
-        statusEl.className = `term-inline-status term-inline-status-${status}`;
+        statusEl.className = `term-widget-status term-widget-status-${status}`;
       }
     }
 
     /**
-     * Get terminal theme
+     * Get xterm.js theme from CSS variables
      */
-    _getTheme() {
-      const isDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true;
+    _getThemeFromCSS() {
+      const style = getComputedStyle(document.documentElement);
+      const get = (name, fallback) => {
+        const value = style.getPropertyValue(name).trim();
+        return value || fallback;
+      };
 
-      if (isDark) {
-        return {
-          background: '#1a1a1a',
-          foreground: '#d4d4d4',
-          cursor: '#aeafad',
-          cursorAccent: '#000000',
-          selectionBackground: '#264f78',
-        };
-      } else {
-        return {
-          background: '#fafafa',
-          foreground: '#2c2c2c',
-          cursor: '#333333',
-          cursorAccent: '#ffffff',
-          selectionBackground: '#b5d5ff',
-        };
-      }
+      return {
+        background: get('--term-background', get('--editor-background', '#1e1e1e')),
+        foreground: get('--term-foreground', get('--editor-foreground', '#d4d4d4')),
+        cursor: get('--term-cursor', get('--editor-cursor', '#aeafad')),
+        cursorAccent: get('--term-cursor-accent', get('--editor-background', '#1e1e1e')),
+        selectionBackground: get('--term-selection', get('--editor-selection', '#264f78')),
+
+        // ANSI colors
+        black: get('--ansi-black', '#1e1e1e'),
+        red: get('--ansi-red', '#f87171'),
+        green: get('--ansi-green', '#4ade80'),
+        yellow: get('--ansi-yellow', '#facc15'),
+        blue: get('--ansi-blue', '#60a5fa'),
+        magenta: get('--ansi-magenta', '#c084fc'),
+        cyan: get('--ansi-cyan', '#22d3ee'),
+        white: get('--ansi-white', '#e0e0e0'),
+
+        // Bright ANSI colors
+        brightBlack: get('--ansi-bright-black', '#6b7280'),
+        brightRed: get('--ansi-bright-red', '#fca5a5'),
+        brightGreen: get('--ansi-bright-green', '#86efac'),
+        brightYellow: get('--ansi-bright-yellow', '#fde047'),
+        brightBlue: get('--ansi-bright-blue', '#93c5fd'),
+        brightMagenta: get('--ansi-bright-magenta', '#d8b4fe'),
+        brightCyan: get('--ansi-bright-cyan', '#67e8f9'),
+        brightWhite: get('--ansi-bright-white', '#ffffff'),
+      };
     }
 
     /**
-     * Hide overlay and optionally snapshot content
-     * @param {boolean} shouldSnapshot - Whether to snapshot and update document
+     * Get snapshotted content from terminal
      */
-    hide(shouldSnapshot = true) {
-      if (!this.overlay) return;
+    getSnapshot() {
+      if (!this.xtermInstance) return '';
 
-      // Snapshot terminal buffer and update document
-      if (shouldSnapshot && this.currentBlock && this.xtermInstance && this.view) {
-        const content = this.currentBlock.snapshot();
-        console.log('[TermOverlay] Snapshotted content length:', content.length);
-
-        // Re-find the block to get current positions (document may have changed)
-        const doc = this.view.state.doc.toString();
-        const blocks = findTerminalBlocks(doc);
-        const currentBlockLine = this.blockInfo?.line;
-
-        // Find the block by line number
-        const updatedBlock = blocks.find(b => b.line === currentBlockLine);
-
-        if (updatedBlock) {
-          // Replace only the CODE content (between fences), not the whole block
-          const from = updatedBlock.codeStart;
-          const to = updatedBlock.codeEnd;
-
-          try {
-            this.view.dispatch({
-              changes: { from, to, insert: content },
-            });
-            console.log('[TermOverlay] Document updated (code content replaced)');
-          } catch (e) {
-            console.error('[TermOverlay] Failed to update document:', e);
-          }
-        } else {
-          console.warn('[TermOverlay] Could not find block to update');
+      const buffer = this.xtermInstance.buffer.active;
+      const lines = [];
+      for (let i = 0; i < buffer.length; i++) {
+        const line = buffer.getLine(i);
+        if (line) {
+          lines.push(line.translateToString(true));
         }
       }
 
-      // Cleanup event handlers
-      if (this._escHandler) {
-        document.removeEventListener('keydown', this._escHandler);
-        this._escHandler = null;
+      // Trim trailing empty lines
+      while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
+        lines.pop();
       }
 
-      if (this._clickOutsideHandler) {
-        document.removeEventListener('mousedown', this._clickOutsideHandler, true);
-        this._clickOutsideHandler = null;
+      return lines.join('\n');
+    }
+
+    destroy(dom) {
+      // Clean up theme listener
+      if (this._themeObserver) {
+        this._themeObserver.disconnect();
+        this._themeObserver = null;
+      }
+
+      if (this._themeChangeHandler) {
+        document.removeEventListener('mrmd-theme-change', this._themeChangeHandler);
+        window.removeEventListener('mrmd-theme-change', this._themeChangeHandler);
+        this._themeChangeHandler = null;
       }
 
       if (this.resizeObserver) {
@@ -89500,90 +89748,277 @@ $1 $2
         this.xtermInstance = null;
       }
 
-      if (this.currentBlock) {
-        this.currentBlock.mode = 'view';
-        this.currentBlock.xtermInstance = null;
-        this.currentBlock.wsConnection = null;
-        this.currentBlock.fitAddon = null;
-        this.currentBlock = null;
+      if (this.block) {
+        this.block.xtermInstance = null;
+        this.block.wsConnection = null;
+        this.block.fitAddon = null;
       }
-
-      if (this.overlay) {
-        this.overlay.remove();
-        this.overlay = null;
-      }
-
-      this.fitAddon = null;
-      this.blockInfo = null;
-      this.config = null;
-      this.view = null;
     }
 
-    /**
-     * Check if overlay is visible
-     */
-    isVisible() {
-      return this.overlay !== null;
+    ignoreEvent(event) {
+      // Let the terminal handle all events
+      return true;
     }
   }
 
-  // Singleton overlay manager
-  const terminalOverlay = new TerminalOverlayManager();
+  // Store reference to active widget for snapshotting
+  let activeWidget = null;
 
-  // #endregion OVERLAY
+  // #endregion WIDGET
+
+  // #region DECORATIONS
+
+  /**
+   * Create decorations for active terminal
+   */
+  function createTerminalDecorations(state) {
+    const active = state.field(activeTerminalState);
+    if (!active) {
+      return Decoration.none;
+    }
+
+    // Find the current block position (may have shifted)
+    const doc = state.doc.toString();
+    const blocks = findTerminalBlocks(doc);
+
+    // Find block closest to the stored position
+    let targetBlock = null;
+    let minDist = Infinity;
+    for (const block of blocks) {
+      const dist = Math.abs(block.start - active.pos);
+      if (dist < minDist) {
+        minDist = dist;
+        targetBlock = block;
+      }
+    }
+
+    if (!targetBlock || minDist > 100) {
+      // Block not found or moved too far
+      return Decoration.none;
+    }
+
+    // Create widget decoration that replaces the code block
+    const widget = new TerminalWidget(targetBlock, active.config);
+    activeWidget = widget;
+
+    const deco = Decoration.replace({
+      widget,
+      block: true,
+    });
+
+    return Decoration.set([deco.range(targetBlock.start, targetBlock.end)]);
+  }
+
+  /**
+   * StateField for terminal decorations
+   */
+  const terminalDecorations = StateField.define({
+    create(state) {
+      return createTerminalDecorations(state);
+    },
+    update(value, tr) {
+      if (tr.docChanged || tr.effects.some(e => e.is(setTerminalActive))) {
+        return createTerminalDecorations(tr.state);
+      }
+      return value.map(tr.changes);
+    },
+    provide(field) {
+      return EditorView.decorations.from(field);
+    },
+  });
+
+  // #endregion DECORATIONS
+
+  // #region API
+
+  /**
+   * Activate terminal for a block
+   */
+  function activateTerminal(view, blockInfo, config) {
+    // Clear the code block content first
+    if (blockInfo.codeStart < blockInfo.codeEnd) {
+      view.dispatch({
+        changes: { from: blockInfo.codeStart, to: blockInfo.codeEnd, insert: '' },
+      });
+    }
+
+    // Re-find block after content change
+    const doc = view.state.doc.toString();
+    const blocks = findTerminalBlocks(doc);
+    const updatedBlock = blocks.find(b => b.line === blockInfo.line) || blockInfo;
+
+    // Activate terminal mode
+    view.dispatch({
+      effects: setTerminalActive.of({
+        active: true,
+        pos: updatedBlock.start,
+        blockInfo: updatedBlock,
+        config,
+      }),
+    });
+  }
+
+  /**
+   * Deactivate terminal and snapshot content
+   */
+  function deactivateTerminal(view) {
+    const active = view.state.field(activeTerminalState);
+    if (!active) return;
+
+    // Get snapshot from widget
+    let content = '';
+    if (activeWidget) {
+      content = activeWidget.getSnapshot();
+      // Ensure trailing newline
+      if (content && !content.endsWith('\n')) {
+        content += '\n';
+      }
+    }
+
+    // Find the current block position
+    const doc = view.state.doc.toString();
+    const blocks = findTerminalBlocks(doc);
+    let targetBlock = null;
+    let minDist = Infinity;
+    for (const block of blocks) {
+      const dist = Math.abs(block.start - active.pos);
+      if (dist < minDist) {
+        minDist = dist;
+        targetBlock = block;
+      }
+    }
+
+    // Deactivate first (removes widget)
+    view.dispatch({
+      effects: setTerminalActive.of({ active: false }),
+    });
+
+    activeWidget = null;
+
+    // Then insert the snapshotted content
+    if (targetBlock && content) {
+      view.dispatch({
+        changes: { from: targetBlock.codeStart, to: targetBlock.codeEnd, insert: content },
+      });
+    }
+  }
+
+  /**
+   * Check if terminal is currently active
+   */
+  function isTerminalActive(view) {
+    return view.state.field(activeTerminalState) !== null;
+  }
+
+  /**
+   * Launch terminal for a code block (called from cell controls button)
+   */
+  function launchTerminal(blockInfo, config, view) {
+    activateTerminal(view, blockInfo, config);
+  }
+
+  /**
+   * Close the active terminal
+   */
+  function closeTerminal(view) {
+    deactivateTerminal(view);
+  }
+
+  // #endregion API
+
+  // #region KEYMAP
+
+  /**
+   * Handle Ctrl+Enter/Shift+Enter toggle
+   */
+  function handleTerminalToggle(view, config) {
+    // If terminal is active, close it
+    if (isTerminalActive(view)) {
+      deactivateTerminal(view);
+      return true;
+    }
+
+    // Check if cursor is in a terminal block
+    const pos = view.state.selection.main.head;
+    const doc = view.state.doc.toString();
+    const block = findCodeBlockAtPosition(doc, pos);
+
+    if (block && block.terminal) {
+      activateTerminal(view, block, config);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Create keymap for terminal shortcuts
+   */
+  function terminalKeymap(config = {}) {
+    return Prec.highest(keymap.of([
+      {
+        key: 'Ctrl-Enter',
+        run: (view) => handleTerminalToggle(view, config),
+      },
+      {
+        key: 'Shift-Enter',
+        run: (view) => handleTerminalToggle(view, config),
+      },
+    ]));
+  }
+
+  // #endregion KEYMAP
 
   // #region STYLES
 
-  /**
-   * CSS styles for inline terminal overlay
-   */
-  const termOverlayStyles = `
-/* Inline Terminal Overlay - positioned over the code block */
-.term-inline-overlay {
-  background: var(--term-bg, #1a1a1a);
-  border: 1px solid var(--term-border, #3c3c3c);
-  border-radius: 6px;
+  const termWidgetStyles = `
+/* Inline Terminal Widget - uses theme tokens */
+.term-widget-inline {
+  margin: 4px 0;
+  border: 1px solid var(--term-border, var(--widget-border, #3c3c3c));
+  border-radius: var(--widget-border-radius, 6px);
+  background: var(--term-background, var(--editor-background, #1e1e1e));
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
-.term-inline-header {
+.term-widget-header {
   display: flex;
   align-items: center;
   padding: 4px 8px;
-  background: var(--term-header-bg, #252526);
-  border-bottom: 1px solid var(--term-border, #3c3c3c);
+  background: var(--term-header-bg, var(--mrmd-popup-bg, #252526));
+  border-bottom: 1px solid var(--term-border, var(--widget-border, #3c3c3c));
   font-size: 12px;
+  flex-shrink: 0;
 }
 
-.term-inline-title {
+.term-widget-title {
   font-weight: 500;
-  color: var(--term-header-fg, #888);
+  color: var(--term-header-fg, var(--widget-text-muted, #888));
   flex: 1;
 }
 
-.term-inline-status {
+.term-widget-status {
   font-size: 11px;
-  color: var(--term-status-fg, #888);
+  color: var(--term-header-fg, var(--widget-text-muted, #888));
   margin-right: 8px;
 }
 
-.term-inline-status-connected {
-  color: #4ade80;
+.term-widget-status-connected {
+  color: var(--ansi-green, #4ade80);
 }
 
-.term-inline-status-error {
-  color: #f87171;
+.term-widget-status-error {
+  color: var(--ansi-red, #f87171);
 }
 
-.term-inline-close {
+.term-widget-close {
   width: 20px;
   height: 20px;
   border: none;
   background: transparent;
-  color: var(--term-header-fg, #888);
+  color: var(--term-header-fg, var(--widget-text-muted, #888));
   font-size: 16px;
   cursor: pointer;
   border-radius: 3px;
@@ -89593,106 +90028,71 @@ $1 $2
   line-height: 1;
 }
 
-.term-inline-close:hover {
+.term-widget-close:hover {
   background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  color: var(--term-foreground, var(--editor-foreground, #fff));
 }
 
-.term-inline-content {
+.term-widget-content {
   flex: 1;
   padding: 4px;
   overflow: hidden;
-  min-height: 150px;
 }
 
-.term-inline-content .xterm {
+.term-widget-content .xterm {
   height: 100%;
 }
 
-.term-inline-content .xterm-viewport {
+.term-widget-content .xterm-viewport {
   overflow-y: auto !important;
 }
 
 .term-error {
   padding: 20px;
-  color: #f87171;
+  color: var(--ansi-red, #f87171);
   font-family: monospace;
-}
-
-/* Light mode */
-@media (prefers-color-scheme: light) {
-  .term-inline-overlay {
-    --term-bg: #fafafa;
-    --term-header-bg: #f0f0f0;
-    --term-border: #e0e0e0;
-    --term-header-fg: #333;
-  }
 }
 `;
 
-  /**
-   * Inject terminal overlay styles
-   */
   function injectTermWidgetStyles() {
-    if (document.getElementById('term-overlay-styles')) return;
+    if (document.getElementById('term-widget-styles')) return;
 
     const style = document.createElement('style');
-    style.id = 'term-overlay-styles';
-    style.textContent = termOverlayStyles;
+    style.id = 'term-widget-styles';
+    style.textContent = termWidgetStyles;
     document.head.appendChild(style);
   }
 
   // #endregion STYLES
 
-  // #region PUBLIC API
+  // #region EXTENSION
 
   /**
-   * Launch terminal for a code block
-   *
-   * @param {Object} blockInfo - Block info from findTerminalBlocks()
-   * @param {Object} config - Terminal config { baseUrl, cwd, venv, filePath }
-   * @param {EditorView} view - CodeMirror EditorView
-   */
-  function launchTerminal(blockInfo, config, view) {
-    terminalOverlay.show(blockInfo, config, view);
-  }
-
-  /**
-   * Close the terminal overlay
-   */
-  function closeTerminal() {
-    terminalOverlay.hide(true);
-  }
-
-  /**
-   * Check if terminal overlay is visible
-   */
-  function isTerminalVisible() {
-    return terminalOverlay.isVisible();
-  }
-
-  /**
-   * Create terminal widget extension (now just provides styles and callbacks)
+   * Create terminal widget extension
    *
    * @param {Object} config
-   * @param {string} [config.filePath] - Current file path
-   * @param {string} [config.cwd] - Working directory for PTY
-   * @param {string} [config.venv] - Virtual environment path
-   * @param {string} [config.baseUrl] - PTY server base URL
-   * @returns {Object} Config object (no extensions needed - blocks are editable by default)
+   * @returns {Extension[]}
    */
   function terminalWidget(config = {}) {
-    // Inject styles
     injectTermWidgetStyles();
 
-    // Return config for use by cell controls callback
-    return {
-      ...config,
-      launchTerminal: (blockInfo, view) => launchTerminal(blockInfo, config, view),
-    };
+    return [
+      activeTerminalState,
+      terminalDecorations,
+    ];
   }
 
-  // #endregion PUBLIC API
+  // Backwards compatibility
+  const termOverlayStyles = termWidgetStyles;
+  const terminalOverlay = {
+    isVisible: () => activeWidget !== null,
+    hide: () => {}, // No-op, use deactivateTerminal instead
+  };
+  function isTerminalVisible() {
+    return activeWidget !== null;
+  }
+
+  // #endregion EXTENSION
 
   /**
    * Image Widget
@@ -117267,6 +117667,18 @@ $1 $2
     '--ansi-bright-white': { description: 'ANSI bright white', category: 'ansi', default: '#ffffff' },
 
     // ===========================================================================
+    // TERMINAL (xterm.js terminal widget)
+    // ===========================================================================
+    '--term-background': { description: 'Terminal background color', category: 'terminal', default: 'var(--editor-background)' },
+    '--term-foreground': { description: 'Terminal text color', category: 'terminal', default: 'var(--editor-foreground)' },
+    '--term-cursor': { description: 'Terminal cursor color', category: 'terminal', default: 'var(--editor-cursor)' },
+    '--term-cursor-accent': { description: 'Terminal cursor text color', category: 'terminal', default: 'var(--editor-background)' },
+    '--term-selection': { description: 'Terminal selection background', category: 'terminal', default: 'var(--editor-selection)' },
+    '--term-border': { description: 'Terminal border color', category: 'terminal', default: 'var(--widget-border)' },
+    '--term-header-bg': { description: 'Terminal header background', category: 'terminal', default: 'var(--mrmd-popup-bg, #252526)' },
+    '--term-header-fg': { description: 'Terminal header text color', category: 'terminal', default: 'var(--widget-text-muted)' },
+
+    // ===========================================================================
     // COLLABORATOR COLORS (used by awareness system)
     // ===========================================================================
     '--collab-human': { description: 'Default color for human collaborators', category: 'collab', default: '#3b82f6' },
@@ -117526,6 +117938,16 @@ $1 $2
     '--ansi-bright-cyan': '#67e8f9',
     '--ansi-bright-white': '#ffffff',
 
+    // Terminal colors
+    '--term-background': '#1e1e1e',
+    '--term-foreground': '#d4d4d4',
+    '--term-cursor': '#aeafad',
+    '--term-cursor-accent': '#1e1e1e',
+    '--term-selection': '#37608c',
+    '--term-border': 'rgba(255, 255, 255, 0.1)',
+    '--term-header-bg': '#252526',
+    '--term-header-fg': '#888888',
+
     // Collaborator defaults
     '--collab-human': '#3b82f6',
     '--collab-ai': '#8b5cf6',
@@ -117719,6 +118141,16 @@ $1 $2
     '--ansi-bright-magenta': '#ba68c8',
     '--ansi-bright-cyan': '#4dd0e1',
     '--ansi-bright-white': '#ffffff',
+
+    // Terminal colors (light theme)
+    '--term-background': '#fafafa',
+    '--term-foreground': '#37474f',
+    '--term-cursor': '#37474f',
+    '--term-cursor-accent': '#ffffff',
+    '--term-selection': '#bbdefb',
+    '--term-border': 'rgba(0, 0, 0, 0.12)',
+    '--term-header-bg': '#f5f5f5',
+    '--term-header-fg': '#78909c',
 
     // Collaborator defaults
     '--collab-human': '#1976d2',
@@ -117914,6 +118346,16 @@ $1 $2
     '--ansi-bright-magenta': '#d2a8ff',
     '--ansi-bright-cyan': '#b6e3ff',
     '--ansi-bright-white': '#ffffff',
+
+    // Terminal colors (GitHub Dark)
+    '--term-background': '#0d1117',
+    '--term-foreground': '#c9d1d9',
+    '--term-cursor': '#c9d1d9',
+    '--term-cursor-accent': '#0d1117',
+    '--term-selection': '#3a6ea5',
+    '--term-border': '#30363d',
+    '--term-header-bg': '#161b22',
+    '--term-header-fg': '#8b949e',
 
     // Collaborator defaults
     '--collab-human': '#58a6ff',
@@ -118213,6 +118655,16 @@ $1 $2
     '--ansi-bright-cyan': '#8fbcbb',         // nord7
     '--ansi-bright-white': '#eceff4',        // nord6
 
+    // Terminal colors (using Nord Polar Night for bg, Snow Storm for text)
+    '--term-background': '#2e3440',          // nord0 - matches editor
+    '--term-foreground': '#d8dee9',          // nord4
+    '--term-cursor': '#d8dee9',              // nord4
+    '--term-cursor-accent': '#2e3440',       // nord0
+    '--term-selection': '#5e81ac',           // nord10
+    '--term-border': '#3b4252',              // nord1
+    '--term-header-bg': '#3b4252',           // nord1
+    '--term-header-fg': '#4c566a',           // nord3
+
     // ===========================================================================
     // COLLABORATOR COLORS
     //
@@ -118490,6 +118942,16 @@ $1 $2
     '--ansi-bright-cyan': '#b0b0b0',
     '--ansi-bright-white': '#e8e8e8',
 
+    // Terminal colors (grayscale dark)
+    '--term-background': '#1a1a1a',
+    '--term-foreground': '#c8c8c8',
+    '--term-cursor': '#a0a0a0',
+    '--term-cursor-accent': '#1a1a1a',
+    '--term-selection': '#404040',
+    '--term-border': '#333333',
+    '--term-header-bg': '#252525',
+    '--term-header-fg': '#707070',
+
     // Collaborator - grayscale
     '--collab-human': '#909090',
     '--collab-ai': '#707070',
@@ -118683,6 +119145,16 @@ $1 $2
     '--ansi-bright-cyan': '#3a3a3a',
     '--ansi-bright-white': '#777777',
 
+    // Terminal colors (grayscale light)
+    '--term-background': '#fafafa',
+    '--term-foreground': '#333333',
+    '--term-cursor': '#333333',
+    '--term-cursor-accent': '#fafafa',
+    '--term-selection': '#d0d0d0',
+    '--term-border': '#e0e0e0',
+    '--term-header-bg': '#f0f0f0',
+    '--term-header-fg': '#888888',
+
     // Collaborator - grayscale
     '--collab-human': '#555555',
     '--collab-ai': '#666666',
@@ -118802,6 +119274,321 @@ $1 $2
     '--mrmd-shadow-xl': '0 16px 48px rgba(0, 0, 0, 0.15)',
   };
 
+  // ===========================================================================
+  // OPEN RESPONSES THEME
+  // ===========================================================================
+  /**
+   * Open Responses Theme
+   *
+   * A clean, professional light theme inspired by openresponses.org.
+   * Uses the Tailwind slate color palette with orange accents.
+   *
+   * Key characteristics:
+   * - White background (matches openresponses.org)
+   * - Slate text colors for excellent readability
+   * - Orange accent color for interactive elements (cursor, active TOC item)
+   * - Dark code blocks (slate-800) for contrast
+   * - Clean, minimal aesthetic with subtle borders
+   */
+  const openresponsesTheme = {
+    name: 'openresponses',
+    description: 'Clean, professional light theme inspired by openresponses.org',
+    isDark: false,
+
+    // ===========================================================================
+    // FONT FACE (injected separately)
+    // ===========================================================================
+    fontFace: `@font-face {
+    font-family: 'OpenAI Sans';
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url(https://www.openresponses.org/fonts/openaiSansVariableVF.woff2) format('woff2-variations');
+  }`,
+
+    // ===========================================================================
+    // SPACING
+    // ===========================================================================
+    '--widget-line-height': '1.75',
+    '--widget-padding-x': '16px',
+    '--widget-padding-y': '12px',
+    '--widget-margin-y': '4px',
+    '--widget-border-radius': '6px',
+    '--widget-border-width': '1px',
+    '--widget-border-accent-width': '3px',
+
+    // Text layout
+    '--widget-white-space': 'pre-wrap',
+    '--widget-word-break': 'break-word',
+
+    // ===========================================================================
+    // TYPOGRAPHY - OpenAI Sans
+    // ===========================================================================
+    '--widget-font-mono': "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+    '--widget-font-sans': "'OpenAI Sans', system-ui, sans-serif",
+    '--widget-font-size': '1rem',
+    '--widget-font-size-small': '0.875rem',
+    '--widget-font-size-label': '0.75rem',
+    '--widget-font-weight': '300',
+    '--widget-font-weight-medium': '500',
+    '--widget-font-weight-semibold': '600',
+    '--widget-font-weight-bold': '700',
+
+    // ===========================================================================
+    // SURFACES (Tailwind slate palette like openresponses.org)
+    // ===========================================================================
+    '--widget-surface': '#f8fafc',           // slate-50 (main background like openresponses.org)
+    '--widget-surface-hover': '#f1f5f9',     // slate-100
+    '--widget-surface-elevated': '#ffffff',  // white for popups
+    '--widget-surface-inset': '#e2e8f0',     // slate-200 for inputs
+
+    // ===========================================================================
+    // BORDERS
+    // ===========================================================================
+    '--widget-border': '#e2e8f0',            // slate-200
+    '--widget-border-accent': '#ea580c',     // orange-600 accent
+    '--widget-border-focus': '#ea580c',      // orange-600
+
+    // ===========================================================================
+    // TEXT COLORS
+    // ===========================================================================
+    '--widget-text': '#0f172a',              // slate-900 (darker for better contrast)
+    '--widget-text-muted': '#64748b',        // slate-500
+    '--widget-text-accent': '#ea580c',       // orange-600
+
+    // ===========================================================================
+    // SEMANTIC COLORS
+    // ===========================================================================
+    '--widget-success': '#16a34a',           // green-600
+    '--widget-warning': '#d97706',           // amber-600
+    '--widget-error': '#dc2626',             // red-600
+    '--widget-info': '#2563eb',              // blue-600
+
+    // ===========================================================================
+    // ANSI COLORS (optimized for light background)
+    // ===========================================================================
+    '--ansi-black': '#0f172a',               // slate-900
+    '--ansi-red': '#dc2626',                 // red-600
+    '--ansi-green': '#16a34a',               // green-600
+    '--ansi-yellow': '#d97706',              // amber-600
+    '--ansi-blue': '#2563eb',                // blue-600
+    '--ansi-magenta': '#9333ea',             // purple-600
+    '--ansi-cyan': '#0891b2',                // cyan-600
+    '--ansi-white': '#f1f5f9',               // slate-100
+    '--ansi-bright-black': '#64748b',        // slate-500
+    '--ansi-bright-red': '#ef4444',          // red-500
+    '--ansi-bright-green': '#22c55e',        // green-500
+    '--ansi-bright-yellow': '#f59e0b',       // amber-500
+    '--ansi-bright-blue': '#3b82f6',         // blue-500
+    '--ansi-bright-magenta': '#a855f7',      // purple-500
+    '--ansi-bright-cyan': '#06b6d4',         // cyan-500
+    '--ansi-bright-white': '#ffffff',        // white
+
+    // ===========================================================================
+    // TERMINAL COLORS
+    // ===========================================================================
+    '--term-background': '#1e293b',          // slate-800 (dark for contrast)
+    '--term-foreground': '#e2e8f0',          // slate-200
+    '--term-cursor': '#f97316',              // orange-500 accent
+    '--term-cursor-accent': '#1e293b',       // slate-800
+    '--term-selection': '#334155',           // slate-700
+    '--term-border': '#e2e8f0',              // slate-200
+    '--term-header-bg': '#f1f5f9',           // slate-100
+    '--term-header-fg': '#64748b',           // slate-500
+
+    // ===========================================================================
+    // COLLABORATOR COLORS
+    // ===========================================================================
+    '--collab-human': '#3b82f6',             // blue-500
+    '--collab-ai': '#a855f7',                // purple-500
+    '--collab-runtime': '#22c55e',           // green-500
+
+    // ===========================================================================
+    // EDITOR
+    // ===========================================================================
+    '--editor-background': '#f8fafc',        // slate-50 (matches openresponses.org)
+    '--editor-foreground': '#0f172a',        // slate-900
+    '--editor-font-family': "'OpenAI Sans', system-ui, sans-serif",
+    '--editor-font-size': '1rem',
+    '--editor-line-height': '1.75',
+    '--editor-line-number': '#94a3b8',       // slate-400
+    '--editor-line-number-active': '#64748b',// slate-500
+    '--editor-selection': '#e2e8f0',         // slate-200
+    '--editor-selection-match': '#f1f5f9',   // slate-100
+    '--editor-cursor': '#ea580c',            // orange-600 (accent)
+    '--editor-active-line': 'rgba(241, 245, 249, 0.5)', // slate-100 semi
+    '--editor-gutter': '#f8fafc',            // slate-50
+    '--editor-matching-bracket': '#e2e8f0',  // slate-200
+
+    // ===========================================================================
+    // SYNTAX HIGHLIGHTING (Professional, readable)
+    // ===========================================================================
+    '--syntax-keyword': '#7c3aed',           // violet-600
+    '--syntax-control': '#7c3aed',           // violet-600
+    '--syntax-string': '#059669',            // emerald-600
+    '--syntax-number': '#2563eb',            // blue-600
+    '--syntax-comment': '#94a3b8',           // slate-400
+    '--syntax-function': '#c2410c',          // orange-700
+    '--syntax-variable': '#334155',          // slate-700
+    '--syntax-variable-special': '#dc2626',  // red-600
+    '--syntax-property': '#0891b2',          // cyan-600
+    '--syntax-operator': '#64748b',          // slate-500
+    '--syntax-punctuation': '#94a3b8',       // slate-400
+    '--syntax-type': '#0d9488',              // teal-600
+    '--syntax-class': '#c2410c',             // orange-700
+    '--syntax-constant': '#7c3aed',          // violet-600
+    '--syntax-parameter': '#0891b2',         // cyan-600
+    '--syntax-regexp': '#be185d',            // pink-700
+    '--syntax-escape': '#be185d',            // pink-700
+    '--syntax-tag': '#c2410c',               // orange-700
+    '--syntax-attribute': '#0891b2',         // cyan-600
+    '--syntax-attribute-value': '#059669',   // emerald-600
+    '--syntax-heading': '#0f172a',           // slate-900
+    '--syntax-link': '#2563eb',              // blue-600
+    '--syntax-link-text': '#334155',         // slate-700
+    '--syntax-emphasis': '#334155',          // slate-700
+    '--syntax-strong': '#0f172a',            // slate-900
+    '--syntax-strikethrough': '#94a3b8',     // slate-400
+    '--syntax-quote': '#64748b',             // slate-500
+    '--syntax-code': '#c2410c',              // orange-700
+    '--syntax-code-background': '#f1f5f9',   // slate-100
+    '--syntax-meta': '#64748b',              // slate-500
+    '--syntax-inserted': '#16a34a',          // green-600
+    '--syntax-deleted': '#dc2626',           // red-600
+    '--syntax-changed': '#d97706',           // amber-600
+
+    // ===========================================================================
+    // MARKDOWN RENDERING
+    // ===========================================================================
+    '--md-heading-1-size': '2em',
+    '--md-heading-2-size': '1.5em',
+    '--md-heading-3-size': '1.25em',
+    '--md-heading-4-size': '1.1em',
+    '--md-heading-5-size': '1em',
+    '--md-heading-6-size': '0.9em',
+    '--md-heading-weight': '600',
+    '--md-heading-line-height': '1.3',
+    '--md-heading-margin-top': '1.5em',
+    '--md-marker-color': '#94a3b8',          // slate-400
+    '--md-marker-font': "ui-monospace, SFMono-Regular, monospace",
+    '--md-link-color': '#2563eb',            // blue-600
+    '--md-link-decoration': 'underline',
+    '--md-code-background': '#f1f5f9',       // slate-100
+    '--md-code-color': '#c2410c',            // orange-700
+    '--md-code-padding': '0.2em 0.4em',
+    '--md-code-radius': '4px',
+    '--md-blockquote-border': '#e2e8f0',     // slate-200
+    '--md-blockquote-border-width': '4px',
+    '--md-blockquote-color': '#64748b',      // slate-500
+    '--md-blockquote-padding': '1em',
+    '--md-list-marker-color': '#94a3b8',     // slate-400
+    '--md-hr-color': '#e2e8f0',              // slate-200
+    '--md-table-header-bg': '#f1f5f9',       // slate-100
+    '--md-table-header-border': '#cbd5e1',   // slate-300
+    '--md-table-row-border': '#e2e8f0',      // slate-200
+    '--md-table-stripe-bg': '#f8fafc',       // slate-50
+    '--md-image-border-radius': '8px',
+    '--md-checkbox-size': '1.1em',
+    '--md-checkbox-color': '#f97316',        // orange-500
+    '--md-alert-note-color': '#2563eb',      // blue-600
+    '--md-alert-tip-color': '#16a34a',       // green-600
+    '--md-alert-important-color': '#7c3aed', // violet-600
+    '--md-alert-warning-color': '#d97706',   // amber-600
+    '--md-alert-caution-color': '#dc2626',   // red-600
+
+    // ===========================================================================
+    // SHELL/UI
+    // ===========================================================================
+    '--mrmd-ui-font': "'OpenAI Sans', system-ui, sans-serif",
+    '--mrmd-ui-font-size': '14px',
+    '--mrmd-ui-font-size-sm': '12px',
+    '--mrmd-ui-font-size-xs': '10px',
+    '--mrmd-panel-bg': '#f8fafc',            // slate-50 like openresponses.org
+    '--mrmd-popup-bg': '#ffffff',            // white for popups
+    '--mrmd-bg': '#f8fafc',                  // slate-50 (main background like openresponses.org)
+    '--mrmd-fg': '#0f172a',                  // slate-900
+    '--mrmd-fg-muted': '#64748b',            // slate-500
+    '--mrmd-fg-dim': '#94a3b8',              // slate-400
+    '--mrmd-border': '#e2e8f0',              // slate-200
+    '--mrmd-hover-bg': '#f1f5f9',            // slate-100
+    '--mrmd-active-bg': '#e2e8f0',           // slate-200
+    '--mrmd-selection-bg': '#cbd5e1',        // slate-300
+    '--mrmd-accent': '#ea580c',              // orange-600
+    '--mrmd-accent-hover': '#c2410c',        // orange-700
+    '--mrmd-success': '#16a34a',             // green-600
+    '--mrmd-warning': '#d97706',             // amber-600
+    '--mrmd-error': '#dc2626',               // red-600
+    '--mrmd-shadow-md': '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1)',
+    '--mrmd-shadow-lg': '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1)',
+    '--mrmd-shadow-xl': '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+    '--mrmd-button-bg': '#f1f5f9',           // slate-100
+    '--mrmd-button-fg': '#334155',           // slate-700
+    '--mrmd-button-hover': '#e2e8f0',        // slate-200
+    '--mrmd-button-active': '#cbd5e1',       // slate-300
+
+    // ===========================================================================
+    // DOCS LAYOUT - Grid structure like openresponses.org
+    // ===========================================================================
+    '--docs-layout-max-width': '72rem',      // max-w-6xl (1152px)
+    '--docs-layout-gap': '2.5rem',           // gap-10
+    '--docs-layout-padding-x': '1rem',       // px-4
+    '--docs-layout-padding-y': '2.5rem',     // py-10
+    '--docs-sidebar-width': '200px',
+    '--docs-toc-width': '220px',
+    '--docs-content-max-width': '65ch',      // prose max-width
+
+    // ===========================================================================
+    // LEFT SIDEBAR / NAVIGATION
+    // ===========================================================================
+    '--sidebar-bg': 'transparent',
+    '--sidebar-fg': '#334155',               // slate-700
+    '--sidebar-fg-muted': '#64748b',         // slate-500
+    '--sidebar-font': "'OpenAI Sans', system-ui, sans-serif",
+    '--sidebar-font-size': '0.875rem',       // text-sm
+    '--sidebar-font-weight': '400',
+    '--sidebar-item-padding-x': '0.75rem',   // px-3
+    '--sidebar-item-padding-y': '0.5rem',    // py-2
+    '--sidebar-item-radius': '0.75rem',      // rounded-xl
+    '--sidebar-item-hover-bg': '#f1f5f9',    // slate-100
+    '--sidebar-item-active-bg': '#f1f5f9',   // slate-100
+    '--sidebar-item-active-fg': '#0f172a',   // slate-900
+    '--sidebar-group-label-size': '0.625rem', // text-[10px]
+    '--sidebar-group-label-weight': '600',   // font-semibold
+    '--sidebar-group-label-spacing': '0.08em', // tracking-[0.08em]
+    '--sidebar-group-label-color': '#94a3b8', // slate-400
+    '--sidebar-border': '#e2e8f0',           // slate-200
+
+    // ===========================================================================
+    // RIGHT TABLE OF CONTENTS (TOC)
+    // ===========================================================================
+    '--toc-bg': 'transparent',
+    '--toc-fg': '#64748b',                   // slate-500
+    '--toc-fg-active': '#ea580c',            // orange-600
+    '--toc-font': "'OpenAI Sans', system-ui, sans-serif",
+    '--toc-font-size': '0.875rem',           // text-sm
+    '--toc-font-weight': '400',
+    '--toc-title-size': '0.625rem',          // text-[10px]
+    '--toc-title-weight': '600',             // font-semibold
+    '--toc-title-spacing': '0.2em',          // tracking-[0.2em]
+    '--toc-title-color': '#94a3b8',          // slate-400
+    '--toc-item-padding-y': '0.25rem',       // py-1
+    '--toc-item-hover-color': '#334155',     // slate-700
+    '--toc-border-left': '1px solid #e2e8f0', // border-l slate-200
+    '--toc-indicator-color': '#ea580c',      // orange-600
+    '--toc-indicator-width': '2px',
+    '--toc-depth-indent': '0.75rem',         // indent per depth level
+
+    // ===========================================================================
+    // HEADER
+    // ===========================================================================
+    '--header-height': '4rem',               // h-16
+    '--header-bg': 'transparent',
+    '--header-bg-scrolled': 'rgba(248, 250, 252, 0.9)', // slate-50 with opacity
+    '--header-border': '#e2e8f0',            // slate-200
+    '--header-fg': '#334155',                // slate-700
+    '--header-fg-hover': '#0f172a',          // slate-900
+  };
+
   // #endregion BUILT_IN_THEMES
 
   // #region THEME_REGISTRY
@@ -118818,6 +119605,7 @@ $1 $2
     ['nord-outputs', nordOutputsTheme],
     ['grayscale-dark', grayscaleDarkTheme],
     ['grayscale-light', grayscaleLightTheme],
+    ['openresponses', openresponsesTheme],
   ]);
 
   /**
@@ -119101,9 +119889,15 @@ $1 $2
   const THEME_STYLE_ID = 'mrmd-widget-theme';
 
   /**
+   * Style element ID for theme fonts
+   */
+  const THEME_FONTS_ID = 'mrmd-widget-theme-fonts';
+
+  /**
    * Apply a theme by injecting CSS custom properties.
    *
    * Creates or updates a <style> element with CSS variables from the theme.
+   * Also injects @font-face rules if the theme has a `fontFace` property.
    *
    * @param {string|Object} themeOrName - Theme name or theme object
    * @param {Object} [options]
@@ -119133,7 +119927,7 @@ $1 $2
       return applyTheme('midnight', { target, useStyleTag });
     }
 
-    // Get token values (exclude name, description)
+    // Get token values (exclude name, description, fontFace, isDark)
     const tokens = {};
     for (const [key, value] of Object.entries(theme)) {
       if (key.startsWith('--')) {
@@ -119142,6 +119936,10 @@ $1 $2
     }
 
     if (useStyleTag && typeof document !== 'undefined') {
+      // Inject font-face if present
+      if (theme.fontFace) {
+        injectFontFace(theme.fontFace);
+      }
       // Inject via style tag (recommended)
       injectThemeStyleTag(tokens);
     } else if (target) {
@@ -119149,6 +119947,34 @@ $1 $2
       for (const [key, value] of Object.entries(tokens)) {
         target.style.setProperty(key, value);
       }
+    }
+  }
+
+  /**
+   * Inject @font-face rules
+   * @param {string} fontFaceCSS - CSS @font-face declaration(s)
+   */
+  function injectFontFace(fontFaceCSS) {
+    // Check if already injected
+    const existing = document.getElementById(THEME_FONTS_ID);
+    if (existing) {
+      // Update if different
+      if (existing.textContent !== fontFaceCSS) {
+        existing.textContent = fontFaceCSS;
+      }
+      return;
+    }
+
+    // Create and inject (before other styles so fonts load early)
+    const style = document.createElement('style');
+    style.id = THEME_FONTS_ID;
+    style.textContent = fontFaceCSS;
+
+    // Insert at the beginning of head for early loading
+    if (document.head.firstChild) {
+      document.head.insertBefore(style, document.head.firstChild);
+    } else {
+      document.head.appendChild(style);
     }
   }
 
@@ -119178,14 +120004,19 @@ $1 $2
   }
 
   /**
-   * Remove the injected theme style tag
+   * Remove the injected theme style tags (both variables and fonts)
    */
   function removeThemeStyles() {
     if (typeof document === 'undefined') return;
 
-    const existing = document.getElementById(THEME_STYLE_ID);
-    if (existing) {
-      existing.remove();
+    const existingVars = document.getElementById(THEME_STYLE_ID);
+    if (existingVars) {
+      existingVars.remove();
+    }
+
+    const existingFonts = document.getElementById(THEME_FONTS_ID);
+    if (existingFonts) {
+      existingFonts.remove();
     }
   }
 
@@ -119193,7 +120024,9 @@ $1 $2
    * Generate CSS string for a theme (useful for SSR or manual injection)
    *
    * @param {string|Object} themeOrName - Theme name or object
-   * @returns {string} CSS string with :root variables
+   * @param {Object} [options]
+   * @param {boolean} [options.includeFontFace=true] - Include @font-face rules
+   * @returns {string} CSS string with :root variables and optional font-face
    *
    * @example
    * const css = generateThemeCSS('midnight');
@@ -119201,14 +120034,18 @@ $1 $2
    * //   --widget-surface: rgba(0, 0, 0, 0.35);
    * //   ...
    * // }
+   *
+   * const css = generateThemeCSS('openresponses');
+   * // @font-face { font-family: 'OpenAI Sans'; ... }
+   * // :root { ... }
    */
-  function generateThemeCSS(themeOrName) {
+  function generateThemeCSS(themeOrName, { includeFontFace = true } = {}) {
     const theme = typeof themeOrName === 'string'
       ? getTheme(themeOrName)
       : themeOrName;
 
     if (!theme) {
-      return generateThemeCSS('midnight');
+      return generateThemeCSS('midnight', { includeFontFace });
     }
 
     const vars = Object.entries(theme)
@@ -119216,7 +120053,14 @@ $1 $2
       .map(([k, v]) => `  ${k}: ${v};`)
       .join('\n');
 
-    return `:root {\n${vars}\n}`;
+    const rootCSS = `:root {\n${vars}\n}`;
+
+    // Include font-face if present and requested
+    if (includeFontFace && theme.fontFace) {
+      return `${theme.fontFace}\n\n${rootCSS}`;
+    }
+
+    return rootCSS;
   }
 
   // #endregion INJECTION
@@ -123066,6 +123910,23 @@ $1 $2
       },
 
       /**
+       * Unregister a runtime.
+       * Call this when a runtime is stopped/killed to prevent stale client usage.
+       *
+       * @param {string} name - Runtime name (e.g., 'python', 'julia')
+       */
+      unregisterRuntime(name) {
+        registry.unregister(name);
+
+        // Also remove LSP provider if present
+        if (runtimeLspProviders.has(name)) {
+          runtimeLspProviders.delete(name);
+        }
+
+        console.log(`[editor] Unregistered runtime: ${name}`);
+      },
+
+      /**
        * Check if a language is supported
        */
       supportsLanguage(language) {
@@ -124178,6 +125039,7 @@ $1 $2
     listTerminalSessions,
     createTerminalSession,
     terminalWidget,
+    terminalKeymap,
     launchTerminal,
     closeTerminal,
     isTerminalVisible,
@@ -124506,6 +125368,7 @@ $1 $2
     termBlockRegistry: termBlockRegistry,
     termOverlayStyles: termOverlayStyles,
     terminal: terminal,
+    terminalKeymap: terminalKeymap,
     terminalOverlay: terminalOverlay,
     terminalToHtml: terminalToHtml,
     terminalWidget: terminalWidget,
@@ -124636,6 +125499,7 @@ $1 $2
   exports.termBlockRegistry = termBlockRegistry;
   exports.termOverlayStyles = termOverlayStyles;
   exports.terminal = terminal;
+  exports.terminalKeymap = terminalKeymap;
   exports.terminalOverlay = terminalOverlay;
   exports.terminalToHtml = terminalToHtml;
   exports.terminalWidget = terminalWidget;

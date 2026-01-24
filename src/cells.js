@@ -33,8 +33,34 @@ const RENDERED_LANGUAGES = new Set(['html', 'html-rendered']);
 
 /**
  * Terminal portal languages - interactive PTY sessions embedded in document
+ * Supports: term, terminal, term:session1, terminal:mysession
  */
 const TERMINAL_LANGUAGES = new Set(['term', 'terminal']);
+
+/**
+ * Check if language is a terminal type (with optional session suffix)
+ * @param {string} lang - Language string (e.g., 'term', 'term:session1')
+ * @returns {{isTerminal: boolean, sessionName: string|null}}
+ */
+function parseTerminalLanguage(lang) {
+  if (!lang) return { isTerminal: false, sessionName: null };
+  const lower = lang.toLowerCase();
+
+  // Check for term:sessionname or terminal:sessionname format
+  if (lower.startsWith('term:')) {
+    return { isTerminal: true, sessionName: lower.slice(5) || null };
+  }
+  if (lower.startsWith('terminal:')) {
+    return { isTerminal: true, sessionName: lower.slice(9) || null };
+  }
+
+  // Plain term or terminal
+  if (TERMINAL_LANGUAGES.has(lower)) {
+    return { isTerminal: true, sessionName: null };
+  }
+
+  return { isTerminal: false, sessionName: null };
+}
 
 /**
  * Find all code blocks in the document
@@ -88,6 +114,11 @@ export function findCodeBlocks(content) {
         const codeEnd = lineStart;
         const blockEnd = lineStart + line.length;
 
+        // Parse terminal language for session support
+        const terminalInfo = parseTerminalLanguage(blockLanguage);
+        // Terminal session can come from term:session or from space-separated session
+        const terminalSession = terminalInfo.sessionName || (terminalInfo.isTerminal ? blockSession : null);
+
         blocks.push({
           language: blockLanguage,
           session: blockSession,
@@ -99,7 +130,8 @@ export function findCodeBlocks(content) {
           line: blockLine,
           executable: EXECUTABLE_LANGUAGES.has(blockLanguage),
           rendered: RENDERED_LANGUAGES.has(blockLanguage),
-          terminal: TERMINAL_LANGUAGES.has(blockLanguage),
+          terminal: terminalInfo.isTerminal,
+          terminalSession: terminalSession, // Named terminal session (e.g., 'session1' from term:session1)
         });
 
         inBlock = false;
@@ -304,9 +336,9 @@ export function findTerminalBlocks(content) {
 /**
  * Check if a language is a terminal portal
  *
- * @param {string} language - Language identifier
+ * @param {string} language - Language identifier (e.g., 'term', 'term:session1')
  * @returns {boolean}
  */
 export function isTerminalLanguage(language) {
-  return TERMINAL_LANGUAGES.has(language?.toLowerCase());
+  return parseTerminalLanguage(language).isTerminal;
 }

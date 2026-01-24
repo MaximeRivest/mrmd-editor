@@ -1,190 +1,153 @@
 /**
  * Terminal Widget for CodeMirror
  *
- * Provides an inline terminal overlay that can be activated for ```term blocks.
- * The blocks remain editable by default - the terminal is shown as an
- * inline overlay (same position as the code block) when launched.
+ * Provides an inline terminal widget for ```term blocks.
+ * When activated, the terminal replaces the code block content inline
+ * (part of document flow, not an overlay).
  *
  * @module term-widget
  */
 
-import { StateEffect } from '@codemirror/state';
+import { StateEffect, StateField, Prec } from '@codemirror/state';
+import { WidgetType, Decoration, EditorView, keymap } from '@codemirror/view';
 import { TermBlock, termBlockRegistry } from './term-block.js';
 import { PtyClient } from './term-pty-client.js';
-import { findTerminalBlocks } from './cells.js';
+import { findTerminalBlocks, findCodeBlockAtPosition } from './cells.js';
 
 // #region STATE
 
 /**
- * Effect to show/hide terminal overlay for a block
+ * Effect to activate/deactivate terminal for a block
  */
-export const showTerminalOverlay = StateEffect.define();
-export const hideTerminalOverlay = StateEffect.define();
+export const setTerminalActive = StateEffect.define({
+  map: (value, change) => ({
+    ...value,
+    pos: change.mapPos(value.pos, 1),
+  }),
+});
+
+/**
+ * State field tracking active terminal block position
+ * Only one terminal can be active at a time
+ */
+export const activeTerminalState = StateField.define({
+  create() {
+    return null; // { pos, blockInfo, config } or null
+  },
+  update(state, tr) {
+    // Map position through changes
+    if (state && tr.docChanged) {
+      state = {
+        ...state,
+        pos: tr.changes.mapPos(state.pos, 1),
+      };
+    }
+
+    // Apply effects
+    for (const effect of tr.effects) {
+      if (effect.is(setTerminalActive)) {
+        if (effect.value.active) {
+          return {
+            pos: effect.value.pos,
+            blockInfo: effect.value.blockInfo,
+            config: effect.value.config,
+          };
+        } else {
+          return null;
+        }
+      }
+    }
+
+    return state;
+  },
+});
 
 // #endregion STATE
 
-// #region OVERLAY
+// #region WIDGET
 
 /**
- * Terminal overlay manager
- * Creates an inline terminal that overlays the code block in the editor
+ * Terminal widget that replaces the code block when active
  */
-class TerminalOverlayManager {
-  constructor() {
-    this.overlay = null;
-    this.currentBlock = null;
-    this.blockInfo = null;
+class TerminalWidget extends WidgetType {
+  constructor(blockInfo, config) {
+    super();
+    this.blockInfo = blockInfo;
+    this.config = config;
+    this.block = null;
     this.xtermInstance = null;
     this.fitAddon = null;
     this.wsConnection = null;
     this.resizeObserver = null;
-    this.scrollHandler = null;
-    this.config = null;
-    this.view = null;
   }
 
-  /**
-   * Show terminal overlay for a block (inline, not modal)
-   */
-  show(blockInfo, config, view) {
-    // Close any existing overlay
-    this.hide(false); // Don't snapshot when switching blocks
+  eq(other) {
+    return (
+      other instanceof TerminalWidget &&
+      this.blockInfo.start === other.blockInfo.start
+    );
+  }
 
-    this.config = config;
-    this.view = view;
-    this.blockInfo = blockInfo;
+  toDOM(view) {
+    const container = document.createElement('div');
+    container.className = 'term-widget-inline';
 
-    // Create or get TermBlock
-    const sessionId = `term:${config.filePath || 'untitled'}:${blockInfo.line}`;
-    let block = termBlockRegistry.get(sessionId);
+    // Fixed height at 60% of viewport
+    const height = Math.floor(window.innerHeight * 0.6);
+    container.style.height = `${height}px`;
 
-    if (!block) {
-      block = new TermBlock(blockInfo, config.filePath, blockInfo.line);
-      termBlockRegistry.register(block);
-    } else {
-      // Update positions
-      block.start = blockInfo.start;
-      block.end = blockInfo.end;
-      block.codeStart = blockInfo.codeStart;
-      block.codeEnd = blockInfo.codeEnd;
-      block.content = blockInfo.code;
-    }
-
-    this.currentBlock = block;
-    block.mode = 'terminal';
-
-    // Create overlay element (will be positioned inline)
-    this.overlay = document.createElement('div');
-    this.overlay.className = 'term-inline-overlay';
-    this.overlay.innerHTML = `
-      <div class="term-inline-header">
-        <span class="term-inline-title">terminal</span>
-        <span class="term-inline-status">connecting...</span>
-        <button class="term-inline-close" title="Close (Esc)">×</button>
-      </div>
-      <div class="term-inline-content"></div>
+    // Header
+    const header = document.createElement('div');
+    header.className = 'term-widget-header';
+    header.innerHTML = `
+      <span class="term-widget-title">terminal</span>
+      <span class="term-widget-status">connecting...</span>
+      <button class="term-widget-close" title="Close (Esc/Ctrl+Enter)">×</button>
     `;
+    container.appendChild(header);
 
-    // Find the editor's scroll container and content area
-    const editorDom = view.dom;
-    const scrollDom = view.scrollDOM;
+    // Terminal content area
+    const content = document.createElement('div');
+    content.className = 'term-widget-content';
+    container.appendChild(content);
 
-    // Get the position of the code block in the editor
-    const blockRect = this._getBlockRect(view, blockInfo);
-    if (!blockRect) {
-      console.error('[TermOverlay] Could not get block position');
-      return;
-    }
-
-    // Position overlay relative to editor
-    const editorRect = editorDom.getBoundingClientRect();
-    const scrollRect = scrollDom.getBoundingClientRect();
-
-    // Insert overlay into the editor DOM (so it scrolls with content)
-    this.overlay.style.position = 'absolute';
-    this.overlay.style.left = '0';
-    this.overlay.style.right = '0';
-    this.overlay.style.top = `${blockRect.top}px`;
-    this.overlay.style.height = `${Math.max(blockRect.height, 200)}px`;
-    this.overlay.style.zIndex = '100';
-
-    // Add to scroller so it moves with content
-    scrollDom.style.position = 'relative';
-    scrollDom.appendChild(this.overlay);
-
-    // Setup close handlers
-    const closeBtn = this.overlay.querySelector('.term-inline-close');
+    // Close button handler
+    const closeBtn = header.querySelector('.term-widget-close');
     closeBtn.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      this.hide(true);
+      deactivateTerminal(view);
     };
 
-    // Click outside handler
-    this._clickOutsideHandler = (e) => {
-      if (this.overlay && !this.overlay.contains(e.target)) {
-        this.hide(true);
-      }
-    };
-    // Delay adding click handler to avoid immediate trigger
-    setTimeout(() => {
-      document.addEventListener('mousedown', this._clickOutsideHandler, true);
-    }, 100);
+    // Initialize terminal after DOM is ready
+    requestAnimationFrame(() => {
+      this._initTerminal(content, view);
+    });
 
-    // Escape key handler
-    this._escHandler = (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        this.hide(true);
-      }
-    };
-    document.addEventListener('keydown', this._escHandler);
-
-    // Initialize xterm.js
-    const termContainer = this.overlay.querySelector('.term-inline-content');
-    this._initXterm(termContainer);
+    return container;
   }
 
-  /**
-   * Get the bounding rect of a code block in editor coordinates
-   */
-  _getBlockRect(view, blockInfo) {
-    try {
-      // Get the line positions
-      const startLine = view.state.doc.lineAt(blockInfo.start);
-      const endLine = view.state.doc.lineAt(blockInfo.end);
-
-      // Get the visual positions using coordsAtPos
-      const startCoords = view.coordsAtPos(startLine.from);
-      const endCoords = view.coordsAtPos(endLine.to);
-
-      if (!startCoords || !endCoords) return null;
-
-      // Convert to scroll-relative coordinates
-      const scrollTop = view.scrollDOM.scrollTop;
-      const scrollRect = view.scrollDOM.getBoundingClientRect();
-
-      return {
-        top: startCoords.top - scrollRect.top + scrollTop,
-        height: endCoords.bottom - startCoords.top,
-      };
-    } catch (e) {
-      console.error('[TermOverlay] Error getting block rect:', e);
-      return null;
-    }
-  }
-
-  /**
-   * Initialize xterm.js in the overlay
-   */
-  _initXterm(container) {
+  _initTerminal(container, view) {
     if (typeof Terminal === 'undefined') {
       container.innerHTML = '<div class="term-error">xterm.js not loaded</div>';
       return;
     }
 
-    const theme = this._getTheme();
+    // Create or get TermBlock
+    const sessionName = this.blockInfo.terminalSession || `line${this.blockInfo.line}`;
+    const sessionId = `term:${this.config.filePath || 'untitled'}:${sessionName}`;
+    let block = termBlockRegistry.get(sessionId);
 
+    if (!block) {
+      block = new TermBlock(this.blockInfo, this.config.filePath, this.blockInfo.line);
+      termBlockRegistry.register(block);
+    }
+    this.block = block;
+
+    // Get theme from CSS variables
+    const theme = this._getThemeFromCSS();
+
+    // Create terminal
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 14,
@@ -195,13 +158,13 @@ class TerminalOverlayManager {
     });
 
     this.xtermInstance = term;
-    this.currentBlock.xtermInstance = term;
+    block.xtermInstance = term;
 
     // Add fit addon
     if (typeof FitAddon !== 'undefined') {
       this.fitAddon = new FitAddon.FitAddon();
       term.loadAddon(this.fitAddon);
-      this.currentBlock.fitAddon = this.fitAddon;
+      block.fitAddon = this.fitAddon;
     }
 
     // Add web links addon
@@ -219,7 +182,7 @@ class TerminalOverlayManager {
         try {
           this.fitAddon.fit();
         } catch (e) {
-          console.warn('[TermOverlay] Initial fit failed:', e);
+          console.warn('[TermWidget] Initial fit failed:', e);
         }
       }, 50);
     }
@@ -240,57 +203,98 @@ class TerminalOverlayManager {
     this.resizeObserver.observe(container);
 
     // Connect to PTY
-    this._connectToPty(term);
+    this._connectToPty(term, view);
 
     // Focus terminal
     term.focus();
+
+    // Listen for theme changes to update terminal colors dynamically
+    this._setupThemeListener(term);
   }
 
   /**
-   * Connect to PTY backend
+   * Setup listener for theme changes
    */
-  _connectToPty(term) {
+  _setupThemeListener(term) {
+    // Watch for class changes on document element (theme switching)
+    this._themeObserver = new MutationObserver(() => {
+      this._updateTerminalTheme(term);
+    });
+
+    this._themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class', 'style', 'data-theme'],
+    });
+
+    // Also watch the body
+    this._themeObserver.observe(document.body, {
+      attributes: true,
+      attributeFilter: ['class', 'style', 'data-theme'],
+    });
+
+    // Listen for custom theme change events
+    this._themeChangeHandler = () => {
+      this._updateTerminalTheme(term);
+    };
+    document.addEventListener('mrmd-theme-change', this._themeChangeHandler);
+    window.addEventListener('mrmd-theme-change', this._themeChangeHandler);
+  }
+
+  /**
+   * Update terminal theme from current CSS variables
+   */
+  _updateTerminalTheme(term) {
+    if (!term) return;
+
+    // Small delay to let CSS variables update
+    requestAnimationFrame(() => {
+      const newTheme = this._getThemeFromCSS();
+      term.options.theme = newTheme;
+    });
+  }
+
+  _connectToPty(term, view) {
     if (!this.config.baseUrl) {
       term.write('\x1b[33m[PTY server not running]\x1b[0m\r\n');
-      this._updateStatus('offline');
+      this._updateStatus(view, 'offline');
       return;
     }
 
     const client = new PtyClient({
       baseUrl: this.config.baseUrl,
-      sessionId: this.currentBlock.sessionId,
+      sessionId: this.block.sessionId,
       cwd: this.config.cwd,
       venv: this.config.venv,
-      filePath: this.currentBlock.filePath,
+      filePath: this.block.filePath,
       onData: (data) => {
         term.write(data);
       },
       onConnect: () => {
-        console.log('[TermOverlay] PTY connected');
-        this._updateStatus('connected');
+        console.log('[TermWidget] PTY connected');
+        this._updateStatus(view, 'connected');
       },
       onDisconnect: (code, reason) => {
-        console.log('[TermOverlay] PTY disconnected:', code, reason);
-        this._updateStatus('disconnected');
+        console.log('[TermWidget] PTY disconnected:', code, reason);
+        this._updateStatus(view, 'disconnected');
       },
       onError: (err) => {
-        console.error('[TermOverlay] PTY error:', err);
+        console.error('[TermWidget] PTY error:', err);
         term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n');
-        this._updateStatus('error');
+        this._updateStatus(view, 'error');
       },
     });
 
     this.wsConnection = client;
-    this.currentBlock.wsConnection = client;
+    this.block.wsConnection = client;
 
     client.connect().then(() => {
       if (this.fitAddon) {
         client.resize(term.cols, term.rows);
       }
     }).catch((err) => {
-      console.error('[TermOverlay] Failed to connect:', err);
+      console.error('[TermWidget] Failed to connect:', err);
       term.write('\x1b[31m[Failed to connect to PTY server]\x1b[0m\r\n');
-      this._updateStatus('error');
+      this._updateStatus(view, 'error');
     });
 
     // Forward input to PTY
@@ -299,11 +303,9 @@ class TerminalOverlayManager {
     });
   }
 
-  /**
-   * Update status indicator
-   */
-  _updateStatus(status) {
-    const statusEl = this.overlay?.querySelector('.term-inline-status');
+  _updateStatus(view, status) {
+    const widget = view.dom.querySelector('.term-widget-inline');
+    const statusEl = widget?.querySelector('.term-widget-status');
     if (statusEl) {
       const statusMap = {
         'connecting': '○ connecting...',
@@ -313,82 +315,83 @@ class TerminalOverlayManager {
         'error': '✕ error',
       };
       statusEl.textContent = statusMap[status] || status;
-      statusEl.className = `term-inline-status term-inline-status-${status}`;
+      statusEl.className = `term-widget-status term-widget-status-${status}`;
     }
   }
 
   /**
-   * Get terminal theme
+   * Get xterm.js theme from CSS variables
    */
-  _getTheme() {
-    const isDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true;
+  _getThemeFromCSS() {
+    const style = getComputedStyle(document.documentElement);
+    const get = (name, fallback) => {
+      const value = style.getPropertyValue(name).trim();
+      return value || fallback;
+    };
 
-    if (isDark) {
-      return {
-        background: '#1a1a1a',
-        foreground: '#d4d4d4',
-        cursor: '#aeafad',
-        cursorAccent: '#000000',
-        selectionBackground: '#264f78',
-      };
-    } else {
-      return {
-        background: '#fafafa',
-        foreground: '#2c2c2c',
-        cursor: '#333333',
-        cursorAccent: '#ffffff',
-        selectionBackground: '#b5d5ff',
-      };
-    }
+    return {
+      background: get('--term-background', get('--editor-background', '#1e1e1e')),
+      foreground: get('--term-foreground', get('--editor-foreground', '#d4d4d4')),
+      cursor: get('--term-cursor', get('--editor-cursor', '#aeafad')),
+      cursorAccent: get('--term-cursor-accent', get('--editor-background', '#1e1e1e')),
+      selectionBackground: get('--term-selection', get('--editor-selection', '#264f78')),
+
+      // ANSI colors
+      black: get('--ansi-black', '#1e1e1e'),
+      red: get('--ansi-red', '#f87171'),
+      green: get('--ansi-green', '#4ade80'),
+      yellow: get('--ansi-yellow', '#facc15'),
+      blue: get('--ansi-blue', '#60a5fa'),
+      magenta: get('--ansi-magenta', '#c084fc'),
+      cyan: get('--ansi-cyan', '#22d3ee'),
+      white: get('--ansi-white', '#e0e0e0'),
+
+      // Bright ANSI colors
+      brightBlack: get('--ansi-bright-black', '#6b7280'),
+      brightRed: get('--ansi-bright-red', '#fca5a5'),
+      brightGreen: get('--ansi-bright-green', '#86efac'),
+      brightYellow: get('--ansi-bright-yellow', '#fde047'),
+      brightBlue: get('--ansi-bright-blue', '#93c5fd'),
+      brightMagenta: get('--ansi-bright-magenta', '#d8b4fe'),
+      brightCyan: get('--ansi-bright-cyan', '#67e8f9'),
+      brightWhite: get('--ansi-bright-white', '#ffffff'),
+    };
   }
 
   /**
-   * Hide overlay and optionally snapshot content
-   * @param {boolean} shouldSnapshot - Whether to snapshot and update document
+   * Get snapshotted content from terminal
    */
-  hide(shouldSnapshot = true) {
-    if (!this.overlay) return;
+  getSnapshot() {
+    if (!this.xtermInstance) return '';
 
-    // Snapshot terminal buffer and update document
-    if (shouldSnapshot && this.currentBlock && this.xtermInstance && this.view) {
-      const content = this.currentBlock.snapshot();
-      console.log('[TermOverlay] Snapshotted content length:', content.length);
-
-      // Re-find the block to get current positions (document may have changed)
-      const doc = this.view.state.doc.toString();
-      const blocks = findTerminalBlocks(doc);
-      const currentBlockLine = this.blockInfo?.line;
-
-      // Find the block by line number
-      const updatedBlock = blocks.find(b => b.line === currentBlockLine);
-
-      if (updatedBlock) {
-        // Replace only the CODE content (between fences), not the whole block
-        const from = updatedBlock.codeStart;
-        const to = updatedBlock.codeEnd;
-
-        try {
-          this.view.dispatch({
-            changes: { from, to, insert: content },
-          });
-          console.log('[TermOverlay] Document updated (code content replaced)');
-        } catch (e) {
-          console.error('[TermOverlay] Failed to update document:', e);
-        }
-      } else {
-        console.warn('[TermOverlay] Could not find block to update');
+    const buffer = this.xtermInstance.buffer.active;
+    const lines = [];
+    for (let i = 0; i < buffer.length; i++) {
+      const line = buffer.getLine(i);
+      if (line) {
+        lines.push(line.translateToString(true));
       }
     }
 
-    // Cleanup event handlers
-    if (this._escHandler) {
-      document.removeEventListener('keydown', this._escHandler);
-      this._escHandler = null;
+    // Trim trailing empty lines
+    while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
+      lines.pop();
     }
 
-    if (this._clickOutsideHandler) {
-      document.removeEventListener('mousedown', this._clickOutsideHandler, true);
-      this._clickOutsideHandler = null;
+    return lines.join('\n');
+  }
+
+  destroy(dom) {
+    // Clean up theme listener
+    if (this._themeObserver) {
+      this._themeObserver.disconnect();
+      this._themeObserver = null;
+    }
+
+    if (this._themeChangeHandler) {
+      document.removeEventListener('mrmd-theme-change', this._themeChangeHandler);
+      window.removeEventListener('mrmd-theme-change', this._themeChangeHandler);
+      this._themeChangeHandler = null;
     }
 
     if (this.resizeObserver) {
@@ -406,90 +409,277 @@ class TerminalOverlayManager {
       this.xtermInstance = null;
     }
 
-    if (this.currentBlock) {
-      this.currentBlock.mode = 'view';
-      this.currentBlock.xtermInstance = null;
-      this.currentBlock.wsConnection = null;
-      this.currentBlock.fitAddon = null;
-      this.currentBlock = null;
+    if (this.block) {
+      this.block.xtermInstance = null;
+      this.block.wsConnection = null;
+      this.block.fitAddon = null;
     }
-
-    if (this.overlay) {
-      this.overlay.remove();
-      this.overlay = null;
-    }
-
-    this.fitAddon = null;
-    this.blockInfo = null;
-    this.config = null;
-    this.view = null;
   }
 
-  /**
-   * Check if overlay is visible
-   */
-  isVisible() {
-    return this.overlay !== null;
+  ignoreEvent(event) {
+    // Let the terminal handle all events
+    return true;
   }
 }
 
-// Singleton overlay manager
-export const terminalOverlay = new TerminalOverlayManager();
+// Store reference to active widget for snapshotting
+let activeWidget = null;
 
-// #endregion OVERLAY
+// #endregion WIDGET
+
+// #region DECORATIONS
+
+/**
+ * Create decorations for active terminal
+ */
+function createTerminalDecorations(state) {
+  const active = state.field(activeTerminalState);
+  if (!active) {
+    return Decoration.none;
+  }
+
+  // Find the current block position (may have shifted)
+  const doc = state.doc.toString();
+  const blocks = findTerminalBlocks(doc);
+
+  // Find block closest to the stored position
+  let targetBlock = null;
+  let minDist = Infinity;
+  for (const block of blocks) {
+    const dist = Math.abs(block.start - active.pos);
+    if (dist < minDist) {
+      minDist = dist;
+      targetBlock = block;
+    }
+  }
+
+  if (!targetBlock || minDist > 100) {
+    // Block not found or moved too far
+    return Decoration.none;
+  }
+
+  // Create widget decoration that replaces the code block
+  const widget = new TerminalWidget(targetBlock, active.config);
+  activeWidget = widget;
+
+  const deco = Decoration.replace({
+    widget,
+    block: true,
+  });
+
+  return Decoration.set([deco.range(targetBlock.start, targetBlock.end)]);
+}
+
+/**
+ * StateField for terminal decorations
+ */
+const terminalDecorations = StateField.define({
+  create(state) {
+    return createTerminalDecorations(state);
+  },
+  update(value, tr) {
+    if (tr.docChanged || tr.effects.some(e => e.is(setTerminalActive))) {
+      return createTerminalDecorations(tr.state);
+    }
+    return value.map(tr.changes);
+  },
+  provide(field) {
+    return EditorView.decorations.from(field);
+  },
+});
+
+// #endregion DECORATIONS
+
+// #region API
+
+/**
+ * Activate terminal for a block
+ */
+export function activateTerminal(view, blockInfo, config) {
+  // Clear the code block content first
+  if (blockInfo.codeStart < blockInfo.codeEnd) {
+    view.dispatch({
+      changes: { from: blockInfo.codeStart, to: blockInfo.codeEnd, insert: '' },
+    });
+  }
+
+  // Re-find block after content change
+  const doc = view.state.doc.toString();
+  const blocks = findTerminalBlocks(doc);
+  const updatedBlock = blocks.find(b => b.line === blockInfo.line) || blockInfo;
+
+  // Activate terminal mode
+  view.dispatch({
+    effects: setTerminalActive.of({
+      active: true,
+      pos: updatedBlock.start,
+      blockInfo: updatedBlock,
+      config,
+    }),
+  });
+}
+
+/**
+ * Deactivate terminal and snapshot content
+ */
+export function deactivateTerminal(view) {
+  const active = view.state.field(activeTerminalState);
+  if (!active) return;
+
+  // Get snapshot from widget
+  let content = '';
+  if (activeWidget) {
+    content = activeWidget.getSnapshot();
+    // Ensure trailing newline
+    if (content && !content.endsWith('\n')) {
+      content += '\n';
+    }
+  }
+
+  // Find the current block position
+  const doc = view.state.doc.toString();
+  const blocks = findTerminalBlocks(doc);
+  let targetBlock = null;
+  let minDist = Infinity;
+  for (const block of blocks) {
+    const dist = Math.abs(block.start - active.pos);
+    if (dist < minDist) {
+      minDist = dist;
+      targetBlock = block;
+    }
+  }
+
+  // Deactivate first (removes widget)
+  view.dispatch({
+    effects: setTerminalActive.of({ active: false }),
+  });
+
+  activeWidget = null;
+
+  // Then insert the snapshotted content
+  if (targetBlock && content) {
+    view.dispatch({
+      changes: { from: targetBlock.codeStart, to: targetBlock.codeEnd, insert: content },
+    });
+  }
+}
+
+/**
+ * Check if terminal is currently active
+ */
+export function isTerminalActive(view) {
+  return view.state.field(activeTerminalState) !== null;
+}
+
+/**
+ * Launch terminal for a code block (called from cell controls button)
+ */
+export function launchTerminal(blockInfo, config, view) {
+  activateTerminal(view, blockInfo, config);
+}
+
+/**
+ * Close the active terminal
+ */
+export function closeTerminal(view) {
+  deactivateTerminal(view);
+}
+
+// #endregion API
+
+// #region KEYMAP
+
+/**
+ * Handle Ctrl+Enter/Shift+Enter toggle
+ */
+function handleTerminalToggle(view, config) {
+  // If terminal is active, close it
+  if (isTerminalActive(view)) {
+    deactivateTerminal(view);
+    return true;
+  }
+
+  // Check if cursor is in a terminal block
+  const pos = view.state.selection.main.head;
+  const doc = view.state.doc.toString();
+  const block = findCodeBlockAtPosition(doc, pos);
+
+  if (block && block.terminal) {
+    activateTerminal(view, block, config);
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Create keymap for terminal shortcuts
+ */
+export function terminalKeymap(config = {}) {
+  return Prec.highest(keymap.of([
+    {
+      key: 'Ctrl-Enter',
+      run: (view) => handleTerminalToggle(view, config),
+    },
+    {
+      key: 'Shift-Enter',
+      run: (view) => handleTerminalToggle(view, config),
+    },
+  ]));
+}
+
+// #endregion KEYMAP
 
 // #region STYLES
 
-/**
- * CSS styles for inline terminal overlay
- */
-export const termOverlayStyles = `
-/* Inline Terminal Overlay - positioned over the code block */
-.term-inline-overlay {
-  background: var(--term-bg, #1a1a1a);
-  border: 1px solid var(--term-border, #3c3c3c);
-  border-radius: 6px;
+export const termWidgetStyles = `
+/* Inline Terminal Widget - uses theme tokens */
+.term-widget-inline {
+  margin: 4px 0;
+  border: 1px solid var(--term-border, var(--widget-border, #3c3c3c));
+  border-radius: var(--widget-border-radius, 6px);
+  background: var(--term-background, var(--editor-background, #1e1e1e));
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
-.term-inline-header {
+.term-widget-header {
   display: flex;
   align-items: center;
   padding: 4px 8px;
-  background: var(--term-header-bg, #252526);
-  border-bottom: 1px solid var(--term-border, #3c3c3c);
+  background: var(--term-header-bg, var(--mrmd-popup-bg, #252526));
+  border-bottom: 1px solid var(--term-border, var(--widget-border, #3c3c3c));
   font-size: 12px;
+  flex-shrink: 0;
 }
 
-.term-inline-title {
+.term-widget-title {
   font-weight: 500;
-  color: var(--term-header-fg, #888);
+  color: var(--term-header-fg, var(--widget-text-muted, #888));
   flex: 1;
 }
 
-.term-inline-status {
+.term-widget-status {
   font-size: 11px;
-  color: var(--term-status-fg, #888);
+  color: var(--term-header-fg, var(--widget-text-muted, #888));
   margin-right: 8px;
 }
 
-.term-inline-status-connected {
-  color: #4ade80;
+.term-widget-status-connected {
+  color: var(--ansi-green, #4ade80);
 }
 
-.term-inline-status-error {
-  color: #f87171;
+.term-widget-status-error {
+  color: var(--ansi-red, #f87171);
 }
 
-.term-inline-close {
+.term-widget-close {
   width: 20px;
   height: 20px;
   border: none;
   background: transparent;
-  color: var(--term-header-fg, #888);
+  color: var(--term-header-fg, var(--widget-text-muted, #888));
   font-size: 16px;
   cursor: pointer;
   border-radius: 3px;
@@ -499,109 +689,74 @@ export const termOverlayStyles = `
   line-height: 1;
 }
 
-.term-inline-close:hover {
+.term-widget-close:hover {
   background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  color: var(--term-foreground, var(--editor-foreground, #fff));
 }
 
-.term-inline-content {
+.term-widget-content {
   flex: 1;
   padding: 4px;
   overflow: hidden;
-  min-height: 150px;
 }
 
-.term-inline-content .xterm {
+.term-widget-content .xterm {
   height: 100%;
 }
 
-.term-inline-content .xterm-viewport {
+.term-widget-content .xterm-viewport {
   overflow-y: auto !important;
 }
 
 .term-error {
   padding: 20px;
-  color: #f87171;
+  color: var(--ansi-red, #f87171);
   font-family: monospace;
-}
-
-/* Light mode */
-@media (prefers-color-scheme: light) {
-  .term-inline-overlay {
-    --term-bg: #fafafa;
-    --term-header-bg: #f0f0f0;
-    --term-border: #e0e0e0;
-    --term-header-fg: #333;
-  }
 }
 `;
 
-/**
- * Inject terminal overlay styles
- */
 export function injectTermWidgetStyles() {
-  if (document.getElementById('term-overlay-styles')) return;
+  if (document.getElementById('term-widget-styles')) return;
 
   const style = document.createElement('style');
-  style.id = 'term-overlay-styles';
-  style.textContent = termOverlayStyles;
+  style.id = 'term-widget-styles';
+  style.textContent = termWidgetStyles;
   document.head.appendChild(style);
 }
 
 // #endregion STYLES
 
-// #region PUBLIC API
+// #region EXTENSION
 
 /**
- * Launch terminal for a code block
- *
- * @param {Object} blockInfo - Block info from findTerminalBlocks()
- * @param {Object} config - Terminal config { baseUrl, cwd, venv, filePath }
- * @param {EditorView} view - CodeMirror EditorView
- */
-export function launchTerminal(blockInfo, config, view) {
-  terminalOverlay.show(blockInfo, config, view);
-}
-
-/**
- * Close the terminal overlay
- */
-export function closeTerminal() {
-  terminalOverlay.hide(true);
-}
-
-/**
- * Check if terminal overlay is visible
- */
-export function isTerminalVisible() {
-  return terminalOverlay.isVisible();
-}
-
-/**
- * Create terminal widget extension (now just provides styles and callbacks)
+ * Create terminal widget extension
  *
  * @param {Object} config
- * @param {string} [config.filePath] - Current file path
- * @param {string} [config.cwd] - Working directory for PTY
- * @param {string} [config.venv] - Virtual environment path
- * @param {string} [config.baseUrl] - PTY server base URL
- * @returns {Object} Config object (no extensions needed - blocks are editable by default)
+ * @returns {Extension[]}
  */
 export function terminalWidget(config = {}) {
-  // Inject styles
   injectTermWidgetStyles();
 
-  // Return config for use by cell controls callback
-  return {
-    ...config,
-    launchTerminal: (blockInfo, view) => launchTerminal(blockInfo, config, view),
-  };
+  return [
+    activeTerminalState,
+    terminalDecorations,
+  ];
 }
 
-// Re-export for backwards compatibility
+// Backwards compatibility
+export const termOverlayStyles = termWidgetStyles;
+export const terminalOverlay = {
+  isVisible: () => activeWidget !== null,
+  hide: () => {}, // No-op, use deactivateTerminal instead
+};
+export function isTerminalVisible() {
+  return activeWidget !== null;
+}
+
+// Re-exports
 export { findTerminalBlocks } from './cells.js';
 export { TermBlock, termBlockRegistry } from './term-block.js';
 
 export default terminalWidget;
 
-// #endregion PUBLIC API
+// #endregion EXTENSION

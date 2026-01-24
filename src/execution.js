@@ -49,8 +49,20 @@ export class ExecutionManager {
       cellOutput: [],
       cellComplete: [],
       cellError: [],
+      cellAsset: [], // Called when a rich output (plot, image) is received
       stdinRequest: [], // Called when input() is invoked
+      noRuntime: [], // Called when no runtime is available for a language
     };
+
+    /**
+     * Asset handler for saving generated plots/images to _assets/.
+     * Set by consuming code (e.g., mrmd-electron) to integrate with asset service.
+     *
+     * @type {function(Object): Promise<{assetPath: string, relativePath: string}>|null}
+     * Called with: { execId, url, mimeType, assetType, runtimeUrl }
+     * Should return: { assetPath: '/project/_assets/generated/...', relativePath: '../_assets/generated/...' }
+     */
+    this.assetHandler = null;
 
     // Monitor mode state
     /** @type {MonitorCoordination|null} */
@@ -564,6 +576,25 @@ export class ExecutionManager {
     return this.running.has(execId);
   }
 
+  /**
+   * Check if a runtime is available for a language
+   *
+   * @param {string} language - Language identifier
+   * @returns {boolean}
+   */
+  hasRuntime(language) {
+    return this.registry.supports(language);
+  }
+
+  /**
+   * Get list of languages that have runtimes registered
+   *
+   * @returns {string[]}
+   */
+  getAvailableLanguages() {
+    return this.registry.supportedLanguages();
+  }
+
   // ===========================================================================
   // Events
   // ===========================================================================
@@ -618,8 +649,18 @@ export class ExecutionManager {
     // Check runtime support (for direct execution)
     if (!this.registry.supports(language)) {
       console.warn(`No runtime for language: ${language}`);
+      // Emit noRuntime event - allows UI to handle setup and retry
+      // The event includes a retry callback that can be called after runtime is registered
+      const retryPromise = new Promise((resolve) => {
+        this._emit('noRuntime', index, cell, language, async () => {
+          // Retry callback - called by UI after runtime is set up
+          const result = await this._executeCell(cell, index);
+          resolve(result);
+        });
+      });
+      // Also emit error for backwards compatibility
       this._emit('cellError', index, `No runtime registered for ${language}`);
-      return null;
+      return retryPromise;
     }
 
     // Cancel any existing execution for this cell
@@ -842,6 +883,42 @@ export class ExecutionManager {
         });
       };
 
+      // Collect asset promises during execution (async callbacks need to be awaited later)
+      const assetPromises = [];
+
+      // Handle rich output (plots, images, HTML)
+      const onAsset = (assetData, eventType) => {
+        console.log('[execution] Asset received:', eventType, assetData);
+        this._emit('cellAsset', index, assetData, eventType, execId);
+
+        // If we have an asset handler, create a promise for processing
+        if (this.assetHandler) {
+          const promise = (async () => {
+            try {
+              // Get runtime URL from registry (the MRPClient stores it)
+              const runtime = this.registry.getRuntime(language);
+              const runtimeUrl = runtime?.runtimeUrl || this._defaultRuntimeUrl;
+
+              const result = await this.assetHandler({
+                execId,
+                cellIndex: index,
+                data: assetData,
+                eventType,
+                runtimeUrl,
+                mimeType: assetData.mimeType,
+                url: assetData.url,
+              });
+
+              return result;
+            } catch (err) {
+              console.error('[execution] Asset handler error:', err);
+              return null;
+            }
+          })();
+          assetPromises.push(promise);
+        }
+      };
+
       // Execute with streaming (pass onStdinRequest for input() support)
       // Pass execId so hub runtimes can find the output block
       // Pass session name for named session support (e.g., ```js sandbox)
@@ -849,6 +926,7 @@ export class ExecutionManager {
         execId,
         cellId: cell.id || `cell-${index}`,
         session: cell.session,
+        onAsset,
       });
 
       // Final update - find output block by execId for robustness
@@ -879,6 +957,52 @@ export class ExecutionManager {
             insert: outputWithError
           },
         });
+
+        // Wait for all asset processing to complete and collect results
+        const collectedAssets = (await Promise.all(assetPromises)).filter(Boolean);
+
+        // Insert markdown images for collected assets (plots, images)
+        if (collectedAssets.length > 0) {
+          // Build markdown for all assets
+          const imageMarkdown = collectedAssets
+            .map((asset, i) => {
+              const alt = `plot-${i + 1}`;
+              return `![${alt}](${asset.relativePath})`;
+            })
+            .join('\n');
+
+          // Get FRESH content right before dispatch to avoid stale positions
+          // (Yjs sync may have changed the document during async asset processing)
+          const freshContent = this.editor.view.state.doc.toString();
+          const freshOutputBlock = findOutputBlockByExecId(freshContent, execId);
+
+          if (freshOutputBlock) {
+            // Check if there are existing images after the output block that we should replace
+            const afterBlock = freshContent.slice(freshOutputBlock.blockEnd);
+            const existingImageMatch = afterBlock.match(/^\n*(?:!\[[^\]]*\]\([^)]*\)\n*)+/);
+
+            let insertPos = freshOutputBlock.blockEnd;
+            let deleteLength = 0;
+
+            if (existingImageMatch) {
+              // Replace existing images
+              deleteLength = existingImageMatch[0].length;
+            }
+
+            // Insert after output block (with newline)
+            this.editor.view.dispatch({
+              changes: {
+                from: insertPos,
+                to: insertPos + deleteLength,
+                insert: '\n\n' + imageMarkdown + '\n',
+              },
+            });
+
+            console.log('[execution] Inserted', collectedAssets.length, 'plot image(s) after output block');
+          } else {
+            console.warn('[execution] Could not find output block for image insertion, execId:', execId);
+          }
+        }
       }
 
       this._emit('cellComplete', index, result, execId);

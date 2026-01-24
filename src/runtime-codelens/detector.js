@@ -135,6 +135,12 @@ export function findSessionFrontmatter(content) {
 
 /**
  * Extract runtime configurations from YAML content
+ *
+ * Supports both verbose and minimal syntax:
+ * - Verbose: session: { python: { venv: .venv } }
+ * - Minimal: python: .venv
+ * - Minimal object: python: { venv: .venv }
+ *
  * @param {string} yamlContent - Raw YAML string
  * @param {number} [contentStartOffset=0] - Character offset where YAML content starts in document
  * @returns {RuntimeConfig[]}
@@ -144,25 +150,42 @@ export function extractRuntimes(yamlContent, contentStartOffset = 0) {
 
   try {
     const parsed = yaml.parse(yamlContent);
-    if (!parsed?.session) {
+    if (!parsed) return runtimes;
+
+    // Normalize: check for minimal syntax first, then verbose
+    // This matches the normalization in mrmd-project
+    const sessionConfig = normalizeToSessionConfig(parsed);
+
+    if (!sessionConfig) {
       return runtimes;
     }
 
     // Check for each supported runtime language
     for (const language of RUNTIME_LANGUAGES) {
-      const config = parsed.session[language];
+      const config = sessionConfig[language];
       if (config) {
-        // Find the line where this runtime is declared (e.g., "  python:")
-        // Search for the pattern with proper indentation under session:
-        const pattern = new RegExp(`^(  ${language}:)`, 'm');
-        const match = yamlContent.match(pattern);
+        // Find the line where this runtime is declared
+        // Try both minimal (python:) and verbose (  python: under session:)
         let lineOffset = null;
 
-        if (match) {
-          // Find the end of the line where this runtime key appears
-          const keyStart = match.index;
+        // Try minimal syntax first (top-level python:)
+        const minimalPattern = new RegExp(`^(${language}:)`, 'm');
+        const minimalMatch = yamlContent.match(minimalPattern);
+
+        if (minimalMatch) {
+          const keyStart = minimalMatch.index;
           const lineEnd = yamlContent.indexOf('\n', keyStart);
-          lineOffset = contentStartOffset + (lineEnd !== -1 ? lineEnd : keyStart + match[1].length);
+          lineOffset = contentStartOffset + (lineEnd !== -1 ? lineEnd : keyStart + minimalMatch[1].length);
+        } else {
+          // Try verbose syntax (indented under session:)
+          const verbosePattern = new RegExp(`^(  ${language}:)`, 'm');
+          const verboseMatch = yamlContent.match(verbosePattern);
+
+          if (verboseMatch) {
+            const keyStart = verboseMatch.index;
+            const lineEnd = yamlContent.indexOf('\n', keyStart);
+            lineOffset = contentStartOffset + (lineEnd !== -1 ? lineEnd : keyStart + verboseMatch[1].length);
+          }
         }
 
         runtimes.push({
@@ -181,6 +204,49 @@ export function extractRuntimes(yamlContent, contentStartOffset = 0) {
   }
 
   return runtimes;
+}
+
+/**
+ * Normalize parsed YAML to session config format.
+ * Handles both minimal syntax (python: .venv) and verbose (session: { python: { venv: .venv } })
+ *
+ * @param {object} parsed - Parsed YAML object
+ * @returns {object | null} Session config object or null if no runtime config found
+ */
+function normalizeToSessionConfig(parsed) {
+  if (!parsed || typeof parsed !== 'object') {
+    return null;
+  }
+
+  // If already has session key, use it directly
+  if (parsed.session && typeof parsed.session === 'object') {
+    return parsed.session;
+  }
+
+  // Check for minimal syntax (python:, bash:, etc. at top level)
+  const sessionConfig = {};
+  let hasRuntime = false;
+
+  for (const language of RUNTIME_LANGUAGES) {
+    if (language in parsed) {
+      const value = parsed[language];
+      hasRuntime = true;
+
+      if (typeof value === 'string') {
+        // Minimal string form: python: .venv -> { venv: '.venv' }
+        if (language === 'python') {
+          sessionConfig[language] = { venv: value };
+        } else {
+          sessionConfig[language] = { cwd: value };
+        }
+      } else if (typeof value === 'object' && value !== null) {
+        // Minimal object form: python: { venv: .venv }
+        sessionConfig[language] = value;
+      }
+    }
+  }
+
+  return hasRuntime ? sessionConfig : null;
 }
 
 /**

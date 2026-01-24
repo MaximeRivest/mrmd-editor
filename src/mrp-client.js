@@ -262,10 +262,10 @@ export class MRPClient {
    * @param {string} code - Code to execute
    * @param {string} [language] - Language (for mrmd Runtime interface compatibility)
    * @param {function(string, string, boolean): void} onChunk - Callback (chunk, accumulated, done)
-   * @param {function(StdinRequest): Promise<string> | Partial<ExecuteRequest> & { onStdinRequest?: function }} [optionsOrStdinHandler]
+   * @param {function(StdinRequest): Promise<string> | Partial<ExecuteRequest> & { onStdinRequest?: function, onAsset?: function }} [optionsOrStdinHandler]
    *        Can be either:
    *        - A function to handle stdin requests (for Runtime interface compatibility)
-   *        - An options object with onStdinRequest property
+   *        - An options object with onStdinRequest and onAsset properties
    * @returns {Promise<ExecuteResult>}
    */
   async executeStreaming(code, language, onChunk, optionsOrStdinHandler = {}, extraOptions = {}) {
@@ -279,17 +279,19 @@ export class MRPClient {
 
     // Handle both signatures:
     // 1. executeStreaming(code, lang, onChunk, onStdinRequest, options) - Runtime interface (5 params)
-    // 2. executeStreaming(code, lang, onChunk, { onStdinRequest, ...options }) - Original MRP client
+    // 2. executeStreaming(code, lang, onChunk, { onStdinRequest, onAsset, ...options }) - Original MRP client
     let onStdinRequest;
+    let onAsset;
     let executeOptions = {};
 
     if (typeof optionsOrStdinHandler === 'function') {
       // Runtime interface: 4th param is the stdin handler, 5th is options
       onStdinRequest = optionsOrStdinHandler;
       executeOptions = extraOptions;
+      onAsset = extraOptions.onAsset;
     } else {
       // Options object
-      ({ onStdinRequest, ...executeOptions } = optionsOrStdinHandler);
+      ({ onStdinRequest, onAsset, ...executeOptions } = optionsOrStdinHandler);
     }
 
     try {
@@ -354,8 +356,30 @@ export class MRPClient {
                       });
                     });
                 }
+              } else if (currentEvent === 'asset' || currentEvent === 'display') {
+                // Rich output: images, plots, HTML, etc.
+                // data contains: { path, url, mimeType, assetType, size } for assets
+                // or { data: { 'image/png': base64, ... }, metadata } for display
+                if (onAsset) {
+                  onAsset(data, currentEvent);
+                }
               } else if (currentEvent === 'result') {
                 finalResult = data;
+
+                // Extract assets from result and notify callback
+                if (onAsset && data.assets && data.assets.length > 0) {
+                  for (const asset of data.assets) {
+                    onAsset(asset, 'asset');
+                  }
+                }
+                // Also handle displayData with images
+                if (onAsset && data.displayData && data.displayData.length > 0) {
+                  for (const display of data.displayData) {
+                    if (display.data && (display.data['image/png'] || display.data['image/jpeg'] || display.data['image/svg+xml'])) {
+                      onAsset(display, 'display');
+                    }
+                  }
+                }
               } else if (currentEvent === 'error') {
                 finalResult = { success: false, error: data, stdout: '', stderr: '' };
               } else if (currentEvent === 'done') {

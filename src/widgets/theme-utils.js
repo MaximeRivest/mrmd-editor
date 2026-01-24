@@ -190,9 +190,15 @@ export function watchTheme({ editorElement, currentTheme, onThemeChange }) {
 const THEME_STYLE_ID = 'mrmd-widget-theme';
 
 /**
+ * Style element ID for theme fonts
+ */
+const THEME_FONTS_ID = 'mrmd-widget-theme-fonts';
+
+/**
  * Apply a theme by injecting CSS custom properties.
  *
  * Creates or updates a <style> element with CSS variables from the theme.
+ * Also injects @font-face rules if the theme has a `fontFace` property.
  *
  * @param {string|Object} themeOrName - Theme name or theme object
  * @param {Object} [options]
@@ -222,7 +228,7 @@ export function applyTheme(themeOrName, { target, useStyleTag = true } = {}) {
     return applyTheme('midnight', { target, useStyleTag });
   }
 
-  // Get token values (exclude name, description)
+  // Get token values (exclude name, description, fontFace, isDark)
   const tokens = {};
   for (const [key, value] of Object.entries(theme)) {
     if (key.startsWith('--')) {
@@ -231,6 +237,10 @@ export function applyTheme(themeOrName, { target, useStyleTag = true } = {}) {
   }
 
   if (useStyleTag && typeof document !== 'undefined') {
+    // Inject font-face if present
+    if (theme.fontFace) {
+      injectFontFace(theme.fontFace);
+    }
     // Inject via style tag (recommended)
     injectThemeStyleTag(tokens);
   } else if (target) {
@@ -238,6 +248,34 @@ export function applyTheme(themeOrName, { target, useStyleTag = true } = {}) {
     for (const [key, value] of Object.entries(tokens)) {
       target.style.setProperty(key, value);
     }
+  }
+}
+
+/**
+ * Inject @font-face rules
+ * @param {string} fontFaceCSS - CSS @font-face declaration(s)
+ */
+function injectFontFace(fontFaceCSS) {
+  // Check if already injected
+  const existing = document.getElementById(THEME_FONTS_ID);
+  if (existing) {
+    // Update if different
+    if (existing.textContent !== fontFaceCSS) {
+      existing.textContent = fontFaceCSS;
+    }
+    return;
+  }
+
+  // Create and inject (before other styles so fonts load early)
+  const style = document.createElement('style');
+  style.id = THEME_FONTS_ID;
+  style.textContent = fontFaceCSS;
+
+  // Insert at the beginning of head for early loading
+  if (document.head.firstChild) {
+    document.head.insertBefore(style, document.head.firstChild);
+  } else {
+    document.head.appendChild(style);
   }
 }
 
@@ -267,14 +305,19 @@ function injectThemeStyleTag(tokens) {
 }
 
 /**
- * Remove the injected theme style tag
+ * Remove the injected theme style tags (both variables and fonts)
  */
 export function removeThemeStyles() {
   if (typeof document === 'undefined') return;
 
-  const existing = document.getElementById(THEME_STYLE_ID);
-  if (existing) {
-    existing.remove();
+  const existingVars = document.getElementById(THEME_STYLE_ID);
+  if (existingVars) {
+    existingVars.remove();
+  }
+
+  const existingFonts = document.getElementById(THEME_FONTS_ID);
+  if (existingFonts) {
+    existingFonts.remove();
   }
 }
 
@@ -282,7 +325,9 @@ export function removeThemeStyles() {
  * Generate CSS string for a theme (useful for SSR or manual injection)
  *
  * @param {string|Object} themeOrName - Theme name or object
- * @returns {string} CSS string with :root variables
+ * @param {Object} [options]
+ * @param {boolean} [options.includeFontFace=true] - Include @font-face rules
+ * @returns {string} CSS string with :root variables and optional font-face
  *
  * @example
  * const css = generateThemeCSS('midnight');
@@ -290,14 +335,18 @@ export function removeThemeStyles() {
  * //   --widget-surface: rgba(0, 0, 0, 0.35);
  * //   ...
  * // }
+ *
+ * const css = generateThemeCSS('openresponses');
+ * // @font-face { font-family: 'OpenAI Sans'; ... }
+ * // :root { ... }
  */
-export function generateThemeCSS(themeOrName) {
+export function generateThemeCSS(themeOrName, { includeFontFace = true } = {}) {
   const theme = typeof themeOrName === 'string'
     ? getTheme(themeOrName)
     : themeOrName;
 
   if (!theme) {
-    return generateThemeCSS('midnight');
+    return generateThemeCSS('midnight', { includeFontFace });
   }
 
   const vars = Object.entries(theme)
@@ -305,7 +354,14 @@ export function generateThemeCSS(themeOrName) {
     .map(([k, v]) => `  ${k}: ${v};`)
     .join('\n');
 
-  return `:root {\n${vars}\n}`;
+  const rootCSS = `:root {\n${vars}\n}`;
+
+  // Include font-face if present and requested
+  if (includeFontFace && theme.fontFace) {
+    return `${theme.fontFace}\n\n${rootCSS}`;
+  }
+
+  return rootCSS;
 }
 
 // #endregion INJECTION
