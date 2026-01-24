@@ -26486,12 +26486,20 @@ var mrmd = (function (exports) {
         backgroundColor: theme['--editor-background'] || '#1e1e1e',
         color: theme['--editor-foreground'] || '#d4d4d4',
         fontFamily: theme['--editor-font-family'] || 'inherit',
+        fontSize: theme['--editor-font-size'] || 'inherit',
       },
 
       // Content area
       '.cm-content': {
         caretColor: theme['--editor-cursor'] || '#aeafad',
         fontFamily: theme['--editor-font-family'] || 'inherit',
+        fontSize: theme['--editor-font-size'] || 'inherit',
+        lineHeight: theme['--editor-line-height'] || 'inherit',
+      },
+
+      // Lines
+      '.cm-line': {
+        lineHeight: theme['--editor-line-height'] || 'inherit',
       },
 
       // Cursor
@@ -55187,7 +55195,7 @@ var mrmd = (function (exports) {
    * @param {Object|null} awarenessSystem - Optional awareness system for collaborative focus
    * @returns {import('@codemirror/view').DecorationSet}
    */
-  function buildDecorations$4(view, awarenessSystem) {
+  function buildDecorations$5(view, awarenessSystem) {
     const decorations = [];
     const doc = view.state.doc;
     const cursorPos = view.state.selection.main.head;
@@ -55240,15 +55248,62 @@ var mrmd = (function (exports) {
       const isEmpty = trimmedContent.length === 0;
 
       if (anyCollaboratorFocused) {
-        // EDITING MODE: Show raw text with visible ANSI codes
-        // Add line decorations for editing state visual feedback
-        for (let i = startLine.number; i <= endLine.number; i++) {
+        // EDITING MODE: Keep ANSI colors rendered, but make escape sequences
+        // subtle (visible but small) so they can be selected/deleted.
+        // Colors update live as you edit - deleting an escape sequence removes its styling.
+
+        // Fence lines - subtle styling, clearly editable
+        decorations.push(
+          Decoration.line({
+            class: 'cm-output-fence-editing cm-output-fence-start-editing',
+          }).range(startLine.from)
+        );
+        decorations.push(
+          Decoration.line({
+            class: 'cm-output-fence-editing cm-output-fence-end-editing',
+          }).range(endLine.from)
+        );
+
+        // Content lines - same styling as rendered mode (consistent appearance)
+        for (let i = startLine.number + 1; i < endLine.number; i++) {
           const line = doc.line(i);
           decorations.push(
             Decoration.line({
-              class: 'cm-output-line-editing',
+              class: 'cm-output-content-line cm-output-content-editing',
             }).range(line.from)
           );
+        }
+
+        // Parse ANSI and apply color styling even in editing mode
+        const contentStartLine = doc.line(startLine.number + 1);
+        const contentEndLine = doc.line(endLine.number - 1);
+
+        if (contentStartLine.number <= contentEndLine.number && !isEmpty) {
+          const contentStart = contentStartLine.from;
+          const { escapes, styles } = parseAnsiDecorations(content, contentStart);
+
+          // Make escape sequences subtle but still selectable/deletable
+          // Using Decoration.mark instead of replace so they remain in the document
+          for (const esc of escapes) {
+            if (esc.from < esc.to && esc.from >= contentStart) {
+              decorations.push(
+                Decoration.mark({
+                  class: 'cm-ansi-escape-editing',
+                }).range(esc.from, esc.to)
+              );
+            }
+          }
+
+          // Apply ANSI color styling (same as viewing mode)
+          for (const style of styles) {
+            if (style.from < style.to && style.classes && style.from >= contentStart) {
+              decorations.push(
+                Decoration.mark({
+                  class: style.classes,
+                }).range(style.from, style.to)
+              );
+            }
+          }
         }
       } else {
         // VIEWING MODE: Render ANSI colors inline, hide escape sequences
@@ -55426,7 +55481,7 @@ var mrmd = (function (exports) {
         this.unsubscribe = null;
 
         // Build initial decorations
-        this.decorations = buildDecorations$4(view, this.awarenessSystem);
+        this.decorations = buildDecorations$5(view, this.awarenessSystem);
 
         // Setup awareness listener (following y-codemirror.next pattern)
         // The listener dispatches a transaction which triggers update()
@@ -55478,7 +55533,7 @@ var mrmd = (function (exports) {
         // ALWAYS rebuild decorations (following y-codemirror.next pattern)
         // Uses y-codemirror.next cursor positions to check remote focus
         // (no separate focusedBlock state needed - cursor positions survive edits)
-        this.decorations = buildDecorations$4(update.view, this.awarenessSystem);
+        this.decorations = buildDecorations$5(update.view, this.awarenessSystem);
       }
 
       destroy() {
@@ -55503,7 +55558,7 @@ var mrmd = (function (exports) {
    * See widgets/theme.js for available tokens.
    */
   const outputWidgetStyles = `
-/* Output widget container */
+/* Output widget container - attenuated, secondary to code */
 /* Widget is absolutely positioned - overlays on transparent text lines, doesn't add to flow */
 .cm-output-widget {
   position: absolute;
@@ -55512,14 +55567,14 @@ var mrmd = (function (exports) {
   top: var(--widget-offset-top, 0);  /* Can be negative to pull widget up closer to code block */
   z-index: 1;
   font-family: var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', monospace);
-  font-size: var(--widget-font-size, 0.9em);
-  line-height: var(--widget-line-height, inherit);
+  font-size: var(--output-font-size, 0.7em);
+  line-height: var(--output-line-height, 1.4);
   padding: var(--widget-padding-y, 8px) var(--widget-padding-x, 12px);
   background: var(--widget-surface, rgba(0, 0, 0, 0.35));
   border-radius: var(--widget-border-radius, 6px);
   overflow-x: auto;
-  border-left: var(--widget-border-accent-width, 3px) solid var(--widget-border-accent, rgba(100, 149, 237, 0.6));
   cursor: pointer;
+  opacity: var(--output-opacity, 0.8);
 }
 
 .cm-output-widget pre {
@@ -55603,17 +55658,27 @@ var mrmd = (function (exports) {
   /* Visual marker for block end */
 }
 
-/* Content lines - typewriter console style for output block */
+/* Content lines - attenuated console style for output block
+ *
+ * Design: Outputs are secondary to code - smaller, muted, visually recessed.
+ * Selection visibility: Using color-mix for semi-transparent background.
+ */
 .cm-output-content-line {
-  background: var(--widget-surface, rgba(0, 0, 0, 0.35));
-  border-left: var(--widget-border-accent-width, 0) solid var(--widget-border-accent, transparent);
+  background: color-mix(in srgb, var(--widget-surface, rgba(0, 0, 0, 0.35)) 85%, transparent);
   margin-left: var(--widget-inset-left, 0);
   padding-left: var(--widget-padding-x, 16px);
   padding-right: var(--widget-padding-x, 16px);
   font-family: var(--widget-font-mono, 'Roboto Mono', 'SF Mono', Monaco, Consolas, monospace);
-  font-size: var(--widget-font-size, 0.85em);
-  line-height: var(--widget-line-height, 1.6);
-  color: var(--widget-text, #37474f);
+  font-size: var(--output-font-size, 0.7em);
+  line-height: var(--output-line-height, 1.4);
+  color: var(--output-text, var(--widget-text-muted, #6b7280));
+  opacity: var(--output-opacity, 0.8);
+}
+
+/* Selection styling for output content - ensure visibility */
+.cm-output-content-line::selection,
+.cm-output-content-line *::selection {
+  background: var(--editor-selection, #264f78) !important;
 }
 
 /* First content line - add top padding and rounded corners */
@@ -55638,13 +55703,60 @@ var mrmd = (function (exports) {
   tab-size: 4;
 }
 
-/* Editing mode - show raw content with different styling */
-.cm-output-line-editing {
-  background: var(--widget-surface-elevated, #1e1e1e);
-  border-left: var(--widget-border-accent-width, 3px) solid var(--widget-warning, #f59e0b);
+/* ==========================================================================
+   EDITING MODE STYLES
+
+   When cursor is in an output block, we show raw text but maintain visual
+   consistency with the rendered appearance. Key differences:
+   - Fence lines are visible (subtle styling)
+   - ANSI escape codes are visible (necessary for editing)
+   - Content lines keep the same styling as rendered mode
+   ========================================================================== */
+
+/* Fence lines in editing mode - visible but subtle */
+.cm-output-fence-editing {
+  background: color-mix(in srgb, var(--widget-surface, rgba(0, 0, 0, 0.35)) 60%, transparent);
+  font-family: var(--widget-font-mono, 'SF Mono', Monaco, monospace);
+  font-size: 0.65em;
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.3));
+  padding-left: var(--widget-padding-x, 16px);
+  margin-left: var(--widget-inset-left, 0);
+  opacity: 0.7;
 }
 
-/* ANSI escape sequences - hidden (zero-width) */
+/* Opening fence - rounded top corners */
+.cm-output-fence-start-editing {
+  border-top-left-radius: var(--widget-border-radius, 6px);
+  border-top-right-radius: var(--widget-border-radius, 6px);
+  padding-top: 4px;
+}
+
+/* Closing fence - rounded bottom corners */
+.cm-output-fence-end-editing {
+  border-bottom-left-radius: var(--widget-border-radius, 6px);
+  border-bottom-right-radius: var(--widget-border-radius, 6px);
+  padding-bottom: 4px;
+}
+
+/* Content lines in editing mode - no extra styling needed, inherits from .cm-output-content-line */
+.cm-output-content-editing {
+  /* Editing mode uses same attenuated style as viewing mode */
+}
+
+/* Selection styling for editing mode */
+.cm-output-fence-editing::selection,
+.cm-output-fence-editing *::selection,
+.cm-output-content-editing::selection,
+.cm-output-content-editing *::selection {
+  background: var(--editor-selection, #264f78) !important;
+}
+
+/* Legacy class - keep for backwards compatibility */
+.cm-output-line-editing {
+  background: color-mix(in srgb, var(--widget-surface-elevated, #1e1e1e) 90%, transparent);
+}
+
+/* ANSI escape sequences - hidden (zero-width) in viewing mode */
 .cm-ansi-escape-hidden {
   display: inline !important;
   font-size: 0 !important;
@@ -55662,14 +55774,50 @@ var mrmd = (function (exports) {
   display: none !important;
 }
 
+/* ANSI escape sequences in EDITING mode - subtle but selectable/deletable
+ * Shows as a small colored pill that can be selected and deleted.
+ * Deleting this removes the associated color styling.
+ */
+.cm-ansi-escape-editing {
+  font-size: 0.6em;
+  padding: 0 2px;
+  margin: 0 1px;
+  background: var(--widget-surface-inset, rgba(255, 255, 255, 0.08));
+  border-radius: 3px;
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.4));
+  vertical-align: middle;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.cm-ansi-escape-editing:hover {
+  opacity: 1;
+  background: var(--widget-surface-hover, rgba(255, 255, 255, 0.12));
+}
+
+/* When selected, make it clearly visible */
+.cm-ansi-escape-editing::selection {
+  background: var(--editor-selection, #264f78) !important;
+  opacity: 1;
+}
+
 /* Legacy widget support (for transition period) */
 .cm-output-widget-hidden {
   display: none !important;
 }
 
-/* Widget text color */
+/* Widget text color - muted for attenuated appearance */
 .cm-output-widget pre {
-  color: var(--widget-text, #e0e0e0);
+  color: var(--output-text, var(--widget-text-muted, #9ca3af));
+}
+
+/* Selection styling for rendered output widget */
+.cm-output-widget::selection,
+.cm-output-widget *::selection,
+.cm-output-content::selection,
+.cm-output-content *::selection {
+  background: var(--editor-selection, #264f78) !important;
 }
 
 /* Output content container */
@@ -55685,11 +55833,12 @@ var mrmd = (function (exports) {
   right: 0;
   z-index: 1;
   font-family: var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', monospace);
-  font-size: var(--widget-font-size-small, 0.85em);
-  color: var(--widget-text-muted, rgba(255, 255, 255, 0.35));
+  font-size: var(--output-font-size, 0.75em);
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.25));
   padding: 4px var(--widget-padding-x, 12px);
   margin: 2px 0;
   font-style: italic;
+  opacity: 0.6;
 }
 
 /* Stdin input widget - positioned via CodeMirror decoration system */
@@ -62951,20 +63100,20 @@ ${studioStyles}
   // STYLE INJECTION
   // =============================================================================
 
-  let stylesInjected$5 = false;
+  let stylesInjected$6 = false;
 
   /**
    * Inject shell styles into the document
    */
   function injectShellStyles$1() {
-    if (stylesInjected$5) return;
+    if (stylesInjected$6) return;
 
     const style = document.createElement('style');
     style.id = 'mrmd-shell-styles';
     style.textContent = shellStyles;
     document.head.appendChild(style);
 
-    stylesInjected$5 = true;
+    stylesInjected$6 = true;
   }
 
   /**
@@ -63335,6 +63484,7 @@ ${studioStyles}
     TEXT: ['GetSynonymsPredict', 'GetPhraseSynonymsPredict', 'ReformatMarkdownPredict', 'IdentifyReplacementPredict'],
     DOCUMENT: ['DocumentResponsePredict', 'DocumentSummaryPredict', 'DocumentAnalysisPredict'],
     NOTEBOOK: ['NotebookNamePredict'],
+    EDIT: ['EditAtCursorPredict', 'AddressCommentPredict', 'AddressAllCommentsPredict', 'AddressNearbyCommentPredict'],
   };
 
   /**
@@ -63685,6 +63835,76 @@ ${studioStyles}
       return this.execute('NotebookNamePredict', {
         document,
         current_name: currentName,
+      }, options);
+    }
+
+    // ===========================================================================
+    // Edit methods (Ctrl-K and comments)
+    // ===========================================================================
+
+    /**
+     * Execute an instruction at cursor position
+     * @param {string} textBefore - Text before cursor
+     * @param {string} textAfter - Text after cursor
+     * @param {string} selection - Selected text (empty if no selection)
+     * @param {string} fullDocument - Full document content
+     * @param {string} instruction - User's instruction
+     */
+    async editAtCursor(textBefore, textAfter, selection, fullDocument, instruction, options = {}) {
+      return this.execute('EditAtCursorPredict', {
+        text_before: textBefore,
+        text_after: textAfter,
+        selection,
+        full_document: fullDocument,
+        instruction,
+      }, options);
+    }
+
+    /**
+     * Address a single comment
+     * @param {string} fullDocument - Full document content
+     * @param {string} commentText - Comment text content
+     * @param {string} contextBefore - Text before comment
+     * @param {string} contextAfter - Text after comment
+     * @param {string} commentRaw - Raw comment including markers
+     */
+    async addressComment(fullDocument, commentText, contextBefore, contextAfter, commentRaw, options = {}) {
+      return this.execute('AddressCommentPredict', {
+        full_document: fullDocument,
+        comment_text: commentText,
+        comment_context_before: contextBefore,
+        comment_context_after: contextAfter,
+        comment_raw: commentRaw,
+      }, options);
+    }
+
+    /**
+     * Address all comments in document
+     * @param {string} fullDocument - Full document content
+     * @param {Array<{text: string, context_before: string, context_after: string}>} comments - Comments info
+     */
+    async addressAllComments(fullDocument, comments, options = {}) {
+      return this.execute('AddressAllCommentsPredict', {
+        full_document: fullDocument,
+        comments,
+      }, options);
+    }
+
+    /**
+     * Address comment nearest to cursor
+     * @param {string} fullDocument - Full document content
+     * @param {string} cursorContextBefore - Text before cursor
+     * @param {string} cursorContextAfter - Text after cursor
+     * @param {{text: string, context_before: string, context_after: string}} nearbyComment - Nearby comment info
+     * @param {string} nearbyCommentRaw - Raw comment including markers
+     */
+    async addressNearbyComment(fullDocument, cursorContextBefore, cursorContextAfter, nearbyComment, nearbyCommentRaw, options = {}) {
+      return this.execute('AddressNearbyCommentPredict', {
+        full_document: fullDocument,
+        cursor_context_before: cursorContextBefore,
+        cursor_context_after: cursorContextAfter,
+        nearby_comment: nearbyComment,
+        nearby_comment_raw: nearbyCommentRaw,
       }, options);
     }
   }
@@ -64481,6 +64701,32 @@ ${studioStyles}
         newEditor.view.dispatch({
           effects: mrmd.codemirror.StateEffect.appendConfig.of(aiExtensions),
         });
+
+        // Add Ctrl-K modal extension
+        if (mrmd.default.ctrlK?.createCtrlKExtension) {
+          const ctrlKExtensions = mrmd.default.ctrlK.createCtrlKExtension({
+            aiClient,
+            juiceLevel: shellState.get('ai')?.juiceLevel || 0,
+            onError: (err) => {
+              console.error('[Studio] Ctrl-K error:', err);
+              emit('aiCommandError', { command: 'ctrl-k', error: err.message });
+            },
+          });
+          newEditor.view.dispatch({
+            effects: mrmd.codemirror.StateEffect.appendConfig.of(ctrlKExtensions),
+          });
+        }
+
+        // Add Comment Syntax extension
+        if (mrmd.default.commentSyntax?.createCommentSyntaxExtension) {
+          const commentExtensions = mrmd.default.commentSyntax.createCommentSyntaxExtension({
+            aiClient,
+            juiceLevel: shellState.get('ai')?.juiceLevel || 0,
+          });
+          newEditor.view.dispatch({
+            effects: mrmd.codemirror.StateEffect.appendConfig.of(commentExtensions),
+          });
+        }
       }
 
       return newEditor;
@@ -66020,7 +66266,7 @@ ${studioStyles}
   // Decoration Plugin
   // ===========================================================================
 
-  function buildDecorations$3(view) {
+  function buildDecorations$4(view) {
     const state = view.state.field(aiState);
     const decorations = [];
 
@@ -66088,12 +66334,12 @@ ${studioStyles}
   const aiDecorations = ViewPlugin.fromClass(
     class {
       constructor(view) {
-        this.decorations = buildDecorations$3(view);
+        this.decorations = buildDecorations$4(view);
       }
 
       update(update) {
         if (update.docChanged || update.state.field(aiState) !== update.startState.field(aiState)) {
-          this.decorations = buildDecorations$3(update.view);
+          this.decorations = buildDecorations$4(update.view);
         }
       }
     },
@@ -66143,7 +66389,7 @@ ${studioStyles}
   // Keybindings
   // ===========================================================================
 
-  const aiKeymap = keymap.of([
+  const aiKeymap = Prec.highest(keymap.of([
     {
       key: 'Enter',
       run(view) {
@@ -66302,7 +66548,7 @@ ${studioStyles}
         return false;
       },
     },
-  ]);
+  ]));
 
   // ===========================================================================
   // CSS Styles
@@ -66801,7 +67047,7 @@ ${studioStyles}
    */
   const LONG_PRESS_CONFIG = {
     quickPhaseMs: 100,    // Time before showing loading indicator
-    triggerMs: 1500,      // Time to trigger palette
+    triggerMs: 700,       // Time to trigger palette
   };
 
   /**
@@ -67623,6 +67869,1550 @@ ${studioStyles}
     startAiOperation: startAiOperation,
     startAiOperationMulti: startAiOperationMulti,
     updateAiResponse: updateAiResponse
+  });
+
+  /**
+   * Ctrl-K Modal
+   *
+   * A modal that appears at the cursor position allowing users to enter
+   * free-form AI instructions. The AI returns structured edits that are
+   * applied to the document.
+   */
+
+
+  // ===========================================================================
+  // Configuration Facet
+  // ===========================================================================
+
+  /**
+   * Facet for configuring the Ctrl-K modal.
+   * Provides the AI client and callbacks.
+   *
+   * @type {Facet<{aiClient: Object, onError?: function, juiceLevel?: number}, Object|null>}
+   */
+  const ctrlKConfigFacet = Facet.define({
+    combine: (values) => values[values.length - 1] || null,
+  });
+
+  // ===========================================================================
+  // Modal State
+  // ===========================================================================
+
+  let activeModal = null;
+
+  /**
+   * Close the active modal if any
+   */
+  function closeActiveModal() {
+    if (activeModal) {
+      activeModal.remove();
+      activeModal = null;
+    }
+  }
+
+  // ===========================================================================
+  // Modal Component
+  // ===========================================================================
+
+  /**
+   * Show the Ctrl-K modal at the cursor position
+   *
+   * @param {import('@codemirror/view').EditorView} view
+   */
+  function showCtrlKModal(view) {
+    // Close any existing modal
+    closeActiveModal();
+
+    const config = view.state.facet(ctrlKConfigFacet);
+    if (!config || !config.aiClient) {
+      console.warn('[Ctrl-K] No AI client configured');
+      return;
+    }
+
+    const { aiClient, onError } = config;
+    const context = getAiContext(view);
+
+    // Get cursor screen coordinates
+    const cursorPos = view.state.selection.main.head;
+    const coords = view.coordsAtPos(cursorPos);
+
+    if (!coords) {
+      console.warn('[Ctrl-K] Could not get cursor coordinates');
+      return;
+    }
+
+    // Inject styles if not already present
+    injectCtrlKStyles();
+
+    // Create modal container
+    const modal = document.createElement('div');
+    modal.className = 'cm-ctrl-k-modal';
+    modal.style.left = `${coords.left}px`;
+    modal.style.top = `${coords.bottom + 8}px`;
+
+    // Track expanded/collapsed state
+    let isExpanded = false;
+
+    // Create header (draggable)
+    const header = document.createElement('div');
+    header.className = 'cm-ctrl-k-header';
+
+    // Drag handle
+    const dragHandle = document.createElement('span');
+    dragHandle.className = 'cm-ctrl-k-drag';
+    dragHandle.textContent = '⋮⋮';
+    header.appendChild(dragHandle);
+
+    // Toggle button for settings
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'cm-ctrl-k-toggle';
+    toggleBtn.textContent = '▾';
+    toggleBtn.title = 'Toggle settings';
+    toggleBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      isExpanded = !isExpanded;
+      modal.classList.toggle('expanded', isExpanded);
+      toggleBtn.textContent = isExpanded ? '▴' : '▾';
+      input.focus();
+    });
+    header.appendChild(toggleBtn);
+
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'cm-ctrl-k-close';
+    closeBtn.textContent = '×';
+    closeBtn.title = 'Close (Esc)';
+    closeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      close();
+    });
+    header.appendChild(closeBtn);
+
+    modal.appendChild(header);
+
+    // Create input wrapper
+    const inputWrapper = document.createElement('div');
+    inputWrapper.className = 'cm-ctrl-k-input-wrap';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'cm-ctrl-k-input';
+    input.placeholder = context.selectedText ? 'Edit selection...' : 'Ask AI...';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    inputWrapper.appendChild(input);
+
+    // Loading indicator
+    const loader = document.createElement('span');
+    loader.className = 'cm-ctrl-k-loader';
+    inputWrapper.appendChild(loader);
+
+    modal.appendChild(inputWrapper);
+
+    // Create collapsible controls section
+    const controls = document.createElement('div');
+    controls.className = 'cm-ctrl-k-controls';
+
+    // Quality row
+    const qualityRow = document.createElement('div');
+    qualityRow.className = 'cm-ctrl-k-row';
+
+    const qualityLabel = document.createElement('span');
+    qualityLabel.className = 'cm-ctrl-k-label';
+    qualityLabel.textContent = 'Quality';
+    qualityRow.appendChild(qualityLabel);
+
+    const qualityBtns = document.createElement('div');
+    qualityBtns.className = 'cm-ctrl-k-btns';
+    const qualityNames = ['Quick', 'Balanced', 'Deep', 'Maximum', 'Ultimate'];
+    for (let i = 0; i < 5; i++) {
+      const btn = document.createElement('button');
+      btn.className = 'cm-ctrl-k-btn' + (i === (aiClient.juiceLevel ?? 1) ? ' active' : '');
+      btn.dataset.level = i;
+      btn.textContent = i + 1;
+      btn.title = qualityNames[i];
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        aiClient.juiceLevel = i;
+        qualityBtns.querySelectorAll('.cm-ctrl-k-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        input.focus();
+      });
+      qualityBtns.appendChild(btn);
+    }
+    qualityRow.appendChild(qualityBtns);
+    controls.appendChild(qualityRow);
+
+    // Thinking row
+    const thinkingRow = document.createElement('div');
+    thinkingRow.className = 'cm-ctrl-k-row';
+
+    const thinkingLabel = document.createElement('span');
+    thinkingLabel.className = 'cm-ctrl-k-label';
+    thinkingLabel.textContent = 'Thinking';
+    thinkingRow.appendChild(thinkingLabel);
+
+    const thinkingBtns = document.createElement('div');
+    thinkingBtns.className = 'cm-ctrl-k-btns';
+    const thinkingNames = ['Off', 'Minimal', 'Low', 'Medium', 'High', 'Maximum'];
+    for (let i = 0; i <= 5; i++) {
+      const btn = document.createElement('button');
+      btn.className = 'cm-ctrl-k-btn' + (i === (aiClient.reasoningLevel ?? 1) ? ' active' : '');
+      btn.dataset.level = i;
+      btn.textContent = i;
+      btn.title = thinkingNames[i];
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        aiClient.reasoningLevel = i;
+        thinkingBtns.querySelectorAll('.cm-ctrl-k-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        input.focus();
+      });
+      thinkingBtns.appendChild(btn);
+    }
+    thinkingRow.appendChild(thinkingBtns);
+    controls.appendChild(thinkingRow);
+
+    modal.appendChild(controls);
+
+    document.body.appendChild(modal);
+    activeModal = modal;
+
+    // Make draggable
+    let isDragging = false;
+    let dragStartX, dragStartY, modalStartX, modalStartY;
+
+    header.addEventListener('mousedown', (e) => {
+      if (e.target === closeBtn || e.target === toggleBtn) return;
+      isDragging = true;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      const rect = modal.getBoundingClientRect();
+      modalStartX = rect.left;
+      modalStartY = rect.top;
+      modal.classList.add('dragging');
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      modal.style.left = `${modalStartX + dx}px`;
+      modal.style.top = `${modalStartY + dy}px`;
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        modal.classList.remove('dragging');
+      }
+    });
+
+    // Adjust position if off-screen
+    requestAnimationFrame(() => {
+      const rect = modal.getBoundingClientRect();
+      if (rect.right > window.innerWidth - 10) {
+        modal.style.left = `${Math.max(10, window.innerWidth - rect.width - 10)}px`;
+      }
+      if (rect.bottom > window.innerHeight - 10) {
+        modal.style.top = `${Math.max(10, coords.top - rect.height - 4)}px`;
+      }
+    });
+
+    // Focus input
+    input.focus();
+
+    // Close function
+    const close = () => {
+      closeActiveModal();
+      view.focus();
+    };
+
+    // Handle input
+    input.addEventListener('keydown', async (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+      } else if (e.key === 'Enter' && input.value.trim()) {
+        e.preventDefault();
+        const instruction = input.value.trim();
+
+        // Show loading state
+        input.disabled = true;
+        modal.classList.add('loading');
+
+        try {
+          await executeCtrlKCommand(view, context, instruction, {
+            aiClient,
+            onError,
+          });
+          close();
+        } catch (err) {
+          // Show error
+          modal.classList.remove('loading');
+          modal.classList.add('error');
+          input.disabled = false;
+          input.value = '';
+          input.placeholder = err.message.slice(0, 40);
+          onError?.(err);
+        }
+      }
+    });
+
+    // Close on click outside
+    const handleOutside = (e) => {
+      if (activeModal && !activeModal.contains(e.target)) {
+        close();
+        document.removeEventListener('mousedown', handleOutside);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', handleOutside), 0);
+  }
+
+  // ===========================================================================
+  // Inject Styles (into document head for proper CSS)
+  // ===========================================================================
+
+  let stylesInjected$5 = false;
+
+  function injectCtrlKStyles() {
+    if (stylesInjected$5) return;
+    stylesInjected$5 = true;
+
+    const css = `
+.cm-ctrl-k-modal {
+  position: fixed;
+  z-index: 10001;
+  min-width: 280px;
+  max-width: 400px;
+  background: var(--bg-secondary, #1c1c1c);
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--text, #e0e0e0);
+  overflow: hidden;
+}
+
+.cm-ctrl-k-modal.dragging {
+  opacity: 0.9;
+  cursor: grabbing;
+}
+
+/* Header */
+.cm-ctrl-k-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--bg-tertiary, #252525);
+  border-bottom: 1px solid var(--border, #333);
+  cursor: grab;
+}
+
+.cm-ctrl-k-drag {
+  color: var(--text-dim, #666);
+  font-size: 10px;
+  letter-spacing: -2px;
+  margin-right: auto;
+  user-select: none;
+}
+
+.cm-ctrl-k-toggle,
+.cm-ctrl-k-close {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted, #888);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, color 0.1s;
+}
+
+.cm-ctrl-k-toggle:hover,
+.cm-ctrl-k-close:hover {
+  background: var(--hover-bg, rgba(255,255,255,0.1));
+  color: var(--text, #e0e0e0);
+}
+
+.cm-ctrl-k-close:hover {
+  background: rgba(255, 80, 80, 0.2);
+  color: #ff6b6b;
+}
+
+/* Input */
+.cm-ctrl-k-input-wrap {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  gap: 8px;
+}
+
+.cm-ctrl-k-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text, #e0e0e0);
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.cm-ctrl-k-input::placeholder {
+  color: var(--text-dim, #666);
+}
+
+.cm-ctrl-k-loader {
+  display: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border, #333);
+  border-top-color: var(--accent, #58a6ff);
+  border-radius: 50%;
+  animation: cm-ctrl-k-spin 0.6s linear infinite;
+}
+
+.cm-ctrl-k-modal.loading .cm-ctrl-k-loader {
+  display: block;
+}
+
+@keyframes cm-ctrl-k-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Controls - collapsed by default */
+.cm-ctrl-k-controls {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.15s ease, padding 0.15s ease;
+  padding: 0 12px;
+  border-top: 1px solid transparent;
+}
+
+.cm-ctrl-k-modal.expanded .cm-ctrl-k-controls {
+  max-height: 100px;
+  padding: 8px 12px;
+  border-top-color: var(--border, #333);
+}
+
+.cm-ctrl-k-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.cm-ctrl-k-row:last-child {
+  margin-bottom: 0;
+}
+
+.cm-ctrl-k-label {
+  width: 54px;
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  flex-shrink: 0;
+}
+
+.cm-ctrl-k-btns {
+  display: flex;
+  gap: 3px;
+}
+
+.cm-ctrl-k-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  background: var(--bg, #1a1a1a);
+  color: var(--text-muted, #888);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.cm-ctrl-k-btn:hover {
+  border-color: var(--text-muted, #888);
+  color: var(--text, #e0e0e0);
+}
+
+.cm-ctrl-k-btn.active {
+  background: var(--accent, #58a6ff);
+  border-color: var(--accent, #58a6ff);
+  color: white;
+}
+
+/* Error state */
+.cm-ctrl-k-modal.error .cm-ctrl-k-input::placeholder {
+  color: var(--error, #ff6b6b);
+}
+
+.cm-ctrl-k-modal.error .cm-ctrl-k-header {
+  border-bottom-color: var(--error, #ff6b6b);
+}
+
+/* Loading state - hide controls */
+.cm-ctrl-k-modal.loading .cm-ctrl-k-controls {
+  display: none;
+}
+
+.cm-ctrl-k-modal.loading .cm-ctrl-k-toggle {
+  display: none;
+}
+`;
+
+    const style = document.createElement('style');
+    style.id = 'cm-ctrl-k-styles';
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
+
+  // ===========================================================================
+  // Execute Command
+  // ===========================================================================
+
+  /**
+   * Execute the Ctrl-K command via AI
+   *
+   * @param {import('@codemirror/view').EditorView} view
+   * @param {Object} context - Context from getAiContext
+   * @param {string} instruction - User's instruction
+   * @param {Object} options
+   */
+  async function executeCtrlKCommand(view, context, instruction, options) {
+    const { aiClient} = options;
+
+    const opId = generateOperationId();
+    const from = context.selectionFrom;
+    const to = context.selectionTo;
+    const hasSelection = from !== to;
+
+    // Start loading state
+    view.dispatch({
+      effects: startAiOperation.of({
+        id: opId,
+        type: hasSelection ? 'replace' : 'insert',
+        from,
+        to,
+        originalText: hasSelection ? context.selectedText : '',
+      }),
+    });
+
+    try {
+      // Don't pass juiceLevel - let aiClient use its current setting
+      const result = await aiClient.execute('EditAtCursorPredict', {
+        text_before: context.textBeforeCursor,
+        text_after: context.textAfterCursor,
+        selection: context.selectedText || '',
+        full_document: context.documentContext,
+        instruction,
+      });
+
+      // Cancel the loading state
+      view.dispatch({
+        effects: cancelAiOperation.of({ id: opId }),
+      });
+
+      // Apply edits
+      if (result.edits && result.edits.length > 0) {
+        applyEdits(view, result.edits, context);
+      }
+    } catch (err) {
+      // Cancel on error
+      view.dispatch({
+        effects: cancelAiOperation.of({ id: opId }),
+      });
+      throw err;
+    }
+  }
+
+  /**
+   * Apply a list of find/replace edits to the document
+   *
+   * @param {import('@codemirror/view').EditorView} view
+   * @param {Array<{find: string, replace: string}>} edits
+   * @param {Object} context
+   */
+  function applyEdits(view, edits, context) {
+    const changes = [];
+    const doc = view.state.doc.toString();
+
+    for (const edit of edits) {
+      if (edit.find === '' || edit.find === null) {
+        // Insert at cursor position
+        changes.push({
+          from: context.cursorPos,
+          insert: edit.replace,
+        });
+      } else {
+        // Find and replace
+        // Start search from cursor position area for better locality
+        const searchStart = Math.max(0, context.cursorPos - 2000);
+        const searchEnd = Math.min(doc.length, context.cursorPos + 2000);
+        const searchArea = doc.slice(searchStart, searchEnd);
+
+        let idx = searchArea.indexOf(edit.find);
+        if (idx >= 0) {
+          // Found in nearby area
+          idx += searchStart;
+        } else {
+          // Search entire document
+          idx = doc.indexOf(edit.find);
+        }
+
+        if (idx >= 0) {
+          changes.push({
+            from: idx,
+            to: idx + edit.find.length,
+            insert: edit.replace,
+          });
+        } else {
+          console.warn(`[Ctrl-K] Could not find text to replace: "${edit.find.slice(0, 50)}..."`);
+        }
+      }
+    }
+
+    if (changes.length > 0) {
+      view.dispatch({ changes });
+    }
+  }
+
+  // ===========================================================================
+  // Extension
+  // ===========================================================================
+
+  /**
+   * Create the Ctrl-K extension
+   *
+   * @param {Object} options
+   * @param {Object} options.aiClient - AI client instance
+   * @param {function} [options.onError] - Error callback
+   * @param {number} [options.juiceLevel] - Default juice level (0-4)
+   * @returns {import('@codemirror/state').Extension}
+   */
+  function createCtrlKExtension(options = {}) {
+    return [
+      ctrlKConfigFacet.of(options),
+      keymap.of([
+        {
+          key: 'Mod-k',
+          run(view) {
+            showCtrlKModal(view);
+            return true;
+          },
+        },
+      ]),
+      ctrlKStyles,
+    ];
+  }
+
+  // Styles are injected via injectCtrlKStyles() for proper CSS support
+  const ctrlKStyles = EditorView.baseTheme({});
+
+  var ctrlKModalModule = /*#__PURE__*/Object.freeze({
+    __proto__: null,
+    applyEdits: applyEdits,
+    closeActiveModal: closeActiveModal,
+    createCtrlKExtension: createCtrlKExtension,
+    ctrlKConfigFacet: ctrlKConfigFacet,
+    showCtrlKModal: showCtrlKModal
+  });
+
+  /**
+   * Comment Syntax Extension
+   *
+   * Detects <!--! comment text !--> markers in the document and displays them
+   * as collapsed indicators. When clicked, opens a bubble for editing.
+   *
+   * Also provides AI programs to address comments.
+   */
+
+
+  // ===========================================================================
+  // Constants
+  // ===========================================================================
+
+  /**
+   * Regex to match comment markers: <!--! content !-->
+   * Captures the content inside the markers
+   */
+  const COMMENT_REGEX = /<!--!\s*([\s\S]*?)\s*!-->/g;
+
+  // ===========================================================================
+  // Configuration
+  // ===========================================================================
+
+  /**
+   * Facet for configuring comment syntax behavior
+   */
+  const commentConfigFacet = Facet.define({
+    combine: (values) => values[values.length - 1] || null,
+  });
+
+  // ===========================================================================
+  // Bubble State
+  // ===========================================================================
+
+  /**
+   * Effect to show a comment bubble
+   */
+  const showCommentBubble = StateEffect.define();
+
+  /**
+   * Effect to hide the comment bubble
+   */
+  const hideCommentBubble = StateEffect.define();
+
+  /**
+   * State field tracking the active comment bubble
+   */
+  const commentBubbleState = StateField.define({
+    create() {
+      return null;
+    },
+    update(value, tr) {
+      for (const effect of tr.effects) {
+        if (effect.is(showCommentBubble)) {
+          return effect.value;
+        }
+        if (effect.is(hideCommentBubble)) {
+          return null;
+        }
+      }
+      // Invalidate if document changed and positions are affected
+      if (tr.docChanged && value) {
+        // Check if the comment still exists
+        const doc = tr.state.doc.toString();
+        const commentRaw = value.raw;
+        if (!doc.includes(commentRaw)) {
+          return null;
+        }
+      }
+      return value;
+    },
+  });
+
+  // ===========================================================================
+  // Comment Extraction
+  // ===========================================================================
+
+  /**
+   * Extract all comments from a document
+   *
+   * @param {string} text - Document text
+   * @returns {Array<{start: number, end: number, content: string, raw: string}>}
+   */
+  function extractComments(text) {
+    const comments = [];
+    let match;
+    const regex = new RegExp(COMMENT_REGEX.source, 'g');
+
+    while ((match = regex.exec(text)) !== null) {
+      comments.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        content: match[1].trim(),
+        raw: match[0],
+      });
+    }
+
+    return comments;
+  }
+
+  /**
+   * Find the comment nearest to a position
+   *
+   * @param {string} text - Document text
+   * @param {number} pos - Cursor position
+   * @returns {{start: number, end: number, content: string, raw: string}|null}
+   */
+  function findNearestComment(text, pos) {
+    const comments = extractComments(text);
+    if (comments.length === 0) return null;
+
+    let nearest = comments[0];
+    let nearestDist = Math.min(Math.abs(pos - nearest.start), Math.abs(pos - nearest.end));
+
+    for (const comment of comments.slice(1)) {
+      const dist = Math.min(Math.abs(pos - comment.start), Math.abs(pos - comment.end));
+      if (dist < nearestDist) {
+        nearest = comment;
+        nearestDist = dist;
+      }
+    }
+
+    return nearest;
+  }
+
+  // ===========================================================================
+  // Comment Marker Widget
+  // ===========================================================================
+
+  /**
+   * Widget that displays a collapsed comment marker
+   */
+  class CommentMarkerWidget extends WidgetType {
+    /**
+     * @param {string} content - Comment content
+     * @param {number} from - Start position
+     * @param {number} to - End position
+     * @param {string} raw - Raw comment text
+     */
+    constructor(content, from, to, raw) {
+      super();
+      this.content = content;
+      this.from = from;
+      this.to = to;
+      this.raw = raw;
+    }
+
+    eq(other) {
+      return (
+        other instanceof CommentMarkerWidget &&
+        other.content === this.content &&
+        other.from === this.from
+      );
+    }
+
+    toDOM(view) {
+      const marker = document.createElement('span');
+      marker.className = 'cm-comment-marker';
+      marker.setAttribute('aria-label', `Comment: ${this.content.slice(0, 50)}`);
+      marker.setAttribute('role', 'button');
+      marker.setAttribute('tabindex', '0');
+
+      // Icon
+      const icon = document.createElement('span');
+      icon.className = 'cm-comment-marker-icon';
+      icon.textContent = '💭';
+      marker.appendChild(icon);
+
+      // Preview (truncated)
+      if (this.content.length > 0) {
+        const preview = document.createElement('span');
+        preview.className = 'cm-comment-marker-preview';
+        preview.textContent = this.content.slice(0, 20) + (this.content.length > 20 ? '…' : '');
+        marker.appendChild(preview);
+      }
+
+      // Click handler
+      marker.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        view.dispatch({
+          effects: showCommentBubble.of({
+            from: this.from,
+            to: this.to,
+            content: this.content,
+            raw: this.raw,
+          }),
+        });
+      });
+
+      // Keyboard handler
+      marker.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          marker.click();
+        }
+      });
+
+      return marker;
+    }
+
+    ignoreEvent() {
+      return false;
+    }
+  }
+
+  // ===========================================================================
+  // Decoration Builder
+  // ===========================================================================
+
+  /**
+   * Build decorations for comment markers
+   *
+   * @param {import('@codemirror/view').EditorView} view
+   * @returns {import('@codemirror/view').DecorationSet}
+   */
+  function buildDecorations$3(view) {
+    const decorations = [];
+    const doc = view.state.doc;
+    const text = doc.toString();
+    const selection = view.state.selection.main;
+    const cursorPos = selection.head;
+
+    // Get the line the cursor is on
+    const cursorLine = doc.lineAt(cursorPos);
+
+    // Extract all comments
+    const comments = extractComments(text);
+
+    for (const comment of comments) {
+      const commentLine = doc.lineAt(comment.start);
+
+      // Check if cursor is on the same line as the comment
+      const isActiveLine = cursorLine.number === commentLine.number;
+
+      if (isActiveLine) {
+        // Show raw syntax with styling
+        decorations.push(
+          Decoration.mark({
+            class: 'cm-comment-syntax-active',
+          }).range(comment.start, comment.end)
+        );
+      } else {
+        // Replace with marker widget
+        decorations.push(
+          Decoration.replace({
+            widget: new CommentMarkerWidget(
+              comment.content,
+              comment.start,
+              comment.end,
+              comment.raw
+            ),
+          }).range(comment.start, comment.end)
+        );
+      }
+    }
+
+    return Decoration.set(decorations, true);
+  }
+
+  // ===========================================================================
+  // View Plugin
+  // ===========================================================================
+
+  /**
+   * ViewPlugin that manages comment decorations
+   */
+  const commentDecorationsPlugin = ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.decorations = buildDecorations$3(view);
+      }
+
+      update(update) {
+        if (
+          update.docChanged ||
+          update.selectionSet ||
+          update.viewportChanged
+        ) {
+          this.decorations = buildDecorations$3(update.view);
+        }
+      }
+    },
+    {
+      decorations: (v) => v.decorations,
+    }
+  );
+
+  // ===========================================================================
+  // Comment Bubble Component
+  // ===========================================================================
+
+  let activeBubble = null;
+
+  /**
+   * Close the active bubble if any
+   */
+  function closeActiveBubble() {
+    if (activeBubble) {
+      activeBubble.remove();
+      activeBubble = null;
+    }
+  }
+
+  /**
+   * Create and show a comment bubble
+   *
+   * @param {import('@codemirror/view').EditorView} view
+   * @param {{from: number, to: number, content: string, raw: string}} comment
+   */
+  function showBubble(view, comment) {
+    closeActiveBubble();
+
+    const config = view.state.facet(commentConfigFacet);
+    const aiClient = config?.aiClient;
+
+    // Get position for the bubble
+    const coords = view.coordsAtPos(comment.from);
+    if (!coords) return;
+
+    // Create bubble container
+    const bubble = document.createElement('div');
+    bubble.className = 'cm-comment-bubble';
+    bubble.style.position = 'fixed';
+    bubble.style.left = `${coords.left}px`;
+    bubble.style.top = `${coords.bottom + 4}px`;
+    bubble.style.zIndex = '10002';
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'cm-comment-bubble-header';
+
+    const title = document.createElement('span');
+    title.className = 'cm-comment-bubble-title';
+    title.textContent = '💭 Comment';
+    header.appendChild(title);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'cm-comment-bubble-close';
+    closeBtn.textContent = '×';
+    closeBtn.title = 'Close';
+    closeBtn.onclick = () => closeBubble(view);
+    header.appendChild(closeBtn);
+
+    bubble.appendChild(header);
+
+    // Textarea
+    const textarea = document.createElement('textarea');
+    textarea.className = 'cm-comment-bubble-textarea';
+    textarea.value = comment.content;
+    textarea.placeholder = 'Enter comment or instruction...';
+    textarea.rows = 3;
+    bubble.appendChild(textarea);
+
+    // Actions
+    const actions = document.createElement('div');
+    actions.className = 'cm-comment-bubble-actions';
+
+    // Delete button
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'cm-comment-bubble-btn cm-comment-bubble-btn-secondary';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.onclick = () => {
+      // Remove the comment from the document
+      view.dispatch({
+        changes: { from: comment.from, to: comment.to, insert: '' },
+        effects: hideCommentBubble.of(null),
+      });
+      closeBubble(view);
+    };
+    actions.appendChild(deleteBtn);
+
+    // Spacer
+    const spacer = document.createElement('div');
+    spacer.style.flex = '1';
+    actions.appendChild(spacer);
+
+    // Address button (AI)
+    if (aiClient) {
+      const addressBtn = document.createElement('button');
+      addressBtn.className = 'cm-comment-bubble-btn cm-comment-bubble-btn-primary';
+      addressBtn.textContent = 'Address with AI';
+      addressBtn.onclick = async () => {
+        addressBtn.disabled = true;
+        addressBtn.textContent = 'Thinking...';
+
+        try {
+          await addressComment(view, comment, aiClient);
+          closeBubble(view);
+        } catch (err) {
+          addressBtn.disabled = false;
+          addressBtn.textContent = 'Address with AI';
+          console.error('[Comment] AI error:', err);
+        }
+      };
+      actions.appendChild(addressBtn);
+    }
+
+    // Save button
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'cm-comment-bubble-btn cm-comment-bubble-btn-primary';
+    saveBtn.textContent = 'Save';
+    saveBtn.onclick = () => {
+      const newContent = textarea.value.trim();
+      if (newContent !== comment.content) {
+        // Update the comment in the document
+        const newRaw = `<!--! ${newContent} !-->`;
+        view.dispatch({
+          changes: { from: comment.from, to: comment.to, insert: newRaw },
+          effects: hideCommentBubble.of(null),
+        });
+      }
+      closeBubble(view);
+    };
+    actions.appendChild(saveBtn);
+
+    bubble.appendChild(actions);
+
+    document.body.appendChild(bubble);
+    activeBubble = bubble;
+
+    // Adjust position if off-screen
+    requestAnimationFrame(() => {
+      const rect = bubble.getBoundingClientRect();
+      if (rect.right > window.innerWidth - 10) {
+        bubble.style.left = `${Math.max(10, window.innerWidth - rect.width - 10)}px`;
+      }
+      if (rect.bottom > window.innerHeight - 10) {
+        bubble.style.top = `${Math.max(10, coords.top - rect.height - 4)}px`;
+      }
+    });
+
+    // Focus textarea
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+
+    // Handle escape
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeBubble(view);
+      }
+    });
+
+    // Close on click outside
+    const handleOutside = (e) => {
+      if (activeBubble && !activeBubble.contains(e.target)) {
+        // Save changes before closing
+        const newContent = textarea.value.trim();
+        if (newContent !== comment.content) {
+          const newRaw = `<!--! ${newContent} !-->`;
+          view.dispatch({
+            changes: { from: comment.from, to: comment.to, insert: newRaw },
+            effects: hideCommentBubble.of(null),
+          });
+        }
+        closeBubble(view);
+        document.removeEventListener('mousedown', handleOutside);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', handleOutside), 0);
+  }
+
+  /**
+   * Close the bubble
+   */
+  function closeBubble(view) {
+    closeActiveBubble();
+    view.dispatch({
+      effects: hideCommentBubble.of(null),
+    });
+    view.focus();
+  }
+
+  // ===========================================================================
+  // AI Integration
+  // ===========================================================================
+
+  /**
+   * Address a comment using AI
+   *
+   * @param {import('@codemirror/view').EditorView} view
+   * @param {{from: number, to: number, content: string, raw: string}} comment
+   * @param {Object} aiClient
+   */
+  async function addressComment(view, comment, aiClient) {
+    const doc = view.state.doc.toString();
+    const contextSize = 500;
+
+    // Get context around the comment
+    const contextBefore = doc.slice(
+      Math.max(0, comment.from - contextSize),
+      comment.from
+    );
+    const contextAfter = doc.slice(
+      comment.to,
+      Math.min(doc.length, comment.to + contextSize)
+    );
+
+    const result = await aiClient.execute('AddressCommentPredict', {
+      full_document: doc,
+      comment_text: comment.content,
+      comment_context_before: contextBefore,
+      comment_context_after: contextAfter,
+      comment_raw: comment.raw,
+    });
+
+    // Apply edits
+    if (result.edits && result.edits.length > 0) {
+      const changes = [];
+
+      for (const edit of result.edits) {
+        if (edit.find === '' || edit.find === null) {
+          // Insert at comment position
+          changes.push({
+            from: comment.from,
+            insert: edit.replace,
+          });
+        } else {
+          // Find and replace
+          const idx = doc.indexOf(edit.find);
+          if (idx >= 0) {
+            changes.push({
+              from: idx,
+              to: idx + edit.find.length,
+              insert: edit.replace,
+            });
+          }
+        }
+      }
+
+      if (changes.length > 0) {
+        view.dispatch({ changes });
+      }
+    }
+  }
+
+  /**
+   * Address all comments in the document
+   *
+   * @param {import('@codemirror/view').EditorView} view
+   */
+  async function addressAllComments(view) {
+    const config = view.state.facet(commentConfigFacet);
+    if (!config?.aiClient) {
+      console.warn('[Comment] No AI client configured');
+      return;
+    }
+
+    const doc = view.state.doc.toString();
+    const comments = extractComments(doc);
+
+    if (comments.length === 0) {
+      console.log('[Comment] No comments found');
+      return;
+    }
+
+    // Build comment info for the AI
+    const commentInfos = comments.map((c) => ({
+      text: c.content,
+      context_before: doc.slice(Math.max(0, c.start - 200), c.start),
+      context_after: doc.slice(c.end, Math.min(doc.length, c.end + 200)),
+    }));
+
+    const result = await config.aiClient.execute('AddressAllCommentsPredict', {
+      full_document: doc,
+      comments: commentInfos,
+    });
+
+    // Apply edits
+    if (result.edits && result.edits.length > 0) {
+      const changes = [];
+
+      for (const edit of result.edits) {
+        if (edit.find === '' || edit.find === null) {
+          continue; // Skip pure insertions for bulk operations
+        }
+
+        const idx = doc.indexOf(edit.find);
+        if (idx >= 0) {
+          changes.push({
+            from: idx,
+            to: idx + edit.find.length,
+            insert: edit.replace,
+          });
+        }
+      }
+
+      if (changes.length > 0) {
+        view.dispatch({ changes });
+      }
+    }
+  }
+
+  /**
+   * Address the comment nearest to the cursor
+   *
+   * @param {import('@codemirror/view').EditorView} view
+   */
+  async function addressNearbyComment(view) {
+    const config = view.state.facet(commentConfigFacet);
+    if (!config?.aiClient) {
+      console.warn('[Comment] No AI client configured');
+      return;
+    }
+
+    const doc = view.state.doc.toString();
+    const cursorPos = view.state.selection.main.head;
+    const comment = findNearestComment(doc, cursorPos);
+
+    if (!comment) {
+      console.log('[Comment] No nearby comment found');
+      return;
+    }
+
+    await addressComment(view, comment, config.aiClient);
+  }
+
+  // ===========================================================================
+  // Bubble Manager Plugin
+  // ===========================================================================
+
+  /**
+   * ViewPlugin that manages the comment bubble DOM
+   */
+  const bubbleManagerPlugin = ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.view = view;
+        this.checkBubble(view.state);
+      }
+
+      update(update) {
+        if (update.state.field(commentBubbleState) !== update.startState.field(commentBubbleState)) {
+          this.checkBubble(update.state);
+        }
+      }
+
+      checkBubble(state) {
+        const bubbleData = state.field(commentBubbleState);
+        if (bubbleData) {
+          showBubble(this.view, bubbleData);
+        } else {
+          closeActiveBubble();
+        }
+      }
+
+      destroy() {
+        closeActiveBubble();
+      }
+    }
+  );
+
+  // ===========================================================================
+  // Styles
+  // ===========================================================================
+
+  const commentStyles = EditorView.baseTheme({
+    '.cm-comment-marker': {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '4px',
+      padding: '1px 6px',
+      background: 'var(--bg-comment, rgba(255, 203, 107, 0.15))',
+      border: '1px solid var(--border-comment, rgba(255, 203, 107, 0.3))',
+      borderRadius: '4px',
+      cursor: 'pointer',
+      fontSize: '12px',
+      verticalAlign: 'baseline',
+      transition: 'background 0.15s, border-color 0.15s',
+      '&:hover': {
+        background: 'var(--bg-comment-hover, rgba(255, 203, 107, 0.25))',
+        borderColor: 'var(--border-comment-hover, rgba(255, 203, 107, 0.5))',
+      },
+    },
+
+    '.cm-comment-marker-icon': {
+      fontSize: '11px',
+    },
+
+    '.cm-comment-marker-preview': {
+      color: 'var(--text-comment, #ffcb6b)',
+      maxWidth: '150px',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    },
+
+    '.cm-comment-syntax-active': {
+      background: 'var(--bg-comment-active, rgba(255, 203, 107, 0.1))',
+      borderRadius: '2px',
+    },
+
+    '.cm-comment-bubble': {
+      background: 'var(--bg-secondary, #1e1e1e)',
+      border: '1px solid var(--border, #3c3c3c)',
+      borderRadius: '8px',
+      boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+      minWidth: '300px',
+      maxWidth: '450px',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: '13px',
+      overflow: 'hidden',
+    },
+
+    '.cm-comment-bubble-header': {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '8px 12px',
+      background: 'var(--bg-tertiary, #252526)',
+      borderBottom: '1px solid var(--border, #3c3c3c)',
+    },
+
+    '.cm-comment-bubble-title': {
+      fontWeight: '600',
+      color: 'var(--text-comment, #ffcb6b)',
+    },
+
+    '.cm-comment-bubble-close': {
+      background: 'none',
+      border: 'none',
+      color: 'var(--text-muted, #6e7681)',
+      fontSize: '18px',
+      cursor: 'pointer',
+      padding: '0 4px',
+      lineHeight: 1,
+      '&:hover': {
+        color: 'var(--text, #c9d1d9)',
+      },
+    },
+
+    '.cm-comment-bubble-textarea': {
+      display: 'block',
+      width: '100%',
+      boxSizing: 'border-box',
+      padding: '12px',
+      border: 'none',
+      background: 'var(--bg, #0d1117)',
+      color: 'var(--text, #c9d1d9)',
+      fontSize: '13px',
+      fontFamily: 'inherit',
+      resize: 'vertical',
+      minHeight: '80px',
+      '&:focus': {
+        outline: 'none',
+      },
+      '&::placeholder': {
+        color: 'var(--text-muted, #6e7681)',
+      },
+    },
+
+    '.cm-comment-bubble-actions': {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '8px 12px',
+      background: 'var(--bg-tertiary, #252526)',
+      borderTop: '1px solid var(--border, #3c3c3c)',
+    },
+
+    '.cm-comment-bubble-btn': {
+      padding: '6px 12px',
+      border: 'none',
+      borderRadius: '4px',
+      fontSize: '12px',
+      fontWeight: '500',
+      cursor: 'pointer',
+      transition: 'background 0.15s',
+    },
+
+    '.cm-comment-bubble-btn-primary': {
+      background: 'var(--accent, #58a6ff)',
+      color: 'white',
+      '&:hover': {
+        background: 'var(--accent-hover, #79b8ff)',
+      },
+      '&:disabled': {
+        opacity: 0.5,
+        cursor: 'not-allowed',
+      },
+    },
+
+    '.cm-comment-bubble-btn-secondary': {
+      background: 'var(--bg-secondary, #21262d)',
+      color: 'var(--text, #c9d1d9)',
+      border: '1px solid var(--border, #30363d)',
+      '&:hover': {
+        background: 'var(--bg-hover, #30363d)',
+      },
+    },
+  });
+
+  // ===========================================================================
+  // Insert Comment Command
+  // ===========================================================================
+
+  /**
+   * Insert a comment at the cursor position
+   *
+   * @param {import('@codemirror/view').EditorView} view
+   * @returns {boolean}
+   */
+  function insertComment(view) {
+    const { state } = view;
+    const { from, to } = state.selection.main;
+    const hasSelection = from !== to;
+
+    let insert;
+    let cursorPos;
+
+    if (hasSelection) {
+      // Wrap selection in comment
+      const selectedText = state.sliceDoc(from, to);
+      insert = `<!--! ${selectedText} !-->`;
+      cursorPos = from + 6; // After "<!--! "
+    } else {
+      // Insert empty comment and place cursor inside
+      insert = `<!--!  !-->`;
+      cursorPos = from + 6; // After "<!--! "
+    }
+
+    view.dispatch({
+      changes: { from, to, insert },
+      selection: { anchor: cursorPos },
+    });
+
+    return true;
+  }
+
+  /**
+   * Keymap for comment syntax shortcuts
+   */
+  const commentKeymap = keymap.of([
+    {
+      key: 'Mod-Shift-m',
+      run: insertComment,
+    },
+    {
+      // Alternative: Ctrl-Shift-/ (common comment shortcut pattern)
+      key: 'Mod-Shift-/',
+      run: insertComment,
+    },
+  ]);
+
+  // ===========================================================================
+  // Extension Factory
+  // ===========================================================================
+
+  /**
+   * Create the comment syntax extension
+   *
+   * @param {Object} [options]
+   * @param {Object} [options.aiClient] - AI client for addressing comments
+   * @param {number} [options.juiceLevel] - Default juice level for AI
+   * @returns {import('@codemirror/state').Extension}
+   */
+  function createCommentSyntaxExtension(options = {}) {
+    return [
+      commentConfigFacet.of(options),
+      commentBubbleState,
+      commentDecorationsPlugin,
+      bubbleManagerPlugin,
+      commentKeymap,
+      commentStyles,
+    ];
+  }
+
+  var commentSyntaxModule = /*#__PURE__*/Object.freeze({
+    __proto__: null,
+    COMMENT_REGEX: COMMENT_REGEX,
+    CommentMarkerWidget: CommentMarkerWidget,
+    addressAllComments: addressAllComments,
+    addressNearbyComment: addressNearbyComment,
+    closeActiveBubble: closeActiveBubble,
+    commentBubbleState: commentBubbleState,
+    commentConfigFacet: commentConfigFacet,
+    createCommentSyntaxExtension: createCommentSyntaxExtension,
+    extractComments: extractComments,
+    findNearestComment: findNearestComment,
+    hideCommentBubble: hideCommentBubble,
+    insertComment: insertComment,
+    showCommentBubble: showCommentBubble
   });
 
   /**
@@ -114474,7 +116264,7 @@ $1 $2
     '--editor-foreground': '#d4d4d4',
     '--editor-line-number': '#858585',
     '--editor-line-number-active': '#c6c6c6',
-    '--editor-selection': '#264f78',
+    '--editor-selection': '#37608c',        // Brighter blue for better contrast
     '--editor-selection-match': '#515c6a',
     '--editor-cursor': '#aeafad',
     '--editor-active-line': 'rgba(255, 255, 255, 0.05)',
@@ -114668,7 +116458,7 @@ $1 $2
     '--editor-foreground': '#37474f',
     '--editor-line-number': '#90a4ae',
     '--editor-line-number-active': '#546e7a',
-    '--editor-selection': '#e3f2fd',
+    '--editor-selection': '#bbdefb',        // More saturated blue for better visibility
     '--editor-selection-match': '#fff9c4',
     '--editor-cursor': '#37474f',
     '--editor-active-line': 'rgba(0, 0, 0, 0.02)',
@@ -114863,7 +116653,7 @@ $1 $2
     '--editor-foreground': '#c9d1d9',
     '--editor-line-number': '#6e7681',
     '--editor-line-number-active': '#c9d1d9',
-    '--editor-selection': '#264f78',
+    '--editor-selection': '#3a6ea5',        // Brighter blue for better contrast on dark github bg
     '--editor-selection-match': '#3b5070',
     '--editor-cursor': '#c9d1d9',
     '--editor-active-line': 'rgba(110, 118, 129, 0.1)',
@@ -115171,8 +116961,8 @@ $1 $2
     '--editor-foreground': '#d8dee9',        // nord4
     '--editor-line-number': '#4c566a',       // nord3 - subtle but readable
     '--editor-line-number-active': '#d8dee9',// nord4 - matches text
-    '--editor-selection': '#434c5e',         // nord2
-    '--editor-selection-match': '#3b4252',   // nord1 - subtle match highlight
+    '--editor-selection': '#5e81ac',         // nord10 - much better contrast than nord2
+    '--editor-selection-match': '#4c566a',   // nord3 - visible match highlight
     '--editor-cursor': '#d8dee9',            // nord4 - matches text
     '--editor-active-line': 'rgba(67, 76, 94, 0.5)',  // nord2 at 50%
     '--editor-gutter': '#2e3440',            // nord0 - matches background
@@ -115350,6 +117140,396 @@ $1 $2
     '--widget-font-size-small': '0.75em',
   };
 
+  // =============================================================================
+  // GRAYSCALE THEMES
+  // =============================================================================
+
+  /**
+   * Grayscale Dark Theme
+   *
+   * A pure grayscale dark theme - no colors, just shades of gray.
+   * Perfect for distraction-free writing or reduced eye strain.
+   */
+  const grayscaleDarkTheme = {
+    name: 'grayscale-dark',
+    description: 'Pure grayscale dark theme - no colors, just gray tones.',
+    isDark: true,
+
+    // Spacing
+    '--widget-line-height': 'inherit',
+    '--widget-padding-x': '12px',
+    '--widget-padding-y': '8px',
+    '--widget-margin-y': '4px',
+    '--widget-border-radius': '6px',
+    '--widget-border-width': '1px',
+    '--widget-border-accent-width': '2px',
+
+    // Text layout
+    '--widget-white-space': 'pre-wrap',
+    '--widget-word-break': 'break-word',
+
+    // Typography - Romantic programming aesthetic
+    // Code: Courier Prime - old typewriter feel, calm and nostalgic
+    // Prose: EB Garamond - 16th century elegance, Voltaire's quill
+    '--widget-font-mono': "'Courier Prime', 'Courier New', Courier, monospace",
+    '--widget-font-sans': "'EB Garamond', Georgia, 'Times New Roman', serif",
+    '--widget-font-serif': "'EB Garamond', Georgia, 'Times New Roman', serif",
+    '--widget-font-size': '0.95em',
+    '--widget-font-size-small': '0.85em',
+    '--widget-font-size-label': '12px',
+
+    // Surfaces - dark grays
+    '--widget-surface': 'rgba(255, 255, 255, 0.06)',
+    '--widget-surface-hover': 'rgba(255, 255, 255, 0.1)',
+    '--widget-surface-elevated': '#252525',
+    '--widget-surface-inset': 'rgba(0, 0, 0, 0.3)',
+
+    // Borders - subtle grays
+    '--widget-border': 'rgba(255, 255, 255, 0.12)',
+    '--widget-border-accent': 'rgba(255, 255, 255, 0.25)',
+    '--widget-border-focus': '#888888',
+
+    // Text - gray tones
+    '--widget-text': '#d0d0d0',
+    '--widget-text-muted': '#808080',
+    '--widget-text-accent': '#a0a0a0',
+
+    // Semantic - grayscale versions
+    '--widget-success': '#a0a0a0',
+    '--widget-warning': '#909090',
+    '--widget-error': '#707070',
+    '--widget-info': '#888888',
+
+    // ANSI colors - all grayscale
+    '--ansi-black': '#1a1a1a',
+    '--ansi-red': '#909090',
+    '--ansi-green': '#a8a8a8',
+    '--ansi-yellow': '#b0b0b0',
+    '--ansi-blue': '#888888',
+    '--ansi-magenta': '#989898',
+    '--ansi-cyan': '#a0a0a0',
+    '--ansi-white': '#d0d0d0',
+    '--ansi-bright-black': '#505050',
+    '--ansi-bright-red': '#a0a0a0',
+    '--ansi-bright-green': '#b8b8b8',
+    '--ansi-bright-yellow': '#c8c8c8',
+    '--ansi-bright-blue': '#989898',
+    '--ansi-bright-magenta': '#a8a8a8',
+    '--ansi-bright-cyan': '#b0b0b0',
+    '--ansi-bright-white': '#e8e8e8',
+
+    // Collaborator - grayscale
+    '--collab-human': '#909090',
+    '--collab-ai': '#707070',
+    '--collab-runtime': '#808080',
+
+    // Editor - EB Garamond for prose, literary romanticism
+    '--editor-background': '#1a1a1a',
+    '--editor-foreground': '#c8c8c8',
+    '--editor-font-family': "'EB Garamond', Georgia, 'Times New Roman', serif",
+    '--editor-font-size': '18px',
+    '--editor-line-height': '1.7',
+    '--editor-line-number': '#505050',
+    '--editor-line-number-active': '#808080',
+    '--editor-selection': '#404040',
+    '--editor-selection-match': '#353535',
+    '--editor-cursor': '#a0a0a0',
+    '--editor-active-line': 'rgba(255, 255, 255, 0.04)',
+    '--editor-gutter': '#1a1a1a',
+    '--editor-matching-bracket': 'rgba(255, 255, 255, 0.15)',
+
+    // Syntax highlighting - all grayscale with varied intensities
+    '--syntax-keyword': '#b0b0b0',
+    '--syntax-control': '#a0a0a0',
+    '--syntax-string': '#909090',
+    '--syntax-number': '#989898',
+    '--syntax-comment': '#606060',
+    '--syntax-function': '#c0c0c0',
+    '--syntax-variable': '#b8b8b8',
+    '--syntax-variable-special': '#a8a8a8',
+    '--syntax-property': '#b0b0b0',
+    '--syntax-operator': '#c8c8c8',
+    '--syntax-punctuation': '#888888',
+    '--syntax-type': '#a0a0a0',
+    '--syntax-class': '#b8b8b8',
+    '--syntax-constant': '#a8a8a8',
+    '--syntax-parameter': '#b0b0b0',
+    '--syntax-regexp': '#909090',
+    '--syntax-escape': '#989898',
+    '--syntax-tag': '#a8a8a8',
+    '--syntax-attribute': '#b0b0b0',
+    '--syntax-attribute-value': '#909090',
+    '--syntax-heading': '#d0d0d0',
+    '--syntax-link': '#a0a0a0',
+    '--syntax-link-text': '#909090',
+    '--syntax-emphasis': '#b8b8b8',
+    '--syntax-strong': '#d0d0d0',
+    '--syntax-strikethrough': '#606060',
+    '--syntax-quote': '#707070',
+    '--syntax-code': '#a0a0a0',
+    '--syntax-code-background': 'rgba(255, 255, 255, 0.06)',
+    '--syntax-meta': '#707070',
+    '--syntax-inserted': '#a0a0a0',
+    '--syntax-deleted': '#808080',
+    '--syntax-changed': '#909090',
+
+    // Markdown rendering
+    '--md-heading-1-size': '1.75em',
+    '--md-heading-2-size': '1.4em',
+    '--md-heading-3-size': '1.2em',
+    '--md-heading-4-size': '1.1em',
+    '--md-heading-5-size': '1.05em',
+    '--md-heading-6-size': '1em',
+    '--md-heading-weight': '600',
+    '--md-heading-line-height': '1.3',
+    '--md-heading-margin-top': '0.5em',
+    '--md-marker-color': '#606060',
+    '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+    '--md-link-color': '#a0a0a0',
+    '--md-link-decoration': 'underline',
+    '--md-code-background': 'rgba(255, 255, 255, 0.08)',
+    '--md-code-color': '#a0a0a0',
+    '--md-code-padding': '0.15em 0.35em',
+    '--md-code-radius': '3px',
+    '--md-blockquote-border': 'rgba(255, 255, 255, 0.2)',
+    '--md-blockquote-border-width': '2px',
+    '--md-blockquote-color': '#707070',
+    '--md-blockquote-padding': '1em',
+    '--md-list-marker-color': '#606060',
+    '--md-hr-color': 'rgba(255, 255, 255, 0.15)',
+    '--md-hr-height': '1px',
+    '--md-hr-margin': '1.5em 0',
+    '--md-table-border': 'rgba(255, 255, 255, 0.1)',
+    '--md-table-header-bg': 'rgba(255, 255, 255, 0.05)',
+    '--md-table-header-weight': '600',
+    '--md-table-cell-padding': '0.5em 0.75em',
+    '--md-table-stripe-bg': 'transparent',
+    '--md-image-max-width': '100%',
+    '--md-image-border-radius': '6px',
+    '--md-checkbox-size': '1em',
+    '--md-checkbox-color': '#808080',
+    '--md-alert-note-color': '#808080',
+    '--md-alert-tip-color': '#909090',
+    '--md-alert-important-color': '#888888',
+    '--md-alert-warning-color': '#787878',
+    '--md-alert-caution-color': '#686868',
+
+    // Shell - Uses EB Garamond for literary feel
+    '--mrmd-ui-font': "'EB Garamond', Georgia, 'Times New Roman', serif",
+    '--mrmd-ui-font-size': '14px',
+    '--mrmd-ui-font-size-sm': '12px',
+    '--mrmd-panel-bg': '#1a1a1a',
+    '--mrmd-popup-bg': '#252525',
+    '--mrmd-bg': '#1a1a1a',
+    '--mrmd-fg': '#c0c0c0',
+    '--mrmd-fg-muted': '#707070',
+    '--mrmd-border': '#333333',
+    '--mrmd-hover-bg': 'rgba(255, 255, 255, 0.06)',
+    '--mrmd-active-bg': 'rgba(255, 255, 255, 0.1)',
+    '--mrmd-selection-bg': 'rgba(255, 255, 255, 0.15)',
+    '--mrmd-accent': '#909090',
+    '--mrmd-accent-hover': '#a0a0a0',
+    '--mrmd-success': '#909090',
+    '--mrmd-warning': '#808080',
+    '--mrmd-error': '#707070',
+    '--mrmd-shadow-md': '0 4px 12px rgba(0, 0, 0, 0.4)',
+    '--mrmd-shadow-lg': '0 8px 32px rgba(0, 0, 0, 0.5)',
+    '--mrmd-shadow-xl': '0 16px 48px rgba(0, 0, 0, 0.6)',
+  };
+
+  /**
+   * Grayscale Light Theme
+   *
+   * A pure grayscale light theme - no colors, just shades of gray.
+   * Clean, minimal, distraction-free.
+   */
+  const grayscaleLightTheme = {
+    name: 'grayscale-light',
+    description: 'Pure grayscale light theme - no colors, just gray tones.',
+    isDark: false,
+
+    // Spacing
+    '--widget-line-height': 'inherit',
+    '--widget-padding-x': '12px',
+    '--widget-padding-y': '8px',
+    '--widget-margin-y': '4px',
+    '--widget-border-radius': '6px',
+    '--widget-border-width': '1px',
+    '--widget-border-accent-width': '2px',
+
+    // Text layout
+    '--widget-white-space': 'pre-wrap',
+    '--widget-word-break': 'break-word',
+
+    // Typography - Romantic programming aesthetic
+    // Code: Courier Prime - old typewriter feel, calm and nostalgic
+    // Prose: EB Garamond - 16th century elegance, Voltaire's quill
+    '--widget-font-mono': "'Courier Prime', 'Courier New', Courier, monospace",
+    '--widget-font-sans': "'EB Garamond', Georgia, 'Times New Roman', serif",
+    '--widget-font-serif': "'EB Garamond', Georgia, 'Times New Roman', serif",
+    '--widget-font-size': '0.95em',
+    '--widget-font-size-small': '0.85em',
+    '--widget-font-size-label': '12px',
+
+    // Surfaces - light grays
+    '--widget-surface': 'rgba(0, 0, 0, 0.04)',
+    '--widget-surface-hover': 'rgba(0, 0, 0, 0.07)',
+    '--widget-surface-elevated': '#ffffff',
+    '--widget-surface-inset': 'rgba(0, 0, 0, 0.03)',
+
+    // Borders - subtle grays
+    '--widget-border': 'rgba(0, 0, 0, 0.12)',
+    '--widget-border-accent': 'rgba(0, 0, 0, 0.25)',
+    '--widget-border-focus': '#666666',
+
+    // Text - gray tones
+    '--widget-text': '#333333',
+    '--widget-text-muted': '#777777',
+    '--widget-text-accent': '#555555',
+
+    // Semantic - grayscale versions
+    '--widget-success': '#555555',
+    '--widget-warning': '#666666',
+    '--widget-error': '#444444',
+    '--widget-info': '#5a5a5a',
+
+    // ANSI colors - all grayscale
+    '--ansi-black': '#333333',
+    '--ansi-red': '#555555',
+    '--ansi-green': '#4a4a4a',
+    '--ansi-yellow': '#5a5a5a',
+    '--ansi-blue': '#606060',
+    '--ansi-magenta': '#505050',
+    '--ansi-cyan': '#484848',
+    '--ansi-white': '#888888',
+    '--ansi-bright-black': '#666666',
+    '--ansi-bright-red': '#4a4a4a',
+    '--ansi-bright-green': '#404040',
+    '--ansi-bright-yellow': '#505050',
+    '--ansi-bright-blue': '#555555',
+    '--ansi-bright-magenta': '#454545',
+    '--ansi-bright-cyan': '#3a3a3a',
+    '--ansi-bright-white': '#777777',
+
+    // Collaborator - grayscale
+    '--collab-human': '#555555',
+    '--collab-ai': '#666666',
+    '--collab-runtime': '#5a5a5a',
+
+    // Editor - EB Garamond for prose, literary romanticism
+    '--editor-background': '#fafafa',
+    '--editor-foreground': '#333333',
+    '--editor-font-family': "'EB Garamond', Georgia, 'Times New Roman', serif",
+    '--editor-font-size': '18px',
+    '--editor-line-height': '1.7',
+    '--editor-line-number': '#aaaaaa',
+    '--editor-line-number-active': '#666666',
+    '--editor-selection': '#d0d0d0',
+    '--editor-selection-match': '#e0e0e0',
+    '--editor-cursor': '#333333',
+    '--editor-active-line': 'rgba(0, 0, 0, 0.03)',
+    '--editor-gutter': '#fafafa',
+    '--editor-matching-bracket': 'rgba(0, 0, 0, 0.1)',
+
+    // Syntax highlighting - all grayscale with varied intensities
+    '--syntax-keyword': '#444444',
+    '--syntax-control': '#4a4a4a',
+    '--syntax-string': '#555555',
+    '--syntax-number': '#505050',
+    '--syntax-comment': '#999999',
+    '--syntax-function': '#333333',
+    '--syntax-variable': '#3a3a3a',
+    '--syntax-variable-special': '#454545',
+    '--syntax-property': '#404040',
+    '--syntax-operator': '#333333',
+    '--syntax-punctuation': '#666666',
+    '--syntax-type': '#4a4a4a',
+    '--syntax-class': '#3a3a3a',
+    '--syntax-constant': '#454545',
+    '--syntax-parameter': '#404040',
+    '--syntax-regexp': '#555555',
+    '--syntax-escape': '#505050',
+    '--syntax-tag': '#454545',
+    '--syntax-attribute': '#404040',
+    '--syntax-attribute-value': '#555555',
+    '--syntax-heading': '#222222',
+    '--syntax-link': '#555555',
+    '--syntax-link-text': '#4a4a4a',
+    '--syntax-emphasis': '#3a3a3a',
+    '--syntax-strong': '#222222',
+    '--syntax-strikethrough': '#999999',
+    '--syntax-quote': '#777777',
+    '--syntax-code': '#555555',
+    '--syntax-code-background': 'rgba(0, 0, 0, 0.05)',
+    '--syntax-meta': '#888888',
+    '--syntax-inserted': '#4a4a4a',
+    '--syntax-deleted': '#666666',
+    '--syntax-changed': '#555555',
+
+    // Markdown rendering
+    '--md-heading-1-size': '1.75em',
+    '--md-heading-2-size': '1.4em',
+    '--md-heading-3-size': '1.2em',
+    '--md-heading-4-size': '1.1em',
+    '--md-heading-5-size': '1.05em',
+    '--md-heading-6-size': '1em',
+    '--md-heading-weight': '600',
+    '--md-heading-line-height': '1.3',
+    '--md-heading-margin-top': '0.5em',
+    '--md-marker-color': '#999999',
+    '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+    '--md-link-color': '#555555',
+    '--md-link-decoration': 'underline',
+    '--md-code-background': 'rgba(0, 0, 0, 0.06)',
+    '--md-code-color': '#555555',
+    '--md-code-padding': '0.15em 0.35em',
+    '--md-code-radius': '3px',
+    '--md-blockquote-border': 'rgba(0, 0, 0, 0.2)',
+    '--md-blockquote-border-width': '2px',
+    '--md-blockquote-color': '#777777',
+    '--md-blockquote-padding': '1em',
+    '--md-list-marker-color': '#888888',
+    '--md-hr-color': 'rgba(0, 0, 0, 0.15)',
+    '--md-hr-height': '1px',
+    '--md-hr-margin': '1.5em 0',
+    '--md-table-border': 'rgba(0, 0, 0, 0.1)',
+    '--md-table-header-bg': 'rgba(0, 0, 0, 0.03)',
+    '--md-table-header-weight': '600',
+    '--md-table-cell-padding': '0.5em 0.75em',
+    '--md-table-stripe-bg': 'transparent',
+    '--md-image-max-width': '100%',
+    '--md-image-border-radius': '6px',
+    '--md-checkbox-size': '1em',
+    '--md-checkbox-color': '#666666',
+    '--md-alert-note-color': '#666666',
+    '--md-alert-tip-color': '#555555',
+    '--md-alert-important-color': '#5a5a5a',
+    '--md-alert-warning-color': '#6a6a6a',
+    '--md-alert-caution-color': '#7a7a7a',
+
+    // Shell - Uses EB Garamond for literary feel
+    '--mrmd-ui-font': "'EB Garamond', Georgia, 'Times New Roman', serif",
+    '--mrmd-ui-font-size': '14px',
+    '--mrmd-ui-font-size-sm': '12px',
+    '--mrmd-panel-bg': '#f5f5f5',
+    '--mrmd-popup-bg': '#ffffff',
+    '--mrmd-bg': '#fafafa',
+    '--mrmd-fg': '#333333',
+    '--mrmd-fg-muted': '#888888',
+    '--mrmd-border': '#e0e0e0',
+    '--mrmd-hover-bg': 'rgba(0, 0, 0, 0.04)',
+    '--mrmd-active-bg': 'rgba(0, 0, 0, 0.07)',
+    '--mrmd-selection-bg': 'rgba(0, 0, 0, 0.1)',
+    '--mrmd-accent': '#555555',
+    '--mrmd-accent-hover': '#444444',
+    '--mrmd-success': '#555555',
+    '--mrmd-warning': '#666666',
+    '--mrmd-error': '#777777',
+    '--mrmd-shadow-md': '0 4px 12px rgba(0, 0, 0, 0.1)',
+    '--mrmd-shadow-lg': '0 8px 32px rgba(0, 0, 0, 0.12)',
+    '--mrmd-shadow-xl': '0 16px 48px rgba(0, 0, 0, 0.15)',
+  };
+
   // #endregion BUILT_IN_THEMES
 
   // #region THEME_REGISTRY
@@ -115364,6 +117544,8 @@ $1 $2
     ['github', githubTheme],
     ['nord', nordTheme],
     ['nord-outputs', nordOutputsTheme],
+    ['grayscale-dark', grayscaleDarkTheme],
+    ['grayscale-light', grayscaleLightTheme],
   ]);
 
   /**
@@ -118596,17 +120778,35 @@ $1 $2
 
   /**
    * CSS styles for code block backgrounds
+   *
+   * Selection visibility fix:
+   * CodeMirror renders selection via .cm-selectionBackground elements in a layer
+   * BELOW the content layer. Opaque line backgrounds hide this selection.
+   * We fix this by:
+   * 1. Using semi-transparent backgrounds (allows selection to show through)
+   * 2. Styling ::selection pseudo-element (native browser selection, always on top)
    */
   const codeBlockStyles = EditorView.theme({
-    // Content lines - gray background
+    // Content lines - smaller than prose, monospace font for code
     '.cm-codeblock-line': {
-      backgroundColor: 'var(--widget-surface, #f5f5f5)',
+      backgroundColor: 'color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
+      fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
+      fontSize: 'var(--code-font-size, 0.8em)',
+      lineHeight: 'var(--code-line-height, 1.5)',
     },
-    // Fence lines (``` markers) - same background, smaller/faded text (no opacity to preserve bg)
+    // Fence lines (``` markers) - even smaller, very subtle
     '.cm-codeblock-fence': {
-      backgroundColor: 'var(--widget-surface, #f5f5f5)',
-      fontSize: '0.6em',
-      color: '#c0c0c0',
+      backgroundColor: 'color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
+      fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
+      fontSize: '0.5em',
+      color: 'var(--widget-text-muted, #888)',
+    },
+    // Selection styling for code blocks - ensure visibility with native ::selection
+    '.cm-codeblock-line::selection, .cm-codeblock-line *::selection': {
+      backgroundColor: 'var(--editor-selection, #264f78) !important',
+    },
+    '.cm-codeblock-fence::selection, .cm-codeblock-fence *::selection': {
+      backgroundColor: 'var(--editor-selection, #264f78) !important',
     },
   });
   // #endregion CODE_BLOCK_BACKGROUND
@@ -120860,6 +123060,10 @@ $1 $2
     shell: shellModule,
     // AI Integration (decorations, state, widgets)
     ai: aiIntegrationModule,
+    // Ctrl-K Modal (cursor-positioned AI command input)
+    ctrlK: ctrlKModalModule,
+    // Comment Syntax (<!--! !--> markers with AI integration)
+    commentSyntax: commentSyntaxModule,
     // Utilities for runtime authors
     RuntimeRegistry,
     createRuntimeRegistry,

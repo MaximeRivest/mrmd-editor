@@ -73,6 +73,12 @@ import * as shellModule from './shell/index.js';
 // AI Integration (decorations, state, widgets)
 import * as aiIntegrationModule from './ai-integration.js';
 
+// Ctrl-K Modal (cursor-positioned AI command input)
+import * as ctrlKModalModule from './ctrl-k-modal.js';
+
+// Comment Syntax (<!--! !--> markers with AI integration)
+import * as commentSyntaxModule from './comment-syntax.js';
+
 // Cell controls (run buttons, queue, status)
 import { createCellControls, CellControlsSystem } from './cell-controls/index.js';
 
@@ -671,17 +677,35 @@ const codeBlockBackground = ViewPlugin.fromClass(class {
 
 /**
  * CSS styles for code block backgrounds
+ *
+ * Selection visibility fix:
+ * CodeMirror renders selection via .cm-selectionBackground elements in a layer
+ * BELOW the content layer. Opaque line backgrounds hide this selection.
+ * We fix this by:
+ * 1. Using semi-transparent backgrounds (allows selection to show through)
+ * 2. Styling ::selection pseudo-element (native browser selection, always on top)
  */
 const codeBlockStyles = EditorView.theme({
-  // Content lines - gray background
+  // Content lines - smaller than prose, monospace font for code
   '.cm-codeblock-line': {
-    backgroundColor: 'var(--widget-surface, #f5f5f5)',
+    backgroundColor: 'color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
+    fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
+    fontSize: 'var(--code-font-size, 0.8em)',
+    lineHeight: 'var(--code-line-height, 1.5)',
   },
-  // Fence lines (``` markers) - same background, smaller/faded text (no opacity to preserve bg)
+  // Fence lines (``` markers) - even smaller, very subtle
   '.cm-codeblock-fence': {
-    backgroundColor: 'var(--widget-surface, #f5f5f5)',
-    fontSize: '0.6em',
-    color: '#c0c0c0',
+    backgroundColor: 'color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
+    fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
+    fontSize: '0.5em',
+    color: 'var(--widget-text-muted, #888)',
+  },
+  // Selection styling for code blocks - ensure visibility with native ::selection
+  '.cm-codeblock-line::selection, .cm-codeblock-line *::selection': {
+    backgroundColor: 'var(--editor-selection, #264f78) !important',
+  },
+  '.cm-codeblock-fence::selection, .cm-codeblock-fence *::selection': {
+    backgroundColor: 'var(--editor-selection, #264f78) !important',
   },
 });
 // #endregion CODE_BLOCK_BACKGROUND
@@ -2939,6 +2963,10 @@ const mrmd = {
   shell: shellModule,
   // AI Integration (decorations, state, widgets)
   ai: aiIntegrationModule,
+  // Ctrl-K Modal (cursor-positioned AI command input)
+  ctrlK: ctrlKModalModule,
+  // Comment Syntax (<!--! !--> markers with AI integration)
+  commentSyntax: commentSyntaxModule,
   // Utilities for runtime authors
   RuntimeRegistry,
   createRuntimeRegistry,

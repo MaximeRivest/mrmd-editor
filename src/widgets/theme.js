@@ -510,7 +510,7 @@ export const midnightTheme = {
   '--editor-foreground': '#d4d4d4',
   '--editor-line-number': '#858585',
   '--editor-line-number-active': '#c6c6c6',
-  '--editor-selection': '#264f78',
+  '--editor-selection': '#37608c',        // Brighter blue for better contrast
   '--editor-selection-match': '#515c6a',
   '--editor-cursor': '#aeafad',
   '--editor-active-line': 'rgba(255, 255, 255, 0.05)',
@@ -704,7 +704,7 @@ export const daylightTheme = {
   '--editor-foreground': '#37474f',
   '--editor-line-number': '#90a4ae',
   '--editor-line-number-active': '#546e7a',
-  '--editor-selection': '#e3f2fd',
+  '--editor-selection': '#bbdefb',        // More saturated blue for better visibility
   '--editor-selection-match': '#fff9c4',
   '--editor-cursor': '#37474f',
   '--editor-active-line': 'rgba(0, 0, 0, 0.02)',
@@ -899,7 +899,7 @@ export const githubTheme = {
   '--editor-foreground': '#c9d1d9',
   '--editor-line-number': '#6e7681',
   '--editor-line-number-active': '#c9d1d9',
-  '--editor-selection': '#264f78',
+  '--editor-selection': '#3a6ea5',        // Brighter blue for better contrast on dark github bg
   '--editor-selection-match': '#3b5070',
   '--editor-cursor': '#c9d1d9',
   '--editor-active-line': 'rgba(110, 118, 129, 0.1)',
@@ -1207,8 +1207,8 @@ export const nordTheme = {
   '--editor-foreground': '#d8dee9',        // nord4
   '--editor-line-number': '#4c566a',       // nord3 - subtle but readable
   '--editor-line-number-active': '#d8dee9',// nord4 - matches text
-  '--editor-selection': '#434c5e',         // nord2
-  '--editor-selection-match': '#3b4252',   // nord1 - subtle match highlight
+  '--editor-selection': '#5e81ac',         // nord10 - much better contrast than nord2
+  '--editor-selection-match': '#4c566a',   // nord3 - visible match highlight
   '--editor-cursor': '#d8dee9',            // nord4 - matches text
   '--editor-active-line': 'rgba(67, 76, 94, 0.5)',  // nord2 at 50%
   '--editor-gutter': '#2e3440',            // nord0 - matches background
@@ -1386,6 +1386,396 @@ export const nordOutputsTheme = {
   '--widget-font-size-small': '0.75em',
 };
 
+// =============================================================================
+// GRAYSCALE THEMES
+// =============================================================================
+
+/**
+ * Grayscale Dark Theme
+ *
+ * A pure grayscale dark theme - no colors, just shades of gray.
+ * Perfect for distraction-free writing or reduced eye strain.
+ */
+export const grayscaleDarkTheme = {
+  name: 'grayscale-dark',
+  description: 'Pure grayscale dark theme - no colors, just gray tones.',
+  isDark: true,
+
+  // Spacing
+  '--widget-line-height': 'inherit',
+  '--widget-padding-x': '12px',
+  '--widget-padding-y': '8px',
+  '--widget-margin-y': '4px',
+  '--widget-border-radius': '6px',
+  '--widget-border-width': '1px',
+  '--widget-border-accent-width': '2px',
+
+  // Text layout
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
+
+  // Typography - Romantic programming aesthetic
+  // Code: Courier Prime - old typewriter feel, calm and nostalgic
+  // Prose: EB Garamond - 16th century elegance, Voltaire's quill
+  '--widget-font-mono': "'Courier Prime', 'Courier New', Courier, monospace",
+  '--widget-font-sans': "'EB Garamond', Georgia, 'Times New Roman', serif",
+  '--widget-font-serif': "'EB Garamond', Georgia, 'Times New Roman', serif",
+  '--widget-font-size': '0.95em',
+  '--widget-font-size-small': '0.85em',
+  '--widget-font-size-label': '12px',
+
+  // Surfaces - dark grays
+  '--widget-surface': 'rgba(255, 255, 255, 0.06)',
+  '--widget-surface-hover': 'rgba(255, 255, 255, 0.1)',
+  '--widget-surface-elevated': '#252525',
+  '--widget-surface-inset': 'rgba(0, 0, 0, 0.3)',
+
+  // Borders - subtle grays
+  '--widget-border': 'rgba(255, 255, 255, 0.12)',
+  '--widget-border-accent': 'rgba(255, 255, 255, 0.25)',
+  '--widget-border-focus': '#888888',
+
+  // Text - gray tones
+  '--widget-text': '#d0d0d0',
+  '--widget-text-muted': '#808080',
+  '--widget-text-accent': '#a0a0a0',
+
+  // Semantic - grayscale versions
+  '--widget-success': '#a0a0a0',
+  '--widget-warning': '#909090',
+  '--widget-error': '#707070',
+  '--widget-info': '#888888',
+
+  // ANSI colors - all grayscale
+  '--ansi-black': '#1a1a1a',
+  '--ansi-red': '#909090',
+  '--ansi-green': '#a8a8a8',
+  '--ansi-yellow': '#b0b0b0',
+  '--ansi-blue': '#888888',
+  '--ansi-magenta': '#989898',
+  '--ansi-cyan': '#a0a0a0',
+  '--ansi-white': '#d0d0d0',
+  '--ansi-bright-black': '#505050',
+  '--ansi-bright-red': '#a0a0a0',
+  '--ansi-bright-green': '#b8b8b8',
+  '--ansi-bright-yellow': '#c8c8c8',
+  '--ansi-bright-blue': '#989898',
+  '--ansi-bright-magenta': '#a8a8a8',
+  '--ansi-bright-cyan': '#b0b0b0',
+  '--ansi-bright-white': '#e8e8e8',
+
+  // Collaborator - grayscale
+  '--collab-human': '#909090',
+  '--collab-ai': '#707070',
+  '--collab-runtime': '#808080',
+
+  // Editor - EB Garamond for prose, literary romanticism
+  '--editor-background': '#1a1a1a',
+  '--editor-foreground': '#c8c8c8',
+  '--editor-font-family': "'EB Garamond', Georgia, 'Times New Roman', serif",
+  '--editor-font-size': '18px',
+  '--editor-line-height': '1.7',
+  '--editor-line-number': '#505050',
+  '--editor-line-number-active': '#808080',
+  '--editor-selection': '#404040',
+  '--editor-selection-match': '#353535',
+  '--editor-cursor': '#a0a0a0',
+  '--editor-active-line': 'rgba(255, 255, 255, 0.04)',
+  '--editor-gutter': '#1a1a1a',
+  '--editor-matching-bracket': 'rgba(255, 255, 255, 0.15)',
+
+  // Syntax highlighting - all grayscale with varied intensities
+  '--syntax-keyword': '#b0b0b0',
+  '--syntax-control': '#a0a0a0',
+  '--syntax-string': '#909090',
+  '--syntax-number': '#989898',
+  '--syntax-comment': '#606060',
+  '--syntax-function': '#c0c0c0',
+  '--syntax-variable': '#b8b8b8',
+  '--syntax-variable-special': '#a8a8a8',
+  '--syntax-property': '#b0b0b0',
+  '--syntax-operator': '#c8c8c8',
+  '--syntax-punctuation': '#888888',
+  '--syntax-type': '#a0a0a0',
+  '--syntax-class': '#b8b8b8',
+  '--syntax-constant': '#a8a8a8',
+  '--syntax-parameter': '#b0b0b0',
+  '--syntax-regexp': '#909090',
+  '--syntax-escape': '#989898',
+  '--syntax-tag': '#a8a8a8',
+  '--syntax-attribute': '#b0b0b0',
+  '--syntax-attribute-value': '#909090',
+  '--syntax-heading': '#d0d0d0',
+  '--syntax-link': '#a0a0a0',
+  '--syntax-link-text': '#909090',
+  '--syntax-emphasis': '#b8b8b8',
+  '--syntax-strong': '#d0d0d0',
+  '--syntax-strikethrough': '#606060',
+  '--syntax-quote': '#707070',
+  '--syntax-code': '#a0a0a0',
+  '--syntax-code-background': 'rgba(255, 255, 255, 0.06)',
+  '--syntax-meta': '#707070',
+  '--syntax-inserted': '#a0a0a0',
+  '--syntax-deleted': '#808080',
+  '--syntax-changed': '#909090',
+
+  // Markdown rendering
+  '--md-heading-1-size': '1.75em',
+  '--md-heading-2-size': '1.4em',
+  '--md-heading-3-size': '1.2em',
+  '--md-heading-4-size': '1.1em',
+  '--md-heading-5-size': '1.05em',
+  '--md-heading-6-size': '1em',
+  '--md-heading-weight': '600',
+  '--md-heading-line-height': '1.3',
+  '--md-heading-margin-top': '0.5em',
+  '--md-marker-color': '#606060',
+  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--md-link-color': '#a0a0a0',
+  '--md-link-decoration': 'underline',
+  '--md-code-background': 'rgba(255, 255, 255, 0.08)',
+  '--md-code-color': '#a0a0a0',
+  '--md-code-padding': '0.15em 0.35em',
+  '--md-code-radius': '3px',
+  '--md-blockquote-border': 'rgba(255, 255, 255, 0.2)',
+  '--md-blockquote-border-width': '2px',
+  '--md-blockquote-color': '#707070',
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#606060',
+  '--md-hr-color': 'rgba(255, 255, 255, 0.15)',
+  '--md-hr-height': '1px',
+  '--md-hr-margin': '1.5em 0',
+  '--md-table-border': 'rgba(255, 255, 255, 0.1)',
+  '--md-table-header-bg': 'rgba(255, 255, 255, 0.05)',
+  '--md-table-header-weight': '600',
+  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-table-stripe-bg': 'transparent',
+  '--md-image-max-width': '100%',
+  '--md-image-border-radius': '6px',
+  '--md-checkbox-size': '1em',
+  '--md-checkbox-color': '#808080',
+  '--md-alert-note-color': '#808080',
+  '--md-alert-tip-color': '#909090',
+  '--md-alert-important-color': '#888888',
+  '--md-alert-warning-color': '#787878',
+  '--md-alert-caution-color': '#686868',
+
+  // Shell - Uses EB Garamond for literary feel
+  '--mrmd-ui-font': "'EB Garamond', Georgia, 'Times New Roman', serif",
+  '--mrmd-ui-font-size': '14px',
+  '--mrmd-ui-font-size-sm': '12px',
+  '--mrmd-panel-bg': '#1a1a1a',
+  '--mrmd-popup-bg': '#252525',
+  '--mrmd-bg': '#1a1a1a',
+  '--mrmd-fg': '#c0c0c0',
+  '--mrmd-fg-muted': '#707070',
+  '--mrmd-border': '#333333',
+  '--mrmd-hover-bg': 'rgba(255, 255, 255, 0.06)',
+  '--mrmd-active-bg': 'rgba(255, 255, 255, 0.1)',
+  '--mrmd-selection-bg': 'rgba(255, 255, 255, 0.15)',
+  '--mrmd-accent': '#909090',
+  '--mrmd-accent-hover': '#a0a0a0',
+  '--mrmd-success': '#909090',
+  '--mrmd-warning': '#808080',
+  '--mrmd-error': '#707070',
+  '--mrmd-shadow-md': '0 4px 12px rgba(0, 0, 0, 0.4)',
+  '--mrmd-shadow-lg': '0 8px 32px rgba(0, 0, 0, 0.5)',
+  '--mrmd-shadow-xl': '0 16px 48px rgba(0, 0, 0, 0.6)',
+};
+
+/**
+ * Grayscale Light Theme
+ *
+ * A pure grayscale light theme - no colors, just shades of gray.
+ * Clean, minimal, distraction-free.
+ */
+export const grayscaleLightTheme = {
+  name: 'grayscale-light',
+  description: 'Pure grayscale light theme - no colors, just gray tones.',
+  isDark: false,
+
+  // Spacing
+  '--widget-line-height': 'inherit',
+  '--widget-padding-x': '12px',
+  '--widget-padding-y': '8px',
+  '--widget-margin-y': '4px',
+  '--widget-border-radius': '6px',
+  '--widget-border-width': '1px',
+  '--widget-border-accent-width': '2px',
+
+  // Text layout
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
+
+  // Typography - Romantic programming aesthetic
+  // Code: Courier Prime - old typewriter feel, calm and nostalgic
+  // Prose: EB Garamond - 16th century elegance, Voltaire's quill
+  '--widget-font-mono': "'Courier Prime', 'Courier New', Courier, monospace",
+  '--widget-font-sans': "'EB Garamond', Georgia, 'Times New Roman', serif",
+  '--widget-font-serif': "'EB Garamond', Georgia, 'Times New Roman', serif",
+  '--widget-font-size': '0.95em',
+  '--widget-font-size-small': '0.85em',
+  '--widget-font-size-label': '12px',
+
+  // Surfaces - light grays
+  '--widget-surface': 'rgba(0, 0, 0, 0.04)',
+  '--widget-surface-hover': 'rgba(0, 0, 0, 0.07)',
+  '--widget-surface-elevated': '#ffffff',
+  '--widget-surface-inset': 'rgba(0, 0, 0, 0.03)',
+
+  // Borders - subtle grays
+  '--widget-border': 'rgba(0, 0, 0, 0.12)',
+  '--widget-border-accent': 'rgba(0, 0, 0, 0.25)',
+  '--widget-border-focus': '#666666',
+
+  // Text - gray tones
+  '--widget-text': '#333333',
+  '--widget-text-muted': '#777777',
+  '--widget-text-accent': '#555555',
+
+  // Semantic - grayscale versions
+  '--widget-success': '#555555',
+  '--widget-warning': '#666666',
+  '--widget-error': '#444444',
+  '--widget-info': '#5a5a5a',
+
+  // ANSI colors - all grayscale
+  '--ansi-black': '#333333',
+  '--ansi-red': '#555555',
+  '--ansi-green': '#4a4a4a',
+  '--ansi-yellow': '#5a5a5a',
+  '--ansi-blue': '#606060',
+  '--ansi-magenta': '#505050',
+  '--ansi-cyan': '#484848',
+  '--ansi-white': '#888888',
+  '--ansi-bright-black': '#666666',
+  '--ansi-bright-red': '#4a4a4a',
+  '--ansi-bright-green': '#404040',
+  '--ansi-bright-yellow': '#505050',
+  '--ansi-bright-blue': '#555555',
+  '--ansi-bright-magenta': '#454545',
+  '--ansi-bright-cyan': '#3a3a3a',
+  '--ansi-bright-white': '#777777',
+
+  // Collaborator - grayscale
+  '--collab-human': '#555555',
+  '--collab-ai': '#666666',
+  '--collab-runtime': '#5a5a5a',
+
+  // Editor - EB Garamond for prose, literary romanticism
+  '--editor-background': '#fafafa',
+  '--editor-foreground': '#333333',
+  '--editor-font-family': "'EB Garamond', Georgia, 'Times New Roman', serif",
+  '--editor-font-size': '18px',
+  '--editor-line-height': '1.7',
+  '--editor-line-number': '#aaaaaa',
+  '--editor-line-number-active': '#666666',
+  '--editor-selection': '#d0d0d0',
+  '--editor-selection-match': '#e0e0e0',
+  '--editor-cursor': '#333333',
+  '--editor-active-line': 'rgba(0, 0, 0, 0.03)',
+  '--editor-gutter': '#fafafa',
+  '--editor-matching-bracket': 'rgba(0, 0, 0, 0.1)',
+
+  // Syntax highlighting - all grayscale with varied intensities
+  '--syntax-keyword': '#444444',
+  '--syntax-control': '#4a4a4a',
+  '--syntax-string': '#555555',
+  '--syntax-number': '#505050',
+  '--syntax-comment': '#999999',
+  '--syntax-function': '#333333',
+  '--syntax-variable': '#3a3a3a',
+  '--syntax-variable-special': '#454545',
+  '--syntax-property': '#404040',
+  '--syntax-operator': '#333333',
+  '--syntax-punctuation': '#666666',
+  '--syntax-type': '#4a4a4a',
+  '--syntax-class': '#3a3a3a',
+  '--syntax-constant': '#454545',
+  '--syntax-parameter': '#404040',
+  '--syntax-regexp': '#555555',
+  '--syntax-escape': '#505050',
+  '--syntax-tag': '#454545',
+  '--syntax-attribute': '#404040',
+  '--syntax-attribute-value': '#555555',
+  '--syntax-heading': '#222222',
+  '--syntax-link': '#555555',
+  '--syntax-link-text': '#4a4a4a',
+  '--syntax-emphasis': '#3a3a3a',
+  '--syntax-strong': '#222222',
+  '--syntax-strikethrough': '#999999',
+  '--syntax-quote': '#777777',
+  '--syntax-code': '#555555',
+  '--syntax-code-background': 'rgba(0, 0, 0, 0.05)',
+  '--syntax-meta': '#888888',
+  '--syntax-inserted': '#4a4a4a',
+  '--syntax-deleted': '#666666',
+  '--syntax-changed': '#555555',
+
+  // Markdown rendering
+  '--md-heading-1-size': '1.75em',
+  '--md-heading-2-size': '1.4em',
+  '--md-heading-3-size': '1.2em',
+  '--md-heading-4-size': '1.1em',
+  '--md-heading-5-size': '1.05em',
+  '--md-heading-6-size': '1em',
+  '--md-heading-weight': '600',
+  '--md-heading-line-height': '1.3',
+  '--md-heading-margin-top': '0.5em',
+  '--md-marker-color': '#999999',
+  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--md-link-color': '#555555',
+  '--md-link-decoration': 'underline',
+  '--md-code-background': 'rgba(0, 0, 0, 0.06)',
+  '--md-code-color': '#555555',
+  '--md-code-padding': '0.15em 0.35em',
+  '--md-code-radius': '3px',
+  '--md-blockquote-border': 'rgba(0, 0, 0, 0.2)',
+  '--md-blockquote-border-width': '2px',
+  '--md-blockquote-color': '#777777',
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#888888',
+  '--md-hr-color': 'rgba(0, 0, 0, 0.15)',
+  '--md-hr-height': '1px',
+  '--md-hr-margin': '1.5em 0',
+  '--md-table-border': 'rgba(0, 0, 0, 0.1)',
+  '--md-table-header-bg': 'rgba(0, 0, 0, 0.03)',
+  '--md-table-header-weight': '600',
+  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-table-stripe-bg': 'transparent',
+  '--md-image-max-width': '100%',
+  '--md-image-border-radius': '6px',
+  '--md-checkbox-size': '1em',
+  '--md-checkbox-color': '#666666',
+  '--md-alert-note-color': '#666666',
+  '--md-alert-tip-color': '#555555',
+  '--md-alert-important-color': '#5a5a5a',
+  '--md-alert-warning-color': '#6a6a6a',
+  '--md-alert-caution-color': '#7a7a7a',
+
+  // Shell - Uses EB Garamond for literary feel
+  '--mrmd-ui-font': "'EB Garamond', Georgia, 'Times New Roman', serif",
+  '--mrmd-ui-font-size': '14px',
+  '--mrmd-ui-font-size-sm': '12px',
+  '--mrmd-panel-bg': '#f5f5f5',
+  '--mrmd-popup-bg': '#ffffff',
+  '--mrmd-bg': '#fafafa',
+  '--mrmd-fg': '#333333',
+  '--mrmd-fg-muted': '#888888',
+  '--mrmd-border': '#e0e0e0',
+  '--mrmd-hover-bg': 'rgba(0, 0, 0, 0.04)',
+  '--mrmd-active-bg': 'rgba(0, 0, 0, 0.07)',
+  '--mrmd-selection-bg': 'rgba(0, 0, 0, 0.1)',
+  '--mrmd-accent': '#555555',
+  '--mrmd-accent-hover': '#444444',
+  '--mrmd-success': '#555555',
+  '--mrmd-warning': '#666666',
+  '--mrmd-error': '#777777',
+  '--mrmd-shadow-md': '0 4px 12px rgba(0, 0, 0, 0.1)',
+  '--mrmd-shadow-lg': '0 8px 32px rgba(0, 0, 0, 0.12)',
+  '--mrmd-shadow-xl': '0 16px 48px rgba(0, 0, 0, 0.15)',
+};
+
 // #endregion BUILT_IN_THEMES
 
 // #region THEME_REGISTRY
@@ -1400,6 +1790,8 @@ const themeRegistry = new Map([
   ['github', githubTheme],
   ['nord', nordTheme],
   ['nord-outputs', nordOutputsTheme],
+  ['grayscale-dark', grayscaleDarkTheme],
+  ['grayscale-light', grayscaleLightTheme],
 ]);
 
 /**

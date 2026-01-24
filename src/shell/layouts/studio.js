@@ -361,6 +361,32 @@ export async function createStudio(target, options = {}) {
       newEditor.view.dispatch({
         effects: mrmd.codemirror.StateEffect.appendConfig.of(aiExtensions),
       });
+
+      // Add Ctrl-K modal extension
+      if (mrmd.default.ctrlK?.createCtrlKExtension) {
+        const ctrlKExtensions = mrmd.default.ctrlK.createCtrlKExtension({
+          aiClient,
+          juiceLevel: shellState.get('ai')?.juiceLevel || 0,
+          onError: (err) => {
+            console.error('[Studio] Ctrl-K error:', err);
+            emit('aiCommandError', { command: 'ctrl-k', error: err.message });
+          },
+        });
+        newEditor.view.dispatch({
+          effects: mrmd.codemirror.StateEffect.appendConfig.of(ctrlKExtensions),
+        });
+      }
+
+      // Add Comment Syntax extension
+      if (mrmd.default.commentSyntax?.createCommentSyntaxExtension) {
+        const commentExtensions = mrmd.default.commentSyntax.createCommentSyntaxExtension({
+          aiClient,
+          juiceLevel: shellState.get('ai')?.juiceLevel || 0,
+        });
+        newEditor.view.dispatch({
+          effects: mrmd.codemirror.StateEffect.appendConfig.of(commentExtensions),
+        });
+      }
     }
 
     return newEditor;

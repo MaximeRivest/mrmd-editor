@@ -10,7 +10,7 @@
  * - ResponsePicker widget for multi-model responses
  */
 
-import { StateField, StateEffect, Facet } from '@codemirror/state';
+import { StateField, StateEffect, Facet, Prec } from '@codemirror/state';
 import { Decoration, WidgetType, EditorView, ViewPlugin } from '@codemirror/view';
 import { keymap } from '@codemirror/view';
 
@@ -966,7 +966,7 @@ export function createSparkPlugin(onSparkClick) {
 // Keybindings
 // ===========================================================================
 
-export const aiKeymap = keymap.of([
+export const aiKeymap = Prec.highest(keymap.of([
   {
     key: 'Enter',
     run(view) {
@@ -1125,7 +1125,7 @@ export const aiKeymap = keymap.of([
       return false;
     },
   },
-]);
+]));
 
 // ===========================================================================
 // CSS Styles
@@ -1624,7 +1624,7 @@ let activePalette = null;
  */
 const LONG_PRESS_CONFIG = {
   quickPhaseMs: 100,    // Time before showing loading indicator
-  triggerMs: 1500,      // Time to trigger palette
+  triggerMs: 700,       // Time to trigger palette
 };
 
 /**

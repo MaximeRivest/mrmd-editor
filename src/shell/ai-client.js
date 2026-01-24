@@ -28,6 +28,7 @@ export const AI_CATEGORIES = {
   TEXT: ['GetSynonymsPredict', 'GetPhraseSynonymsPredict', 'ReformatMarkdownPredict', 'IdentifyReplacementPredict'],
   DOCUMENT: ['DocumentResponsePredict', 'DocumentSummaryPredict', 'DocumentAnalysisPredict'],
   NOTEBOOK: ['NotebookNamePredict'],
+  EDIT: ['EditAtCursorPredict', 'AddressCommentPredict', 'AddressAllCommentsPredict', 'AddressNearbyCommentPredict'],
 };
 
 /**
@@ -378,6 +379,76 @@ export class AiClient {
     return this.execute('NotebookNamePredict', {
       document,
       current_name: currentName,
+    }, options);
+  }
+
+  // ===========================================================================
+  // Edit methods (Ctrl-K and comments)
+  // ===========================================================================
+
+  /**
+   * Execute an instruction at cursor position
+   * @param {string} textBefore - Text before cursor
+   * @param {string} textAfter - Text after cursor
+   * @param {string} selection - Selected text (empty if no selection)
+   * @param {string} fullDocument - Full document content
+   * @param {string} instruction - User's instruction
+   */
+  async editAtCursor(textBefore, textAfter, selection, fullDocument, instruction, options = {}) {
+    return this.execute('EditAtCursorPredict', {
+      text_before: textBefore,
+      text_after: textAfter,
+      selection,
+      full_document: fullDocument,
+      instruction,
+    }, options);
+  }
+
+  /**
+   * Address a single comment
+   * @param {string} fullDocument - Full document content
+   * @param {string} commentText - Comment text content
+   * @param {string} contextBefore - Text before comment
+   * @param {string} contextAfter - Text after comment
+   * @param {string} commentRaw - Raw comment including markers
+   */
+  async addressComment(fullDocument, commentText, contextBefore, contextAfter, commentRaw, options = {}) {
+    return this.execute('AddressCommentPredict', {
+      full_document: fullDocument,
+      comment_text: commentText,
+      comment_context_before: contextBefore,
+      comment_context_after: contextAfter,
+      comment_raw: commentRaw,
+    }, options);
+  }
+
+  /**
+   * Address all comments in document
+   * @param {string} fullDocument - Full document content
+   * @param {Array<{text: string, context_before: string, context_after: string}>} comments - Comments info
+   */
+  async addressAllComments(fullDocument, comments, options = {}) {
+    return this.execute('AddressAllCommentsPredict', {
+      full_document: fullDocument,
+      comments,
+    }, options);
+  }
+
+  /**
+   * Address comment nearest to cursor
+   * @param {string} fullDocument - Full document content
+   * @param {string} cursorContextBefore - Text before cursor
+   * @param {string} cursorContextAfter - Text after cursor
+   * @param {{text: string, context_before: string, context_after: string}} nearbyComment - Nearby comment info
+   * @param {string} nearbyCommentRaw - Raw comment including markers
+   */
+  async addressNearbyComment(fullDocument, cursorContextBefore, cursorContextAfter, nearbyComment, nearbyCommentRaw, options = {}) {
+    return this.execute('AddressNearbyCommentPredict', {
+      full_document: fullDocument,
+      cursor_context_before: cursorContextBefore,
+      cursor_context_after: cursorContextAfter,
+      nearby_comment: nearbyComment,
+      nearby_comment_raw: nearbyCommentRaw,
     }, options);
   }
 }

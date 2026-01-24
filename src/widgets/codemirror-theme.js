@@ -38,12 +38,20 @@ export function createCodemirrorTheme(theme) {
       backgroundColor: theme['--editor-background'] || '#1e1e1e',
       color: theme['--editor-foreground'] || '#d4d4d4',
       fontFamily: theme['--editor-font-family'] || 'inherit',
+      fontSize: theme['--editor-font-size'] || 'inherit',
     },
 
     // Content area
     '.cm-content': {
       caretColor: theme['--editor-cursor'] || '#aeafad',
       fontFamily: theme['--editor-font-family'] || 'inherit',
+      fontSize: theme['--editor-font-size'] || 'inherit',
+      lineHeight: theme['--editor-line-height'] || 'inherit',
+    },
+
+    // Lines
+    '.cm-line': {
+      lineHeight: theme['--editor-line-height'] || 'inherit',
     },
 
     // Cursor

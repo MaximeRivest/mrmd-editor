@@ -397,15 +397,62 @@ function buildDecorations(view, awarenessSystem) {
     const isEmpty = trimmedContent.length === 0;
 
     if (anyCollaboratorFocused) {
-      // EDITING MODE: Show raw text with visible ANSI codes
-      // Add line decorations for editing state visual feedback
-      for (let i = startLine.number; i <= endLine.number; i++) {
+      // EDITING MODE: Keep ANSI colors rendered, but make escape sequences
+      // subtle (visible but small) so they can be selected/deleted.
+      // Colors update live as you edit - deleting an escape sequence removes its styling.
+
+      // Fence lines - subtle styling, clearly editable
+      decorations.push(
+        Decoration.line({
+          class: 'cm-output-fence-editing cm-output-fence-start-editing',
+        }).range(startLine.from)
+      );
+      decorations.push(
+        Decoration.line({
+          class: 'cm-output-fence-editing cm-output-fence-end-editing',
+        }).range(endLine.from)
+      );
+
+      // Content lines - same styling as rendered mode (consistent appearance)
+      for (let i = startLine.number + 1; i < endLine.number; i++) {
         const line = doc.line(i);
         decorations.push(
           Decoration.line({
-            class: 'cm-output-line-editing',
+            class: 'cm-output-content-line cm-output-content-editing',
           }).range(line.from)
         );
+      }
+
+      // Parse ANSI and apply color styling even in editing mode
+      const contentStartLine = doc.line(startLine.number + 1);
+      const contentEndLine = doc.line(endLine.number - 1);
+
+      if (contentStartLine.number <= contentEndLine.number && !isEmpty) {
+        const contentStart = contentStartLine.from;
+        const { escapes, styles } = parseAnsiDecorations(content, contentStart);
+
+        // Make escape sequences subtle but still selectable/deletable
+        // Using Decoration.mark instead of replace so they remain in the document
+        for (const esc of escapes) {
+          if (esc.from < esc.to && esc.from >= contentStart) {
+            decorations.push(
+              Decoration.mark({
+                class: 'cm-ansi-escape-editing',
+              }).range(esc.from, esc.to)
+            );
+          }
+        }
+
+        // Apply ANSI color styling (same as viewing mode)
+        for (const style of styles) {
+          if (style.from < style.to && style.classes && style.from >= contentStart) {
+            decorations.push(
+              Decoration.mark({
+                class: style.classes,
+              }).range(style.from, style.to)
+            );
+          }
+        }
       }
     } else {
       // VIEWING MODE: Render ANSI colors inline, hide escape sequences
@@ -660,7 +707,7 @@ export const outputWidgetPlugin = ViewPlugin.fromClass(
  * See widgets/theme.js for available tokens.
  */
 export const outputWidgetStyles = `
-/* Output widget container */
+/* Output widget container - attenuated, secondary to code */
 /* Widget is absolutely positioned - overlays on transparent text lines, doesn't add to flow */
 .cm-output-widget {
   position: absolute;
@@ -669,14 +716,14 @@ export const outputWidgetStyles = `
   top: var(--widget-offset-top, 0);  /* Can be negative to pull widget up closer to code block */
   z-index: 1;
   font-family: var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', monospace);
-  font-size: var(--widget-font-size, 0.9em);
-  line-height: var(--widget-line-height, inherit);
+  font-size: var(--output-font-size, 0.7em);
+  line-height: var(--output-line-height, 1.4);
   padding: var(--widget-padding-y, 8px) var(--widget-padding-x, 12px);
   background: var(--widget-surface, rgba(0, 0, 0, 0.35));
   border-radius: var(--widget-border-radius, 6px);
   overflow-x: auto;
-  border-left: var(--widget-border-accent-width, 3px) solid var(--widget-border-accent, rgba(100, 149, 237, 0.6));
   cursor: pointer;
+  opacity: var(--output-opacity, 0.8);
 }
 
 .cm-output-widget pre {
@@ -760,17 +807,27 @@ export const outputWidgetStyles = `
   /* Visual marker for block end */
 }
 
-/* Content lines - typewriter console style for output block */
+/* Content lines - attenuated console style for output block
+ *
+ * Design: Outputs are secondary to code - smaller, muted, visually recessed.
+ * Selection visibility: Using color-mix for semi-transparent background.
+ */
 .cm-output-content-line {
-  background: var(--widget-surface, rgba(0, 0, 0, 0.35));
-  border-left: var(--widget-border-accent-width, 0) solid var(--widget-border-accent, transparent);
+  background: color-mix(in srgb, var(--widget-surface, rgba(0, 0, 0, 0.35)) 85%, transparent);
   margin-left: var(--widget-inset-left, 0);
   padding-left: var(--widget-padding-x, 16px);
   padding-right: var(--widget-padding-x, 16px);
   font-family: var(--widget-font-mono, 'Roboto Mono', 'SF Mono', Monaco, Consolas, monospace);
-  font-size: var(--widget-font-size, 0.85em);
-  line-height: var(--widget-line-height, 1.6);
-  color: var(--widget-text, #37474f);
+  font-size: var(--output-font-size, 0.7em);
+  line-height: var(--output-line-height, 1.4);
+  color: var(--output-text, var(--widget-text-muted, #6b7280));
+  opacity: var(--output-opacity, 0.8);
+}
+
+/* Selection styling for output content - ensure visibility */
+.cm-output-content-line::selection,
+.cm-output-content-line *::selection {
+  background: var(--editor-selection, #264f78) !important;
 }
 
 /* First content line - add top padding and rounded corners */
@@ -795,13 +852,60 @@ export const outputWidgetStyles = `
   tab-size: 4;
 }
 
-/* Editing mode - show raw content with different styling */
-.cm-output-line-editing {
-  background: var(--widget-surface-elevated, #1e1e1e);
-  border-left: var(--widget-border-accent-width, 3px) solid var(--widget-warning, #f59e0b);
+/* ==========================================================================
+   EDITING MODE STYLES
+
+   When cursor is in an output block, we show raw text but maintain visual
+   consistency with the rendered appearance. Key differences:
+   - Fence lines are visible (subtle styling)
+   - ANSI escape codes are visible (necessary for editing)
+   - Content lines keep the same styling as rendered mode
+   ========================================================================== */
+
+/* Fence lines in editing mode - visible but subtle */
+.cm-output-fence-editing {
+  background: color-mix(in srgb, var(--widget-surface, rgba(0, 0, 0, 0.35)) 60%, transparent);
+  font-family: var(--widget-font-mono, 'SF Mono', Monaco, monospace);
+  font-size: 0.65em;
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.3));
+  padding-left: var(--widget-padding-x, 16px);
+  margin-left: var(--widget-inset-left, 0);
+  opacity: 0.7;
 }
 
-/* ANSI escape sequences - hidden (zero-width) */
+/* Opening fence - rounded top corners */
+.cm-output-fence-start-editing {
+  border-top-left-radius: var(--widget-border-radius, 6px);
+  border-top-right-radius: var(--widget-border-radius, 6px);
+  padding-top: 4px;
+}
+
+/* Closing fence - rounded bottom corners */
+.cm-output-fence-end-editing {
+  border-bottom-left-radius: var(--widget-border-radius, 6px);
+  border-bottom-right-radius: var(--widget-border-radius, 6px);
+  padding-bottom: 4px;
+}
+
+/* Content lines in editing mode - no extra styling needed, inherits from .cm-output-content-line */
+.cm-output-content-editing {
+  /* Editing mode uses same attenuated style as viewing mode */
+}
+
+/* Selection styling for editing mode */
+.cm-output-fence-editing::selection,
+.cm-output-fence-editing *::selection,
+.cm-output-content-editing::selection,
+.cm-output-content-editing *::selection {
+  background: var(--editor-selection, #264f78) !important;
+}
+
+/* Legacy class - keep for backwards compatibility */
+.cm-output-line-editing {
+  background: color-mix(in srgb, var(--widget-surface-elevated, #1e1e1e) 90%, transparent);
+}
+
+/* ANSI escape sequences - hidden (zero-width) in viewing mode */
 .cm-ansi-escape-hidden {
   display: inline !important;
   font-size: 0 !important;
@@ -819,14 +923,50 @@ export const outputWidgetStyles = `
   display: none !important;
 }
 
+/* ANSI escape sequences in EDITING mode - subtle but selectable/deletable
+ * Shows as a small colored pill that can be selected and deleted.
+ * Deleting this removes the associated color styling.
+ */
+.cm-ansi-escape-editing {
+  font-size: 0.6em;
+  padding: 0 2px;
+  margin: 0 1px;
+  background: var(--widget-surface-inset, rgba(255, 255, 255, 0.08));
+  border-radius: 3px;
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.4));
+  vertical-align: middle;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.cm-ansi-escape-editing:hover {
+  opacity: 1;
+  background: var(--widget-surface-hover, rgba(255, 255, 255, 0.12));
+}
+
+/* When selected, make it clearly visible */
+.cm-ansi-escape-editing::selection {
+  background: var(--editor-selection, #264f78) !important;
+  opacity: 1;
+}
+
 /* Legacy widget support (for transition period) */
 .cm-output-widget-hidden {
   display: none !important;
 }
 
-/* Widget text color */
+/* Widget text color - muted for attenuated appearance */
 .cm-output-widget pre {
-  color: var(--widget-text, #e0e0e0);
+  color: var(--output-text, var(--widget-text-muted, #9ca3af));
+}
+
+/* Selection styling for rendered output widget */
+.cm-output-widget::selection,
+.cm-output-widget *::selection,
+.cm-output-content::selection,
+.cm-output-content *::selection {
+  background: var(--editor-selection, #264f78) !important;
 }
 
 /* Output content container */
@@ -842,11 +982,12 @@ export const outputWidgetStyles = `
   right: 0;
   z-index: 1;
   font-family: var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', monospace);
-  font-size: var(--widget-font-size-small, 0.85em);
-  color: var(--widget-text-muted, rgba(255, 255, 255, 0.35));
+  font-size: var(--output-font-size, 0.75em);
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.25));
   padding: 4px var(--widget-padding-x, 12px);
   margin: 2px 0;
   font-style: italic;
+  opacity: 0.6;
 }
 
 /* Stdin input widget - positioned via CodeMirror decoration system */
