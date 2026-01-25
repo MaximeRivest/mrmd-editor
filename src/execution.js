@@ -693,6 +693,13 @@ export class ExecutionManager {
       // Check for existing output block and create/update with new execId
       const existingOutput = findOutputBlock(content, currentCell.end);
 
+      // Determine output type based on language (for rich rendering)
+      // HTML and CSS get special output types for visual rendering
+      const langLower = language.toLowerCase();
+      const isRichOutput = ['html', 'htm', 'css', 'style', 'stylesheet'].includes(langLower);
+      const outputType = isRichOutput ? langLower.replace(/^(htm|style|stylesheet)$/, (m) => m === 'htm' ? 'html' : 'css') : null;
+      const outputTag = outputType ? `output:${execId}:${outputType}` : `output:${execId}`;
+
       if (existingOutput) {
         // Replace existing output block with new one that has our execId
         // This ensures clean slate and proper execId tagging
@@ -700,14 +707,14 @@ export class ExecutionManager {
           changes: {
             from: existingOutput.start,
             to: existingOutput.end,
-            insert: `\`\`\`output:${execId}\n\`\`\``
+            insert: `\`\`\`${outputTag}\n\`\`\``
           },
         });
       } else {
         // Create new output block with execId
         const insertPos = currentCell.end;
         this.editor.view.dispatch({
-          changes: { from: insertPos, insert: `\n\n\`\`\`output:${execId}\n\`\`\`` },
+          changes: { from: insertPos, insert: `\n\n\`\`\`${outputTag}\n\`\`\`` },
         });
       }
 
@@ -971,36 +978,67 @@ export class ExecutionManager {
             })
             .join('\n');
 
-          // Get FRESH content right before dispatch to avoid stale positions
-          // (Yjs sync may have changed the document during async asset processing)
-          const freshContent = this.editor.view.state.doc.toString();
-          const freshOutputBlock = findOutputBlockByExecId(freshContent, execId);
+          // Insert using Yjs directly to avoid CodeMirror/Yjs sync conflicts
+          // The y-codemirror binding will automatically update the editor
+          const yText = this.editor.yText || this.editor.getYText?.();
 
-          if (freshOutputBlock) {
-            // Check if there are existing images after the output block that we should replace
-            const afterBlock = freshContent.slice(freshOutputBlock.blockEnd);
-            const existingImageMatch = afterBlock.match(/^\n*(?:!\[[^\]]*\]\([^)]*\)\n*)+/);
+          if (yText) {
+            try {
+              // Get content from Yjs (source of truth for collaborative editing)
+              const yContent = yText.toString();
 
-            let insertPos = freshOutputBlock.blockEnd;
-            let deleteLength = 0;
+              // Find the output block by execId in Yjs content
+              const blockPattern = new RegExp('```output:' + execId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[^`]*```');
+              const match = yContent.match(blockPattern);
 
-            if (existingImageMatch) {
-              // Replace existing images
-              deleteLength = existingImageMatch[0].length;
+              if (match) {
+                const blockEnd = match.index + match[0].length;
+
+                // Check for existing images after this block that we should replace
+                const afterBlock = yContent.slice(blockEnd);
+                const existingImageMatch = afterBlock.match(/^\n*(?:!\[[^\]]*\]\([^)]*\)\n*)+/);
+
+                let insertPos = blockEnd;
+                let deleteLength = 0;
+
+                if (existingImageMatch) {
+                  deleteLength = existingImageMatch[0].length;
+                }
+
+                // Use Yjs transact for atomic operation
+                yText.doc.transact(() => {
+                  if (deleteLength > 0) {
+                    yText.delete(insertPos, deleteLength);
+                  }
+                  yText.insert(insertPos, '\n\n' + imageMarkdown + '\n');
+                });
+
+                console.log('[execution] Inserted', collectedAssets.length, 'plot image(s) via Yjs after output block');
+              } else {
+                console.warn('[execution] Could not find output block in Yjs content for image insertion, execId:', execId);
+              }
+            } catch (yjsErr) {
+              console.error('[execution] Yjs insertion failed:', yjsErr);
             }
-
-            // Insert after output block (with newline)
-            this.editor.view.dispatch({
-              changes: {
-                from: insertPos,
-                to: insertPos + deleteLength,
-                insert: '\n\n' + imageMarkdown + '\n',
-              },
-            });
-
-            console.log('[execution] Inserted', collectedAssets.length, 'plot image(s) after output block');
           } else {
-            console.warn('[execution] Could not find output block for image insertion, execId:', execId);
+            // Fallback to CodeMirror dispatch if yText not available
+            console.warn('[execution] yText not available, falling back to dispatch');
+            try {
+              const currentContent = this.editor.getContent();
+              const outputBlock = findOutputBlockByExecId(currentContent, execId);
+
+              if (outputBlock) {
+                this.editor.view.dispatch({
+                  changes: {
+                    from: outputBlock.blockEnd,
+                    insert: '\n\n' + imageMarkdown + '\n',
+                  },
+                });
+                console.log('[execution] Inserted', collectedAssets.length, 'plot image(s) via dispatch');
+              }
+            } catch (dispatchErr) {
+              console.error('[execution] Dispatch fallback failed:', dispatchErr);
+            }
           }
         }
       }

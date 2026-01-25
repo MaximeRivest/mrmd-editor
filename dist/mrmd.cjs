@@ -55117,6 +55117,244 @@ class EmptyOutputWidget extends WidgetType {
 }
 
 /**
+ * Widget for rendering HTML output in a sandboxed iframe.
+ * Used for ```html code blocks to show rendered HTML.
+ */
+class HtmlOutputWidget extends WidgetType {
+  /**
+   * @param {string} content - HTML content to render
+   * @param {boolean} hidden - Whether widget should be hidden (cursor in block)
+   * @param {number} blockStart - Document position where this output block starts
+   * @param {string|null} execId - Execution ID for this output block
+   */
+  constructor(content, hidden = false, blockStart = 0, execId = null) {
+    super();
+    this.content = content;
+    this.hidden = hidden;
+    this.blockStart = blockStart;
+    this.execId = execId;
+  }
+
+  eq(other) {
+    return other.content === this.content && other.hidden === this.hidden && other.blockStart === this.blockStart && other.execId === this.execId;
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = 'cm-html-output-widget' + (this.hidden ? ' cm-output-widget-hidden' : '');
+    container.dataset.outputBlockStart = String(this.blockStart);
+    if (this.execId) {
+      container.dataset.execId = this.execId;
+    }
+
+    // Create sandboxed iframe for HTML rendering
+    const iframe = document.createElement('iframe');
+    iframe.className = 'cm-html-output-iframe';
+    iframe.sandbox = 'allow-scripts allow-same-origin';
+    iframe.style.cssText = 'width: 100%; border: none; background: white; border-radius: 4px; min-height: 60px;';
+
+    container.appendChild(iframe);
+
+    // Write content to iframe after it's attached to DOM
+    requestAnimationFrame(() => {
+      try {
+        const doc = iframe.contentDocument || iframe.contentWindow?.document;
+        if (doc) {
+          // Wrap content in a basic HTML structure with some default styles
+          const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 8px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #333;
+    }
+    img { max-width: 100%; height: auto; }
+    table { border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 8px; }
+    th { background: #f5f5f5; }
+    pre { background: #f5f5f5; padding: 8px; border-radius: 4px; overflow-x: auto; }
+    code { background: #f0f0f0; padding: 2px 4px; border-radius: 2px; font-size: 0.9em; }
+  </style>
+</head>
+<body>${this.content}</body>
+</html>`;
+          doc.open();
+          doc.write(htmlContent);
+          doc.close();
+
+          // Auto-resize iframe to content height
+          const resizeIframe = () => {
+            const body = doc.body;
+            const html = doc.documentElement;
+            if (body && html) {
+              const height = Math.max(
+                body.scrollHeight,
+                body.offsetHeight,
+                html.clientHeight,
+                html.scrollHeight,
+                html.offsetHeight
+              );
+              iframe.style.height = Math.max(60, Math.min(height + 16, 500)) + 'px';
+            }
+          };
+
+          // Resize after images load
+          const images = doc.querySelectorAll('img');
+          if (images.length > 0) {
+            let loaded = 0;
+            images.forEach(img => {
+              if (img.complete) {
+                loaded++;
+              } else {
+                img.onload = img.onerror = () => {
+                  loaded++;
+                  if (loaded === images.length) resizeIframe();
+                };
+              }
+            });
+            if (loaded === images.length) resizeIframe();
+          } else {
+            resizeIframe();
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to render HTML in iframe:', e);
+        container.innerHTML = `<pre class="cm-output-content">${this.content.replace(/</g, '&lt;')}</pre>`;
+      }
+    });
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+/**
+ * Widget for rendering CSS output with visual preview.
+ * Injects CSS into a scoped container and shows a preview.
+ */
+class CssOutputWidget extends WidgetType {
+  /**
+   * @param {string} content - CSS content
+   * @param {boolean} hidden - Whether widget should be hidden (cursor in block)
+   * @param {number} blockStart - Document position where this output block starts
+   * @param {string|null} execId - Execution ID for this output block
+   */
+  constructor(content, hidden = false, blockStart = 0, execId = null) {
+    super();
+    this.content = content;
+    this.hidden = hidden;
+    this.blockStart = blockStart;
+    this.execId = execId;
+  }
+
+  eq(other) {
+    return other.content === this.content && other.hidden === this.hidden && other.blockStart === this.blockStart && other.execId === this.execId;
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = 'cm-css-output-widget' + (this.hidden ? ' cm-output-widget-hidden' : '');
+    container.dataset.outputBlockStart = String(this.blockStart);
+    if (this.execId) {
+      container.dataset.execId = this.execId;
+    }
+
+    // Generate unique scope class
+    const scopeClass = `mrmd-css-scope-${this.execId || Date.now()}`.replace(/[^a-z0-9-]/gi, '-');
+
+    // Create style element with scoped CSS
+    const style = document.createElement('style');
+    style.dataset.mrmdCssOutput = this.execId || '';
+
+    // Scope all CSS selectors to prevent leaking into the main document
+    // This is a simplified scoping - prepends .scopeClass to each selector
+    const scopedCss = this.content.replace(
+      /([^{}]+)\{/g,
+      (match, selectors) => {
+        const scoped = selectors
+          .split(',')
+          .map(sel => {
+            const trimmed = sel.trim();
+            // Don't scope @rules, keyframe percentages, or empty selectors
+            if (!trimmed || trimmed.startsWith('@') || trimmed.startsWith('from') ||
+                trimmed.startsWith('to') || /^\d+%$/.test(trimmed)) {
+              return trimmed;
+            }
+            // Replace :root with the scope class
+            if (trimmed === ':root' || trimmed === 'html' || trimmed === 'body') {
+              return `.${scopeClass}`;
+            }
+            return `.${scopeClass} ${trimmed}`;
+          })
+          .join(', ');
+        return `${scoped} {`;
+      }
+    );
+    style.textContent = scopedCss;
+
+    // Inject the style into document head
+    document.head.appendChild(style);
+
+    // Create preview container
+    const preview = document.createElement('div');
+    preview.className = `cm-css-preview ${scopeClass}`;
+    preview.innerHTML = `
+      <div class="cm-css-preview-header">
+        <span class="cm-css-preview-badge">CSS Applied</span>
+        <span class="cm-css-preview-info">${this.content.split('{').length - 1} rules</span>
+      </div>
+      <div class="cm-css-preview-demo">
+        <p>Preview text with <strong>bold</strong> and <em>italic</em></p>
+        <button>Button</button>
+        <a href="#">Link</a>
+        <div class="box">Box element</div>
+      </div>
+    `;
+
+    container.appendChild(preview);
+
+    // Clean up style when widget is destroyed
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.removedNodes) {
+          if (node === container || node.contains?.(container)) {
+            style.remove();
+            observer.disconnect();
+            return;
+          }
+        }
+      }
+    });
+
+    // Start observing when attached
+    requestAnimationFrame(() => {
+      if (container.parentElement) {
+        observer.observe(container.parentElement.parentElement || document.body, {
+          childList: true,
+          subtree: true
+        });
+      }
+    });
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+/**
  * Widget for stdin input blocks.
  * Renders a styled input area that's part of the document (Yjs collaborative).
  * The actual input is stored in the stdin block content, not in this widget.
@@ -55272,10 +55510,23 @@ function buildDecorations$5(view, awarenessSystem) {
   const outputBlocksByExecId = new Map();
 
   while ((match = outputBlockRegex.exec(text)) !== null) {
-    const execId = match[2] || null;  // May be undefined for legacy ```output blocks
+    const rawExecId = match[2] || null;  // May be undefined for legacy ```output blocks
     const content = match[3];
     const blockStart = match.index;
     const blockEnd = blockStart + match[0].length;
+
+    // Parse execId and output type (format: execId:type, e.g., "exec-123:html")
+    let execId = rawExecId;
+    let outputType = null;  // 'html', 'css', or null for regular output
+    if (rawExecId && rawExecId.includes(':')) {
+      const parts = rawExecId.split(':');
+      // Check if last part is a type indicator
+      const lastPart = parts[parts.length - 1].toLowerCase();
+      if (['html', 'htm', 'css', 'style'].includes(lastPart)) {
+        outputType = lastPart === 'htm' || lastPart === 'html' ? 'html' : 'css';
+        execId = parts.slice(0, -1).join(':');
+      }
+    }
 
     // Store for stdin positioning
     if (execId) {
@@ -55366,10 +55617,10 @@ function buildDecorations$5(view, awarenessSystem) {
         }
       }
     } else {
-      // VIEWING MODE: Render ANSI colors inline, hide escape sequences
-      // This uses line-by-line rendering that works with CM6 virtualization
+      // VIEWING MODE: Render output visually
+      // For HTML/CSS, use rich widgets; for regular output, use ANSI styling
 
-      // Style the fence lines (opening and closing fences)
+      // Style the fence lines (opening and closing fences) - always hidden
       decorations.push(
         Decoration.line({
           class: 'cm-output-fence-line cm-output-fence-start',
@@ -55381,57 +55632,97 @@ function buildDecorations$5(view, awarenessSystem) {
         }).range(endLine.from)
       );
 
-      // Style content lines with output block background
-      for (let i = startLine.number + 1; i < endLine.number; i++) {
-        const line = doc.line(i);
-        decorations.push(
-          Decoration.line({
-            class: 'cm-output-content-line',
-          }).range(line.from)
-        );
-      }
-
-      // Parse ANSI content and create decorations for escape sequences and styled text
-      // Content starts after the opening fence line
-      const contentStartLine = doc.line(startLine.number + 1);
-      const contentEndLine = doc.line(endLine.number - 1);
-
-      if (contentStartLine.number <= contentEndLine.number && !isEmpty) {
-        const contentStart = contentStartLine.from;
-        const { escapes, styles } = parseAnsiDecorations(content, contentStart);
-
-        // Replace escape sequences with zero-width element (Decoration.replace)
-        // This fully hides them, including CodeMirror's control character rendering
-        for (const esc of escapes) {
-          if (esc.from < esc.to && esc.from >= contentStart) {
-            decorations.push(
-              Decoration.replace({
-                widget: new HiddenWidget(),
-              }).range(esc.from, esc.to)
-            );
-          }
+      // Check if this is a rich output type (HTML or CSS)
+      if (outputType === 'html' && !isEmpty) {
+        // HTML OUTPUT: Hide content lines and add HTML widget
+        for (let i = startLine.number + 1; i < endLine.number; i++) {
+          const line = doc.line(i);
+          decorations.push(
+            Decoration.line({
+              class: 'cm-output-content-line cm-rich-output-hidden',
+            }).range(line.from)
+          );
         }
 
-        // Add decorations to style text with ANSI colors
-        for (const style of styles) {
-          if (style.from < style.to && style.classes && style.from >= contentStart) {
-            decorations.push(
-              Decoration.mark({
-                class: style.classes,
-              }).range(style.from, style.to)
-            );
-          }
-        }
-      }
-
-      // Add empty output indicator if needed
-      if (isEmpty) {
+        // Add HTML rendering widget
         decorations.push(
           Decoration.widget({
-            widget: new EmptyOutputWidget(false, blockStart, execId),
+            widget: new HtmlOutputWidget(trimmedContent, false, blockStart, execId),
             side: 1,
           }).range(startLine.to)
         );
+      } else if (outputType === 'css' && !isEmpty) {
+        // CSS OUTPUT: Hide content lines and add CSS widget
+        for (let i = startLine.number + 1; i < endLine.number; i++) {
+          const line = doc.line(i);
+          decorations.push(
+            Decoration.line({
+              class: 'cm-output-content-line cm-rich-output-hidden',
+            }).range(line.from)
+          );
+        }
+
+        // Add CSS preview widget
+        decorations.push(
+          Decoration.widget({
+            widget: new CssOutputWidget(trimmedContent, false, blockStart, execId),
+            side: 1,
+          }).range(startLine.to)
+        );
+      } else {
+        // REGULAR OUTPUT: Show with ANSI styling
+        // Style content lines with output block background
+        for (let i = startLine.number + 1; i < endLine.number; i++) {
+          const line = doc.line(i);
+          decorations.push(
+            Decoration.line({
+              class: 'cm-output-content-line',
+            }).range(line.from)
+          );
+        }
+
+        // Parse ANSI content and create decorations for escape sequences and styled text
+        // Content starts after the opening fence line
+        const contentStartLine = doc.line(startLine.number + 1);
+        const contentEndLine = doc.line(endLine.number - 1);
+
+        if (contentStartLine.number <= contentEndLine.number && !isEmpty) {
+          const contentStart = contentStartLine.from;
+          const { escapes, styles } = parseAnsiDecorations(content, contentStart);
+
+          // Replace escape sequences with zero-width element (Decoration.replace)
+          // This fully hides them, including CodeMirror's control character rendering
+          for (const esc of escapes) {
+            if (esc.from < esc.to && esc.from >= contentStart) {
+              decorations.push(
+                Decoration.replace({
+                  widget: new HiddenWidget(),
+                }).range(esc.from, esc.to)
+              );
+            }
+          }
+
+          // Add decorations to style text with ANSI colors
+          for (const style of styles) {
+            if (style.from < style.to && style.classes && style.from >= contentStart) {
+              decorations.push(
+                Decoration.mark({
+                  class: style.classes,
+                }).range(style.from, style.to)
+              );
+            }
+          }
+        }
+
+        // Add empty output indicator if needed
+        if (isEmpty) {
+          decorations.push(
+            Decoration.widget({
+              widget: new EmptyOutputWidget(false, blockStart, execId),
+              side: 1,
+            }).range(startLine.to)
+          );
+        }
       }
     }
 
@@ -55976,6 +56267,137 @@ const outputWidgetStyles = `
 @keyframes fadeOut {
   0%, 70% { opacity: 1; }
   100% { opacity: 0; }
+}
+
+/* ==========================================================================
+   RICH OUTPUT WIDGETS (HTML/CSS)
+
+   These widgets render HTML in iframes or inject CSS with preview.
+   Content lines are hidden when these widgets are shown.
+   ========================================================================== */
+
+/* Hide content lines for rich output (HTML/CSS) */
+.cm-rich-output-hidden {
+  font-size: 0 !important;
+  line-height: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  color: transparent !important;
+}
+
+/* HTML Output Widget - renders HTML in sandboxed iframe */
+.cm-html-output-widget {
+  position: relative;
+  margin: 8px 0;
+  padding: 0;
+  background: var(--widget-surface, rgba(0, 0, 0, 0.35));
+  border-radius: var(--widget-border-radius, 6px);
+  overflow: hidden;
+  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
+}
+
+.cm-html-output-widget::before {
+  content: 'HTML';
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 10px;
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.4));
+  background: var(--widget-surface-inset, rgba(0, 0, 0, 0.3));
+  padding: 2px 6px;
+  border-radius: 3px;
+  z-index: 10;
+  font-family: var(--widget-font-mono, monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.cm-html-output-iframe {
+  display: block;
+  width: 100%;
+  min-height: 60px;
+  max-height: 500px;
+  border: none;
+  background: white;
+  border-radius: 4px;
+}
+
+/* CSS Output Widget - shows CSS with preview */
+.cm-css-output-widget {
+  position: relative;
+  margin: 8px 0;
+  padding: 0;
+  background: var(--widget-surface, rgba(0, 0, 0, 0.35));
+  border-radius: var(--widget-border-radius, 6px);
+  overflow: hidden;
+  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
+  border-left: 3px solid var(--widget-accent-css, #64b5f6);
+}
+
+.cm-css-preview {
+  padding: var(--widget-padding-y, 8px) var(--widget-padding-x, 12px);
+}
+
+.cm-css-preview-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
+}
+
+.cm-css-preview-badge {
+  font-size: 10px;
+  color: var(--widget-accent-css, #64b5f6);
+  background: rgba(100, 181, 246, 0.15);
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-family: var(--widget-font-mono, monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.cm-css-preview-info {
+  font-size: 11px;
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.5));
+}
+
+.cm-css-preview-demo {
+  padding: 12px;
+  background: white;
+  border-radius: 4px;
+  color: #333;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+}
+
+.cm-css-preview-demo p {
+  margin: 0 0 8px 0;
+}
+
+.cm-css-preview-demo button {
+  padding: 6px 12px;
+  margin-right: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #f5f5f5;
+  cursor: pointer;
+}
+
+.cm-css-preview-demo a {
+  color: #0066cc;
+  text-decoration: underline;
+  margin-right: 8px;
+}
+
+.cm-css-preview-demo .box {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px dashed #ccc;
+  background: #fafafa;
 }
 
 /* ANSI text styles */
@@ -57322,6 +57744,13 @@ class ExecutionManager {
       // Check for existing output block and create/update with new execId
       const existingOutput = findOutputBlock(content, currentCell.end);
 
+      // Determine output type based on language (for rich rendering)
+      // HTML and CSS get special output types for visual rendering
+      const langLower = language.toLowerCase();
+      const isRichOutput = ['html', 'htm', 'css', 'style', 'stylesheet'].includes(langLower);
+      const outputType = isRichOutput ? langLower.replace(/^(htm|style|stylesheet)$/, (m) => m === 'htm' ? 'html' : 'css') : null;
+      const outputTag = outputType ? `output:${execId}:${outputType}` : `output:${execId}`;
+
       if (existingOutput) {
         // Replace existing output block with new one that has our execId
         // This ensures clean slate and proper execId tagging
@@ -57329,14 +57758,14 @@ class ExecutionManager {
           changes: {
             from: existingOutput.start,
             to: existingOutput.end,
-            insert: `\`\`\`output:${execId}\n\`\`\``
+            insert: `\`\`\`${outputTag}\n\`\`\``
           },
         });
       } else {
         // Create new output block with execId
         const insertPos = currentCell.end;
         this.editor.view.dispatch({
-          changes: { from: insertPos, insert: `\n\n\`\`\`output:${execId}\n\`\`\`` },
+          changes: { from: insertPos, insert: `\n\n\`\`\`${outputTag}\n\`\`\`` },
         });
       }
 
@@ -57600,36 +58029,67 @@ class ExecutionManager {
             })
             .join('\n');
 
-          // Get FRESH content right before dispatch to avoid stale positions
-          // (Yjs sync may have changed the document during async asset processing)
-          const freshContent = this.editor.view.state.doc.toString();
-          const freshOutputBlock = findOutputBlockByExecId(freshContent, execId);
+          // Insert using Yjs directly to avoid CodeMirror/Yjs sync conflicts
+          // The y-codemirror binding will automatically update the editor
+          const yText = this.editor.yText || this.editor.getYText?.();
 
-          if (freshOutputBlock) {
-            // Check if there are existing images after the output block that we should replace
-            const afterBlock = freshContent.slice(freshOutputBlock.blockEnd);
-            const existingImageMatch = afterBlock.match(/^\n*(?:!\[[^\]]*\]\([^)]*\)\n*)+/);
+          if (yText) {
+            try {
+              // Get content from Yjs (source of truth for collaborative editing)
+              const yContent = yText.toString();
 
-            let insertPos = freshOutputBlock.blockEnd;
-            let deleteLength = 0;
+              // Find the output block by execId in Yjs content
+              const blockPattern = new RegExp('```output:' + execId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[^`]*```');
+              const match = yContent.match(blockPattern);
 
-            if (existingImageMatch) {
-              // Replace existing images
-              deleteLength = existingImageMatch[0].length;
+              if (match) {
+                const blockEnd = match.index + match[0].length;
+
+                // Check for existing images after this block that we should replace
+                const afterBlock = yContent.slice(blockEnd);
+                const existingImageMatch = afterBlock.match(/^\n*(?:!\[[^\]]*\]\([^)]*\)\n*)+/);
+
+                let insertPos = blockEnd;
+                let deleteLength = 0;
+
+                if (existingImageMatch) {
+                  deleteLength = existingImageMatch[0].length;
+                }
+
+                // Use Yjs transact for atomic operation
+                yText.doc.transact(() => {
+                  if (deleteLength > 0) {
+                    yText.delete(insertPos, deleteLength);
+                  }
+                  yText.insert(insertPos, '\n\n' + imageMarkdown + '\n');
+                });
+
+                console.log('[execution] Inserted', collectedAssets.length, 'plot image(s) via Yjs after output block');
+              } else {
+                console.warn('[execution] Could not find output block in Yjs content for image insertion, execId:', execId);
+              }
+            } catch (yjsErr) {
+              console.error('[execution] Yjs insertion failed:', yjsErr);
             }
-
-            // Insert after output block (with newline)
-            this.editor.view.dispatch({
-              changes: {
-                from: insertPos,
-                to: insertPos + deleteLength,
-                insert: '\n\n' + imageMarkdown + '\n',
-              },
-            });
-
-            console.log('[execution] Inserted', collectedAssets.length, 'plot image(s) after output block');
           } else {
-            console.warn('[execution] Could not find output block for image insertion, execId:', execId);
+            // Fallback to CodeMirror dispatch if yText not available
+            console.warn('[execution] yText not available, falling back to dispatch');
+            try {
+              const currentContent = this.editor.getContent();
+              const outputBlock = findOutputBlockByExecId(currentContent, execId);
+
+              if (outputBlock) {
+                this.editor.view.dispatch({
+                  changes: {
+                    from: outputBlock.blockEnd,
+                    insert: '\n\n' + imageMarkdown + '\n',
+                  },
+                });
+                console.log('[execution] Inserted', collectedAssets.length, 'plot image(s) via dispatch');
+              }
+            } catch (dispatchErr) {
+              console.error('[execution] Dispatch fallback failed:', dispatchErr);
+            }
           }
         }
       }
@@ -82530,6 +82990,15 @@ const DEFAULT_MAX_SESSIONS = 10;
  */
 
 /**
+ * Check if a value is a Promise
+ * @param {*} value
+ * @returns {boolean}
+ */
+function isPromise(value) {
+  return value && typeof value === 'object' && typeof value.then === 'function';
+}
+
+/**
  * Format arguments for logging
  * @param {Array<*>} args
  * @returns {string}
@@ -82549,6 +83018,21 @@ function formatArgs(args) {
       return String(arg);
     })
     .join(' ');
+}
+
+/**
+ * Check args for Promises and return warning message if found
+ * @param {Array<*>} args
+ * @returns {string | null}
+ */
+function checkForPromises(args) {
+  for (const arg of args) {
+    if (isPromise(arg)) {
+      return '⚠️  Promise detected - this value needs to be awaited. ' +
+             'Add "await" before the async call, or assign it to get the resolved value.';
+    }
+  }
+  return null;
 }
 
 /**
@@ -82593,11 +83077,23 @@ class ConsoleCapture {
     // Intercept methods
     console.log = (...args) => {
       this.#queue.push({ type: 'log', args, timestamp: Date.now() });
+      // Check for unresolved Promises and warn
+      const promiseWarning = checkForPromises(args);
+      if (promiseWarning) {
+        this.#queue.push({ type: 'warn', args: [promiseWarning], timestamp: Date.now() });
+        this.#originalConsole?.warn?.(promiseWarning);
+      }
       this.#originalConsole?.log?.(...args);
     };
 
     console.info = (...args) => {
       this.#queue.push({ type: 'info', args, timestamp: Date.now() });
+      // Check for unresolved Promises and warn
+      const promiseWarning = checkForPromises(args);
+      if (promiseWarning) {
+        this.#queue.push({ type: 'warn', args: [promiseWarning], timestamp: Date.now() });
+        this.#originalConsole?.warn?.(promiseWarning);
+      }
       this.#originalConsole?.info?.(...args);
     };
 
@@ -84001,12 +84497,110 @@ function isWordBoundary(code, pos) {
 /**
  * Async Transform
  *
- * Wraps code to support top-level await.
+ * Wraps code to support top-level await and auto-awaits common async patterns.
+ * This makes JavaScript feel more linear like Python/R/Julia.
  * @module transform/async
  */
 
+
 /**
- * Check if code contains top-level await
+ * Auto-insert await before common async function calls
+ * This makes JavaScript feel more linear like Python/R
+ *
+ * @param {string} code - Source code
+ * @returns {string} Code with auto-awaits inserted
+ */
+function autoInsertAwaits(code) {
+  // Don't process if code already uses await extensively
+  // (user knows what they're doing)
+  const awaitCount = (code.match(/\bawait\b/g) || []).length;
+  const lines = code.split('\n').length;
+  if (awaitCount > lines / 2) {
+    return code;
+  }
+
+  let result = code;
+
+  // Track positions to avoid double-processing
+  // We need to be careful not to add await before already-awaited expressions
+
+  // First, temporarily replace existing awaits to protect them
+  const awaitPlaceholders = [];
+  result = result.replace(/\bawait\s+/g, (match) => {
+    const placeholder = `__AWAIT_PLACEHOLDER_${awaitPlaceholders.length}__`;
+    awaitPlaceholders.push(match);
+    return placeholder;
+  });
+
+  // Also protect strings, comments, and template literals
+  const protectedStrings = [];
+
+  // Protect template literals
+  result = result.replace(/`(?:[^`\\]|\\.)*`/g, (match) => {
+    const placeholder = `__PROTECTED_${protectedStrings.length}__`;
+    protectedStrings.push(match);
+    return placeholder;
+  });
+
+  // Protect strings
+  result = result.replace(/"(?:[^"\\]|\\.)*"/g, (match) => {
+    const placeholder = `__PROTECTED_${protectedStrings.length}__`;
+    protectedStrings.push(match);
+    return placeholder;
+  });
+  result = result.replace(/'(?:[^'\\]|\\.)*'/g, (match) => {
+    const placeholder = `__PROTECTED_${protectedStrings.length}__`;
+    protectedStrings.push(match);
+    return placeholder;
+  });
+
+  // Protect comments
+  result = result.replace(/\/\/[^\n]*/g, (match) => {
+    const placeholder = `__PROTECTED_${protectedStrings.length}__`;
+    protectedStrings.push(match);
+    return placeholder;
+  });
+  result = result.replace(/\/\*[\s\S]*?\*\//g, (match) => {
+    const placeholder = `__PROTECTED_${protectedStrings.length}__`;
+    protectedStrings.push(match);
+    return placeholder;
+  });
+
+  // Now auto-insert awaits for common patterns
+  // fetch(...) -> await fetch(...)
+  result = result.replace(/\bfetch\s*\(/g, 'await fetch(');
+
+  // import(...) -> await import(...)
+  // But not "import x from" statements
+  result = result.replace(/(?<![.\w])import\s*\(/g, 'await import(');
+
+  // .json() .text() .blob() etc on response objects
+  // These methods also return Promises, so we need to await both:
+  // response.json() -> await (await response).json()
+  result = result.replace(/([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\.\s*json\s*\(\s*\)/g, 'await (await $1).json()');
+  result = result.replace(/([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\.\s*text\s*\(\s*\)/g, 'await (await $1).text()');
+  result = result.replace(/([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\.\s*blob\s*\(\s*\)/g, 'await (await $1).blob()');
+  result = result.replace(/([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\.\s*arrayBuffer\s*\(\s*\)/g, 'await (await $1).arrayBuffer()');
+  result = result.replace(/([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\.\s*formData\s*\(\s*\)/g, 'await (await $1).formData()');
+
+  // Restore protected content
+  for (let i = protectedStrings.length - 1; i >= 0; i--) {
+    result = result.replace(`__PROTECTED_${i}__`, protectedStrings[i]);
+  }
+
+  // Restore existing awaits
+  for (let i = awaitPlaceholders.length - 1; i >= 0; i--) {
+    result = result.replace(`__AWAIT_PLACEHOLDER_${i}__`, awaitPlaceholders[i]);
+  }
+
+  // Clean up any double awaits we might have introduced
+  result = result.replace(/\bawait\s+await\b/g, 'await');
+
+  return result;
+}
+
+/**
+ * Check if code contains top-level await (or will after auto-insertion)
  * @param {string} code
  * @returns {boolean}
  */
@@ -84071,12 +84665,40 @@ function hasTopLevelAwait(code) {
  * @returns {string} Wrapped code that returns last expression
  */
 function wrapWithLastExpression(code) {
-  const needsAsync = hasTopLevelAwait(code);
+  // Auto-insert awaits for common async patterns (fetch, import, .json(), etc.)
+  // This makes JavaScript feel more linear like Python/R/Julia
+  const autoAwaitedCode = autoInsertAwaits(code);
 
-  // Find the last expression and make it a return value
-  // This is tricky without AST - we use eval trick instead
+  // Check if code needs async (either explicit await or auto-inserted)
+  const needsAsync = hasTopLevelAwait(autoAwaitedCode);
+
+  if (needsAsync) {
+    // For code with await, wrap in async IIFE
+    // This allows await to work at the "top level" of the user's code
+    const asyncWrappedCode = `(async () => {\n${autoAwaitedCode}\n})()`;
+
+    // Now wrap to capture the result
+    const wrapped = `
+;(async function() {
+  let __result__;
+  try {
+    __result__ = await eval(${JSON.stringify(asyncWrappedCode)});
+  } catch (e) {
+    if (e instanceof SyntaxError) {
+      await eval(${JSON.stringify(asyncWrappedCode)});
+      __result__ = undefined;
+    } else {
+      throw e;
+    }
+  }
+  return __result__;
+})()`;
+    return wrapped.trim();
+  }
+
+  // No async needed - use simpler synchronous wrapper
   const wrapped = `
-;(${needsAsync ? 'async ' : ''}function() {
+;(function() {
   let __result__;
   try {
     __result__ = eval(${JSON.stringify(code)});
@@ -84181,7 +84803,19 @@ class JavaScriptExecutor extends BaseExecutor {
 
     try {
       // Execute in context (pass execId for input() support)
-      const rawResult = await context.execute(wrapped, { execId: options.execId });
+      let rawResult = await context.execute(wrapped, { execId: options.execId });
+
+      // Auto-await if result is a Promise (catch cases not handled by auto-await transform)
+      if (rawResult.result && typeof rawResult.result === 'object' && typeof rawResult.result.then === 'function') {
+        try {
+          rawResult.result = await rawResult.result;
+        } catch (promiseError) {
+          // Promise rejected - treat as error
+          rawResult.error = promiseError instanceof Error ? promiseError : new Error(String(promiseError));
+          rawResult.result = undefined;
+        }
+      }
+
       const duration = performance.now() - startTime;
 
       // Format result
@@ -117537,12 +118171,12 @@ const tokenDefinitions = {
   '--widget-font-mono': {
     description: 'Monospace font stack for code/output',
     category: 'typography',
-    default: "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+    default: "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
   },
   '--widget-font-sans': {
-    description: 'Sans-serif font stack for UI elements',
+    description: 'Serif font stack for prose and UI elements',
     category: 'typography',
-    default: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    default: "Literata, Charter, Georgia, serif",
   },
   '--widget-font-size': {
     description: 'Base font size for widgets (relative to editor)',
@@ -117866,6 +118500,45 @@ const tokenDefinitions = {
 
 // #endregion TOKEN_DEFINITIONS
 
+// #region FONT_FACES
+
+/**
+ * Shared @font-face declarations for Monaspace Neon and Literata.
+ * These are the default fonts used across most themes.
+ *
+ * Fonts are bundled in src/fonts/ and should be served from your app's assets.
+ * Adjust the paths below to match your deployment setup.
+ */
+const defaultFontFace = `
+@font-face {
+  font-family: 'Monaspace Neon Var';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./assets/fonts/MonaspaceNeon-Variable.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Literata';
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url('./assets/fonts/Literata-Variable.ttf') format('truetype');
+  font-optical-sizing: auto;
+}
+
+@font-face {
+  font-family: 'Literata';
+  font-style: italic;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url('./assets/fonts/Literata-Italic-Variable.ttf') format('truetype');
+  font-optical-sizing: auto;
+}
+`;
+
+// #endregion FONT_FACES
+
 // #region BUILT_IN_THEMES
 
 /**
@@ -117878,6 +118551,7 @@ const midnightTheme = {
   name: 'midnight',
   description: 'Deep dark theme with blue accents. Default for dark mode.',
   isDark: true,  // Controls CodeMirror editor theme
+  fontFace: defaultFontFace,
 
   // Spacing (shared across themes)
   '--widget-line-height': 'inherit',
@@ -117893,8 +118567,9 @@ const midnightTheme = {
   '--widget-word-break': 'break-word',
 
   // Typography (shared across themes)
-  '--widget-font-mono': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
-  '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  '--widget-font-mono': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+  '--widget-font-sans': "Literata, Charter, Georgia, serif",
+  '--editor-font-family': "Literata, Charter, Georgia, serif",
   '--widget-font-size': '0.9em',
   '--widget-font-size-small': '0.8em',
   '--widget-font-size-label': '11px',
@@ -118012,7 +118687,7 @@ const midnightTheme = {
   '--md-heading-line-height': '1.3',
   '--md-heading-margin-top': '0.5em',
   '--md-marker-color': '#6b7280',
-  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
   '--md-link-color': '#6495ed',
   '--md-link-decoration': 'underline',
   '--md-code-background': 'rgba(110, 118, 129, 0.2)',
@@ -118043,7 +118718,7 @@ const midnightTheme = {
   '--md-alert-caution-color': '#ef4444',
 
   // Shell (status bar, menus, dialogs)
-  '--mrmd-ui-font': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  '--mrmd-ui-font': "Literata, Charter, Georgia, serif",
   '--mrmd-ui-font-size': '13px',
   '--mrmd-ui-font-size-sm': '11px',
   '--mrmd-panel-bg': '#1e1e1e',
@@ -118075,6 +118750,7 @@ const daylightTheme = {
   name: 'daylight',
   description: 'Clean light theme inspired by Material for MkDocs.',
   isDark: false,  // Controls CodeMirror editor theme
+  fontFace: defaultFontFace,
 
   // Spacing
   '--widget-line-height': '1.6',
@@ -118093,12 +118769,12 @@ const daylightTheme = {
   '--widget-white-space': 'pre-wrap',
   '--widget-word-break': 'break-word',
 
-  // Typography
+  // Typography (Material Design - Roboto family)
   '--widget-font-mono': "'Roboto Mono', 'SF Mono', Monaco, Consolas, monospace",
   '--widget-font-sans': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
   '--widget-font-size': '0.85em',
 
-  // Main editor font - sans-serif for body text
+  // Main editor font
   '--editor-font-family': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
   '--widget-font-size-small': '0.75em',
   '--widget-font-size-label': '11px',
@@ -118287,6 +118963,7 @@ const githubTheme = {
   name: 'github',
   description: 'GitHub-inspired theme. Familiar for developers.',
   isDark: true,  // GitHub dark theme - controls CodeMirror editor theme
+  fontFace: defaultFontFace,
 
   // Spacing
   '--widget-line-height': 'inherit',
@@ -118301,9 +118978,10 @@ const githubTheme = {
   '--widget-white-space': 'pre-wrap',
   '--widget-word-break': 'break-word',
 
-  // Typography (GitHub's font stack)
-  '--widget-font-mono': "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
-  '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif",
+  // Typography
+  '--widget-font-mono': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+  '--widget-font-sans': "Literata, Charter, Georgia, serif",
+  '--editor-font-family': "Literata, Charter, Georgia, serif",
   '--widget-font-size': '0.875em',
   '--widget-font-size-small': '0.75em',
   '--widget-font-size-label': '12px',
@@ -118421,7 +119099,7 @@ const githubTheme = {
   '--md-heading-line-height': '1.3',
   '--md-heading-margin-top': '0.5em',
   '--md-marker-color': '#6e7681',
-  '--md-marker-font': "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
+  '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
   '--md-link-color': '#58a6ff',
   '--md-link-decoration': 'underline',
   '--md-code-background': 'rgba(110, 118, 129, 0.2)',
@@ -118452,7 +119130,7 @@ const githubTheme = {
   '--md-alert-caution-color': '#f85149',
 
   // Shell (status bar, menus, dialogs) - GitHub dark
-  '--mrmd-ui-font': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif",
+  '--mrmd-ui-font': "Literata, Charter, Georgia, serif",
   '--mrmd-ui-font-size': '14px',
   '--mrmd-ui-font-size-sm': '12px',
   '--mrmd-panel-bg': '#161b22',
@@ -118553,6 +119231,7 @@ const nordTheme = {
   name: 'nord',
   description: 'Arctic, north-bluish theme. Optimized for eye comfort during long sessions.',
   isDark: true,
+  fontFace: defaultFontFace,
 
   // ===========================================================================
   // SPACING
@@ -118573,11 +119252,10 @@ const nordTheme = {
 
   // ===========================================================================
   // TYPOGRAPHY
-  // Nord works well with most monospace fonts. We use a stack that prioritizes
-  // fonts known to render well with Nord's color palette.
   // ===========================================================================
-  '--widget-font-mono': "'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace",
-  '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  '--widget-font-mono': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+  '--widget-font-sans': "Literata, Charter, Georgia, serif",
+  '--editor-font-family': "Literata, Charter, Georgia, serif",
   '--widget-font-size': '0.9em',
   '--widget-font-size-small': '0.8em',
   '--widget-font-size-label': '11px',
@@ -118773,7 +119451,7 @@ const nordTheme = {
   '--md-heading-line-height': '1.3',
   '--md-heading-margin-top': '0.5em',
   '--md-marker-color': '#4c566a',          // nord3
-  '--md-marker-font': "'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace",
+  '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
   '--md-link-color': '#88c0d0',            // nord8
   '--md-link-decoration': 'underline',
   '--md-code-background': 'rgba(67, 76, 94, 0.5)',  // nord2 at 50%
@@ -119019,7 +119697,7 @@ const grayscaleDarkTheme = {
   '--md-heading-line-height': '1.3',
   '--md-heading-margin-top': '0.5em',
   '--md-marker-color': '#606060',
-  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
   '--md-link-color': '#a0a0a0',
   '--md-link-decoration': 'underline',
   '--md-code-background': 'rgba(255, 255, 255, 0.08)',
@@ -119222,7 +119900,7 @@ const grayscaleLightTheme = {
   '--md-heading-line-height': '1.3',
   '--md-heading-margin-top': '0.5em',
   '--md-marker-color': '#999999',
-  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
   '--md-link-color': '#555555',
   '--md-link-decoration': 'underline',
   '--md-code-background': 'rgba(0, 0, 0, 0.06)',

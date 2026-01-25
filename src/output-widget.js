@@ -206,6 +206,244 @@ class EmptyOutputWidget extends WidgetType {
 }
 
 /**
+ * Widget for rendering HTML output in a sandboxed iframe.
+ * Used for ```html code blocks to show rendered HTML.
+ */
+class HtmlOutputWidget extends WidgetType {
+  /**
+   * @param {string} content - HTML content to render
+   * @param {boolean} hidden - Whether widget should be hidden (cursor in block)
+   * @param {number} blockStart - Document position where this output block starts
+   * @param {string|null} execId - Execution ID for this output block
+   */
+  constructor(content, hidden = false, blockStart = 0, execId = null) {
+    super();
+    this.content = content;
+    this.hidden = hidden;
+    this.blockStart = blockStart;
+    this.execId = execId;
+  }
+
+  eq(other) {
+    return other.content === this.content && other.hidden === this.hidden && other.blockStart === this.blockStart && other.execId === this.execId;
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = 'cm-html-output-widget' + (this.hidden ? ' cm-output-widget-hidden' : '');
+    container.dataset.outputBlockStart = String(this.blockStart);
+    if (this.execId) {
+      container.dataset.execId = this.execId;
+    }
+
+    // Create sandboxed iframe for HTML rendering
+    const iframe = document.createElement('iframe');
+    iframe.className = 'cm-html-output-iframe';
+    iframe.sandbox = 'allow-scripts allow-same-origin';
+    iframe.style.cssText = 'width: 100%; border: none; background: white; border-radius: 4px; min-height: 60px;';
+
+    container.appendChild(iframe);
+
+    // Write content to iframe after it's attached to DOM
+    requestAnimationFrame(() => {
+      try {
+        const doc = iframe.contentDocument || iframe.contentWindow?.document;
+        if (doc) {
+          // Wrap content in a basic HTML structure with some default styles
+          const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 8px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #333;
+    }
+    img { max-width: 100%; height: auto; }
+    table { border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 8px; }
+    th { background: #f5f5f5; }
+    pre { background: #f5f5f5; padding: 8px; border-radius: 4px; overflow-x: auto; }
+    code { background: #f0f0f0; padding: 2px 4px; border-radius: 2px; font-size: 0.9em; }
+  </style>
+</head>
+<body>${this.content}</body>
+</html>`;
+          doc.open();
+          doc.write(htmlContent);
+          doc.close();
+
+          // Auto-resize iframe to content height
+          const resizeIframe = () => {
+            const body = doc.body;
+            const html = doc.documentElement;
+            if (body && html) {
+              const height = Math.max(
+                body.scrollHeight,
+                body.offsetHeight,
+                html.clientHeight,
+                html.scrollHeight,
+                html.offsetHeight
+              );
+              iframe.style.height = Math.max(60, Math.min(height + 16, 500)) + 'px';
+            }
+          };
+
+          // Resize after images load
+          const images = doc.querySelectorAll('img');
+          if (images.length > 0) {
+            let loaded = 0;
+            images.forEach(img => {
+              if (img.complete) {
+                loaded++;
+              } else {
+                img.onload = img.onerror = () => {
+                  loaded++;
+                  if (loaded === images.length) resizeIframe();
+                };
+              }
+            });
+            if (loaded === images.length) resizeIframe();
+          } else {
+            resizeIframe();
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to render HTML in iframe:', e);
+        container.innerHTML = `<pre class="cm-output-content">${this.content.replace(/</g, '&lt;')}</pre>`;
+      }
+    });
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+/**
+ * Widget for rendering CSS output with visual preview.
+ * Injects CSS into a scoped container and shows a preview.
+ */
+class CssOutputWidget extends WidgetType {
+  /**
+   * @param {string} content - CSS content
+   * @param {boolean} hidden - Whether widget should be hidden (cursor in block)
+   * @param {number} blockStart - Document position where this output block starts
+   * @param {string|null} execId - Execution ID for this output block
+   */
+  constructor(content, hidden = false, blockStart = 0, execId = null) {
+    super();
+    this.content = content;
+    this.hidden = hidden;
+    this.blockStart = blockStart;
+    this.execId = execId;
+  }
+
+  eq(other) {
+    return other.content === this.content && other.hidden === this.hidden && other.blockStart === this.blockStart && other.execId === this.execId;
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = 'cm-css-output-widget' + (this.hidden ? ' cm-output-widget-hidden' : '');
+    container.dataset.outputBlockStart = String(this.blockStart);
+    if (this.execId) {
+      container.dataset.execId = this.execId;
+    }
+
+    // Generate unique scope class
+    const scopeClass = `mrmd-css-scope-${this.execId || Date.now()}`.replace(/[^a-z0-9-]/gi, '-');
+
+    // Create style element with scoped CSS
+    const style = document.createElement('style');
+    style.dataset.mrmdCssOutput = this.execId || '';
+
+    // Scope all CSS selectors to prevent leaking into the main document
+    // This is a simplified scoping - prepends .scopeClass to each selector
+    const scopedCss = this.content.replace(
+      /([^{}]+)\{/g,
+      (match, selectors) => {
+        const scoped = selectors
+          .split(',')
+          .map(sel => {
+            const trimmed = sel.trim();
+            // Don't scope @rules, keyframe percentages, or empty selectors
+            if (!trimmed || trimmed.startsWith('@') || trimmed.startsWith('from') ||
+                trimmed.startsWith('to') || /^\d+%$/.test(trimmed)) {
+              return trimmed;
+            }
+            // Replace :root with the scope class
+            if (trimmed === ':root' || trimmed === 'html' || trimmed === 'body') {
+              return `.${scopeClass}`;
+            }
+            return `.${scopeClass} ${trimmed}`;
+          })
+          .join(', ');
+        return `${scoped} {`;
+      }
+    );
+    style.textContent = scopedCss;
+
+    // Inject the style into document head
+    document.head.appendChild(style);
+
+    // Create preview container
+    const preview = document.createElement('div');
+    preview.className = `cm-css-preview ${scopeClass}`;
+    preview.innerHTML = `
+      <div class="cm-css-preview-header">
+        <span class="cm-css-preview-badge">CSS Applied</span>
+        <span class="cm-css-preview-info">${this.content.split('{').length - 1} rules</span>
+      </div>
+      <div class="cm-css-preview-demo">
+        <p>Preview text with <strong>bold</strong> and <em>italic</em></p>
+        <button>Button</button>
+        <a href="#">Link</a>
+        <div class="box">Box element</div>
+      </div>
+    `;
+
+    container.appendChild(preview);
+
+    // Clean up style when widget is destroyed
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.removedNodes) {
+          if (node === container || node.contains?.(container)) {
+            style.remove();
+            observer.disconnect();
+            return;
+          }
+        }
+      }
+    });
+
+    // Start observing when attached
+    requestAnimationFrame(() => {
+      if (container.parentElement) {
+        observer.observe(container.parentElement.parentElement || document.body, {
+          childList: true,
+          subtree: true
+        });
+      }
+    });
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+/**
  * Widget for stdin input blocks.
  * Renders a styled input area that's part of the document (Yjs collaborative).
  * The actual input is stored in the stdin block content, not in this widget.
@@ -361,10 +599,23 @@ function buildDecorations(view, awarenessSystem) {
   const outputBlocksByExecId = new Map();
 
   while ((match = outputBlockRegex.exec(text)) !== null) {
-    const execId = match[2] || null;  // May be undefined for legacy ```output blocks
+    const rawExecId = match[2] || null;  // May be undefined for legacy ```output blocks
     const content = match[3];
     const blockStart = match.index;
     const blockEnd = blockStart + match[0].length;
+
+    // Parse execId and output type (format: execId:type, e.g., "exec-123:html")
+    let execId = rawExecId;
+    let outputType = null;  // 'html', 'css', or null for regular output
+    if (rawExecId && rawExecId.includes(':')) {
+      const parts = rawExecId.split(':');
+      // Check if last part is a type indicator
+      const lastPart = parts[parts.length - 1].toLowerCase();
+      if (['html', 'htm', 'css', 'style'].includes(lastPart)) {
+        outputType = lastPart === 'htm' || lastPart === 'html' ? 'html' : 'css';
+        execId = parts.slice(0, -1).join(':');
+      }
+    }
 
     // Store for stdin positioning
     if (execId) {
@@ -455,10 +706,10 @@ function buildDecorations(view, awarenessSystem) {
         }
       }
     } else {
-      // VIEWING MODE: Render ANSI colors inline, hide escape sequences
-      // This uses line-by-line rendering that works with CM6 virtualization
+      // VIEWING MODE: Render output visually
+      // For HTML/CSS, use rich widgets; for regular output, use ANSI styling
 
-      // Style the fence lines (opening and closing fences)
+      // Style the fence lines (opening and closing fences) - always hidden
       decorations.push(
         Decoration.line({
           class: 'cm-output-fence-line cm-output-fence-start',
@@ -470,57 +721,97 @@ function buildDecorations(view, awarenessSystem) {
         }).range(endLine.from)
       );
 
-      // Style content lines with output block background
-      for (let i = startLine.number + 1; i < endLine.number; i++) {
-        const line = doc.line(i);
-        decorations.push(
-          Decoration.line({
-            class: 'cm-output-content-line',
-          }).range(line.from)
-        );
-      }
-
-      // Parse ANSI content and create decorations for escape sequences and styled text
-      // Content starts after the opening fence line
-      const contentStartLine = doc.line(startLine.number + 1);
-      const contentEndLine = doc.line(endLine.number - 1);
-
-      if (contentStartLine.number <= contentEndLine.number && !isEmpty) {
-        const contentStart = contentStartLine.from;
-        const { escapes, styles } = parseAnsiDecorations(content, contentStart);
-
-        // Replace escape sequences with zero-width element (Decoration.replace)
-        // This fully hides them, including CodeMirror's control character rendering
-        for (const esc of escapes) {
-          if (esc.from < esc.to && esc.from >= contentStart) {
-            decorations.push(
-              Decoration.replace({
-                widget: new HiddenWidget(),
-              }).range(esc.from, esc.to)
-            );
-          }
+      // Check if this is a rich output type (HTML or CSS)
+      if (outputType === 'html' && !isEmpty) {
+        // HTML OUTPUT: Hide content lines and add HTML widget
+        for (let i = startLine.number + 1; i < endLine.number; i++) {
+          const line = doc.line(i);
+          decorations.push(
+            Decoration.line({
+              class: 'cm-output-content-line cm-rich-output-hidden',
+            }).range(line.from)
+          );
         }
 
-        // Add decorations to style text with ANSI colors
-        for (const style of styles) {
-          if (style.from < style.to && style.classes && style.from >= contentStart) {
-            decorations.push(
-              Decoration.mark({
-                class: style.classes,
-              }).range(style.from, style.to)
-            );
-          }
-        }
-      }
-
-      // Add empty output indicator if needed
-      if (isEmpty) {
+        // Add HTML rendering widget
         decorations.push(
           Decoration.widget({
-            widget: new EmptyOutputWidget(false, blockStart, execId),
+            widget: new HtmlOutputWidget(trimmedContent, false, blockStart, execId),
             side: 1,
           }).range(startLine.to)
         );
+      } else if (outputType === 'css' && !isEmpty) {
+        // CSS OUTPUT: Hide content lines and add CSS widget
+        for (let i = startLine.number + 1; i < endLine.number; i++) {
+          const line = doc.line(i);
+          decorations.push(
+            Decoration.line({
+              class: 'cm-output-content-line cm-rich-output-hidden',
+            }).range(line.from)
+          );
+        }
+
+        // Add CSS preview widget
+        decorations.push(
+          Decoration.widget({
+            widget: new CssOutputWidget(trimmedContent, false, blockStart, execId),
+            side: 1,
+          }).range(startLine.to)
+        );
+      } else {
+        // REGULAR OUTPUT: Show with ANSI styling
+        // Style content lines with output block background
+        for (let i = startLine.number + 1; i < endLine.number; i++) {
+          const line = doc.line(i);
+          decorations.push(
+            Decoration.line({
+              class: 'cm-output-content-line',
+            }).range(line.from)
+          );
+        }
+
+        // Parse ANSI content and create decorations for escape sequences and styled text
+        // Content starts after the opening fence line
+        const contentStartLine = doc.line(startLine.number + 1);
+        const contentEndLine = doc.line(endLine.number - 1);
+
+        if (contentStartLine.number <= contentEndLine.number && !isEmpty) {
+          const contentStart = contentStartLine.from;
+          const { escapes, styles } = parseAnsiDecorations(content, contentStart);
+
+          // Replace escape sequences with zero-width element (Decoration.replace)
+          // This fully hides them, including CodeMirror's control character rendering
+          for (const esc of escapes) {
+            if (esc.from < esc.to && esc.from >= contentStart) {
+              decorations.push(
+                Decoration.replace({
+                  widget: new HiddenWidget(),
+                }).range(esc.from, esc.to)
+              );
+            }
+          }
+
+          // Add decorations to style text with ANSI colors
+          for (const style of styles) {
+            if (style.from < style.to && style.classes && style.from >= contentStart) {
+              decorations.push(
+                Decoration.mark({
+                  class: style.classes,
+                }).range(style.from, style.to)
+              );
+            }
+          }
+        }
+
+        // Add empty output indicator if needed
+        if (isEmpty) {
+          decorations.push(
+            Decoration.widget({
+              widget: new EmptyOutputWidget(false, blockStart, execId),
+              side: 1,
+            }).range(startLine.to)
+          );
+        }
       }
     }
 
@@ -1065,6 +1356,137 @@ export const outputWidgetStyles = `
 @keyframes fadeOut {
   0%, 70% { opacity: 1; }
   100% { opacity: 0; }
+}
+
+/* ==========================================================================
+   RICH OUTPUT WIDGETS (HTML/CSS)
+
+   These widgets render HTML in iframes or inject CSS with preview.
+   Content lines are hidden when these widgets are shown.
+   ========================================================================== */
+
+/* Hide content lines for rich output (HTML/CSS) */
+.cm-rich-output-hidden {
+  font-size: 0 !important;
+  line-height: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  color: transparent !important;
+}
+
+/* HTML Output Widget - renders HTML in sandboxed iframe */
+.cm-html-output-widget {
+  position: relative;
+  margin: 8px 0;
+  padding: 0;
+  background: var(--widget-surface, rgba(0, 0, 0, 0.35));
+  border-radius: var(--widget-border-radius, 6px);
+  overflow: hidden;
+  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
+}
+
+.cm-html-output-widget::before {
+  content: 'HTML';
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 10px;
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.4));
+  background: var(--widget-surface-inset, rgba(0, 0, 0, 0.3));
+  padding: 2px 6px;
+  border-radius: 3px;
+  z-index: 10;
+  font-family: var(--widget-font-mono, monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.cm-html-output-iframe {
+  display: block;
+  width: 100%;
+  min-height: 60px;
+  max-height: 500px;
+  border: none;
+  background: white;
+  border-radius: 4px;
+}
+
+/* CSS Output Widget - shows CSS with preview */
+.cm-css-output-widget {
+  position: relative;
+  margin: 8px 0;
+  padding: 0;
+  background: var(--widget-surface, rgba(0, 0, 0, 0.35));
+  border-radius: var(--widget-border-radius, 6px);
+  overflow: hidden;
+  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
+  border-left: 3px solid var(--widget-accent-css, #64b5f6);
+}
+
+.cm-css-preview {
+  padding: var(--widget-padding-y, 8px) var(--widget-padding-x, 12px);
+}
+
+.cm-css-preview-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
+}
+
+.cm-css-preview-badge {
+  font-size: 10px;
+  color: var(--widget-accent-css, #64b5f6);
+  background: rgba(100, 181, 246, 0.15);
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-family: var(--widget-font-mono, monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.cm-css-preview-info {
+  font-size: 11px;
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.5));
+}
+
+.cm-css-preview-demo {
+  padding: 12px;
+  background: white;
+  border-radius: 4px;
+  color: #333;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+}
+
+.cm-css-preview-demo p {
+  margin: 0 0 8px 0;
+}
+
+.cm-css-preview-demo button {
+  padding: 6px 12px;
+  margin-right: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #f5f5f5;
+  cursor: pointer;
+}
+
+.cm-css-preview-demo a {
+  color: #0066cc;
+  text-decoration: underline;
+  margin-right: 8px;
+}
+
+.cm-css-preview-demo .box {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px dashed #ccc;
+  background: #fafafa;
 }
 
 /* ANSI text styles */

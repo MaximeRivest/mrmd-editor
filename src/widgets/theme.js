@@ -110,12 +110,12 @@ export const tokenDefinitions = {
   '--widget-font-mono': {
     description: 'Monospace font stack for code/output',
     category: 'typography',
-    default: "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+    default: "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
   },
   '--widget-font-sans': {
-    description: 'Sans-serif font stack for UI elements',
+    description: 'Serif font stack for prose and UI elements',
     category: 'typography',
-    default: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    default: "Literata, Charter, Georgia, serif",
   },
   '--widget-font-size': {
     description: 'Base font size for widgets (relative to editor)',
@@ -439,6 +439,45 @@ export const tokenDefinitions = {
 
 // #endregion TOKEN_DEFINITIONS
 
+// #region FONT_FACES
+
+/**
+ * Shared @font-face declarations for Monaspace Neon and Literata.
+ * These are the default fonts used across most themes.
+ *
+ * Fonts are bundled in src/fonts/ and should be served from your app's assets.
+ * Adjust the paths below to match your deployment setup.
+ */
+export const defaultFontFace = `
+@font-face {
+  font-family: 'Monaspace Neon Var';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./assets/fonts/MonaspaceNeon-Variable.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Literata';
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url('./assets/fonts/Literata-Variable.ttf') format('truetype');
+  font-optical-sizing: auto;
+}
+
+@font-face {
+  font-family: 'Literata';
+  font-style: italic;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url('./assets/fonts/Literata-Italic-Variable.ttf') format('truetype');
+  font-optical-sizing: auto;
+}
+`;
+
+// #endregion FONT_FACES
+
 // #region BUILT_IN_THEMES
 
 /**
@@ -451,6 +490,7 @@ export const midnightTheme = {
   name: 'midnight',
   description: 'Deep dark theme with blue accents. Default for dark mode.',
   isDark: true,  // Controls CodeMirror editor theme
+  fontFace: defaultFontFace,
 
   // Spacing (shared across themes)
   '--widget-line-height': 'inherit',
@@ -466,8 +506,9 @@ export const midnightTheme = {
   '--widget-word-break': 'break-word',
 
   // Typography (shared across themes)
-  '--widget-font-mono': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
-  '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  '--widget-font-mono': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+  '--widget-font-sans': "Literata, Charter, Georgia, serif",
+  '--editor-font-family': "Literata, Charter, Georgia, serif",
   '--widget-font-size': '0.9em',
   '--widget-font-size-small': '0.8em',
   '--widget-font-size-label': '11px',
@@ -585,7 +626,7 @@ export const midnightTheme = {
   '--md-heading-line-height': '1.3',
   '--md-heading-margin-top': '0.5em',
   '--md-marker-color': '#6b7280',
-  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
   '--md-link-color': '#6495ed',
   '--md-link-decoration': 'underline',
   '--md-code-background': 'rgba(110, 118, 129, 0.2)',
@@ -616,7 +657,7 @@ export const midnightTheme = {
   '--md-alert-caution-color': '#ef4444',
 
   // Shell (status bar, menus, dialogs)
-  '--mrmd-ui-font': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  '--mrmd-ui-font': "Literata, Charter, Georgia, serif",
   '--mrmd-ui-font-size': '13px',
   '--mrmd-ui-font-size-sm': '11px',
   '--mrmd-panel-bg': '#1e1e1e',
@@ -648,6 +689,7 @@ export const daylightTheme = {
   name: 'daylight',
   description: 'Clean light theme inspired by Material for MkDocs.',
   isDark: false,  // Controls CodeMirror editor theme
+  fontFace: defaultFontFace,
 
   // Spacing
   '--widget-line-height': '1.6',
@@ -666,12 +708,12 @@ export const daylightTheme = {
   '--widget-white-space': 'pre-wrap',
   '--widget-word-break': 'break-word',
 
-  // Typography
+  // Typography (Material Design - Roboto family)
   '--widget-font-mono': "'Roboto Mono', 'SF Mono', Monaco, Consolas, monospace",
   '--widget-font-sans': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
   '--widget-font-size': '0.85em',
 
-  // Main editor font - sans-serif for body text
+  // Main editor font
   '--editor-font-family': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
   '--widget-font-size-small': '0.75em',
   '--widget-font-size-label': '11px',
@@ -860,6 +902,7 @@ export const githubTheme = {
   name: 'github',
   description: 'GitHub-inspired theme. Familiar for developers.',
   isDark: true,  // GitHub dark theme - controls CodeMirror editor theme
+  fontFace: defaultFontFace,
 
   // Spacing
   '--widget-line-height': 'inherit',
@@ -874,9 +917,10 @@ export const githubTheme = {
   '--widget-white-space': 'pre-wrap',
   '--widget-word-break': 'break-word',
 
-  // Typography (GitHub's font stack)
-  '--widget-font-mono': "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
-  '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif",
+  // Typography
+  '--widget-font-mono': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+  '--widget-font-sans': "Literata, Charter, Georgia, serif",
+  '--editor-font-family': "Literata, Charter, Georgia, serif",
   '--widget-font-size': '0.875em',
   '--widget-font-size-small': '0.75em',
   '--widget-font-size-label': '12px',
@@ -994,7 +1038,7 @@ export const githubTheme = {
   '--md-heading-line-height': '1.3',
   '--md-heading-margin-top': '0.5em',
   '--md-marker-color': '#6e7681',
-  '--md-marker-font': "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
+  '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
   '--md-link-color': '#58a6ff',
   '--md-link-decoration': 'underline',
   '--md-code-background': 'rgba(110, 118, 129, 0.2)',
@@ -1025,7 +1069,7 @@ export const githubTheme = {
   '--md-alert-caution-color': '#f85149',
 
   // Shell (status bar, menus, dialogs) - GitHub dark
-  '--mrmd-ui-font': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif",
+  '--mrmd-ui-font': "Literata, Charter, Georgia, serif",
   '--mrmd-ui-font-size': '14px',
   '--mrmd-ui-font-size-sm': '12px',
   '--mrmd-panel-bg': '#161b22',
@@ -1126,6 +1170,7 @@ export const nordTheme = {
   name: 'nord',
   description: 'Arctic, north-bluish theme. Optimized for eye comfort during long sessions.',
   isDark: true,
+  fontFace: defaultFontFace,
 
   // ===========================================================================
   // SPACING
@@ -1146,11 +1191,10 @@ export const nordTheme = {
 
   // ===========================================================================
   // TYPOGRAPHY
-  // Nord works well with most monospace fonts. We use a stack that prioritizes
-  // fonts known to render well with Nord's color palette.
   // ===========================================================================
-  '--widget-font-mono': "'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace",
-  '--widget-font-sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  '--widget-font-mono': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+  '--widget-font-sans': "Literata, Charter, Georgia, serif",
+  '--editor-font-family': "Literata, Charter, Georgia, serif",
   '--widget-font-size': '0.9em',
   '--widget-font-size-small': '0.8em',
   '--widget-font-size-label': '11px',
@@ -1346,7 +1390,7 @@ export const nordTheme = {
   '--md-heading-line-height': '1.3',
   '--md-heading-margin-top': '0.5em',
   '--md-marker-color': '#4c566a',          // nord3
-  '--md-marker-font': "'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, monospace",
+  '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
   '--md-link-color': '#88c0d0',            // nord8
   '--md-link-decoration': 'underline',
   '--md-code-background': 'rgba(67, 76, 94, 0.5)',  // nord2 at 50%
@@ -1592,7 +1636,7 @@ export const grayscaleDarkTheme = {
   '--md-heading-line-height': '1.3',
   '--md-heading-margin-top': '0.5em',
   '--md-marker-color': '#606060',
-  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
   '--md-link-color': '#a0a0a0',
   '--md-link-decoration': 'underline',
   '--md-code-background': 'rgba(255, 255, 255, 0.08)',
@@ -1795,7 +1839,7 @@ export const grayscaleLightTheme = {
   '--md-heading-line-height': '1.3',
   '--md-heading-margin-top': '0.5em',
   '--md-marker-color': '#999999',
-  '--md-marker-font': "'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace",
+  '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
   '--md-link-color': '#555555',
   '--md-link-decoration': 'underline',
   '--md-code-background': 'rgba(0, 0, 0, 0.06)',
