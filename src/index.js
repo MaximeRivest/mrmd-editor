@@ -548,7 +548,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {import('./runtime-lsp.js').RuntimeLSPProvider}
      */
     getLSPProvider() {
-      return adaptMrmdJsSession(session);
+      return adaptMrmdJsSession(defaultSession);
     },
   };
 }
@@ -1073,6 +1073,15 @@ function create(target, options = {}) {
       runtimeLspProviders.set(name, mrpProvider);
       // Also register the client for execution
       registry.register(name, client);
+    }
+  }
+
+  // Check for custom runtimes with getLSPProvider method (e.g., mrmd-js passed via options.runtimes)
+  for (const [name, rtConfig] of Object.entries(config.runtimes)) {
+    if (rtConfig.type === 'custom' && rtConfig.instance?.getLSPProvider) {
+      const provider = rtConfig.instance.getLSPProvider();
+      runtimeLspProviders.set(name, provider);
+      console.log(`[editor] Registered LSP provider for custom runtime: ${name}`);
     }
   }
 

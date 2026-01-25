@@ -54,6 +54,10 @@ import {
   extractInlineMath,
 } from './widgets/math.js';
 import {
+  extractHtmlElements,
+  InlineHtmlWidget,
+} from './html-inline.js';
+import {
   WikiLinkWidget,
   ExternalLinkWidget,
   FileLinkWidget,
@@ -705,6 +709,24 @@ function buildDecorations(view) {
   // which is only allowed from StateField, not ViewPlugin.
 
   // ==========================================================================
+  // CODE BLOCK DETECTION (shared by inline math, wiki-links, and HTML)
+  // ==========================================================================
+  // Build a set of line numbers that are inside fenced code blocks
+  // This properly tracks code block boundaries using the syntax tree
+  const codeBlockLines = new Set();
+  syntaxTree(view.state).iterate({
+    enter: (node) => {
+      if (node.name === 'FencedCode') {
+        const startLine = doc.lineAt(node.from).number;
+        const endLine = doc.lineAt(node.to).number;
+        for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
+          codeBlockLines.add(lineNum);
+        }
+      }
+    }
+  });
+
+  // ==========================================================================
   // INLINE MATH: $...$ (single line only)
   // ==========================================================================
   // Inline math can be handled here since it's single-line
@@ -712,6 +734,9 @@ function buildDecorations(view) {
   for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
     const line = doc.line(i);
     const isActiveLine = i === cursorLine;
+
+    // Skip lines inside code blocks
+    if (codeBlockLines.has(i)) continue;
 
     // Skip if this line is part of a display math block
     if (line.text.includes('$$')) continue;
@@ -745,8 +770,8 @@ function buildDecorations(view) {
     const line = doc.line(i);
     const isActiveLine = i === cursorLine;
 
-    // Skip lines inside code blocks (rough check)
-    if (line.text.trimStart().startsWith('```')) continue;
+    // Skip lines inside code blocks (using syntax tree detection)
+    if (codeBlockLines.has(i)) continue;
 
     const wikiLinks = extractWikiLinks(line.text);
 
@@ -764,6 +789,56 @@ function buildDecorations(view) {
         decorations.push(
           Decoration.replace({
             widget: new WikiLinkWidget(link.target, link.display),
+          }).range(from, to)
+        );
+      }
+    }
+  }
+
+  // ==========================================================================
+  // Inline HTML - process line by line
+  // ==========================================================================
+  // Track which ranges are already covered by other decorations to avoid conflicts
+  const coveredRanges = [];
+  for (const dec of decorations) {
+    if (dec.from !== undefined && dec.to !== undefined) {
+      coveredRanges.push({ from: dec.from, to: dec.to });
+    }
+  }
+
+  for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
+    const line = doc.line(i);
+    const isActiveLine = i === cursorLine;
+
+    // Skip lines inside code blocks (using syntax tree detection)
+    if (codeBlockLines.has(i)) continue;
+
+    // Skip frontmatter (YAML between ---)
+    // This is a simple check - a full solution would track state
+
+    const htmlElements = extractHtmlElements(line.text);
+
+    for (const el of htmlElements) {
+      const from = line.from + el.start;
+      const to = line.from + el.end;
+
+      // Skip if this range overlaps with an existing decoration
+      const overlaps = coveredRanges.some(
+        (r) => (from >= r.from && from < r.to) || (to > r.from && to <= r.to) ||
+               (from <= r.from && to >= r.to)
+      );
+      if (overlaps) continue;
+
+      if (isActiveLine) {
+        // Show raw HTML with styling on active line
+        decorations.push(
+          Decoration.mark({ class: 'cm-html-syntax' }).range(from, to)
+        );
+      } else {
+        // Replace with rendered HTML widget
+        decorations.push(
+          Decoration.replace({
+            widget: new InlineHtmlWidget(el.html),
           }).range(from, to)
         );
       }

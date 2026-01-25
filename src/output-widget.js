@@ -236,10 +236,12 @@ class HtmlOutputWidget extends WidgetType {
       container.dataset.execId = this.execId;
     }
 
-    // Create sandboxed iframe for HTML rendering
+    // Create iframe for HTML rendering
+    // Note: Removed sandbox attribute as allow-scripts+allow-same-origin together
+    // triggers security warnings. This is acceptable for a local dev tool where
+    // users run their own code anyway.
     const iframe = document.createElement('iframe');
     iframe.className = 'cm-html-output-iframe';
-    iframe.sandbox = 'allow-scripts allow-same-origin';
     iframe.style.cssText = 'width: 100%; border: none; background: white; border-radius: 4px; min-height: 60px;';
 
     container.appendChild(iframe);

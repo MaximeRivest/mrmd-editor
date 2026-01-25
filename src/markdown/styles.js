@@ -883,6 +883,138 @@ export const markdownStyles = `
 .cm-alert-icon {
   font-size: 1.1em;
 }
+
+/* ==========================================================================
+   INLINE HTML
+
+   Full HTML rendering support. HTML elements are rendered directly
+   without sanitization for maximum flexibility.
+   ========================================================================== */
+
+/* Container for rendered inline HTML */
+.cm-inline-html {
+  display: inline;
+}
+
+/* HTML syntax when editing (cursor on line) */
+.cm-html-syntax {
+  color: var(--md-html-syntax-color, var(--md-marker-color));
+  font-family: var(--md-marker-font);
+  font-size: 0.95em;
+}
+
+/* Style HTML elements rendered in markdown */
+.cm-inline-html kbd {
+  font-family: var(--widget-font-mono);
+  font-size: 0.85em;
+  padding: 0.1em 0.4em;
+  background: var(--widget-surface);
+  border: 1px solid var(--widget-border);
+  border-radius: 3px;
+  box-shadow: 0 1px 0 var(--widget-border);
+}
+
+.cm-inline-html mark {
+  background: var(--md-mark-background, #fef08a);
+  color: var(--md-mark-color, inherit);
+  padding: 0.1em 0.2em;
+  border-radius: 2px;
+}
+
+.cm-inline-html abbr {
+  text-decoration: underline dotted;
+  cursor: help;
+}
+
+.cm-inline-html sub {
+  font-size: 0.75em;
+  vertical-align: sub;
+}
+
+.cm-inline-html sup {
+  font-size: 0.75em;
+  vertical-align: super;
+}
+
+.cm-inline-html small {
+  font-size: 0.85em;
+}
+
+.cm-inline-html ins {
+  text-decoration: underline;
+  background: var(--md-ins-background, rgba(34, 197, 94, 0.15));
+}
+
+.cm-inline-html del {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.cm-inline-html var {
+  font-style: italic;
+  font-family: var(--widget-font-mono);
+}
+
+.cm-inline-html samp {
+  font-family: var(--widget-font-mono);
+  font-size: 0.9em;
+  background: var(--widget-surface);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+
+.cm-inline-html cite {
+  font-style: italic;
+}
+
+.cm-inline-html q {
+  quotes: '"' '"' ''' ''';
+}
+
+.cm-inline-html q::before {
+  content: open-quote;
+}
+
+.cm-inline-html q::after {
+  content: close-quote;
+}
+
+.cm-inline-html dfn {
+  font-style: italic;
+  font-weight: 600;
+}
+
+.cm-inline-html time {
+  font-variant-numeric: tabular-nums;
+}
+
+.cm-inline-html data {
+  font-family: var(--widget-font-mono);
+  font-size: 0.9em;
+}
+
+/* Ruby annotations (for East Asian text) */
+.cm-inline-html ruby {
+  display: ruby;
+}
+
+.cm-inline-html rt {
+  font-size: 0.6em;
+  color: var(--widget-text-muted);
+}
+
+.cm-inline-html rp {
+  display: none;
+}
+
+/* Bidirectional text */
+.cm-inline-html bdi {
+  unicode-bidi: isolate;
+}
+
+.cm-inline-html bdo {
+  unicode-bidi: bidi-override;
+}
 `;
 
 /**

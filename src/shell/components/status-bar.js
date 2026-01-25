@@ -1029,6 +1029,83 @@ function createAiSegment({ shellState, handlers, onCleanup }) {
 // THEME SEGMENT
 // =============================================================================
 
+// Known dark themes for proper icon display
+const DARK_THEMES = new Set([
+  'midnight', 'moonlight', 'github', 'nord', 'nord-outputs',
+  'grayscale-dark',
+]);
+
+// Custom themes storage key
+const CUSTOM_THEMES_KEY = 'mrmd-custom-themes';
+
+/**
+ * Load custom themes from localStorage
+ * @returns {Object[]} Array of custom theme objects
+ */
+function loadCustomThemes() {
+  try {
+    const stored = localStorage.getItem(CUSTOM_THEMES_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch (e) {
+    console.warn('Failed to load custom themes:', e);
+    return [];
+  }
+}
+
+/**
+ * Save custom themes to localStorage
+ * @param {Object[]} themes
+ */
+function saveCustomThemes(themes) {
+  try {
+    localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(themes));
+  } catch (e) {
+    console.warn('Failed to save custom themes:', e);
+  }
+}
+
+/**
+ * Register custom themes with the theme system
+ * @param {Object} editorRef - Reference to the editor
+ */
+function registerCustomThemesFromStorage(editorRef) {
+  const customThemes = loadCustomThemes();
+  const editor = editorRef?.current;
+
+  if (editor?.widgets?.registerTheme) {
+    for (const theme of customThemes) {
+      try {
+        editor.widgets.registerTheme(theme);
+      } catch (e) {
+        console.warn(`Failed to register custom theme "${theme.name}":`, e);
+      }
+    }
+  }
+}
+
+/**
+ * Validate a theme object has required properties
+ * @param {Object} theme
+ * @returns {{valid: boolean, error?: string}}
+ */
+function validateTheme(theme) {
+  if (!theme || typeof theme !== 'object') {
+    return { valid: false, error: 'Theme must be an object' };
+  }
+  if (!theme.name || typeof theme.name !== 'string') {
+    return { valid: false, error: 'Theme must have a "name" property (string)' };
+  }
+  if (theme.name.length > 50) {
+    return { valid: false, error: 'Theme name must be 50 characters or less' };
+  }
+  // Check for at least some CSS variables
+  const cssVars = Object.keys(theme).filter(k => k.startsWith('--'));
+  if (cssVars.length === 0) {
+    return { valid: false, error: 'Theme must have at least one CSS variable (--property)' };
+  }
+  return { valid: true };
+}
+
 function createThemeSegment({ editorRef, shellState, handlers, onCleanup }) {
   const segment = document.createElement('div');
   segment.className = 'mrmd-statusbar__segment';
@@ -1036,6 +1113,9 @@ function createThemeSegment({ editorRef, shellState, handlers, onCleanup }) {
 
   let currentMenu = null;
   let currentTheme = null;
+
+  // Register any stored custom themes on init
+  registerCustomThemesFromStorage(editorRef);
 
   function getThemeName() {
     const editor = editorRef.current;
@@ -1053,7 +1133,22 @@ function createThemeSegment({ editorRef, shellState, handlers, onCleanup }) {
       return editor.getThemeNames();
     }
     // Fallback to known themes
-    return ['midnight', 'daylight', 'github', 'nord', 'nord-outputs'];
+    return ['midnight', 'daylight', 'moonlight', 'github', 'nord', 'nord-outputs'];
+  }
+
+  function getCustomThemeNames() {
+    return loadCustomThemes().map(t => t.name);
+  }
+
+  function isDarkTheme(themeName) {
+    // Check known dark themes
+    if (DARK_THEMES.has(themeName)) return true;
+    // Check custom themes
+    const customThemes = loadCustomThemes();
+    const custom = customThemes.find(t => t.name === themeName);
+    if (custom) return custom.isDark === true;
+    // Check theme name patterns
+    return themeName.includes('dark') || themeName.includes('night');
   }
 
   function render() {
@@ -1067,6 +1162,88 @@ function createThemeSegment({ editorRef, shellState, handlers, onCleanup }) {
     `;
   }
 
+  function handleImportTheme() {
+    // Create a hidden file input
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.style.display = 'none';
+
+    input.onchange = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        const theme = JSON.parse(text);
+
+        // Validate the theme
+        const validation = validateTheme(theme);
+        if (!validation.valid) {
+          alert(`Invalid theme: ${validation.error}`);
+          return;
+        }
+
+        // Check for name conflicts with built-in themes
+        const builtInThemes = ['midnight', 'daylight', 'moonlight', 'github', 'nord', 'nord-outputs', 'grayscale-dark', 'grayscale-light', 'openresponses'];
+        if (builtInThemes.includes(theme.name)) {
+          alert(`Cannot use reserved theme name "${theme.name}". Please rename your theme.`);
+          return;
+        }
+
+        // Register with the editor
+        const editor = editorRef.current;
+        if (editor?.widgets?.registerTheme) {
+          editor.widgets.registerTheme(theme);
+        }
+
+        // Save to localStorage (replace if exists)
+        const customThemes = loadCustomThemes();
+        const existingIndex = customThemes.findIndex(t => t.name === theme.name);
+        if (existingIndex >= 0) {
+          customThemes[existingIndex] = theme;
+        } else {
+          customThemes.push(theme);
+        }
+        saveCustomThemes(customThemes);
+
+        // Apply the new theme
+        handlers.onSetTheme?.(theme.name);
+        render();
+
+        alert(`Theme "${theme.name}" imported successfully!`);
+      } catch (err) {
+        console.error('Failed to import theme:', err);
+        alert(`Failed to import theme: ${err.message}\n\nMake sure the file is valid JSON.`);
+      }
+
+      input.remove();
+    };
+
+    document.body.appendChild(input);
+    input.click();
+  }
+
+  function handleDeleteCustomTheme(themeName) {
+    if (!confirm(`Delete custom theme "${themeName}"?`)) {
+      return;
+    }
+
+    // Remove from localStorage
+    const customThemes = loadCustomThemes();
+    const filtered = customThemes.filter(t => t.name !== themeName);
+    saveCustomThemes(filtered);
+
+    // If current theme was deleted, switch to auto
+    if (getThemeName() === themeName) {
+      handlers.onSetTheme?.(null);
+    }
+
+    render();
+    currentMenu?.close();
+    currentMenu = null;
+  }
+
   function openMenu() {
     if (currentMenu) {
       currentMenu.close();
@@ -1074,6 +1251,7 @@ function createThemeSegment({ editorRef, shellState, handlers, onCleanup }) {
     }
 
     const themes = getAvailableThemes();
+    const customThemeNames = getCustomThemeNames();
     currentTheme = getThemeName();
 
     const items = [
@@ -1093,22 +1271,79 @@ function createThemeSegment({ editorRef, shellState, handlers, onCleanup }) {
       { type: 'divider' },
     ];
 
-    // Add available themes
-    for (const theme of themes) {
-      const icon = theme.includes('dark') || theme === 'midnight' || theme === 'nord' || theme === 'nord-outputs'
-        ? '🌙'
-        : '☀️';
+    // Group themes: Light, Dark, Custom
+    const lightThemes = themes.filter(t => !isDarkTheme(t) && !customThemeNames.includes(t));
+    const darkThemes = themes.filter(t => isDarkTheme(t) && !customThemeNames.includes(t));
+    const customThemes = themes.filter(t => customThemeNames.includes(t));
 
-      items.push({
-        icon,
-        label: theme.charAt(0).toUpperCase() + theme.slice(1).replace('-', ' '),
-        selected: currentTheme === theme,
-        onClick: () => {
-          handlers.onSetTheme?.(theme);
-          render();
-        },
-      });
+    // Light themes
+    if (lightThemes.length > 0) {
+      items.push({ type: 'header', label: 'Light' });
+      for (const theme of lightThemes) {
+        items.push({
+          icon: '☀️',
+          label: theme.charAt(0).toUpperCase() + theme.slice(1).replace(/-/g, ' '),
+          selected: currentTheme === theme,
+          onClick: () => {
+            handlers.onSetTheme?.(theme);
+            render();
+          },
+        });
+      }
     }
+
+    // Dark themes
+    if (darkThemes.length > 0) {
+      items.push({ type: 'header', label: 'Dark' });
+      for (const theme of darkThemes) {
+        items.push({
+          icon: '🌙',
+          label: theme.charAt(0).toUpperCase() + theme.slice(1).replace(/-/g, ' '),
+          selected: currentTheme === theme,
+          onClick: () => {
+            handlers.onSetTheme?.(theme);
+            render();
+          },
+        });
+      }
+    }
+
+    // Custom themes
+    if (customThemes.length > 0) {
+      items.push({ type: 'divider' });
+      items.push({ type: 'header', label: 'Custom Themes' });
+      for (const theme of customThemes) {
+        const icon = isDarkTheme(theme) ? '🌙' : '☀️';
+        items.push({
+          icon,
+          label: theme.charAt(0).toUpperCase() + theme.slice(1).replace(/-/g, ' '),
+          selected: currentTheme === theme,
+          onClick: () => {
+            handlers.onSetTheme?.(theme);
+            render();
+          },
+        });
+        // Add delete option for custom themes
+        items.push({
+          icon: '🗑️',
+          label: `Delete "${theme}"`,
+          onClick: () => handleDeleteCustomTheme(theme),
+        });
+      }
+    }
+
+    // Import theme option
+    items.push({ type: 'divider' });
+    items.push({
+      icon: '📥',
+      label: 'Import Theme...',
+      description: 'Load a JSON theme file',
+      onClick: () => {
+        currentMenu?.close();
+        currentMenu = null;
+        handleImportTheme();
+      },
+    });
 
     currentMenu = createMenu({
       items,

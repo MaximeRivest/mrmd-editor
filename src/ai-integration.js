@@ -396,6 +396,7 @@ export const responsePickerField = StateField.define({
             navigate: null,
             accept: null,
             reject: null,
+            insertAll: null,
           };
           responsePickerCallbacks.set(id, callbacks);
         }
@@ -407,7 +408,8 @@ export const responsePickerField = StateField.define({
           selectedIndex,
           (delta) => callbacks.navigate?.(delta),
           () => callbacks.accept?.(),
-          () => callbacks.reject?.()
+          () => callbacks.reject?.(),
+          () => callbacks.insertAll?.()
         );
 
         widgets.push(
@@ -476,6 +478,39 @@ const responsePickerCallbackPlugin = ViewPlugin.fromClass(
             callbacks.reject = () => {
               op.onCancel?.();
               view.dispatch({ effects: cancelAiOperation.of({ id }) });
+            };
+
+            callbacks.insertAll = () => {
+              const completeResponses = responses.filter(r => r.status === 'complete' && r.response);
+              if (completeResponses.length > 0) {
+                // Shift heading levels down by 2 (# -> ###, ## -> ####, etc.)
+                const shiftHeadings = (text) => {
+                  return text.replace(/^(#{1,6})\s/gm, (match, hashes) => {
+                    const newLevel = Math.min(hashes.length + 2, 6);
+                    return '#'.repeat(newLevel) + ' ';
+                  });
+                };
+
+                const formattedResponses = completeResponses.map(r => {
+                  const modelName = r.model || 'Unknown Model';
+                  const shiftedContent = shiftHeadings(r.response);
+                  return `## ${modelName}\n\n${shiftedContent}`;
+                });
+
+                const combined = `# AI Responses\n\n${formattedResponses.join('\n\n')}`;
+
+                if (op.type === 'insert') {
+                  view.dispatch({
+                    changes: { from: op.from, insert: combined },
+                    effects: [acceptSelectedResponse.of({ id }), cancelAiOperation.of({ id })],
+                  });
+                } else {
+                  view.dispatch({
+                    changes: { from: op.from, to: op.to, insert: combined },
+                    effects: [acceptSelectedResponse.of({ id }), cancelAiOperation.of({ id })],
+                  });
+                }
+              }
             };
           }
         }
@@ -635,8 +670,9 @@ class ResponsePickerWidget extends WidgetType {
    * @param {function} onNavigate - (delta: number) => void
    * @param {function} onAccept - () => void
    * @param {function} onReject - () => void
+   * @param {function} onInsertAll - () => void
    */
-  constructor(operationId, responses, selectedIndex, onNavigate, onAccept, onReject) {
+  constructor(operationId, responses, selectedIndex, onNavigate, onAccept, onReject, onInsertAll) {
     super();
     this.operationId = operationId;
     this.responses = responses;
@@ -644,6 +680,7 @@ class ResponsePickerWidget extends WidgetType {
     this.onNavigate = onNavigate;
     this.onAccept = onAccept;
     this.onReject = onReject;
+    this.onInsertAll = onInsertAll;
   }
 
   eq(other) {
@@ -799,6 +836,19 @@ class ResponsePickerWidget extends WidgetType {
       this.onAccept?.();
     };
     footer.appendChild(acceptBtn);
+
+    const completeResponses = this.responses.filter(r => r.status === 'complete' && r.response);
+    const insertAllBtn = document.createElement('button');
+    insertAllBtn.className = 'cm-ai-picker-btn cm-ai-picker-insert-all';
+    insertAllBtn.textContent = 'Insert All';
+    insertAllBtn.title = 'Insert all complete responses';
+    insertAllBtn.disabled = completeResponses.length === 0;
+    insertAllBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onInsertAll?.();
+    };
+    footer.appendChild(insertAllBtn);
 
     container.appendChild(footer);
 
@@ -1307,12 +1357,15 @@ export const aiStyles = EditorView.baseTheme({
   // Content area
   '.cm-ai-picker-content': {
     flex: '1',
-    overflow: 'auto',
+    overflowY: 'auto',
+    overflowX: 'hidden',
     padding: '12px 16px',
     minHeight: '100px',
     maxHeight: '400px',
     position: 'relative',
     cursor: 'pointer',
+    wordWrap: 'break-word',
+    overflowWrap: 'break-word',
   },
 
   '.cm-ai-picker-loading': {
@@ -1361,8 +1414,11 @@ export const aiStyles = EditorView.baseTheme({
       background: 'var(--widget-surface-inset, rgba(0, 0, 0, 0.3))',
       padding: '8px 12px',
       borderRadius: '4px',
-      overflow: 'auto',
+      overflowX: 'auto',
       margin: '0.5em 0',
+      whiteSpace: 'pre-wrap',
+      wordWrap: 'break-word',
+      overflowWrap: 'break-word',
     },
     '& code': {
       background: 'var(--widget-surface-inset, rgba(0, 0, 0, 0.3))',
@@ -1486,6 +1542,18 @@ export const aiStyles = EditorView.baseTheme({
     color: 'white',
     '&:hover:not(:disabled)': {
       background: 'var(--widget-success-hover, #16a34a)',
+    },
+    '&:disabled': {
+      opacity: '0.5',
+      cursor: 'not-allowed',
+    },
+  },
+
+  '.cm-ai-picker-insert-all': {
+    background: 'var(--widget-primary, #3b82f6)',
+    color: 'white',
+    '&:hover:not(:disabled)': {
+      background: 'var(--widget-primary-hover, #2563eb)',
     },
     '&:disabled': {
       opacity: '0.5',

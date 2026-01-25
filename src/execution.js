@@ -631,14 +631,45 @@ export class ExecutionManager {
    * @returns {Promise<string>} The execution ID
    */
   async _executeCell(cell, index) {
-    const { language, code } = cell;
+    const { language, code, baseLanguage, artifact, artifactName } = cell;
+    // Use baseLanguage for runtime operations (handles artifact targets like css:myapp -> css)
+    const runtimeLanguage = baseLanguage || language;
+
+    // Handle artifact-targeted JS cells specially - they should only run in the artifact iframe,
+    // not in the main JS runtime. The artifact hook will handle actual execution.
+    if (artifact && artifactName && (runtimeLanguage === 'javascript' || runtimeLanguage === 'js')) {
+      const execId = generateExecId();
+      this._emit('cellRun', index, cell, execId);
+
+      // Create output block for artifact JS
+      let content = this.editor.getContent();
+      let currentCell = getCellAtIndex(content, index);
+      if (currentCell) {
+        const existingOutput = findOutputBlock(content, currentCell.end);
+        const outputTag = `output:${execId}`;
+        const outputContent = `\`\`\`${outputTag}\n→ Runs in artifact: ${artifactName}\n\`\`\``;
+
+        if (existingOutput) {
+          this.editor.view.dispatch({
+            changes: { from: existingOutput.start, to: existingOutput.end, insert: outputContent },
+          });
+        } else {
+          this.editor.view.dispatch({
+            changes: { from: currentCell.end, insert: `\n\n${outputContent}` },
+          });
+        }
+      }
+
+      this._emit('cellComplete', index, { stdout: '', stderr: '', error: null }, execId);
+      return execId;
+    }
 
     // Check if we should use monitor mode
     // Monitor mode routes execution through mrmd-monitor for persistence
     // Only use monitor mode for languages with EXPLICIT runtime URLs (not default fallback)
     // This ensures local runtimes (like mrmd-js for JavaScript) still run locally
     if (this._monitorMode && this.coordination) {
-      const runtimeUrl = this._getRuntimeUrl(language, false); // false = no fallback
+      const runtimeUrl = this._getRuntimeUrl(runtimeLanguage, false); // false = no fallback
       if (runtimeUrl) {
         return this._executeCellViaMonitor(cell, index, runtimeUrl);
       }
@@ -647,7 +678,7 @@ export class ExecutionManager {
     }
 
     // Check runtime support (for direct execution)
-    if (!this.registry.supports(language)) {
+    if (!this.registry.supports(runtimeLanguage)) {
       console.warn(`No runtime for language: ${language}`);
       // Emit noRuntime event - allows UI to handle setup and retry
       // The event includes a retry callback that can be called after runtime is registered
@@ -695,7 +726,8 @@ export class ExecutionManager {
 
       // Determine output type based on language (for rich rendering)
       // HTML and CSS get special output types for visual rendering
-      const langLower = language.toLowerCase();
+      // Use runtimeLanguage (base language) for determining output type
+      const langLower = runtimeLanguage.toLowerCase();
       const isRichOutput = ['html', 'htm', 'css', 'style', 'stylesheet'].includes(langLower);
       const outputType = isRichOutput ? langLower.replace(/^(htm|style|stylesheet)$/, (m) => m === 'htm' ? 'html' : 'css') : null;
       const outputTag = outputType ? `output:${execId}:${outputType}` : `output:${execId}`;
@@ -903,7 +935,7 @@ export class ExecutionManager {
           const promise = (async () => {
             try {
               // Get runtime URL from registry (the MRPClient stores it)
-              const runtime = this.registry.getRuntime(language);
+              const runtime = this.registry.getRuntime(runtimeLanguage);
               const runtimeUrl = runtime?.runtimeUrl || this._defaultRuntimeUrl;
 
               const result = await this.assetHandler({
@@ -929,7 +961,7 @@ export class ExecutionManager {
       // Execute with streaming (pass onStdinRequest for input() support)
       // Pass execId so hub runtimes can find the output block
       // Pass session name for named session support (e.g., ```js sandbox)
-      const result = await this.registry.executeStreaming(code, language, onChunk, onStdinRequest, {
+      const result = await this.registry.executeStreaming(code, runtimeLanguage, onChunk, onStdinRequest, {
         execId,
         cellId: cell.id || `cell-${index}`,
         session: cell.session,

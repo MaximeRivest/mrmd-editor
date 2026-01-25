@@ -10,6 +10,7 @@
  */
 
 import { WidgetType } from '@codemirror/view';
+import { renderTextWithHtml } from '../html-inline.js';
 
 // #region WIKI_LINK_WIDGET
 
@@ -43,7 +44,7 @@ export class WikiLinkWidget extends WidgetType {
   toDOM(view) {
     const span = document.createElement('span');
     span.className = this.exists ? 'cm-wiki-link' : 'cm-wiki-link cm-broken-link';
-    span.textContent = this.displayText;
+    span.innerHTML = renderTextWithHtml(this.displayText);
     span.setAttribute('data-target', this.target);
 
     // Click handler - dispatch custom event for host app
@@ -100,7 +101,7 @@ export class ExternalLinkWidget extends WidgetType {
     const link = document.createElement('a');
     link.className = 'cm-external-link';
     link.href = this.url;
-    link.textContent = this.text;
+    link.innerHTML = renderTextWithHtml(this.text);
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
 
@@ -146,7 +147,7 @@ export class FileLinkWidget extends WidgetType {
   toDOM(view) {
     const span = document.createElement('span');
     span.className = 'cm-file-link';
-    span.textContent = this.text;
+    span.innerHTML = renderTextWithHtml(this.text);
     span.setAttribute('data-path', this.path);
 
     // Click handler - dispatch custom event for host app

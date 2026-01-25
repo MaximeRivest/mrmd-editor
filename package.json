@@ -1,6 +1,6 @@
 {
   "name": "mrmd-editor",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Markdown editor with realtime collaboration - the core editor package",
   "type": "module",
   "main": "dist/mrmd.cjs",

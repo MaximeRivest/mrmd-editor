@@ -53417,6 +53417,41 @@ var mrmd = (function (exports) {
   }
 
   /**
+   * Artifact target languages - code that renders to an artifact panel
+   * Supports: html:artifact-name, css:artifact-name, js:artifact-name, js:dom
+   */
+  const ARTIFACT_LANGUAGES = new Set(['html', 'htm', 'css', 'style', 'javascript', 'js']);
+
+  /**
+   * Parse artifact target from language string
+   * @param {string} lang - Language string (e.g., 'html:myapp', 'js:artifact-a', 'js:dom')
+   * @returns {{isArtifact: boolean, artifactName: string|null, baseLanguage: string, isMainDom: boolean}}
+   */
+  function parseArtifactLanguage(lang) {
+    if (!lang) return { isArtifact: false, artifactName: null, baseLanguage: lang, isMainDom: false };
+    const lower = lang.toLowerCase();
+
+    // Check for language:target format
+    const colonIndex = lower.indexOf(':');
+    if (colonIndex > 0) {
+      const baseLang = lower.slice(0, colonIndex);
+      const target = lower.slice(colonIndex + 1);
+
+      // Check if base language supports artifact targets
+      if (ARTIFACT_LANGUAGES.has(baseLang)) {
+        // Special case: js:dom means affect main document
+        if (target === 'dom' || target === 'main') {
+          return { isArtifact: false, artifactName: null, baseLanguage: baseLang, isMainDom: true };
+        }
+        // Otherwise it's an artifact target
+        return { isArtifact: true, artifactName: target, baseLanguage: baseLang, isMainDom: false };
+      }
+    }
+
+    return { isArtifact: false, artifactName: null, baseLanguage: lower, isMainDom: false };
+  }
+
+  /**
    * Find all code blocks in the document
    *
    * @param {string} content - Document content
@@ -53452,8 +53487,9 @@ var mrmd = (function (exports) {
 
       if (!inBlock) {
         // Look for opening fence: ```language [session]
-        // Examples: ```js, ```js sandbox, ```python myenv
-        const match = line.match(/^(`{3,})(\w*)(?:\s+(\S+))?/);
+        // Examples: ```js, ```js sandbox, ```python myenv, ```html:artifact, ```css:myapp
+        // Language can include colon for targets (html:name, css:name, js:name, term:session)
+        const match = line.match(/^(`{3,})([\w:.-]*)(?:\s+(\S+))?/);
         if (match) {
           inBlock = true;
           blockStart = lineStart;
@@ -53473,8 +53509,15 @@ var mrmd = (function (exports) {
           // Terminal session can come from term:session or from space-separated session
           const terminalSession = terminalInfo.sessionName || (terminalInfo.isTerminal ? blockSession : null);
 
+          // Parse artifact language for artifact panel support
+          const artifactInfo = parseArtifactLanguage(blockLanguage);
+
+          // Determine the effective language (base language without target suffix)
+          const effectiveLanguage = artifactInfo.baseLanguage || blockLanguage;
+
           blocks.push({
             language: blockLanguage,
+            baseLanguage: effectiveLanguage, // The language without :target suffix
             session: blockSession,
             code: content.slice(codeStart, codeEnd),
             start: blockStart,
@@ -53482,10 +53525,14 @@ var mrmd = (function (exports) {
             codeStart,
             codeEnd,
             line: blockLine,
-            executable: EXECUTABLE_LANGUAGES.has(blockLanguage),
-            rendered: RENDERED_LANGUAGES.has(blockLanguage),
+            executable: EXECUTABLE_LANGUAGES.has(effectiveLanguage) || EXECUTABLE_LANGUAGES.has(blockLanguage),
+            rendered: RENDERED_LANGUAGES.has(effectiveLanguage) || RENDERED_LANGUAGES.has(blockLanguage),
             terminal: terminalInfo.isTerminal,
             terminalSession: terminalSession, // Named terminal session (e.g., 'session1' from term:session1)
+            // Artifact properties
+            artifact: artifactInfo.isArtifact,
+            artifactName: artifactInfo.artifactName, // Named artifact (e.g., 'myapp' from html:myapp)
+            mainDom: artifactInfo.isMainDom, // js:dom targets main document
           });
 
           inBlock = false;
@@ -55146,10 +55193,12 @@ var mrmd = (function (exports) {
         container.dataset.execId = this.execId;
       }
 
-      // Create sandboxed iframe for HTML rendering
+      // Create iframe for HTML rendering
+      // Note: Removed sandbox attribute as allow-scripts+allow-same-origin together
+      // triggers security warnings. This is acceptable for a local dev tool where
+      // users run their own code anyway.
       const iframe = document.createElement('iframe');
       iframe.className = 'cm-html-output-iframe';
-      iframe.sandbox = 'allow-scripts allow-same-origin';
       iframe.style.cssText = 'width: 100%; border: none; background: white; border-radius: 4px; min-height: 60px;';
 
       container.appendChild(iframe);
@@ -57681,14 +57730,45 @@ ${ansiStyles}
      * @returns {Promise<string>} The execution ID
      */
     async _executeCell(cell, index) {
-      const { language, code } = cell;
+      const { language, code, baseLanguage, artifact, artifactName } = cell;
+      // Use baseLanguage for runtime operations (handles artifact targets like css:myapp -> css)
+      const runtimeLanguage = baseLanguage || language;
+
+      // Handle artifact-targeted JS cells specially - they should only run in the artifact iframe,
+      // not in the main JS runtime. The artifact hook will handle actual execution.
+      if (artifact && artifactName && (runtimeLanguage === 'javascript' || runtimeLanguage === 'js')) {
+        const execId = generateExecId$1();
+        this._emit('cellRun', index, cell, execId);
+
+        // Create output block for artifact JS
+        let content = this.editor.getContent();
+        let currentCell = getCellAtIndex(content, index);
+        if (currentCell) {
+          const existingOutput = findOutputBlock(content, currentCell.end);
+          const outputTag = `output:${execId}`;
+          const outputContent = `\`\`\`${outputTag}\n→ Runs in artifact: ${artifactName}\n\`\`\``;
+
+          if (existingOutput) {
+            this.editor.view.dispatch({
+              changes: { from: existingOutput.start, to: existingOutput.end, insert: outputContent },
+            });
+          } else {
+            this.editor.view.dispatch({
+              changes: { from: currentCell.end, insert: `\n\n${outputContent}` },
+            });
+          }
+        }
+
+        this._emit('cellComplete', index, { stdout: '', stderr: '', error: null }, execId);
+        return execId;
+      }
 
       // Check if we should use monitor mode
       // Monitor mode routes execution through mrmd-monitor for persistence
       // Only use monitor mode for languages with EXPLICIT runtime URLs (not default fallback)
       // This ensures local runtimes (like mrmd-js for JavaScript) still run locally
       if (this._monitorMode && this.coordination) {
-        const runtimeUrl = this._getRuntimeUrl(language, false); // false = no fallback
+        const runtimeUrl = this._getRuntimeUrl(runtimeLanguage, false); // false = no fallback
         if (runtimeUrl) {
           return this._executeCellViaMonitor(cell, index, runtimeUrl);
         }
@@ -57697,7 +57777,7 @@ ${ansiStyles}
       }
 
       // Check runtime support (for direct execution)
-      if (!this.registry.supports(language)) {
+      if (!this.registry.supports(runtimeLanguage)) {
         console.warn(`No runtime for language: ${language}`);
         // Emit noRuntime event - allows UI to handle setup and retry
         // The event includes a retry callback that can be called after runtime is registered
@@ -57745,7 +57825,8 @@ ${ansiStyles}
 
         // Determine output type based on language (for rich rendering)
         // HTML and CSS get special output types for visual rendering
-        const langLower = language.toLowerCase();
+        // Use runtimeLanguage (base language) for determining output type
+        const langLower = runtimeLanguage.toLowerCase();
         const isRichOutput = ['html', 'htm', 'css', 'style', 'stylesheet'].includes(langLower);
         const outputType = isRichOutput ? langLower.replace(/^(htm|style|stylesheet)$/, (m) => m === 'htm' ? 'html' : 'css') : null;
         const outputTag = outputType ? `output:${execId}:${outputType}` : `output:${execId}`;
@@ -57953,7 +58034,7 @@ ${ansiStyles}
             const promise = (async () => {
               try {
                 // Get runtime URL from registry (the MRPClient stores it)
-                const runtime = this.registry.getRuntime(language);
+                const runtime = this.registry.getRuntime(runtimeLanguage);
                 const runtimeUrl = runtime?.runtimeUrl || this._defaultRuntimeUrl;
 
                 const result = await this.assetHandler({
@@ -57979,7 +58060,7 @@ ${ansiStyles}
         // Execute with streaming (pass onStdinRequest for input() support)
         // Pass execId so hub runtimes can find the output block
         // Pass session name for named session support (e.g., ```js sandbox)
-        const result = await this.registry.executeStreaming(code, language, onChunk, onStdinRequest, {
+        const result = await this.registry.executeStreaming(code, runtimeLanguage, onChunk, onStdinRequest, {
           execId,
           cellId: cell.id || `cell-${index}`,
           session: cell.session,
@@ -60678,7 +60759,7 @@ ${ansiStyles}
    * @param {boolean} [options.danger=false]
    * @returns {Promise<boolean>}
    */
-  function confirm(options) {
+  function confirm$1(options) {
     const {
       title,
       message,
@@ -62299,6 +62380,83 @@ ${ansiStyles}
   // THEME SEGMENT
   // =============================================================================
 
+  // Known dark themes for proper icon display
+  const DARK_THEMES = new Set([
+    'midnight', 'moonlight', 'github', 'nord', 'nord-outputs',
+    'grayscale-dark',
+  ]);
+
+  // Custom themes storage key
+  const CUSTOM_THEMES_KEY = 'mrmd-custom-themes';
+
+  /**
+   * Load custom themes from localStorage
+   * @returns {Object[]} Array of custom theme objects
+   */
+  function loadCustomThemes() {
+    try {
+      const stored = localStorage.getItem(CUSTOM_THEMES_KEY);
+      return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+      console.warn('Failed to load custom themes:', e);
+      return [];
+    }
+  }
+
+  /**
+   * Save custom themes to localStorage
+   * @param {Object[]} themes
+   */
+  function saveCustomThemes(themes) {
+    try {
+      localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(themes));
+    } catch (e) {
+      console.warn('Failed to save custom themes:', e);
+    }
+  }
+
+  /**
+   * Register custom themes with the theme system
+   * @param {Object} editorRef - Reference to the editor
+   */
+  function registerCustomThemesFromStorage(editorRef) {
+    const customThemes = loadCustomThemes();
+    const editor = editorRef?.current;
+
+    if (editor?.widgets?.registerTheme) {
+      for (const theme of customThemes) {
+        try {
+          editor.widgets.registerTheme(theme);
+        } catch (e) {
+          console.warn(`Failed to register custom theme "${theme.name}":`, e);
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate a theme object has required properties
+   * @param {Object} theme
+   * @returns {{valid: boolean, error?: string}}
+   */
+  function validateTheme(theme) {
+    if (!theme || typeof theme !== 'object') {
+      return { valid: false, error: 'Theme must be an object' };
+    }
+    if (!theme.name || typeof theme.name !== 'string') {
+      return { valid: false, error: 'Theme must have a "name" property (string)' };
+    }
+    if (theme.name.length > 50) {
+      return { valid: false, error: 'Theme name must be 50 characters or less' };
+    }
+    // Check for at least some CSS variables
+    const cssVars = Object.keys(theme).filter(k => k.startsWith('--'));
+    if (cssVars.length === 0) {
+      return { valid: false, error: 'Theme must have at least one CSS variable (--property)' };
+    }
+    return { valid: true };
+  }
+
   function createThemeSegment({ editorRef, shellState, handlers, onCleanup }) {
     const segment = document.createElement('div');
     segment.className = 'mrmd-statusbar__segment';
@@ -62306,6 +62464,9 @@ ${ansiStyles}
 
     let currentMenu = null;
     let currentTheme = null;
+
+    // Register any stored custom themes on init
+    registerCustomThemesFromStorage(editorRef);
 
     function getThemeName() {
       const editor = editorRef.current;
@@ -62323,7 +62484,22 @@ ${ansiStyles}
         return editor.getThemeNames();
       }
       // Fallback to known themes
-      return ['midnight', 'daylight', 'github', 'nord', 'nord-outputs'];
+      return ['midnight', 'daylight', 'moonlight', 'github', 'nord', 'nord-outputs'];
+    }
+
+    function getCustomThemeNames() {
+      return loadCustomThemes().map(t => t.name);
+    }
+
+    function isDarkTheme(themeName) {
+      // Check known dark themes
+      if (DARK_THEMES.has(themeName)) return true;
+      // Check custom themes
+      const customThemes = loadCustomThemes();
+      const custom = customThemes.find(t => t.name === themeName);
+      if (custom) return custom.isDark === true;
+      // Check theme name patterns
+      return themeName.includes('dark') || themeName.includes('night');
     }
 
     function render() {
@@ -62337,6 +62513,88 @@ ${ansiStyles}
     `;
     }
 
+    function handleImportTheme() {
+      // Create a hidden file input
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json,application/json';
+      input.style.display = 'none';
+
+      input.onchange = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        try {
+          const text = await file.text();
+          const theme = JSON.parse(text);
+
+          // Validate the theme
+          const validation = validateTheme(theme);
+          if (!validation.valid) {
+            alert(`Invalid theme: ${validation.error}`);
+            return;
+          }
+
+          // Check for name conflicts with built-in themes
+          const builtInThemes = ['midnight', 'daylight', 'moonlight', 'github', 'nord', 'nord-outputs', 'grayscale-dark', 'grayscale-light', 'openresponses'];
+          if (builtInThemes.includes(theme.name)) {
+            alert(`Cannot use reserved theme name "${theme.name}". Please rename your theme.`);
+            return;
+          }
+
+          // Register with the editor
+          const editor = editorRef.current;
+          if (editor?.widgets?.registerTheme) {
+            editor.widgets.registerTheme(theme);
+          }
+
+          // Save to localStorage (replace if exists)
+          const customThemes = loadCustomThemes();
+          const existingIndex = customThemes.findIndex(t => t.name === theme.name);
+          if (existingIndex >= 0) {
+            customThemes[existingIndex] = theme;
+          } else {
+            customThemes.push(theme);
+          }
+          saveCustomThemes(customThemes);
+
+          // Apply the new theme
+          handlers.onSetTheme?.(theme.name);
+          render();
+
+          alert(`Theme "${theme.name}" imported successfully!`);
+        } catch (err) {
+          console.error('Failed to import theme:', err);
+          alert(`Failed to import theme: ${err.message}\n\nMake sure the file is valid JSON.`);
+        }
+
+        input.remove();
+      };
+
+      document.body.appendChild(input);
+      input.click();
+    }
+
+    function handleDeleteCustomTheme(themeName) {
+      if (!confirm(`Delete custom theme "${themeName}"?`)) {
+        return;
+      }
+
+      // Remove from localStorage
+      const customThemes = loadCustomThemes();
+      const filtered = customThemes.filter(t => t.name !== themeName);
+      saveCustomThemes(filtered);
+
+      // If current theme was deleted, switch to auto
+      if (getThemeName() === themeName) {
+        handlers.onSetTheme?.(null);
+      }
+
+      render();
+      currentMenu?.close();
+      currentMenu = null;
+    }
+
     function openMenu() {
       if (currentMenu) {
         currentMenu.close();
@@ -62344,6 +62602,7 @@ ${ansiStyles}
       }
 
       const themes = getAvailableThemes();
+      const customThemeNames = getCustomThemeNames();
       currentTheme = getThemeName();
 
       const items = [
@@ -62363,22 +62622,79 @@ ${ansiStyles}
         { type: 'divider' },
       ];
 
-      // Add available themes
-      for (const theme of themes) {
-        const icon = theme.includes('dark') || theme === 'midnight' || theme === 'nord' || theme === 'nord-outputs'
-          ? '🌙'
-          : '☀️';
+      // Group themes: Light, Dark, Custom
+      const lightThemes = themes.filter(t => !isDarkTheme(t) && !customThemeNames.includes(t));
+      const darkThemes = themes.filter(t => isDarkTheme(t) && !customThemeNames.includes(t));
+      const customThemes = themes.filter(t => customThemeNames.includes(t));
 
-        items.push({
-          icon,
-          label: theme.charAt(0).toUpperCase() + theme.slice(1).replace('-', ' '),
-          selected: currentTheme === theme,
-          onClick: () => {
-            handlers.onSetTheme?.(theme);
-            render();
-          },
-        });
+      // Light themes
+      if (lightThemes.length > 0) {
+        items.push({ type: 'header', label: 'Light' });
+        for (const theme of lightThemes) {
+          items.push({
+            icon: '☀️',
+            label: theme.charAt(0).toUpperCase() + theme.slice(1).replace(/-/g, ' '),
+            selected: currentTheme === theme,
+            onClick: () => {
+              handlers.onSetTheme?.(theme);
+              render();
+            },
+          });
+        }
       }
+
+      // Dark themes
+      if (darkThemes.length > 0) {
+        items.push({ type: 'header', label: 'Dark' });
+        for (const theme of darkThemes) {
+          items.push({
+            icon: '🌙',
+            label: theme.charAt(0).toUpperCase() + theme.slice(1).replace(/-/g, ' '),
+            selected: currentTheme === theme,
+            onClick: () => {
+              handlers.onSetTheme?.(theme);
+              render();
+            },
+          });
+        }
+      }
+
+      // Custom themes
+      if (customThemes.length > 0) {
+        items.push({ type: 'divider' });
+        items.push({ type: 'header', label: 'Custom Themes' });
+        for (const theme of customThemes) {
+          const icon = isDarkTheme(theme) ? '🌙' : '☀️';
+          items.push({
+            icon,
+            label: theme.charAt(0).toUpperCase() + theme.slice(1).replace(/-/g, ' '),
+            selected: currentTheme === theme,
+            onClick: () => {
+              handlers.onSetTheme?.(theme);
+              render();
+            },
+          });
+          // Add delete option for custom themes
+          items.push({
+            icon: '🗑️',
+            label: `Delete "${theme}"`,
+            onClick: () => handleDeleteCustomTheme(theme),
+          });
+        }
+      }
+
+      // Import theme option
+      items.push({ type: 'divider' });
+      items.push({
+        icon: '📥',
+        label: 'Import Theme...',
+        description: 'Load a JSON theme file',
+        onClick: () => {
+          currentMenu?.close();
+          currentMenu = null;
+          handleImportTheme();
+        },
+      });
 
       currentMenu = createMenu({
         items,
@@ -65662,7 +65978,7 @@ ${studioStyles}
           emit('runtimeKilled', { runtimeId, result });
         } catch (error) {
           console.error('[KillRuntime] Error:', error);
-          await confirm({
+          await confirm$1({
             title: 'Error',
             message: `Failed to kill runtime: ${error.message}`,
             confirmLabel: 'OK',
@@ -65692,7 +66008,7 @@ ${studioStyles}
             await switchDocument(newName);
             emit('fileCreated', { doc: newName });
           } catch (error) {
-            await confirm({
+            await confirm$1({
               title: 'Error',
               message: `Failed to create file: ${error.message}`,
               confirmLabel: 'OK',
@@ -65778,7 +66094,7 @@ ${studioStyles}
         try {
           const result = await aiClient.summarizeDocument(content, { juiceLevel });
           const summary = result.summary || result.response || 'No summary generated';
-          await confirm({
+          await confirm$1({
             title: 'Document Summary',
             message: summary,
             confirmLabel: 'OK',
@@ -65787,7 +66103,7 @@ ${studioStyles}
           emit('aiSummarizeDocument', { success: true });
         } catch (error) {
           console.error('[Studio] Summarize failed:', error);
-          await confirm({
+          await confirm$1({
             title: 'Error',
             message: `Failed to summarize: ${error.message}`,
             confirmLabel: 'OK',
@@ -65811,7 +66127,7 @@ ${studioStyles}
           const suggestedName = result.name;
 
           if (suggestedName && suggestedName !== currentName) {
-            const confirmed = await confirm({
+            const confirmed = await confirm$1({
               title: 'Rename File?',
               message: `AI suggests: "${suggestedName}"\n\nRename "${currentName}" to "${suggestedName}"?`,
               confirmLabel: 'Rename',
@@ -65822,7 +66138,7 @@ ${studioStyles}
               await studio.rename(suggestedName);
             }
           } else {
-            await confirm({
+            await confirm$1({
               title: 'Filename Suggestion',
               message: 'The current filename seems appropriate.',
               confirmLabel: 'OK',
@@ -66068,7 +66384,7 @@ ${studioStyles}
     JUICE_NAMES: JUICE_NAMES,
     OrchestratorClient: OrchestratorClient$1,
     ShellStateManager: ShellStateManager$1,
-    confirm: confirm,
+    confirm: confirm$1,
     createAiClient: createAiClient,
     createAiMenu: createAiMenu,
     createDialog: createDialog,
@@ -66489,6 +66805,7 @@ ${studioStyles}
               navigate: null,
               accept: null,
               reject: null,
+              insertAll: null,
             };
             responsePickerCallbacks.set(id, callbacks);
           }
@@ -66500,7 +66817,8 @@ ${studioStyles}
             selectedIndex,
             (delta) => callbacks.navigate?.(delta),
             () => callbacks.accept?.(),
-            () => callbacks.reject?.()
+            () => callbacks.reject?.(),
+            () => callbacks.insertAll?.()
           );
 
           widgets.push(
@@ -66569,6 +66887,39 @@ ${studioStyles}
               callbacks.reject = () => {
                 op.onCancel?.();
                 view.dispatch({ effects: cancelAiOperation.of({ id }) });
+              };
+
+              callbacks.insertAll = () => {
+                const completeResponses = responses.filter(r => r.status === 'complete' && r.response);
+                if (completeResponses.length > 0) {
+                  // Shift heading levels down by 2 (# -> ###, ## -> ####, etc.)
+                  const shiftHeadings = (text) => {
+                    return text.replace(/^(#{1,6})\s/gm, (match, hashes) => {
+                      const newLevel = Math.min(hashes.length + 2, 6);
+                      return '#'.repeat(newLevel) + ' ';
+                    });
+                  };
+
+                  const formattedResponses = completeResponses.map(r => {
+                    const modelName = r.model || 'Unknown Model';
+                    const shiftedContent = shiftHeadings(r.response);
+                    return `## ${modelName}\n\n${shiftedContent}`;
+                  });
+
+                  const combined = `# AI Responses\n\n${formattedResponses.join('\n\n')}`;
+
+                  if (op.type === 'insert') {
+                    view.dispatch({
+                      changes: { from: op.from, insert: combined },
+                      effects: [acceptSelectedResponse.of({ id }), cancelAiOperation.of({ id })],
+                    });
+                  } else {
+                    view.dispatch({
+                      changes: { from: op.from, to: op.to, insert: combined },
+                      effects: [acceptSelectedResponse.of({ id }), cancelAiOperation.of({ id })],
+                    });
+                  }
+                }
               };
             }
           }
@@ -66728,8 +67079,9 @@ ${studioStyles}
      * @param {function} onNavigate - (delta: number) => void
      * @param {function} onAccept - () => void
      * @param {function} onReject - () => void
+     * @param {function} onInsertAll - () => void
      */
-    constructor(operationId, responses, selectedIndex, onNavigate, onAccept, onReject) {
+    constructor(operationId, responses, selectedIndex, onNavigate, onAccept, onReject, onInsertAll) {
       super();
       this.operationId = operationId;
       this.responses = responses;
@@ -66737,6 +67089,7 @@ ${studioStyles}
       this.onNavigate = onNavigate;
       this.onAccept = onAccept;
       this.onReject = onReject;
+      this.onInsertAll = onInsertAll;
     }
 
     eq(other) {
@@ -66889,6 +67242,19 @@ ${studioStyles}
         this.onAccept?.();
       };
       footer.appendChild(acceptBtn);
+
+      const completeResponses = this.responses.filter(r => r.status === 'complete' && r.response);
+      const insertAllBtn = document.createElement('button');
+      insertAllBtn.className = 'cm-ai-picker-btn cm-ai-picker-insert-all';
+      insertAllBtn.textContent = 'Insert All';
+      insertAllBtn.title = 'Insert all complete responses';
+      insertAllBtn.disabled = completeResponses.length === 0;
+      insertAllBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.onInsertAll?.();
+      };
+      footer.appendChild(insertAllBtn);
 
       container.appendChild(footer);
 
@@ -67397,12 +67763,15 @@ ${studioStyles}
     // Content area
     '.cm-ai-picker-content': {
       flex: '1',
-      overflow: 'auto',
+      overflowY: 'auto',
+      overflowX: 'hidden',
       padding: '12px 16px',
       minHeight: '100px',
       maxHeight: '400px',
       position: 'relative',
       cursor: 'pointer',
+      wordWrap: 'break-word',
+      overflowWrap: 'break-word',
     },
 
     '.cm-ai-picker-loading': {
@@ -67451,8 +67820,11 @@ ${studioStyles}
         background: 'var(--widget-surface-inset, rgba(0, 0, 0, 0.3))',
         padding: '8px 12px',
         borderRadius: '4px',
-        overflow: 'auto',
+        overflowX: 'auto',
         margin: '0.5em 0',
+        whiteSpace: 'pre-wrap',
+        wordWrap: 'break-word',
+        overflowWrap: 'break-word',
       },
       '& code': {
         background: 'var(--widget-surface-inset, rgba(0, 0, 0, 0.3))',
@@ -67576,6 +67948,18 @@ ${studioStyles}
       color: 'white',
       '&:hover:not(:disabled)': {
         background: 'var(--widget-success-hover, #16a34a)',
+      },
+      '&:disabled': {
+        opacity: '0.5',
+        cursor: 'not-allowed',
+      },
+    },
+
+    '.cm-ai-picker-insert-all': {
+      background: 'var(--widget-primary, #3b82f6)',
+      color: 'white',
+      '&:hover:not(:disabled)': {
+        background: 'var(--widget-primary-hover, #2563eb)',
       },
       '&:disabled': {
         opacity: '0.5',
@@ -84451,12 +84835,12 @@ $1 $2
 
       // Check for const/let keywords
       if (isWordBoundary(code, i)) {
-        if (code.slice(i, i + 5) === 'const' && isWordBoundary(code, i + 5)) {
+        if (code.slice(i, i + 5) === 'const' && isWordBoundaryAfter(code, i + 5)) {
           result += 'var';
           i += 5;
           continue;
         }
-        if (code.slice(i, i + 3) === 'let' && isWordBoundary(code, i + 3)) {
+        if (code.slice(i, i + 3) === 'let' && isWordBoundaryAfter(code, i + 3)) {
           result += 'var';
           i += 3;
           continue;
@@ -84491,6 +84875,17 @@ $1 $2
     if (pos < code.length && !isWordChar(after)) return true;
 
     return true;
+  }
+
+  /**
+   * Check if position after keyword is a word boundary
+   * @param {string} code
+   * @param {number} pos - Position after the keyword
+   * @returns {boolean}
+   */
+  function isWordBoundaryAfter(code, pos) {
+    if (pos >= code.length) return true;
+    return !/[a-zA-Z0-9_$]/.test(code[pos]);
   }
 
   /**
@@ -84534,6 +84929,18 @@ $1 $2
     // Also protect strings, comments, and template literals
     const protectedStrings = [];
 
+    // Protect comments FIRST (before strings) to handle apostrophes in comments like "doesn't"
+    result = result.replace(/\/\/[^\n]*/g, (match) => {
+      const placeholder = `__PROTECTED_${protectedStrings.length}__`;
+      protectedStrings.push(match);
+      return placeholder;
+    });
+    result = result.replace(/\/\*[\s\S]*?\*\//g, (match) => {
+      const placeholder = `__PROTECTED_${protectedStrings.length}__`;
+      protectedStrings.push(match);
+      return placeholder;
+    });
+
     // Protect template literals
     result = result.replace(/`(?:[^`\\]|\\.)*`/g, (match) => {
       const placeholder = `__PROTECTED_${protectedStrings.length}__`;
@@ -84541,25 +84948,13 @@ $1 $2
       return placeholder;
     });
 
-    // Protect strings
+    // Protect strings (after comments, so apostrophes in comments don't interfere)
     result = result.replace(/"(?:[^"\\]|\\.)*"/g, (match) => {
       const placeholder = `__PROTECTED_${protectedStrings.length}__`;
       protectedStrings.push(match);
       return placeholder;
     });
     result = result.replace(/'(?:[^'\\]|\\.)*'/g, (match) => {
-      const placeholder = `__PROTECTED_${protectedStrings.length}__`;
-      protectedStrings.push(match);
-      return placeholder;
-    });
-
-    // Protect comments
-    result = result.replace(/\/\/[^\n]*/g, (match) => {
-      const placeholder = `__PROTECTED_${protectedStrings.length}__`;
-      protectedStrings.push(match);
-      return placeholder;
-    });
-    result = result.replace(/\/\*[\s\S]*?\*\//g, (match) => {
       const placeholder = `__PROTECTED_${protectedStrings.length}__`;
       protectedStrings.push(match);
       return placeholder;
@@ -84608,16 +85003,17 @@ $1 $2
     // This is a heuristic; a proper check would need AST parsing
 
     // Remove strings, comments, and regex to avoid false positives
+    // IMPORTANT: Remove comments FIRST to handle apostrophes in comments like "doesn't"
     const cleaned = code
-      // Remove template literals (simple version)
-      .replace(/`[^`]*`/g, '')
-      // Remove strings
-      .replace(/"(?:[^"\\]|\\.)*"/g, '')
-      .replace(/'(?:[^'\\]|\\.)*'/g, '')
-      // Remove single-line comments
+      // Remove single-line comments FIRST (before strings)
       .replace(/\/\/[^\n]*/g, '')
       // Remove multi-line comments
-      .replace(/\/\*[\s\S]*?\*\//g, '');
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      // Remove template literals
+      .replace(/`[^`]*`/g, '')
+      // Remove strings (after comments, so apostrophes in comments don't interfere)
+      .replace(/"(?:[^"\\]|\\.)*"/g, '')
+      .replace(/'(?:[^'\\]|\\.)*'/g, '');
     let i = 0;
 
     while (i < cleaned.length) {
@@ -84677,14 +85073,15 @@ $1 $2
       const asyncWrappedCode = `(async () => {\n${autoAwaitedCode}\n})()`;
 
       // Now wrap to capture the result
+      // Use indirect eval (0, eval)() to run in global scope so var declarations persist
       const wrapped = `
 ;(async function() {
   let __result__;
   try {
-    __result__ = await eval(${JSON.stringify(asyncWrappedCode)});
+    __result__ = await (0, eval)(${JSON.stringify(asyncWrappedCode)});
   } catch (e) {
     if (e instanceof SyntaxError) {
-      await eval(${JSON.stringify(asyncWrappedCode)});
+      await (0, eval)(${JSON.stringify(asyncWrappedCode)});
       __result__ = undefined;
     } else {
       throw e;
@@ -84696,15 +85093,17 @@ $1 $2
     }
 
     // No async needed - use simpler synchronous wrapper
+    // Use indirect eval (0, eval)() to run in global scope so var declarations persist
+    // Note: Still use autoAwaitedCode in case auto-awaits were added but hasTopLevelAwait missed them
     const wrapped = `
 ;(function() {
   let __result__;
   try {
-    __result__ = eval(${JSON.stringify(code)});
+    __result__ = (0, eval)(${JSON.stringify(autoAwaitedCode)});
   } catch (e) {
     if (e instanceof SyntaxError) {
       // Code might be statements, not expression
-      eval(${JSON.stringify(code)});
+      (0, eval)(${JSON.stringify(autoAwaitedCode)});
       __result__ = undefined;
     } else {
       throw e;
@@ -110152,6 +110551,254 @@ $1 $2
   }
 
   /**
+   * Inline HTML Rendering
+   *
+   * Renders inline HTML elements in markdown content.
+   * Supports all HTML tags with full power - no sanitization.
+   *
+   * @module markdown/html-inline
+   */
+
+
+  /**
+   * Extract HTML elements and entities from text with their positions
+   *
+   * @param {string} text - Text to scan
+   * @returns {Array<{start: number, end: number, html: string, tag: string}>}
+   */
+  function extractHtmlElements(text) {
+    const results = [];
+    const seen = new Set(); // Avoid duplicates from overlapping patterns
+    let match;
+
+    // Match HTML entities: &name; or &#123; or &#x1F600;
+    // Named entities: &copy; &mdash; &hearts; &nbsp; etc.
+    // Numeric entities: &#123; &#8212;
+    // Hex entities: &#x1F600; &#xA9;
+    const entityPattern = /&(?:#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g;
+    while ((match = entityPattern.exec(text)) !== null) {
+      const key = `${match.index}-${match.index + match[0].length}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        results.push({
+          start: match.index,
+          end: match.index + match[0].length,
+          html: match[0],
+          tag: 'entity',
+        });
+      }
+    }
+
+    // Match self-closing and void elements
+    const voidTags = /<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)(?:\s+[^>]*)?\/?\s*>/gi;
+
+    while ((match = voidTags.exec(text)) !== null) {
+      const key = `${match.index}-${match.index + match[0].length}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        results.push({
+          start: match.index,
+          end: match.index + match[0].length,
+          html: match[0],
+          tag: match[1].toLowerCase(),
+        });
+      }
+    }
+
+    // Match HTML comments
+    const comments = /<!--[\s\S]*?-->/g;
+    while ((match = comments.exec(text)) !== null) {
+      const key = `${match.index}-${match.index + match[0].length}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        results.push({
+          start: match.index,
+          end: match.index + match[0].length,
+          html: match[0],
+          tag: 'comment',
+        });
+      }
+    }
+
+    // Match paired tags - use a more robust approach
+    const pairedTagPattern = /<([a-zA-Z][a-zA-Z0-9]*)(?:\s+[^>]*)?>[\s\S]*?<\/\1>/g;
+    while ((match = pairedTagPattern.exec(text)) !== null) {
+      const key = `${match.index}-${match.index + match[0].length}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        results.push({
+          start: match.index,
+          end: match.index + match[0].length,
+          html: match[0],
+          tag: match[1].toLowerCase(),
+        });
+      }
+    }
+
+    // Sort by position
+    results.sort((a, b) => a.start - b.start);
+
+    return results;
+  }
+
+  // =============================================================================
+  // Widget for Inline HTML
+  // =============================================================================
+
+  /**
+   * Widget that renders inline HTML content
+   */
+  class InlineHtmlWidget extends WidgetType {
+    /**
+     * @param {string} html - Raw HTML string to render
+     */
+    constructor(html) {
+      super();
+      this.html = html;
+    }
+
+    eq(other) {
+      return this.html === other.html;
+    }
+
+    toDOM() {
+      const container = document.createElement('span');
+      container.className = 'cm-inline-html';
+      container.innerHTML = this.html;
+      return container;
+    }
+
+    ignoreEvent() {
+      return true;
+    }
+  }
+
+  // =============================================================================
+  // HTML Rendering Utility
+  // =============================================================================
+
+  /**
+   * Render text content that may contain HTML.
+   * Returns an HTML string with HTML elements preserved and text escaped.
+   *
+   * @param {string} text - Text that may contain HTML
+   * @returns {string} - HTML string safe for innerHTML
+   */
+  function renderTextWithHtml(text) {
+    if (!text) return '';
+
+    const elements = extractHtmlElements(text);
+
+    if (elements.length === 0) {
+      // No HTML found, just escape the text
+      return escapeHtmlText(text);
+    }
+
+    // Build output by interleaving escaped text and raw HTML
+    let result = '';
+    let lastEnd = 0;
+
+    for (const el of elements) {
+      // Escape text before this element
+      if (el.start > lastEnd) {
+        result += escapeHtmlText(text.slice(lastEnd, el.start));
+      }
+      // Add raw HTML (not escaped)
+      result += el.html;
+      lastEnd = el.end;
+    }
+
+    // Escape any remaining text
+    if (lastEnd < text.length) {
+      result += escapeHtmlText(text.slice(lastEnd));
+    }
+
+    return result;
+  }
+
+  /**
+   * Escape text for safe HTML insertion (but not HTML tags themselves)
+   * Only escapes &, <, >, " when they're not part of HTML tags
+   *
+   * @param {string} text
+   * @returns {string}
+   */
+  function escapeHtmlText(text) {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  /**
+   * Render inline markdown AND HTML together.
+   * Processes markdown formatting (bold, italic, code, strikethrough)
+   * while preserving HTML elements.
+   *
+   * @param {string} content - Text with potential markdown and HTML
+   * @returns {string} - HTML string
+   */
+  function renderInlineMarkdownWithHtml(content) {
+    if (!content) return '';
+
+    // First, extract and protect HTML elements
+    const elements = extractHtmlElements(content);
+    const placeholders = new Map();
+    let protected_content = content;
+
+    // Replace HTML with placeholders
+    // Process in reverse order to maintain positions
+    for (let i = elements.length - 1; i >= 0; i--) {
+      const el = elements[i];
+      const placeholder = `__HTML_${i}__`;
+      placeholders.set(placeholder, el.html);
+      protected_content =
+        protected_content.slice(0, el.start) +
+        placeholder +
+        protected_content.slice(el.end);
+    }
+
+    // Process images BEFORE escaping HTML (they contain special chars)
+    // Match: ![alt](url) or ![alt](url "title")
+    let html = protected_content.replace(
+      /!\[([^\]]*)\]\(([^)"]+)(?:\s+"([^"]*)")?\)/g,
+      (match, alt, url, title) => {
+        const escapedAlt = escapeHtmlText(alt);
+        const escapedUrl = escapeHtmlText(url);
+        const titleAttr = title ? ` title="${escapeHtmlText(title)}"` : '';
+        return `<img src="${escapedUrl}" alt="${escapedAlt}"${titleAttr} class="cm-inline-img">`;
+      }
+    );
+
+    // Extract and protect our generated img tags
+    const imgTags = [];
+    html = html.replace(/<img [^>]+>/g, (match) => {
+      imgTags.push(match);
+      return `__IMG_${imgTags.length - 1}__`;
+    });
+
+    // Now escape remaining text (but not placeholders)
+    html = escapeHtmlText(html);
+
+    // Restore img tags
+    html = html.replace(/__IMG_(\d+)__/g, (_, index) => imgTags[parseInt(index)]);
+
+    // Process markdown formatting
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    html = html.replace(/`(.+?)`/g, '<code>$1</code>');
+    html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
+
+    // Restore HTML elements from placeholders
+    for (const [placeholder, originalHtml] of placeholders) {
+      html = html.replace(placeholder, originalHtml);
+    }
+
+    return html;
+  }
+
+  /**
    * Link widgets for rendering clickable links in markdown.
    *
    * Includes:
@@ -110195,7 +110842,7 @@ $1 $2
     toDOM(view) {
       const span = document.createElement('span');
       span.className = this.exists ? 'cm-wiki-link' : 'cm-wiki-link cm-broken-link';
-      span.textContent = this.displayText;
+      span.innerHTML = renderTextWithHtml(this.displayText);
       span.setAttribute('data-target', this.target);
 
       // Click handler - dispatch custom event for host app
@@ -110252,7 +110899,7 @@ $1 $2
       const link = document.createElement('a');
       link.className = 'cm-external-link';
       link.href = this.url;
-      link.textContent = this.text;
+      link.innerHTML = renderTextWithHtml(this.text);
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
 
@@ -110298,7 +110945,7 @@ $1 $2
     toDOM(view) {
       const span = document.createElement('span');
       span.className = 'cm-file-link';
-      span.textContent = this.text;
+      span.innerHTML = renderTextWithHtml(this.text);
       span.setAttribute('data-path', this.path);
 
       // Click handler - dispatch custom event for host app
@@ -111073,52 +111720,11 @@ $1 $2
     }
 
     /**
-     * Render basic inline markdown (bold, italic, code, images)
+     * Render inline markdown with full HTML support.
+     * Processes markdown formatting while preserving HTML elements.
      */
     renderInlineMarkdown(content) {
-      // Process images BEFORE escaping HTML (they contain special chars)
-      // Match: ![alt](url) or ![alt](url "title")
-      let html = content.replace(
-        /!\[([^\]]*)\]\(([^)"]+)(?:\s+"([^"]*)")?\)/g,
-        (match, alt, url, title) => {
-          const escapedAlt = this.escapeHtml(alt);
-          const escapedUrl = this.escapeHtml(url);
-          const titleAttr = title ? ` title="${this.escapeHtml(title)}"` : '';
-          return `<img src="${escapedUrl}" alt="${escapedAlt}"${titleAttr} class="cm-table-cell-img">`;
-        }
-      );
-
-      // Now escape remaining HTML
-      // But preserve our img tags - extract them first
-      const imgTags = [];
-      html = html.replace(/<img [^>]+>/g, (match) => {
-        imgTags.push(match);
-        return `__IMG_${imgTags.length - 1}__`;
-      });
-
-      html = this.escapeHtml(html);
-
-      // Restore img tags
-      html = html.replace(/__IMG_(\d+)__/g, (match, index) => imgTags[parseInt(index)]);
-
-      // Process other inline markdown
-      html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-      html = html.replace(/`(.+?)`/g, '<code>$1</code>');
-      html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
-
-      return html;
-    }
-
-    /**
-     * Escape HTML special characters
-     */
-    escapeHtml(text) {
-      return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+      return renderInlineMarkdownWithHtml(content);
     }
 
     ignoreEvent() {
@@ -112245,6 +112851,24 @@ $1 $2
     // which is only allowed from StateField, not ViewPlugin.
 
     // ==========================================================================
+    // CODE BLOCK DETECTION (shared by inline math, wiki-links, and HTML)
+    // ==========================================================================
+    // Build a set of line numbers that are inside fenced code blocks
+    // This properly tracks code block boundaries using the syntax tree
+    const codeBlockLines = new Set();
+    syntaxTree(view.state).iterate({
+      enter: (node) => {
+        if (node.name === 'FencedCode') {
+          const startLine = doc.lineAt(node.from).number;
+          const endLine = doc.lineAt(node.to).number;
+          for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
+            codeBlockLines.add(lineNum);
+          }
+        }
+      }
+    });
+
+    // ==========================================================================
     // INLINE MATH: $...$ (single line only)
     // ==========================================================================
     // Inline math can be handled here since it's single-line
@@ -112252,6 +112876,9 @@ $1 $2
     for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
       const line = doc.line(i);
       const isActiveLine = i === cursorLine;
+
+      // Skip lines inside code blocks
+      if (codeBlockLines.has(i)) continue;
 
       // Skip if this line is part of a display math block
       if (line.text.includes('$$')) continue;
@@ -112285,8 +112912,8 @@ $1 $2
       const line = doc.line(i);
       const isActiveLine = i === cursorLine;
 
-      // Skip lines inside code blocks (rough check)
-      if (line.text.trimStart().startsWith('```')) continue;
+      // Skip lines inside code blocks (using syntax tree detection)
+      if (codeBlockLines.has(i)) continue;
 
       const wikiLinks = extractWikiLinks(line.text);
 
@@ -112304,6 +112931,56 @@ $1 $2
           decorations.push(
             Decoration.replace({
               widget: new WikiLinkWidget(link.target, link.display),
+            }).range(from, to)
+          );
+        }
+      }
+    }
+
+    // ==========================================================================
+    // Inline HTML - process line by line
+    // ==========================================================================
+    // Track which ranges are already covered by other decorations to avoid conflicts
+    const coveredRanges = [];
+    for (const dec of decorations) {
+      if (dec.from !== undefined && dec.to !== undefined) {
+        coveredRanges.push({ from: dec.from, to: dec.to });
+      }
+    }
+
+    for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
+      const line = doc.line(i);
+      const isActiveLine = i === cursorLine;
+
+      // Skip lines inside code blocks (using syntax tree detection)
+      if (codeBlockLines.has(i)) continue;
+
+      // Skip frontmatter (YAML between ---)
+      // This is a simple check - a full solution would track state
+
+      const htmlElements = extractHtmlElements(line.text);
+
+      for (const el of htmlElements) {
+        const from = line.from + el.start;
+        const to = line.from + el.end;
+
+        // Skip if this range overlaps with an existing decoration
+        const overlaps = coveredRanges.some(
+          (r) => (from >= r.from && from < r.to) || (to > r.from && to <= r.to) ||
+                 (from <= r.from && to >= r.to)
+        );
+        if (overlaps) continue;
+
+        if (isActiveLine) {
+          // Show raw HTML with styling on active line
+          decorations.push(
+            Decoration.mark({ class: 'cm-html-syntax' }).range(from, to)
+          );
+        } else {
+          // Replace with rendered HTML widget
+          decorations.push(
+            Decoration.replace({
+              widget: new InlineHtmlWidget(el.html),
             }).range(from, to)
           );
         }
@@ -113218,6 +113895,138 @@ $1 $2
 /* Alert icons */
 .cm-alert-icon {
   font-size: 1.1em;
+}
+
+/* ==========================================================================
+   INLINE HTML
+
+   Full HTML rendering support. HTML elements are rendered directly
+   without sanitization for maximum flexibility.
+   ========================================================================== */
+
+/* Container for rendered inline HTML */
+.cm-inline-html {
+  display: inline;
+}
+
+/* HTML syntax when editing (cursor on line) */
+.cm-html-syntax {
+  color: var(--md-html-syntax-color, var(--md-marker-color));
+  font-family: var(--md-marker-font);
+  font-size: 0.95em;
+}
+
+/* Style HTML elements rendered in markdown */
+.cm-inline-html kbd {
+  font-family: var(--widget-font-mono);
+  font-size: 0.85em;
+  padding: 0.1em 0.4em;
+  background: var(--widget-surface);
+  border: 1px solid var(--widget-border);
+  border-radius: 3px;
+  box-shadow: 0 1px 0 var(--widget-border);
+}
+
+.cm-inline-html mark {
+  background: var(--md-mark-background, #fef08a);
+  color: var(--md-mark-color, inherit);
+  padding: 0.1em 0.2em;
+  border-radius: 2px;
+}
+
+.cm-inline-html abbr {
+  text-decoration: underline dotted;
+  cursor: help;
+}
+
+.cm-inline-html sub {
+  font-size: 0.75em;
+  vertical-align: sub;
+}
+
+.cm-inline-html sup {
+  font-size: 0.75em;
+  vertical-align: super;
+}
+
+.cm-inline-html small {
+  font-size: 0.85em;
+}
+
+.cm-inline-html ins {
+  text-decoration: underline;
+  background: var(--md-ins-background, rgba(34, 197, 94, 0.15));
+}
+
+.cm-inline-html del {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.cm-inline-html var {
+  font-style: italic;
+  font-family: var(--widget-font-mono);
+}
+
+.cm-inline-html samp {
+  font-family: var(--widget-font-mono);
+  font-size: 0.9em;
+  background: var(--widget-surface);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+
+.cm-inline-html cite {
+  font-style: italic;
+}
+
+.cm-inline-html q {
+  quotes: '"' '"' ''' ''';
+}
+
+.cm-inline-html q::before {
+  content: open-quote;
+}
+
+.cm-inline-html q::after {
+  content: close-quote;
+}
+
+.cm-inline-html dfn {
+  font-style: italic;
+  font-weight: 600;
+}
+
+.cm-inline-html time {
+  font-variant-numeric: tabular-nums;
+}
+
+.cm-inline-html data {
+  font-family: var(--widget-font-mono);
+  font-size: 0.9em;
+}
+
+/* Ruby annotations (for East Asian text) */
+.cm-inline-html ruby {
+  display: ruby;
+}
+
+.cm-inline-html rt {
+  font-size: 0.6em;
+  color: var(--widget-text-muted);
+}
+
+.cm-inline-html rp {
+  display: none;
+}
+
+/* Bidirectional text */
+.cm-inline-html bdi {
+  unicode-bidi: isolate;
+}
+
+.cm-inline-html bdo {
+  unicode-bidi: bidi-override;
 }
 `;
 
@@ -118953,6 +119762,218 @@ $1 $2
   };
 
   /**
+   * Moonlight Theme (Dark)
+   *
+   * Dark counterpart to the Daylight theme.
+   * Clean, modern dark theme with Material Design influences.
+   * Same typography and spacing as daylight, inverted colors.
+   */
+  const moonlightTheme = {
+    name: 'moonlight',
+    description: 'Dark counterpart to Daylight. Clean Material-inspired dark theme.',
+    isDark: true,
+    fontFace: defaultFontFace,
+
+    // Spacing - same as daylight
+    '--widget-line-height': '1.6',
+    '--widget-padding-x': '16px',
+    '--widget-padding-y': '12px',
+    '--widget-margin-y': '4px',
+    '--widget-border-radius': '4px',
+    '--widget-border-width': '0',
+    '--widget-border-accent-width': '0',
+
+    // Output styling - same as daylight
+    '--widget-inset-left': '24px',
+    '--widget-offset-top': '0',
+
+    // Text layout - same as daylight
+    '--widget-white-space': 'pre-wrap',
+    '--widget-word-break': 'break-word',
+
+    // Typography - same as daylight (Roboto family)
+    '--widget-font-mono': "'Roboto Mono', 'SF Mono', Monaco, Consolas, monospace",
+    '--widget-font-sans': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    '--widget-font-size': '0.85em',
+    '--editor-font-family': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    '--widget-font-size-small': '0.75em',
+    '--widget-font-size-label': '11px',
+
+    // Surfaces - dark backgrounds inspired by Material Dark
+    '--widget-surface': '#1e1e2e',
+    '--widget-surface-hover': '#2a2a3c',
+    '--widget-surface-elevated': '#252536',
+    '--widget-surface-inset': '#181825',
+
+    // Borders - subtle light borders
+    '--widget-border': 'rgba(255, 255, 255, 0.08)',
+    '--widget-border-accent': 'rgba(255, 255, 255, 0.12)',
+    '--widget-border-focus': '#64b5f6',
+
+    // Text - light text on dark backgrounds
+    '--widget-text': '#cdd6f4',
+    '--widget-text-muted': '#a6adc8',
+    '--widget-text-accent': '#64b5f6',
+
+    // Semantic colors - Material palette (brighter for dark bg)
+    '--widget-success': '#a6e3a1',
+    '--widget-warning': '#fab387',
+    '--widget-error': '#f38ba8',
+    '--widget-info': '#89b4fa',
+
+    // ANSI colors - Material-inspired for dark backgrounds
+    '--ansi-black': '#1e1e2e',
+    '--ansi-red': '#f38ba8',
+    '--ansi-green': '#a6e3a1',
+    '--ansi-yellow': '#f9e2af',
+    '--ansi-blue': '#89b4fa',
+    '--ansi-magenta': '#cba6f7',
+    '--ansi-cyan': '#94e2d5',
+    '--ansi-white': '#cdd6f4',
+    '--ansi-bright-black': '#585b70',
+    '--ansi-bright-red': '#f38ba8',
+    '--ansi-bright-green': '#a6e3a1',
+    '--ansi-bright-yellow': '#f9e2af',
+    '--ansi-bright-blue': '#89b4fa',
+    '--ansi-bright-magenta': '#cba6f7',
+    '--ansi-bright-cyan': '#94e2d5',
+    '--ansi-bright-white': '#ffffff',
+
+    // Terminal colors (dark theme)
+    '--term-background': '#181825',
+    '--term-foreground': '#cdd6f4',
+    '--term-cursor': '#cdd6f4',
+    '--term-cursor-accent': '#181825',
+    '--term-selection': '#45475a',
+    '--term-border': 'rgba(255, 255, 255, 0.1)',
+    '--term-header-bg': '#1e1e2e',
+    '--term-header-fg': '#a6adc8',
+
+    // Collaborator defaults
+    '--collab-human': '#89b4fa',
+    '--collab-ai': '#cba6f7',
+    '--collab-runtime': '#a6e3a1',
+
+    // Editor - clean dark background
+    '--editor-background': '#1e1e2e',
+    '--editor-foreground': '#cdd6f4',
+    '--editor-line-number': '#6c7086',
+    '--editor-line-number-active': '#a6adc8',
+    '--editor-selection': '#45475a',
+    '--editor-selection-match': '#585b70',
+    '--editor-cursor': '#cdd6f4',
+    '--editor-active-line': 'rgba(255, 255, 255, 0.03)',
+    '--editor-gutter': '#1e1e2e',
+    '--editor-matching-bracket': '#585b70',
+
+    // Syntax highlighting - Material Dark inspired (matching daylight's structure)
+    '--syntax-keyword': '#89b4fa',         // Blue for keywords
+    '--syntax-control': '#89b4fa',         // Blue for control flow
+    '--syntax-string': '#a6e3a1',          // Green for strings
+    '--syntax-number': '#fab387',          // Orange for numbers
+    '--syntax-comment': '#6c7086',         // Gray for comments
+    '--syntax-function': '#cba6f7',        // Purple for functions
+    '--syntax-variable': '#cdd6f4',        // Light for variables
+    '--syntax-variable-special': '#89b4fa',// Blue for self/this
+    '--syntax-property': '#89b4fa',        // Blue for properties
+    '--syntax-operator': '#cdd6f4',        // Light for operators
+    '--syntax-punctuation': '#cdd6f4',     // Light for punctuation
+    '--syntax-type': '#94e2d5',            // Teal for types
+    '--syntax-class': '#94e2d5',           // Teal for class names
+    '--syntax-constant': '#89b4fa',        // Blue for constants
+    '--syntax-parameter': '#cdd6f4',       // Light for parameters
+    '--syntax-regexp': '#f38ba8',          // Red for regex
+    '--syntax-escape': '#fab387',          // Orange for escapes
+    '--syntax-tag': '#f38ba8',             // Red for HTML tags
+    '--syntax-attribute': '#cba6f7',       // Purple for attributes
+    '--syntax-attribute-value': '#a6e3a1', // Green for attribute values
+    '--syntax-heading': '#cdd6f4',         // Light for headings
+    '--syntax-link': '#89b4fa',            // Blue for links
+    '--syntax-link-text': '#89b4fa',       // Blue for link text
+    '--syntax-emphasis': '#cdd6f4',        // Light for emphasis
+    '--syntax-strong': '#ffffff',          // White for strong/bold
+    '--syntax-strikethrough': '#6c7086',
+    '--syntax-quote': '#6c7086',
+    '--syntax-code': '#f38ba8',            // Red for inline code
+    '--syntax-code-background': '#252536',
+    '--syntax-meta': '#6c7086',
+    '--syntax-inserted': '#a6e3a1',
+    '--syntax-deleted': '#f38ba8',
+    '--syntax-changed': '#89b4fa',
+
+    // Markdown rendering - Material Dark style
+    '--md-heading-1-size': '2em',
+    '--md-heading-2-size': '1.5625em',
+    '--md-heading-3-size': '1.25em',
+    '--md-heading-4-size': '1em',
+    '--md-heading-5-size': '0.875em',
+    '--md-heading-6-size': '0.75em',
+    '--md-heading-weight': '700',
+    '--md-heading-line-height': '1.4',
+    '--md-heading-margin-top': '0.8em',
+    '--md-heading-color': '#cdd6f4',
+    '--md-marker-color': '#6c7086',
+    '--md-marker-font': "'Roboto Mono', 'SF Mono', Monaco, monospace",
+    '--md-link-color': '#89b4fa',
+    '--md-link-decoration': 'none',
+    '--md-code-background': '#252536',
+    '--md-code-color': '#f38ba8',
+    '--md-code-padding': '0.2em 0.4em',
+    '--md-code-radius': '4px',
+    '--md-blockquote-border': '#45475a',
+    '--md-blockquote-border-width': '4px',
+    '--md-blockquote-color': '#a6adc8',
+    '--md-blockquote-padding': '1em',
+    '--md-list-marker-color': '#a6adc8',
+    '--md-hr-color': '#45475a',
+    '--md-hr-height': '1px',
+    '--md-hr-margin': '2em 0',
+    '--md-table-border': '#45475a',
+    '--md-table-header-bg': '#252536',
+    '--md-table-header-weight': '500',
+    '--md-table-cell-padding': '0.75em 1em',
+    '--md-table-stripe-bg': 'transparent',
+    '--md-image-max-width': '100%',
+    '--md-image-border-radius': '4px',
+    '--md-checkbox-size': '1.1em',
+    '--md-checkbox-color': '#89b4fa',
+    '--md-alert-note-color': '#89b4fa',
+    '--md-alert-tip-color': '#a6e3a1',
+    '--md-alert-important-color': '#cba6f7',
+    '--md-alert-warning-color': '#fab387',
+    '--md-alert-caution-color': '#f38ba8',
+
+    // Shell (status bar, menus, dialogs) - Material Dark
+    '--mrmd-ui-font': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    '--mrmd-ui-font-size': '14px',
+    '--mrmd-ui-font-size-sm': '12px',
+    '--mrmd-panel-bg': '#1e1e2e',
+    '--mrmd-popup-bg': '#252536',
+    '--mrmd-bg': '#1e1e2e',
+    '--mrmd-fg': '#cdd6f4',
+    '--mrmd-fg-muted': '#a6adc8',
+    '--mrmd-border': '#45475a',
+    '--mrmd-hover-bg': 'rgba(255, 255, 255, 0.05)',
+    '--mrmd-active-bg': 'rgba(255, 255, 255, 0.08)',
+    '--mrmd-selection-bg': 'rgba(137, 180, 250, 0.15)',
+    '--mrmd-accent': '#89b4fa',
+    '--mrmd-accent-hover': '#74a8f8',
+    '--mrmd-success': '#a6e3a1',
+    '--mrmd-warning': '#fab387',
+    '--mrmd-error': '#f38ba8',
+    '--mrmd-shadow-md': '0 2px 4px rgba(0, 0, 0, 0.3)',
+    '--mrmd-shadow-lg': '0 4px 8px rgba(0, 0, 0, 0.4)',
+    '--mrmd-shadow-xl': '0 8px 16px rgba(0, 0, 0, 0.5)',
+    '--mrmd-menu-border': '#45475a',
+    '--mrmd-dialog-border': '#45475a',
+    '--mrmd-input-border': '#45475a',
+    '--mrmd-button-bg': '#252536',
+    '--mrmd-button-border': '#45475a',
+    '--mrmd-button-hover': '#313244',
+    '--mrmd-button-active': '#45475a',
+  };
+
+  /**
    * GitHub Theme (Dark)
    *
    * GitHub-inspired styling for familiarity.
@@ -120278,6 +121299,7 @@ $1 $2
   const themeRegistry = new Map([
     ['midnight', midnightTheme],
     ['daylight', daylightTheme],
+    ['moonlight', moonlightTheme],
     ['github', githubTheme],
     ['nord', nordTheme],
     ['nord-outputs', nordOutputsTheme],
@@ -123430,7 +124452,7 @@ $1 $2
        * @returns {import('./runtime-lsp.js').RuntimeLSPProvider}
        */
       getLSPProvider() {
-        return adaptMrmdJsSession(session);
+        return adaptMrmdJsSession(defaultSession);
       },
     };
   }
@@ -123951,6 +124973,15 @@ $1 $2
         runtimeLspProviders.set(name, mrpProvider);
         // Also register the client for execution
         registry.register(name, client);
+      }
+    }
+
+    // Check for custom runtimes with getLSPProvider method (e.g., mrmd-js passed via options.runtimes)
+    for (const [name, rtConfig] of Object.entries(config.runtimes)) {
+      if (rtConfig.type === 'custom' && rtConfig.instance?.getLSPProvider) {
+        const provider = rtConfig.instance.getLSPProvider();
+        runtimeLspProviders.set(name, provider);
+        console.log(`[editor] Registered LSP provider for custom runtime: ${name}`);
       }
     }
 

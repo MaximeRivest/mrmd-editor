@@ -893,6 +893,218 @@ export const daylightTheme = {
 };
 
 /**
+ * Moonlight Theme (Dark)
+ *
+ * Dark counterpart to the Daylight theme.
+ * Clean, modern dark theme with Material Design influences.
+ * Same typography and spacing as daylight, inverted colors.
+ */
+export const moonlightTheme = {
+  name: 'moonlight',
+  description: 'Dark counterpart to Daylight. Clean Material-inspired dark theme.',
+  isDark: true,
+  fontFace: defaultFontFace,
+
+  // Spacing - same as daylight
+  '--widget-line-height': '1.6',
+  '--widget-padding-x': '16px',
+  '--widget-padding-y': '12px',
+  '--widget-margin-y': '4px',
+  '--widget-border-radius': '4px',
+  '--widget-border-width': '0',
+  '--widget-border-accent-width': '0',
+
+  // Output styling - same as daylight
+  '--widget-inset-left': '24px',
+  '--widget-offset-top': '0',
+
+  // Text layout - same as daylight
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
+
+  // Typography - same as daylight (Roboto family)
+  '--widget-font-mono': "'Roboto Mono', 'SF Mono', Monaco, Consolas, monospace",
+  '--widget-font-sans': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  '--widget-font-size': '0.85em',
+  '--editor-font-family': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  '--widget-font-size-small': '0.75em',
+  '--widget-font-size-label': '11px',
+
+  // Surfaces - dark backgrounds inspired by Material Dark
+  '--widget-surface': '#1e1e2e',
+  '--widget-surface-hover': '#2a2a3c',
+  '--widget-surface-elevated': '#252536',
+  '--widget-surface-inset': '#181825',
+
+  // Borders - subtle light borders
+  '--widget-border': 'rgba(255, 255, 255, 0.08)',
+  '--widget-border-accent': 'rgba(255, 255, 255, 0.12)',
+  '--widget-border-focus': '#64b5f6',
+
+  // Text - light text on dark backgrounds
+  '--widget-text': '#cdd6f4',
+  '--widget-text-muted': '#a6adc8',
+  '--widget-text-accent': '#64b5f6',
+
+  // Semantic colors - Material palette (brighter for dark bg)
+  '--widget-success': '#a6e3a1',
+  '--widget-warning': '#fab387',
+  '--widget-error': '#f38ba8',
+  '--widget-info': '#89b4fa',
+
+  // ANSI colors - Material-inspired for dark backgrounds
+  '--ansi-black': '#1e1e2e',
+  '--ansi-red': '#f38ba8',
+  '--ansi-green': '#a6e3a1',
+  '--ansi-yellow': '#f9e2af',
+  '--ansi-blue': '#89b4fa',
+  '--ansi-magenta': '#cba6f7',
+  '--ansi-cyan': '#94e2d5',
+  '--ansi-white': '#cdd6f4',
+  '--ansi-bright-black': '#585b70',
+  '--ansi-bright-red': '#f38ba8',
+  '--ansi-bright-green': '#a6e3a1',
+  '--ansi-bright-yellow': '#f9e2af',
+  '--ansi-bright-blue': '#89b4fa',
+  '--ansi-bright-magenta': '#cba6f7',
+  '--ansi-bright-cyan': '#94e2d5',
+  '--ansi-bright-white': '#ffffff',
+
+  // Terminal colors (dark theme)
+  '--term-background': '#181825',
+  '--term-foreground': '#cdd6f4',
+  '--term-cursor': '#cdd6f4',
+  '--term-cursor-accent': '#181825',
+  '--term-selection': '#45475a',
+  '--term-border': 'rgba(255, 255, 255, 0.1)',
+  '--term-header-bg': '#1e1e2e',
+  '--term-header-fg': '#a6adc8',
+
+  // Collaborator defaults
+  '--collab-human': '#89b4fa',
+  '--collab-ai': '#cba6f7',
+  '--collab-runtime': '#a6e3a1',
+
+  // Editor - clean dark background
+  '--editor-background': '#1e1e2e',
+  '--editor-foreground': '#cdd6f4',
+  '--editor-line-number': '#6c7086',
+  '--editor-line-number-active': '#a6adc8',
+  '--editor-selection': '#45475a',
+  '--editor-selection-match': '#585b70',
+  '--editor-cursor': '#cdd6f4',
+  '--editor-active-line': 'rgba(255, 255, 255, 0.03)',
+  '--editor-gutter': '#1e1e2e',
+  '--editor-matching-bracket': '#585b70',
+
+  // Syntax highlighting - Material Dark inspired (matching daylight's structure)
+  '--syntax-keyword': '#89b4fa',         // Blue for keywords
+  '--syntax-control': '#89b4fa',         // Blue for control flow
+  '--syntax-string': '#a6e3a1',          // Green for strings
+  '--syntax-number': '#fab387',          // Orange for numbers
+  '--syntax-comment': '#6c7086',         // Gray for comments
+  '--syntax-function': '#cba6f7',        // Purple for functions
+  '--syntax-variable': '#cdd6f4',        // Light for variables
+  '--syntax-variable-special': '#89b4fa',// Blue for self/this
+  '--syntax-property': '#89b4fa',        // Blue for properties
+  '--syntax-operator': '#cdd6f4',        // Light for operators
+  '--syntax-punctuation': '#cdd6f4',     // Light for punctuation
+  '--syntax-type': '#94e2d5',            // Teal for types
+  '--syntax-class': '#94e2d5',           // Teal for class names
+  '--syntax-constant': '#89b4fa',        // Blue for constants
+  '--syntax-parameter': '#cdd6f4',       // Light for parameters
+  '--syntax-regexp': '#f38ba8',          // Red for regex
+  '--syntax-escape': '#fab387',          // Orange for escapes
+  '--syntax-tag': '#f38ba8',             // Red for HTML tags
+  '--syntax-attribute': '#cba6f7',       // Purple for attributes
+  '--syntax-attribute-value': '#a6e3a1', // Green for attribute values
+  '--syntax-heading': '#cdd6f4',         // Light for headings
+  '--syntax-link': '#89b4fa',            // Blue for links
+  '--syntax-link-text': '#89b4fa',       // Blue for link text
+  '--syntax-emphasis': '#cdd6f4',        // Light for emphasis
+  '--syntax-strong': '#ffffff',          // White for strong/bold
+  '--syntax-strikethrough': '#6c7086',
+  '--syntax-quote': '#6c7086',
+  '--syntax-code': '#f38ba8',            // Red for inline code
+  '--syntax-code-background': '#252536',
+  '--syntax-meta': '#6c7086',
+  '--syntax-inserted': '#a6e3a1',
+  '--syntax-deleted': '#f38ba8',
+  '--syntax-changed': '#89b4fa',
+
+  // Markdown rendering - Material Dark style
+  '--md-heading-1-size': '2em',
+  '--md-heading-2-size': '1.5625em',
+  '--md-heading-3-size': '1.25em',
+  '--md-heading-4-size': '1em',
+  '--md-heading-5-size': '0.875em',
+  '--md-heading-6-size': '0.75em',
+  '--md-heading-weight': '700',
+  '--md-heading-line-height': '1.4',
+  '--md-heading-margin-top': '0.8em',
+  '--md-heading-color': '#cdd6f4',
+  '--md-marker-color': '#6c7086',
+  '--md-marker-font': "'Roboto Mono', 'SF Mono', Monaco, monospace",
+  '--md-link-color': '#89b4fa',
+  '--md-link-decoration': 'none',
+  '--md-code-background': '#252536',
+  '--md-code-color': '#f38ba8',
+  '--md-code-padding': '0.2em 0.4em',
+  '--md-code-radius': '4px',
+  '--md-blockquote-border': '#45475a',
+  '--md-blockquote-border-width': '4px',
+  '--md-blockquote-color': '#a6adc8',
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#a6adc8',
+  '--md-hr-color': '#45475a',
+  '--md-hr-height': '1px',
+  '--md-hr-margin': '2em 0',
+  '--md-table-border': '#45475a',
+  '--md-table-header-bg': '#252536',
+  '--md-table-header-weight': '500',
+  '--md-table-cell-padding': '0.75em 1em',
+  '--md-table-stripe-bg': 'transparent',
+  '--md-image-max-width': '100%',
+  '--md-image-border-radius': '4px',
+  '--md-checkbox-size': '1.1em',
+  '--md-checkbox-color': '#89b4fa',
+  '--md-alert-note-color': '#89b4fa',
+  '--md-alert-tip-color': '#a6e3a1',
+  '--md-alert-important-color': '#cba6f7',
+  '--md-alert-warning-color': '#fab387',
+  '--md-alert-caution-color': '#f38ba8',
+
+  // Shell (status bar, menus, dialogs) - Material Dark
+  '--mrmd-ui-font': "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  '--mrmd-ui-font-size': '14px',
+  '--mrmd-ui-font-size-sm': '12px',
+  '--mrmd-panel-bg': '#1e1e2e',
+  '--mrmd-popup-bg': '#252536',
+  '--mrmd-bg': '#1e1e2e',
+  '--mrmd-fg': '#cdd6f4',
+  '--mrmd-fg-muted': '#a6adc8',
+  '--mrmd-border': '#45475a',
+  '--mrmd-hover-bg': 'rgba(255, 255, 255, 0.05)',
+  '--mrmd-active-bg': 'rgba(255, 255, 255, 0.08)',
+  '--mrmd-selection-bg': 'rgba(137, 180, 250, 0.15)',
+  '--mrmd-accent': '#89b4fa',
+  '--mrmd-accent-hover': '#74a8f8',
+  '--mrmd-success': '#a6e3a1',
+  '--mrmd-warning': '#fab387',
+  '--mrmd-error': '#f38ba8',
+  '--mrmd-shadow-md': '0 2px 4px rgba(0, 0, 0, 0.3)',
+  '--mrmd-shadow-lg': '0 4px 8px rgba(0, 0, 0, 0.4)',
+  '--mrmd-shadow-xl': '0 8px 16px rgba(0, 0, 0, 0.5)',
+  '--mrmd-menu-border': '#45475a',
+  '--mrmd-dialog-border': '#45475a',
+  '--mrmd-input-border': '#45475a',
+  '--mrmd-button-bg': '#252536',
+  '--mrmd-button-border': '#45475a',
+  '--mrmd-button-hover': '#313244',
+  '--mrmd-button-active': '#45475a',
+};
+
+/**
  * GitHub Theme (Dark)
  *
  * GitHub-inspired styling for familiarity.
@@ -2218,6 +2430,7 @@ export const openresponsesTheme = {
 const themeRegistry = new Map([
   ['midnight', midnightTheme],
   ['daylight', daylightTheme],
+  ['moonlight', moonlightTheme],
   ['github', githubTheme],
   ['nord', nordTheme],
   ['nord-outputs', nordOutputsTheme],
@@ -2325,6 +2538,7 @@ export default {
   // Built-in themes
   midnightTheme,
   daylightTheme,
+  moonlightTheme,
   githubTheme,
   nordTheme,
   nordOutputsTheme,

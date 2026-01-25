@@ -63,6 +63,41 @@ function parseTerminalLanguage(lang) {
 }
 
 /**
+ * Artifact target languages - code that renders to an artifact panel
+ * Supports: html:artifact-name, css:artifact-name, js:artifact-name, js:dom
+ */
+const ARTIFACT_LANGUAGES = new Set(['html', 'htm', 'css', 'style', 'javascript', 'js']);
+
+/**
+ * Parse artifact target from language string
+ * @param {string} lang - Language string (e.g., 'html:myapp', 'js:artifact-a', 'js:dom')
+ * @returns {{isArtifact: boolean, artifactName: string|null, baseLanguage: string, isMainDom: boolean}}
+ */
+function parseArtifactLanguage(lang) {
+  if (!lang) return { isArtifact: false, artifactName: null, baseLanguage: lang, isMainDom: false };
+  const lower = lang.toLowerCase();
+
+  // Check for language:target format
+  const colonIndex = lower.indexOf(':');
+  if (colonIndex > 0) {
+    const baseLang = lower.slice(0, colonIndex);
+    const target = lower.slice(colonIndex + 1);
+
+    // Check if base language supports artifact targets
+    if (ARTIFACT_LANGUAGES.has(baseLang)) {
+      // Special case: js:dom means affect main document
+      if (target === 'dom' || target === 'main') {
+        return { isArtifact: false, artifactName: null, baseLanguage: baseLang, isMainDom: true };
+      }
+      // Otherwise it's an artifact target
+      return { isArtifact: true, artifactName: target, baseLanguage: baseLang, isMainDom: false };
+    }
+  }
+
+  return { isArtifact: false, artifactName: null, baseLanguage: lower, isMainDom: false };
+}
+
+/**
  * Find all code blocks in the document
  *
  * @param {string} content - Document content
@@ -98,8 +133,9 @@ export function findCodeBlocks(content) {
 
     if (!inBlock) {
       // Look for opening fence: ```language [session]
-      // Examples: ```js, ```js sandbox, ```python myenv
-      const match = line.match(/^(`{3,})(\w*)(?:\s+(\S+))?/);
+      // Examples: ```js, ```js sandbox, ```python myenv, ```html:artifact, ```css:myapp
+      // Language can include colon for targets (html:name, css:name, js:name, term:session)
+      const match = line.match(/^(`{3,})([\w:.-]*)(?:\s+(\S+))?/);
       if (match) {
         inBlock = true;
         blockStart = lineStart;
@@ -119,8 +155,15 @@ export function findCodeBlocks(content) {
         // Terminal session can come from term:session or from space-separated session
         const terminalSession = terminalInfo.sessionName || (terminalInfo.isTerminal ? blockSession : null);
 
+        // Parse artifact language for artifact panel support
+        const artifactInfo = parseArtifactLanguage(blockLanguage);
+
+        // Determine the effective language (base language without target suffix)
+        const effectiveLanguage = artifactInfo.baseLanguage || blockLanguage;
+
         blocks.push({
           language: blockLanguage,
+          baseLanguage: effectiveLanguage, // The language without :target suffix
           session: blockSession,
           code: content.slice(codeStart, codeEnd),
           start: blockStart,
@@ -128,10 +171,14 @@ export function findCodeBlocks(content) {
           codeStart,
           codeEnd,
           line: blockLine,
-          executable: EXECUTABLE_LANGUAGES.has(blockLanguage),
-          rendered: RENDERED_LANGUAGES.has(blockLanguage),
+          executable: EXECUTABLE_LANGUAGES.has(effectiveLanguage) || EXECUTABLE_LANGUAGES.has(blockLanguage),
+          rendered: RENDERED_LANGUAGES.has(effectiveLanguage) || RENDERED_LANGUAGES.has(blockLanguage),
           terminal: terminalInfo.isTerminal,
           terminalSession: terminalSession, // Named terminal session (e.g., 'session1' from term:session1)
+          // Artifact properties
+          artifact: artifactInfo.isArtifact,
+          artifactName: artifactInfo.artifactName, // Named artifact (e.g., 'myapp' from html:myapp)
+          mainDom: artifactInfo.isMainDom, // js:dom targets main document
         });
 
         inBlock = false;
@@ -341,4 +388,22 @@ export function findTerminalBlocks(content) {
  */
 export function isTerminalLanguage(language) {
   return parseTerminalLanguage(language).isTerminal;
+}
+
+/**
+ * Check if language targets an artifact (e.g., 'html:myapp', 'js:artifact-a')
+ * @param {string} language - Language identifier
+ * @returns {boolean}
+ */
+export function isArtifactLanguage(language) {
+  return parseArtifactLanguage(language).isArtifact;
+}
+
+/**
+ * Get artifact info from language string
+ * @param {string} language - Language identifier (e.g., 'html:myapp', 'js:dom')
+ * @returns {{isArtifact: boolean, artifactName: string|null, baseLanguage: string, isMainDom: boolean}}
+ */
+export function getArtifactInfo(language) {
+  return parseArtifactLanguage(language);
 }

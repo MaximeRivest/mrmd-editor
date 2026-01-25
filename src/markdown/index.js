@@ -87,3 +87,13 @@ export {
   getKaTeXVersion,
   injectKaTeXStyles,
 } from './widgets/index.js';
+
+// HTML inline rendering
+export {
+  containsHtml,
+  extractHtmlElements,
+  renderTextWithHtml,
+  renderInlineMarkdownWithHtml,
+  createHtmlElement,
+  InlineHtmlWidget,
+} from './html-inline.js';
