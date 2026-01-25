@@ -2160,6 +2160,17 @@ function create(target, options = {}) {
       if (jsRuntime && jsRuntime.destroy) {
         jsRuntime.destroy();
       }
+      // Clean up WebSocket provider (if using createDrive API)
+      // This prevents reconnection loops after editor destruction
+      if (this.provider) {
+        try {
+          this.provider.disconnect();
+          this.provider.destroy();
+        } catch (e) {
+          console.warn('[mrmd] Error cleaning up WebSocket provider:', e);
+        }
+        this.provider = null;
+      }
       // Clean up theme watcher
       unwatchTheme();
       // Clean up undo manager

@@ -326,6 +326,41 @@ export class Drive {
     this._accessOrder = [];
     this._currentDoc = null;
   }
+
+  /**
+   * Update the sync URL for new connections.
+   * This closes ALL existing document connections and updates the URL.
+   * Use this when switching between projects with different sync servers.
+   *
+   * @param {string} newSyncUrl - New WebSocket URL for mrmd-sync
+   */
+  setSyncUrl(newSyncUrl) {
+    const normalizedUrl = newSyncUrl.replace(/\/$/, '');
+
+    if (normalizedUrl === this.syncUrl) {
+      return; // No change
+    }
+
+    this._log('info', 'Changing sync URL', { from: this.syncUrl, to: normalizedUrl });
+
+    // Close all existing connections (they're connected to the old URL)
+    for (const docName of Array.from(this._docs.keys())) {
+      this.close(docName);
+    }
+
+    // Update the URL for new connections
+    this.syncUrl = normalizedUrl;
+
+    this._log('info', 'Sync URL updated', { syncUrl: this.syncUrl });
+  }
+
+  /**
+   * Get the current sync URL
+   * @returns {string}
+   */
+  getSyncUrl() {
+    return this.syncUrl;
+  }
 }
 
 /**

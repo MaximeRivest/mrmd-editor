@@ -64426,6 +64426,41 @@ let Drive$1 = class Drive {
     this._accessOrder = [];
     this._currentDoc = null;
   }
+
+  /**
+   * Update the sync URL for new connections.
+   * This closes ALL existing document connections and updates the URL.
+   * Use this when switching between projects with different sync servers.
+   *
+   * @param {string} newSyncUrl - New WebSocket URL for mrmd-sync
+   */
+  setSyncUrl(newSyncUrl) {
+    const normalizedUrl = newSyncUrl.replace(/\/$/, '');
+
+    if (normalizedUrl === this.syncUrl) {
+      return; // No change
+    }
+
+    this._log('info', 'Changing sync URL', { from: this.syncUrl, to: normalizedUrl });
+
+    // Close all existing connections (they're connected to the old URL)
+    for (const docName of Array.from(this._docs.keys())) {
+      this.close(docName);
+    }
+
+    // Update the URL for new connections
+    this.syncUrl = normalizedUrl;
+
+    this._log('info', 'Sync URL updated', { syncUrl: this.syncUrl });
+  }
+
+  /**
+   * Get the current sync URL
+   * @returns {string}
+   */
+  getSyncUrl() {
+    return this.syncUrl;
+  }
 };
 
 /**
@@ -65811,6 +65846,19 @@ async function createStudio$1(target, options = {}) {
     editorContainer.classList.add('mrmd-studio__editor--loading');
 
     try {
+      // Check if sync URL has changed (e.g., switching between projects)
+      // This prevents WebSocket reconnection loops to old servers
+      try {
+        const urls = await orchestratorClient.getUrls();
+        if (urls.sync && urls.sync !== drive.getSyncUrl()) {
+          console.log('[studio] Sync URL changed, updating drive:', drive.getSyncUrl(), '->', urls.sync);
+          drive.setSyncUrl(urls.sync);
+        }
+      } catch (e) {
+        console.warn('[studio] Failed to check sync URL:', e);
+        // Continue anyway - the old sync URL might still work
+      }
+
       // Clear cursor from awareness before destroying to prevent stale cursors
       // appearing as "anonymous" when navigating back to this document
       if (editor?.awareness) {
@@ -126060,6 +126108,17 @@ function create(target, options = {}) {
       }
       if (jsRuntime && jsRuntime.destroy) {
         jsRuntime.destroy();
+      }
+      // Clean up WebSocket provider (if using createDrive API)
+      // This prevents reconnection loops after editor destruction
+      if (this.provider) {
+        try {
+          this.provider.disconnect();
+          this.provider.destroy();
+        } catch (e) {
+          console.warn('[mrmd] Error cleaning up WebSocket provider:', e);
+        }
+        this.provider = null;
       }
       // Clean up theme watcher
       unwatchTheme();

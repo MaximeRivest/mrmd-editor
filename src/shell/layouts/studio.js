@@ -487,6 +487,19 @@ export async function createStudio(target, options = {}) {
     editorContainer.classList.add('mrmd-studio__editor--loading');
 
     try {
+      // Check if sync URL has changed (e.g., switching between projects)
+      // This prevents WebSocket reconnection loops to old servers
+      try {
+        const urls = await orchestratorClient.getUrls();
+        if (urls.sync && urls.sync !== drive.getSyncUrl()) {
+          console.log('[studio] Sync URL changed, updating drive:', drive.getSyncUrl(), '->', urls.sync);
+          drive.setSyncUrl(urls.sync);
+        }
+      } catch (e) {
+        console.warn('[studio] Failed to check sync URL:', e);
+        // Continue anyway - the old sync URL might still work
+      }
+
       // Clear cursor from awareness before destroying to prevent stale cursors
       // appearing as "anonymous" when navigating back to this document
       if (editor?.awareness) {
