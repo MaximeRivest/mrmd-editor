@@ -1381,6 +1381,7 @@ export const outputWidgetStyles = `
 /* HTML Output Widget - renders HTML in sandboxed iframe */
 .cm-html-output-widget {
   position: relative;
+  z-index: 5;
   margin: 8px 0;
   padding: 0;
   background: var(--widget-surface, rgba(0, 0, 0, 0.35));

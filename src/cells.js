@@ -24,6 +24,8 @@ const EXECUTABLE_LANGUAGES = new Set([
   'html',
   // CSS (applied to page)
   'css',
+  // Mermaid diagrams (rendered to SVG)
+  'mermaid',
 ]);
 
 /**

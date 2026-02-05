@@ -51,6 +51,7 @@ import { xml } from '@codemirror/lang-xml';
 import { yaml } from '@codemirror/lang-yaml';
 import { r } from 'codemirror-lang-r';
 import { julia } from '@plutojl/lang-julia';
+import { mermaid } from 'codemirror-lang-mermaid';
 import { shell } from '@codemirror/legacy-modes/mode/shell';
 import { powerShell } from '@codemirror/legacy-modes/mode/powershell';
 
@@ -365,6 +366,8 @@ function createJavaScriptRuntime(options = {}) {
     'htm': 'html',
     // CSS
     'css': 'css',
+    // Mermaid diagrams
+    'mermaid': 'mermaid',
   };
 
   return {
@@ -572,6 +575,7 @@ const xmlSupport = xml();
 const yamlSupport = yaml();
 const rSupport = r();
 const juliaSupport = julia();
+const mermaidSupport = mermaid();
 const shellLang = StreamLanguage.define(shell);
 const powershellLang = StreamLanguage.define(powerShell);
 
@@ -616,6 +620,8 @@ function codeBlockLanguage(info) {
       return shellLang;
     case 'powershell': case 'ps1': case 'pwsh':
       return powershellLang;
+    case 'mermaid':
+      return mermaidSupport.language;
     default:
       return null;
   }

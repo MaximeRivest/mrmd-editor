@@ -725,11 +725,16 @@ export class ExecutionManager {
       const existingOutput = findOutputBlock(content, currentCell.end);
 
       // Determine output type based on language (for rich rendering)
-      // HTML and CSS get special output types for visual rendering
+      // HTML, CSS, and Mermaid get special output types for visual rendering
       // Use runtimeLanguage (base language) for determining output type
       const langLower = runtimeLanguage.toLowerCase();
-      const isRichOutput = ['html', 'htm', 'css', 'style', 'stylesheet'].includes(langLower);
-      const outputType = isRichOutput ? langLower.replace(/^(htm|style|stylesheet)$/, (m) => m === 'htm' ? 'html' : 'css') : null;
+      const isRichOutput = ['html', 'htm', 'css', 'style', 'stylesheet', 'mermaid'].includes(langLower);
+      const outputType = isRichOutput ? langLower.replace(/^(htm|style|stylesheet|mermaid)$/, (m) => {
+        if (m === 'htm') return 'html';
+        if (m === 'style' || m === 'stylesheet') return 'css';
+        if (m === 'mermaid') return 'html'; // Mermaid renders to HTML/SVG
+        return m;
+      }) : null;
       const outputTag = outputType ? `output:${execId}:${outputType}` : `output:${execId}`;
 
       if (existingOutput) {

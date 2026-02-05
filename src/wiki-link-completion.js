@@ -21,6 +21,14 @@ import { Facet } from '@codemirror/state';
 import { autocompletion, CompletionContext } from '@codemirror/autocomplete';
 import { syntaxTree } from '@codemirror/language';
 
+const DOC_EXTENSIONS = ['.md', '.qmd'];
+
+function isDocFile(path) {
+  if (!path) return false;
+  const lower = path.toLowerCase();
+  return DOC_EXTENSIONS.some(ext => lower.endsWith(ext));
+}
+
 // #region FACET
 
 /**
@@ -190,7 +198,7 @@ export function createWikiLinkCompletionSource() {
 
     for (const file of files) {
       // Skip non-markdown or special files
-      if (!file.path.endsWith('.md')) continue;
+      if (!isDocFile(file.path)) continue;
       if (file.path === 'mrmd.md') continue;
       if (file.name === 'index') continue; // Skip index files, use folder name instead
 

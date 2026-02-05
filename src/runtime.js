@@ -78,6 +78,7 @@ export class RuntimeRegistry {
       'bash', 'sh', 'shell',
       'html',
       'css',
+      'mermaid',
     ];
 
     for (const lang of testLanguages) {

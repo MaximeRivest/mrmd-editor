@@ -1,0 +1,79 @@
+{
+  "version": "1.0",
+  "project": "/home/maxime/Projects/mrmd-packages/mrmd-editor",
+  "updated": "2026-02-04T09:26:37.513433",
+  "lessons": [
+    {
+      "id": "C0001",
+      "scope": "component:mrmd-js/src/execute/**",
+      "category": "patterns",
+      "lesson": "To add a new language to mrmd-js: 1) Create executor in execute/<lang>.js extending BaseExecutor 2) Export from execute/index.js 3) Register in createDefaultExecutorRegistry() 4) Export from main index.js",
+      "evidence": "Added MermaidExecutor following HtmlExecutor pattern",
+      "confidence": 0.9,
+      "times_confirmed": 0,
+      "times_contradicted": 0,
+      "created": "2026-02-04T09:26:37.509171",
+      "last_updated": "2026-02-04T09:26:37.509223",
+      "last_used": null,
+      "tags": [
+        "mrmd-js",
+        "executor",
+        "language-support"
+      ]
+    },
+    {
+      "id": "C0002",
+      "scope": "component:mrmd-editor/src/execution.js",
+      "category": "patterns",
+      "lesson": "For new rich output languages (visual rendering), add to isRichOutput array at execution.js:731 and ensure outputType maps to html or css for iframe rendering",
+      "evidence": "Added mermaid to isRichOutput and mapped to html outputType",
+      "confidence": 0.9,
+      "times_confirmed": 0,
+      "times_contradicted": 0,
+      "created": "2026-02-04T09:26:37.509810",
+      "last_updated": "2026-02-04T09:26:37.509817",
+      "last_used": null,
+      "tags": [
+        "mrmd-editor",
+        "rich-output",
+        "html-output"
+      ]
+    },
+    {
+      "id": "C0003",
+      "scope": "component:mrmd-editor/src/index.js",
+      "category": "patterns",
+      "lesson": "For new language syntax highlighting: 1) Add codemirror-lang-* package to package.json 2) Import in index.js 3) Create support instance (e.g., mermaidSupport = mermaid()) 4) Add case to codeBlockLanguage() switch",
+      "evidence": "Added codemirror-lang-mermaid following R and Julia patterns",
+      "confidence": 0.9,
+      "times_confirmed": 0,
+      "times_contradicted": 0,
+      "created": "2026-02-04T09:26:37.510411",
+      "last_updated": "2026-02-04T09:26:37.510419",
+      "last_used": null,
+      "tags": [
+        "mrmd-editor",
+        "syntax-highlighting",
+        "codemirror"
+      ]
+    },
+    {
+      "id": "C0004",
+      "scope": "component:mrmd-editor/src/index.js",
+      "category": "gotchas",
+      "lesson": "The supportedLanguages object in createBrowserJsRuntime() (around line 357) must include new languages for them to be executable via the JS runtime",
+      "evidence": "Added mermaid to supportedLanguages map",
+      "confidence": 0.85,
+      "times_confirmed": 0,
+      "times_contradicted": 0,
+      "created": "2026-02-04T09:26:37.512334",
+      "last_updated": "2026-02-04T09:26:37.512356",
+      "last_used": null,
+      "tags": [
+        "mrmd-editor",
+        "browser-runtime",
+        "languages"
+      ]
+    }
+  ]
+}

@@ -159,6 +159,7 @@ These languages have full Lezer parser support with syntax trees, smart features
 |----------|------|---------|
 | R | `r`, `rlang` | `codemirror-lang-r` |
 | Julia | `julia`, `jl` | `@plutojl/lang-julia` |
+| Mermaid | `mermaid` | `codemirror-lang-mermaid` |
 
 ### CM5 Legacy Languages (Syntax Highlighting Only)
 
