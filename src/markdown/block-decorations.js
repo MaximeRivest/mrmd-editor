@@ -64,6 +64,9 @@ import {
   extractDisplayMath,
   generateMathId,
 } from './widgets/math.js';
+import {
+  FrontmatterWidget,
+} from './widgets/frontmatter.js';
 
 // =============================================================================
 // Height Cache for Stable Layout
@@ -371,6 +374,64 @@ function findDisplayMathRanges(state) {
 }
 
 /**
+ * FrontmatterWidget wrapper that caches its rendered height for stable layout.
+ */
+class FrontmatterWidgetWithHeightCache extends FrontmatterWidget {
+  constructor(yamlContent, contentHash, sourceFrom, sourceTo) {
+    super(yamlContent, contentHash, sourceFrom, sourceTo);
+  }
+
+  toDOM(view) {
+    const dom = super.toDOM(view);
+    const contentHash = this.contentHash;
+
+    requestAnimationFrame(() => {
+      const line = dom.closest('.cm-line');
+      const height = line ? line.offsetHeight : dom.offsetHeight;
+      if (height > 0) {
+        cacheWidgetHeight(contentHash, height);
+      }
+    });
+
+    return dom;
+  }
+}
+
+/**
+ * Find frontmatter range at the start of the document (--- ... ---)
+ */
+function findFrontmatterRange(state) {
+  const doc = state.doc;
+  if (doc.lines < 2) return null;
+
+  const firstLine = doc.line(1);
+  if (firstLine.text.trim() !== '---') return null;
+
+  // Find closing ---
+  for (let i = 2; i <= doc.lines; i++) {
+    const line = doc.line(i);
+    if (line.text.trim() === '---') {
+      // YAML content is between line 2 and line i-1
+      const yamlLines = [];
+      for (let j = 2; j < i; j++) {
+        yamlLines.push(doc.line(j).text);
+      }
+      return {
+        type: 'frontmatter',
+        from: firstLine.from,
+        to: line.to,
+        startLine: 1,
+        endLine: i,
+        content: yamlLines.join('\n'),
+      };
+    }
+    // If we hit a line that looks like content (not YAML), stop
+    // Frontmatter can't contain blank lines followed by markdown
+  }
+  return null;
+}
+
+/**
  * Build decorations for all block elements
  */
 function buildBlockDecorations(state) {
@@ -458,6 +519,48 @@ function buildBlockDecorations(state) {
         if (padding > 0) {
           // Use line decoration with padding-bottom (doesn't block navigation)
           const lastLine = doc.line(range.endLine);
+          decorations.push(
+            Decoration.line({
+              attributes: {
+                class: 'cm-block-spacer-line',
+                style: `padding-bottom: ${padding}px`
+              }
+            }).range(lastLine.from)
+          );
+        }
+      }
+    }
+  }
+
+  // Find and process frontmatter
+  const fmRange = findFrontmatterRange(state);
+
+  if (fmRange) {
+    const cursorInFrontmatter = cursorLine >= fmRange.startLine && cursorLine <= fmRange.endLine;
+    const contentHash = 'fm-' + hashContent(fmRange.content);
+
+    if (!cursorInFrontmatter) {
+      decorations.push(
+        Decoration.replace({
+          widget: new FrontmatterWidgetWithHeightCache(
+            fmRange.content,
+            contentHash,
+            fmRange.from,
+            fmRange.to
+          ),
+        }).range(fmRange.from, fmRange.to)
+      );
+    } else {
+      // Cursor inside: show raw YAML with spacer for stable height
+      const cachedHeight = getCachedHeight(contentHash);
+      if (cachedHeight) {
+        const lineCount = fmRange.endLine - fmRange.startLine + 1;
+        const lineHeight = getLineHeight();
+        const rawHeight = lineCount * lineHeight;
+        const padding = cachedHeight - rawHeight;
+
+        if (padding > 0) {
+          const lastLine = doc.line(fmRange.endLine);
           decorations.push(
             Decoration.line({
               attributes: {

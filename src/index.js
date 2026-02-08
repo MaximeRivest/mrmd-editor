@@ -407,6 +407,9 @@ function createJavaScriptRuntime(options = {}) {
           // Prefer HTML representation
           if (display.data['text/html']) {
             output = display.data['text/html'];
+          } else if (display.data['text/css']) {
+            // Preserve CSS source so the output widget can show selector impact
+            output = display.data['text/css'];
           } else if (display.data['text/plain']) {
             output = display.data['text/plain'];
           }
@@ -507,12 +510,14 @@ function createJavaScriptRuntime(options = {}) {
     },
 
     /**
-     * List all variables in the session namespace.
+     * List all variables in a session namespace.
      *
+     * @param {Object} [filter]
+     * @param {string} [sessionName='default']
      * @returns {Array<{name: string, type: string, value: string, expandable?: boolean}>}
      */
-    listVariables() {
-      return defaultSession.listVariables();
+    listVariables(filter = {}, sessionName = 'default') {
+      return getOrCreateSession(sessionName).listVariables(filter);
     },
 
     /**
@@ -823,8 +828,6 @@ function create(target, options = {}) {
     // MRP and builtin types are handled separately below
   }
 
-  // JavaScript runtime option (backward compat)
-  const javascript = options.javascript !== undefined ? options.javascript : true;
   // JavaScript isolation mode: 'iframe' (default, sandboxed) or 'none' (main window context)
   const javascriptIsolation = options.javascriptIsolation || 'iframe';
 
@@ -1021,6 +1024,7 @@ function create(target, options = {}) {
   // Event handlers
   const changeHandlers = [];
   const saveHandlers = [];
+  const frontmatterTitleCommitHandlers = [];
   const viewSourceHandlers = [];
   const cellRunHandlers = [];
   const cellOutputHandlers = [];
@@ -1036,6 +1040,19 @@ function create(target, options = {}) {
     }
   });
 
+  const handleFrontmatterTitleCommit = (event) => {
+    const title = event?.detail?.title;
+    if (!title) return;
+    for (const handler of frontmatterTitleCommitHandlers) {
+      try {
+        handler(title, event.detail || {});
+      } catch (err) {
+        console.warn('[mrmd] frontmatter title commit handler failed:', err);
+      }
+    }
+  };
+  element.addEventListener('mrmd:frontmatter-title-commit', handleFrontmatterTitleCommit);
+
   // Create runtime registry
   const registry = createRuntimeRegistry();
 
@@ -1044,19 +1061,17 @@ function create(target, options = {}) {
     registry.register(name, runtime);
   }
 
-  // Built-in JavaScript runtime (mrmd-js)
-  // - true: use built-in mrmd-js runtime (default)
-  // - false: disable JavaScript execution
-  // - object: use custom runtime (must implement supports/execute/executeStreaming)
+  // JavaScript runtime for editor + LSP features.
+  // Use normalized config so options.runtimes.javascript is not shadowed by a second runtime.
   let jsRuntime = null;
-  if (javascript === true) {
+  const jsRuntimeConfig = config.runtimes.javascript;
+  if (jsRuntimeConfig?.type === 'builtin') {
     jsRuntime = createJavaScriptRuntime({ defaultIsolation: javascriptIsolation });
     registry.register('javascript', jsRuntime);
-  } else if (javascript && typeof javascript === 'object') {
-    // Custom runtime provided
-    registry.register('javascript', javascript);
+  } else if (jsRuntimeConfig?.type === 'custom' && jsRuntimeConfig.instance) {
+    jsRuntime = jsRuntimeConfig.instance;
   }
-  // javascript === false means no JS runtime
+  // If javascript is disabled, jsRuntime remains null.
 
   // =========================================================================
   // RUNTIME LSP PROVIDERS
@@ -1066,7 +1081,7 @@ function create(target, options = {}) {
   const runtimeLspProviders = new Map();
 
   // Add JS runtime LSP provider if available
-  if (jsRuntime) {
+  if (jsRuntime?.getLSPProvider) {
     const jsProvider = jsRuntime.getLSPProvider();
     runtimeLspProviders.set('javascript', jsProvider);
   }
@@ -2106,6 +2121,14 @@ function create(target, options = {}) {
       };
     },
 
+    onFrontmatterTitleCommit(callback) {
+      frontmatterTitleCommitHandlers.push(callback);
+      return () => {
+        const idx = frontmatterTitleCommitHandlers.indexOf(callback);
+        if (idx >= 0) frontmatterTitleCommitHandlers.splice(idx, 1);
+      };
+    },
+
     onCellRun(callback) {
       return this.execution.on('cellRun', callback);
     },
@@ -2179,6 +2202,7 @@ function create(target, options = {}) {
       }
       // Clean up theme watcher
       unwatchTheme();
+      element.removeEventListener('mrmd:frontmatter-title-commit', handleFrontmatterTitleCommit);
       // Clean up undo manager
       undoManager.destroy();
       view.destroy();

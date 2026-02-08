@@ -55,6 +55,222 @@ class HiddenWidget extends WidgetType {
   }
 }
 
+function escapeHtml(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function tryParseJsonOutput(content) {
+  if (!content || hasAnsi(content)) return null;
+  if (content.length > 250_000) return null; // Guard large payloads
+
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+  const looksLikeObjectOrArray =
+    (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+    (trimmed.startsWith('[') && trimmed.endsWith(']'));
+  if (!looksLikeObjectOrArray) return null;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+function jsonType(value) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
+}
+
+function formatJsonPrimitive(value) {
+  const type = jsonType(value);
+  if (type === 'string') return `"${value}"`;
+  if (type === 'number' || type === 'boolean' || type === 'null') return String(value);
+  if (type === 'undefined') return 'undefined';
+  return String(value);
+}
+
+function summarizeJson(value) {
+  const type = jsonType(value);
+  if (type === 'array') return `Array(${value.length})`;
+  if (type === 'object') return `Object(${Object.keys(value).length})`;
+  return type;
+}
+
+function previewJsonValue(value) {
+  const type = jsonType(value);
+  if (type === 'array') {
+    const sample = value.slice(0, 3).map(v => formatJsonPrimitive(v)).join(', ');
+    return `[${sample}${value.length > 3 ? ', …' : ''}]`;
+  }
+  if (type === 'object') {
+    const keys = Object.keys(value);
+    return `{${keys.slice(0, 3).join(', ')}${keys.length > 3 ? ', …' : ''}}`;
+  }
+  return formatJsonPrimitive(value);
+}
+
+function buildJsonTreeNode(key, value, depth = 0) {
+  const type = jsonType(value);
+  const isExpandable = type === 'array' || type === 'object';
+
+  if (!isExpandable) {
+    const row = document.createElement('div');
+    row.className = 'cm-json-node cm-json-node-leaf';
+
+    if (key !== null) {
+      const keyEl = document.createElement('span');
+      keyEl.className = 'cm-json-key';
+      keyEl.textContent = String(key);
+      row.appendChild(keyEl);
+    }
+
+    const valueEl = document.createElement('span');
+    valueEl.className = `cm-json-value cm-json-type-${type}`;
+    valueEl.textContent = formatJsonPrimitive(value);
+    row.appendChild(valueEl);
+    return row;
+  }
+
+  const details = document.createElement('details');
+  details.className = 'cm-json-node cm-json-node-expandable';
+  details.open = depth < 1;
+
+  const summary = document.createElement('summary');
+  summary.className = 'cm-json-node-summary';
+
+  if (key !== null) {
+    const keyEl = document.createElement('span');
+    keyEl.className = 'cm-json-key';
+    keyEl.textContent = String(key);
+    summary.appendChild(keyEl);
+  }
+
+  const meta = document.createElement('span');
+  meta.className = 'cm-json-meta';
+  meta.textContent = summarizeJson(value);
+  summary.appendChild(meta);
+
+  const preview = document.createElement('span');
+  preview.className = 'cm-json-preview';
+  preview.textContent = previewJsonValue(value);
+  summary.appendChild(preview);
+
+  details.appendChild(summary);
+
+  const children = document.createElement('div');
+  children.className = 'cm-json-children';
+
+  const entries = Array.isArray(value)
+    ? value.map((v, i) => [`[${i}]`, v])
+    : Object.entries(value);
+
+  if (entries.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'cm-json-empty';
+    empty.textContent = Array.isArray(value) ? '[]' : '{}';
+    children.appendChild(empty);
+  } else {
+    for (const [childKey, childValue] of entries) {
+      children.appendChild(buildJsonTreeNode(childKey, childValue, depth + 1));
+    }
+  }
+
+  details.appendChild(children);
+  return details;
+}
+
+function stripCssComments(css) {
+  return String(css ?? '').replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+function parseCssSelectors(css) {
+  const cleaned = stripCssComments(css);
+  const selectors = [];
+  let ruleCount = 0;
+  const ruleRegex = /([^{}]+)\{/g;
+  let match;
+
+  while ((match = ruleRegex.exec(cleaned)) !== null) {
+    const selectorGroup = match[1].trim();
+    if (!selectorGroup || selectorGroup.startsWith('@')) continue;
+
+    let addedInRule = 0;
+    for (const selector of selectorGroup.split(',')) {
+      const trimmed = selector.trim();
+      if (!trimmed) continue;
+      if (trimmed === 'from' || trimmed === 'to' || /^\d+%$/.test(trimmed)) continue;
+      selectors.push(trimmed);
+      addedInRule++;
+    }
+    if (addedInRule > 0) ruleCount++;
+  }
+
+  return { selectors, ruleCount };
+}
+
+function analyzeCssAgainstDocument(css, scope = 'all') {
+  return analyzeCssAgainstRoots(css, getCssQueryRoots(scope), scope);
+}
+
+function getCssQueryRoots(scope = 'all') {
+  const roots = [];
+  if (scope === 'all' || scope === 'main') {
+    roots.push(document);
+  }
+  try {
+    const artifactIframe = document.getElementById('artifact-iframe');
+    const artifactDoc = artifactIframe?.contentDocument || artifactIframe?.contentWindow?.document;
+    if (artifactDoc && (scope === 'all' || scope === 'artifact')) {
+      roots.push(artifactDoc);
+    }
+  } catch {
+    // Cross-origin or unavailable iframe; ignore.
+  }
+  return roots;
+}
+
+function analyzeCssAgainstRoots(css, queryRoots, scope = 'all') {
+  const { selectors, ruleCount } = parseCssSelectors(css);
+  const uniqueSelectors = Array.from(new Set(selectors));
+  const maxSelectors = 24;
+  const visibleSelectors = uniqueSelectors.slice(0, maxSelectors);
+
+  const selectorMatches = visibleSelectors.map((selector) => {
+    let count = 0;
+    try {
+      for (const root of queryRoots) {
+        count += root.querySelectorAll(selector).length;
+      }
+      return { selector, count, valid: true };
+    } catch {
+      return { selector, count: 0, valid: false };
+    }
+  });
+
+  const matchedSelectors = selectorMatches.filter((s) => s.valid && s.count > 0).length;
+  const totalMatches = selectorMatches
+    .filter((s) => s.valid)
+    .reduce((acc, s) => acc + s.count, 0);
+
+  return {
+    ruleCount,
+    totalSelectors: uniqueSelectors.length,
+    selectorMatches,
+    matchedSelectors,
+    totalMatches,
+    scope,
+    rootsReady: queryRoots.length > 0,
+    truncated: uniqueSelectors.length > maxSelectors,
+  };
+}
+
 // =============================================================================
 // Height Cache for Stable Layout (prevents jitter when editing output blocks)
 // =============================================================================
@@ -330,13 +546,205 @@ class HtmlOutputWidget extends WidgetType {
 }
 
 /**
- * Widget for rendering CSS output with visual preview.
- * Injects CSS into a scoped container and shows a preview.
+ * Widget for rendering CSS output as compact impact summary.
  */
 class CssOutputWidget extends WidgetType {
   /**
    * @param {string} content - CSS content
    * @param {boolean} hidden - Whether widget should be hidden (cursor in block)
+   * @param {number} blockStart - Document position where this output block starts
+   * @param {string|null} execId - Execution ID for this output block
+   */
+  constructor(content, hidden = false, blockStart = 0, execId = null, targetScope = 'all') {
+    super();
+    this.content = content;
+    this.hidden = hidden;
+    this.blockStart = blockStart;
+    this.execId = execId;
+    this.targetScope = targetScope;
+  }
+
+  eq(other) {
+    return other.content === this.content &&
+      other.hidden === this.hidden &&
+      other.blockStart === this.blockStart &&
+      other.execId === this.execId &&
+      other.targetScope === this.targetScope;
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = 'cm-css-output-widget' + (this.hidden ? ' cm-output-widget-hidden' : '');
+    container.dataset.outputBlockStart = String(this.blockStart);
+    if (this.execId) {
+      container.dataset.execId = this.execId;
+    }
+
+    const header = document.createElement('div');
+    header.className = 'cm-css-header';
+    const badge = document.createElement('span');
+    badge.className = 'cm-css-badge';
+    badge.textContent = 'CSS';
+    const statsEl = document.createElement('span');
+    statsEl.className = 'cm-css-stats';
+    const totalTargetsEl = document.createElement('span');
+    totalTargetsEl.className = 'cm-css-total-targets';
+    header.appendChild(badge);
+    header.appendChild(statsEl);
+    header.appendChild(totalTargetsEl);
+    container.appendChild(header);
+
+    const selectorList = document.createElement('div');
+    selectorList.className = 'cm-css-chip-list';
+    container.appendChild(selectorList);
+
+    const note = document.createElement('div');
+    note.className = 'cm-css-note';
+    container.appendChild(note);
+
+    const sourceDetails = document.createElement('details');
+    sourceDetails.className = 'cm-css-source';
+    sourceDetails.innerHTML = `
+      <summary>Show CSS</summary>
+      <pre class="cm-css-source-code">${escapeHtml(this.content)}</pre>
+    `;
+    container.appendChild(sourceDetails);
+
+    const renderAnalysis = (analysis) => {
+      const statsText = analysis.ruleCount > 0
+        ? `${analysis.ruleCount} rule${analysis.ruleCount === 1 ? '' : 's'} · ${analysis.matchedSelectors}/${analysis.totalSelectors} selectors match`
+        : 'No parseable CSS rules detected';
+      statsEl.textContent = statsText;
+      totalTargetsEl.textContent = `${analysis.totalMatches} target${analysis.totalMatches === 1 ? '' : 's'}`;
+
+      selectorList.innerHTML = '';
+      if (analysis.selectorMatches.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'cm-css-note';
+        empty.textContent = 'Run a CSS cell to see selector impact.';
+        selectorList.appendChild(empty);
+      } else {
+        for (const item of analysis.selectorMatches) {
+          const chip = document.createElement('div');
+          const stateClass = item.valid ? (item.count > 0 ? 'cm-css-chip-match' : 'cm-css-chip-nomatch') : 'cm-css-chip-invalid';
+          chip.className = `cm-css-chip ${stateClass}`;
+          chip.title = item.valid
+            ? `${item.count} match${item.count === 1 ? '' : 'es'} in document/artifact`
+            : 'Invalid selector';
+          chip.innerHTML = `
+            <code class="cm-css-chip-selector">${escapeHtml(item.selector)}</code>
+            <span class="cm-css-chip-count">${item.valid ? item.count : '!'}</span>
+          `;
+          selectorList.appendChild(chip);
+        }
+      }
+
+      if (analysis.truncated) {
+        note.textContent = `Showing first ${analysis.selectorMatches.length} selectors.`;
+        note.style.display = '';
+      } else if (analysis.scope === 'artifact' && !analysis.rootsReady) {
+        note.textContent = 'Artifact preview is not ready yet.';
+        note.style.display = '';
+      } else {
+        note.textContent = '';
+        note.style.display = 'none';
+      }
+    };
+
+    let refreshPending = false;
+    const queueRefresh = () => {
+      if (refreshPending) return;
+      refreshPending = true;
+      requestAnimationFrame(() => {
+        refreshPending = false;
+        if (!container.isConnected) return;
+        renderAnalysis(analyzeCssAgainstDocument(this.content, this.targetScope));
+      });
+    };
+
+    // Keep counts live as HTML/artifact DOM updates.
+    const rootObserver = new MutationObserver((mutations) => {
+      let relevant = false;
+      for (const m of mutations) {
+        const target = /** @type {Node|null} */ (m.target);
+        if (!target) {
+          relevant = true;
+          break;
+        }
+        if (target === container || container.contains(target)) {
+          continue;
+        }
+        if (!container.contains(target)) {
+          relevant = true;
+          break;
+        }
+      }
+      if (relevant) queueRefresh();
+    });
+    if (document.documentElement && (this.targetScope === 'all' || this.targetScope === 'main')) {
+      rootObserver.observe(document.documentElement, { childList: true, subtree: true });
+    }
+
+    let artifactObserver = null;
+    let artifactIframe = null;
+    let artifactLoadHandler = null;
+    try {
+      artifactIframe = document.getElementById('artifact-iframe');
+      const bindArtifactObserver = () => {
+        artifactObserver?.disconnect();
+        const artifactDoc = artifactIframe?.contentDocument || artifactIframe?.contentWindow?.document;
+        const artifactRoot = artifactDoc?.documentElement || artifactDoc?.body;
+        if (!artifactRoot) return;
+        artifactObserver = new MutationObserver(() => queueRefresh());
+        artifactObserver.observe(artifactRoot, { childList: true, subtree: true, characterData: true });
+      };
+      if (artifactIframe) {
+        artifactLoadHandler = () => {
+          bindArtifactObserver();
+          queueRefresh();
+        };
+        artifactIframe.addEventListener('load', artifactLoadHandler);
+      }
+      if (this.targetScope === 'all' || this.targetScope === 'artifact') {
+        bindArtifactObserver();
+      }
+    } catch {
+      // Ignore inaccessible artifact iframe.
+    }
+
+    const removalObserver = new MutationObserver(() => {
+      if (container.isConnected) return;
+      rootObserver.disconnect();
+      artifactObserver?.disconnect();
+      if (artifactIframe && artifactLoadHandler) {
+        artifactIframe.removeEventListener('load', artifactLoadHandler);
+      }
+      removalObserver.disconnect();
+    });
+    if (document.body) {
+      removalObserver.observe(document.body, { childList: true, subtree: true });
+    }
+
+    renderAnalysis(analyzeCssAgainstDocument(this.content, this.targetScope));
+    // Artifact updates can race cell rendering; refresh shortly after mount.
+    setTimeout(queueRefresh, 120);
+    setTimeout(queueRefresh, 500);
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+/**
+ * Widget for rendering JSON output with an expandable tree.
+ */
+class JsonOutputWidget extends WidgetType {
+  /**
+   * @param {string} content - JSON content
+   * @param {boolean} hidden - Whether widget should be hidden
    * @param {number} blockStart - Document position where this output block starts
    * @param {string|null} execId - Execution ID for this output block
    */
@@ -349,92 +757,72 @@ class CssOutputWidget extends WidgetType {
   }
 
   eq(other) {
-    return other.content === this.content && other.hidden === this.hidden && other.blockStart === this.blockStart && other.execId === this.execId;
+    return other.content === this.content &&
+      other.hidden === this.hidden &&
+      other.blockStart === this.blockStart &&
+      other.execId === this.execId;
   }
 
   toDOM() {
     const container = document.createElement('div');
-    container.className = 'cm-css-output-widget' + (this.hidden ? ' cm-output-widget-hidden' : '');
+    container.className = 'cm-json-output-widget' + (this.hidden ? ' cm-output-widget-hidden' : '');
     container.dataset.outputBlockStart = String(this.blockStart);
     if (this.execId) {
       container.dataset.execId = this.execId;
     }
 
-    // Generate unique scope class
-    const scopeClass = `mrmd-css-scope-${this.execId || Date.now()}`.replace(/[^a-z0-9-]/gi, '-');
+    const parsed = tryParseJsonOutput(this.content);
+    if (parsed === null) {
+      container.innerHTML = `<pre class="cm-json-fallback">${escapeHtml(this.content)}</pre>`;
+      return container;
+    }
 
-    // Create style element with scoped CSS
-    const style = document.createElement('style');
-    style.dataset.mrmdCssOutput = this.execId || '';
-
-    // Scope all CSS selectors to prevent leaking into the main document
-    // This is a simplified scoping - prepends .scopeClass to each selector
-    const scopedCss = this.content.replace(
-      /([^{}]+)\{/g,
-      (match, selectors) => {
-        const scoped = selectors
-          .split(',')
-          .map(sel => {
-            const trimmed = sel.trim();
-            // Don't scope @rules, keyframe percentages, or empty selectors
-            if (!trimmed || trimmed.startsWith('@') || trimmed.startsWith('from') ||
-                trimmed.startsWith('to') || /^\d+%$/.test(trimmed)) {
-              return trimmed;
-            }
-            // Replace :root with the scope class
-            if (trimmed === ':root' || trimmed === 'html' || trimmed === 'body') {
-              return `.${scopeClass}`;
-            }
-            return `.${scopeClass} ${trimmed}`;
-          })
-          .join(', ');
-        return `${scoped} {`;
-      }
-    );
-    style.textContent = scopedCss;
-
-    // Inject the style into document head
-    document.head.appendChild(style);
-
-    // Create preview container
-    const preview = document.createElement('div');
-    preview.className = `cm-css-preview ${scopeClass}`;
-    preview.innerHTML = `
-      <div class="cm-css-preview-header">
-        <span class="cm-css-preview-badge">CSS Applied</span>
-        <span class="cm-css-preview-info">${this.content.split('{').length - 1} rules</span>
-      </div>
-      <div class="cm-css-preview-demo">
-        <p>Preview text with <strong>bold</strong> and <em>italic</em></p>
-        <button>Button</button>
-        <a href="#">Link</a>
-        <div class="box">Box element</div>
+    const header = document.createElement('div');
+    header.className = 'cm-json-header';
+    header.innerHTML = `
+      <span class="cm-json-badge">JSON</span>
+      <span class="cm-json-summary">${escapeHtml(summarizeJson(parsed))}</span>
+      <div class="cm-json-actions">
+        <button type="button" class="cm-json-action" data-action="expand">Expand</button>
+        <button type="button" class="cm-json-action" data-action="collapse">Collapse</button>
+        <button type="button" class="cm-json-action" data-action="copy">Copy</button>
       </div>
     `;
+    container.appendChild(header);
 
-    container.appendChild(preview);
+    const tree = document.createElement('div');
+    tree.className = 'cm-json-tree';
+    tree.appendChild(buildJsonTreeNode(null, parsed));
+    container.appendChild(tree);
 
-    // Clean up style when widget is destroyed
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        for (const node of mutation.removedNodes) {
-          if (node === container || node.contains?.(container)) {
-            style.remove();
-            observer.disconnect();
-            return;
-          }
+    const actionButtons = header.querySelectorAll('.cm-json-action');
+    actionButtons.forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const action = btn.getAttribute('data-action');
+        if (action === 'expand') {
+          tree.querySelectorAll('details').forEach((d) => { d.open = true; });
+        } else if (action === 'collapse') {
+          let first = true;
+          tree.querySelectorAll('details').forEach((d) => {
+            if (first) {
+              d.open = true;
+              first = false;
+            } else {
+              d.open = false;
+            }
+          });
+        } else if (action === 'copy') {
+          navigator.clipboard.writeText(JSON.stringify(parsed, null, 2)).then(() => {
+            const previous = btn.textContent;
+            btn.textContent = 'Copied';
+            setTimeout(() => {
+              btn.textContent = previous;
+            }, 1200);
+          });
         }
-      }
-    });
-
-    // Start observing when attached
-    requestAnimationFrame(() => {
-      if (container.parentElement) {
-        observer.observe(container.parentElement.parentElement || document.body, {
-          childList: true,
-          subtree: true
-        });
-      }
+      });
     });
 
     return container;
@@ -606,16 +994,26 @@ function buildDecorations(view, awarenessSystem) {
     const blockStart = match.index;
     const blockEnd = blockStart + match[0].length;
 
-    // Parse execId and output type (format: execId:type, e.g., "exec-123:html")
+    // Parse execId + output metadata from fence line.
+    // Supported formats:
+    // - output:execId
+    // - output:execId:css
+    // - output:execId:css:artifact
+    // - output:execId:css:main
     let execId = rawExecId;
-    let outputType = null;  // 'html', 'css', or null for regular output
-    if (rawExecId && rawExecId.includes(':')) {
+    let outputType = null;  // 'html', 'css', 'json', or null for regular output
+    let cssTargetScope = 'all';  // 'all' | 'main' | 'artifact'
+    if (rawExecId) {
       const parts = rawExecId.split(':');
-      // Check if last part is a type indicator
-      const lastPart = parts[parts.length - 1].toLowerCase();
-      if (['html', 'htm', 'css', 'style'].includes(lastPart)) {
-        outputType = lastPart === 'htm' || lastPart === 'html' ? 'html' : 'css';
-        execId = parts.slice(0, -1).join(':');
+      execId = parts[0] || rawExecId;
+      const tags = parts.slice(1).map(p => p.toLowerCase());
+      if (tags.includes('html') || tags.includes('htm')) outputType = 'html';
+      else if (tags.includes('json')) outputType = 'json';
+      else if (tags.includes('css') || tags.includes('style') || tags.includes('stylesheet')) outputType = 'css';
+
+      if (outputType === 'css') {
+        if (tags.includes('artifact')) cssTargetScope = 'artifact';
+        else if (tags.includes('main')) cssTargetScope = 'main';
       }
     }
 
@@ -648,6 +1046,10 @@ function buildDecorations(view, awarenessSystem) {
     // Check if output is empty (just whitespace)
     const trimmedContent = content.trim();
     const isEmpty = trimmedContent.length === 0;
+    const parsedJson = !isEmpty && (outputType === null || outputType === 'json')
+      ? tryParseJsonOutput(trimmedContent)
+      : null;
+    const shouldRenderJson = parsedJson !== null;
 
     if (anyCollaboratorFocused) {
       // EDITING MODE: Keep ANSI colors rendered, but make escape sequences
@@ -711,15 +1113,25 @@ function buildDecorations(view, awarenessSystem) {
       // VIEWING MODE: Render output visually
       // For HTML/CSS, use rich widgets; for regular output, use ANSI styling
 
-      // Style the fence lines (opening and closing fences) - always hidden
+      // Style the fence lines (opening and closing fences).
+      // Rich output widgets (HTML/CSS, including Mermaid rendered as HTML) are
+      // attached to the opening fence line, so that line must remain unclipped.
+      const richOutput = outputType === 'html' || outputType === 'css' || shouldRenderJson;
+      const startFenceClass = richOutput
+        ? 'cm-output-fence-line cm-output-fence-start cm-output-fence-rich-start'
+        : 'cm-output-fence-line cm-output-fence-start';
+      const endFenceClass = richOutput
+        ? 'cm-output-fence-line cm-output-fence-end cm-output-fence-rich-end'
+        : 'cm-output-fence-line cm-output-fence-end';
+
       decorations.push(
         Decoration.line({
-          class: 'cm-output-fence-line cm-output-fence-start',
+          class: startFenceClass,
         }).range(startLine.from)
       );
       decorations.push(
         Decoration.line({
-          class: 'cm-output-fence-line cm-output-fence-end',
+          class: endFenceClass,
         }).range(endLine.from)
       );
 
@@ -742,6 +1154,23 @@ function buildDecorations(view, awarenessSystem) {
             side: 1,
           }).range(startLine.to)
         );
+      } else if (shouldRenderJson) {
+        // JSON OUTPUT: Hide content lines and add expandable JSON tree widget
+        for (let i = startLine.number + 1; i < endLine.number; i++) {
+          const line = doc.line(i);
+          decorations.push(
+            Decoration.line({
+              class: 'cm-output-content-line cm-rich-output-hidden',
+            }).range(line.from)
+          );
+        }
+
+        decorations.push(
+          Decoration.widget({
+            widget: new JsonOutputWidget(trimmedContent, false, blockStart, execId),
+            side: 1,
+          }).range(startLine.to)
+        );
       } else if (outputType === 'css' && !isEmpty) {
         // CSS OUTPUT: Hide content lines and add CSS widget
         for (let i = startLine.number + 1; i < endLine.number; i++) {
@@ -756,7 +1185,7 @@ function buildDecorations(view, awarenessSystem) {
         // Add CSS preview widget
         decorations.push(
           Decoration.widget({
-            widget: new CssOutputWidget(trimmedContent, false, blockStart, execId),
+            widget: new CssOutputWidget(trimmedContent, false, blockStart, execId, cssTargetScope),
             side: 1,
           }).range(startLine.to)
         );
@@ -1050,6 +1479,14 @@ export const outputWidgetStyles = `
   overflow: hidden !important;
   padding: 0 !important;
   margin: 0 !important;
+}
+
+/* Rich output widgets (HTML/CSS/Mermaid->HTML) are mounted on the opening
+ * fence line. Keep that line unclipped so the inline widget can paint. */
+.cm-output-fence-rich-start {
+  height: auto !important;
+  overflow: visible !important;
+  line-height: 1 !important;
 }
 
 /* Hide CodeMirror's special character rendering (escape symbols) in output blocks */
@@ -1416,80 +1853,284 @@ export const outputWidgetStyles = `
   border-radius: 4px;
 }
 
-/* CSS Output Widget - shows CSS with preview */
+/* CSS Output Widget - compact selector impact summary */
 .cm-css-output-widget {
   position: relative;
   margin: 8px 0;
   padding: 0;
   background: var(--widget-surface, rgba(0, 0, 0, 0.35));
   border-radius: var(--widget-border-radius, 6px);
-  overflow: hidden;
-  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
-  border-left: 3px solid var(--widget-accent-css, #64b5f6);
+  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.08));
+  border-left: 2px solid var(--widget-accent-css, #64b5f6);
 }
 
-.cm-css-preview {
-  padding: var(--widget-padding-y, 8px) var(--widget-padding-x, 12px);
-}
-
-.cm-css-preview-header {
+.cm-css-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--widget-border, rgba(255, 255, 255, 0.08));
+  background: var(--widget-surface-elevated, rgba(255, 255, 255, 0.02));
 }
 
-.cm-css-preview-badge {
+.cm-css-badge {
   font-size: 10px;
   color: var(--widget-accent-css, #64b5f6);
-  background: rgba(100, 181, 246, 0.15);
-  padding: 2px 8px;
+  background: color-mix(in srgb, var(--widget-accent-css, #64b5f6) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--widget-accent-css, #64b5f6) 35%, transparent);
+  padding: 2px 6px;
   border-radius: 3px;
   font-family: var(--widget-font-mono, monospace);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.4px;
 }
 
-.cm-css-preview-info {
+.cm-css-stats {
   font-size: 11px;
-  color: var(--widget-text-muted, rgba(255, 255, 255, 0.5));
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.72));
 }
 
-.cm-css-preview-demo {
-  padding: 12px;
-  background: white;
-  border-radius: 4px;
-  color: #333;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-size: 14px;
+.cm-css-total-targets {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.55));
+  font-family: var(--widget-font-mono, monospace);
 }
 
-.cm-css-preview-demo p {
-  margin: 0 0 8px 0;
+.cm-css-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px 4px 10px;
 }
 
-.cm-css-preview-demo button {
-  padding: 6px 12px;
-  margin-right: 8px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  background: #f5f5f5;
+.cm-css-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.14));
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  background: var(--widget-surface-inset, rgba(255, 255, 255, 0.03));
+}
+
+.cm-css-chip-selector {
+  color: var(--widget-text, #e0e0e0);
+  font-family: var(--widget-font-mono, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 360px;
+}
+
+.cm-css-chip-count {
+  font-family: var(--widget-font-mono, monospace);
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.7));
+}
+
+.cm-css-chip-match {
+  border-color: color-mix(in srgb, #22c55e 45%, transparent);
+  background: color-mix(in srgb, #22c55e 12%, transparent);
+}
+
+.cm-css-chip-nomatch {
+  border-color: color-mix(in srgb, #94a3b8 35%, transparent);
+}
+
+.cm-css-chip-invalid {
+  border-color: color-mix(in srgb, #ef4444 45%, transparent);
+  background: color-mix(in srgb, #ef4444 12%, transparent);
+}
+
+.cm-css-note {
+  padding: 2px 10px 8px 10px;
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.55));
+  font-size: 11px;
+}
+
+.cm-css-source {
+  margin: 0;
+  border-top: 1px solid var(--widget-border, rgba(255, 255, 255, 0.08));
+}
+
+.cm-css-source > summary {
   cursor: pointer;
+  padding: 7px 10px;
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.75));
+  font-size: 11px;
+  font-family: var(--widget-font-mono, monospace);
+  user-select: none;
 }
 
-.cm-css-preview-demo a {
-  color: #0066cc;
-  text-decoration: underline;
-  margin-right: 8px;
+.cm-css-source > summary:hover {
+  color: var(--widget-text, #e0e0e0);
 }
 
-.cm-css-preview-demo .box {
-  margin-top: 8px;
-  padding: 8px;
-  border: 1px dashed #ccc;
-  background: #fafafa;
+.cm-css-source-code {
+  margin: 0;
+  padding: 0 10px 10px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--widget-text, #e0e0e0);
+  font-size: 12px;
+  font-family: var(--widget-font-mono, monospace);
+}
+
+/* JSON Output Widget - expandable tree view */
+.cm-json-output-widget {
+  position: relative;
+  margin: 8px 0;
+  background: var(--widget-surface, rgba(0, 0, 0, 0.35));
+  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
+  border-left: 3px solid var(--widget-accent-json, #8cc0ff);
+  border-radius: var(--widget-border-radius, 6px);
+  overflow: hidden;
+}
+
+.cm-json-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--widget-border, rgba(255, 255, 255, 0.08));
+  background: var(--widget-surface-elevated, rgba(255, 255, 255, 0.02));
+}
+
+.cm-json-badge {
+  font-size: 10px;
+  color: var(--widget-accent-json, #8cc0ff);
+  background: color-mix(in srgb, var(--widget-accent-json, #8cc0ff) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--widget-accent-json, #8cc0ff) 35%, transparent);
+  border-radius: 3px;
+  padding: 2px 6px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  font-family: var(--widget-font-mono, monospace);
+}
+
+.cm-json-summary {
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.65));
+  font-size: 11px;
+}
+
+.cm-json-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.cm-json-action {
+  background: var(--widget-surface-inset, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.14));
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.75));
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--widget-font-mono, monospace);
+}
+
+.cm-json-action:hover {
+  background: var(--widget-surface-hover, rgba(255, 255, 255, 0.08));
+  color: var(--widget-text, #e0e0e0);
+}
+
+.cm-json-tree {
+  padding: 8px 10px 10px 10px;
+  font-family: var(--widget-font-mono, 'SF Mono', Monaco, monospace);
+  font-size: 12px;
+  color: var(--widget-text, #e0e0e0);
+  max-height: 420px;
+  overflow: auto;
+}
+
+.cm-json-node {
+  margin-left: 0;
+}
+
+.cm-json-node summary {
+  list-style: none;
+}
+
+.cm-json-node summary::-webkit-details-marker {
+  display: none;
+}
+
+.cm-json-node-summary {
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.cm-json-node-summary::before {
+  content: '▶';
+  font-size: 9px;
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.5));
+  margin-right: 2px;
+  transform: translateY(-1px);
+}
+
+.cm-json-node[open] > .cm-json-node-summary::before {
+  content: '▼';
+}
+
+.cm-json-node-leaf {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.cm-json-key {
+  color: var(--widget-text-accent, #8cc0ff);
+  min-width: 0;
+}
+
+.cm-json-meta {
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.5));
+  font-size: 11px;
+}
+
+.cm-json-preview {
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.7));
+  opacity: 0.9;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-json-children {
+  margin-left: 18px;
+  border-left: 1px dotted color-mix(in srgb, var(--widget-border, rgba(255, 255, 255, 0.2)) 75%, transparent);
+  padding-left: 10px;
+}
+
+.cm-json-empty {
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.45));
+  font-style: italic;
+  padding: 2px 0;
+}
+
+.cm-json-value {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cm-json-type-string { color: #ce9178; }
+.cm-json-type-number { color: #b5cea8; }
+.cm-json-type-boolean { color: #569cd6; }
+.cm-json-type-null { color: #808080; }
+
+.cm-json-fallback {
+  margin: 0;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.72));
 }
 
 /* ANSI text styles */

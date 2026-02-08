@@ -389,11 +389,12 @@ export function normalizeOptions(options = {}) {
   if (options.javascript === true) {
     config.runtimes.javascript = { type: 'builtin' };
   } else if (options.javascript === false) {
-    // Explicitly disabled
+    // Explicitly disabled (even if provided via options.runtimes)
+    delete config.runtimes.javascript;
   } else if (options.javascript && typeof options.javascript === 'object') {
     config.runtimes.javascript = { type: 'custom', instance: options.javascript };
-  } else if (options.javascript === undefined) {
-    // Default: enable builtin
+  } else if (options.javascript === undefined && !config.runtimes.javascript) {
+    // Default: enable builtin only when no JS runtime was already provided
     config.runtimes.javascript = { type: 'builtin' };
   }
 

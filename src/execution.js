@@ -17,6 +17,37 @@ import { pendingStdinRequests } from './output-widget.js';
 import { MonitorCoordination, EXECUTION_STATUS } from './monitor-coordination.js';
 import * as Y from 'yjs';
 
+const STATIC_IMPORT_ERROR_RE = /import declarations may only appear at top level of a module/i;
+const UNDEFINED_VAR_RE = /\bis not defined\b/i;
+
+function buildJavaScriptImportHint(errorText, runtimeLanguage) {
+  const language = String(runtimeLanguage || '').toLowerCase();
+  const isJavaScriptLike = language === 'javascript' || language === 'js' || language === 'node' || language === 'typescript' || language === 'ts';
+  const text = String(errorText || '');
+  if (!isJavaScriptLike) {
+    return '';
+  }
+
+  if (STATIC_IMPORT_ERROR_RE.test(text)) {
+    return [
+      '',
+      '[Hint: JavaScript cells run as scripts (eval), not ES modules.]',
+      "[Use dynamic import: const pkg = await import('https://cdn.skypack.dev/lodash')]",
+      '[For a cached helper, open Help > JavaScript Imports and copy loadPkg().]',
+    ].join('\n');
+  }
+
+  if (UNDEFINED_VAR_RE.test(text)) {
+    return [
+      '',
+      '[Hint: For cross-cell JS variables, bind imports to globals.]',
+      "[Example: d3 = await globalThis.loadPkg('d3', 'https://cdn.skypack.dev/d3@7')]",
+    ].join('\n');
+  }
+
+  return '';
+}
+
 /**
  * Execution Manager
  *
@@ -735,7 +766,17 @@ export class ExecutionManager {
         if (m === 'mermaid') return 'html'; // Mermaid renders to HTML/SVG
         return m;
       }) : null;
-      const outputTag = outputType ? `output:${execId}:${outputType}` : `output:${execId}`;
+      let outputTag;
+      if (!outputType) {
+        outputTag = `output:${execId}`;
+      } else {
+        const outputTagParts = [`output:${execId}`, outputType];
+        if (outputType === 'css') {
+          // Let CSS widgets scope selector matching to where this CSS actually targets.
+          outputTagParts.push(artifact && artifactName ? 'artifact' : 'main');
+        }
+        outputTag = outputTagParts.join(':');
+      }
 
       if (existingOutput) {
         // Replace existing output block with new one that has our execId
@@ -983,8 +1024,10 @@ export class ExecutionManager {
         // Handle errors
         let outputWithError = finalOutput;
         if (result.error) {
-          const errorText = `\n[Error: ${result.error.message || result.stderr}]`;
-          outputWithError = finalOutput + errorText;
+          const rawError = result.error.message || result.stderr || String(result.error);
+          const errorText = `\n[Error: ${rawError}]`;
+          const runtimeHint = buildJavaScriptImportHint(rawError, runtimeLanguage);
+          outputWithError = finalOutput + errorText + runtimeHint;
           this._emit('cellError', index, result.error, execId);
         }
 
