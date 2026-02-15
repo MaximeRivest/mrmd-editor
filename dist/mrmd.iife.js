@@ -70699,10 +70699,16 @@ ${mobileStyles}
 
     modal.appendChild(controls);
 
+    // On mobile: start with controls visible (expanded), skip dragging
+    if (isMobile) {
+      isExpanded = true;
+      modal.classList.add('expanded');
+    }
+
     document.body.appendChild(modal);
     activeModal = modal;
 
-    // Make draggable
+    // Make draggable (desktop only)
     let isDragging = false;
     let dragStartX, dragStartY, modalStartX, modalStartY;
 
@@ -70988,83 +70994,166 @@ ${mobileStyles}
   display: none;
 }
 
-/* Mobile: Ctrl-K becomes a bottom sheet instead of cursor-anchored popup */
+/* ==========================================================================
+   MOBILE: Ctrl-K as a focused, keyboard-aware command bar.
+
+   On mobile, the modal becomes a clean input bar that sits right above
+   the virtual keyboard — like iMessage's text field or Spotlight search.
+   It uses the visualViewport API (via --mobile-vh custom property) to
+   stay visible when the keyboard is open.
+
+   Design: minimal, one clear action. The input is the hero.
+   Settings (quality/thinking) start expanded since there's room.
+   ========================================================================== */
 @media (max-width: 768px) {
   .cm-ctrl-k-modal {
     position: fixed !important;
     left: 0 !important;
     right: 0 !important;
+    /* Anchor to bottom of visual viewport, not layout viewport */
     bottom: 0 !important;
+    bottom: calc(100vh - var(--mobile-vh, 100vh)) !important;
     top: auto !important;
     min-width: 100%;
     max-width: 100%;
-    border-radius: 16px 16px 0 0;
+    border-radius: 14px 14px 0 0;
     border: none;
-    border-top: 1px solid var(--border, #333);
-    box-shadow: 0 -4px 32px rgba(0, 0, 0, 0.4);
-    animation: cm-ctrl-k-slide-up 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: none;
+    background: var(--bg-secondary, #1c1c1c);
+    animation: cm-ctrl-k-slide-up 0.2s cubic-bezier(0.2, 0, 0, 1);
+    /* Let content size naturally */
+    max-height: none;
   }
 
   @keyframes cm-ctrl-k-slide-up {
-    from { transform: translateY(100%); }
-    to { transform: translateY(0); }
+    from {
+      transform: translateY(100%);
+      opacity: 0.8;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
   }
 
+  /* Header: slim, just close button on the right */
   .cm-ctrl-k-header {
     cursor: default;
-    justify-content: space-between;
-    padding: 8px 16px;
-    position: relative;
+    justify-content: flex-end;
+    padding: 6px 8px 0;
+    background: transparent;
+    border-bottom: none;
+    min-height: 0;
   }
 
-  /* Drag handle */
-  .cm-ctrl-k-header::before {
-    content: '';
-    position: absolute;
-    top: 4px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 36px;
-    height: 4px;
-    background: var(--text-dim, #666);
-    border-radius: 2px;
-    opacity: 0.4;
+  /* Hide the toggle — controls are always visible on mobile */
+  .cm-ctrl-k-toggle {
+    display: none !important;
   }
 
-  .cm-ctrl-k-toggle,
   .cm-ctrl-k-close {
-    width: 44px;
-    height: 44px;
-    font-size: 18px;
+    width: 36px;
+    height: 36px;
+    font-size: 20px;
+    border-radius: 18px;
+    color: var(--text-muted, #888);
   }
 
+  .cm-ctrl-k-close:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  /* Input: the hero element. Big, clear, inviting. */
   .cm-ctrl-k-input-wrap {
-    padding: 12px 16px;
+    padding: 4px 16px 12px;
+    gap: 10px;
   }
 
   .cm-ctrl-k-input {
-    font-size: 16px; /* Prevents iOS zoom */
-    padding: 8px 0;
+    font-size: 17px;  /* Comfortable reading size, prevents iOS zoom */
+    padding: 10px 0;
+    line-height: 1.4;
+    color: var(--text, #e0e0e0);
   }
 
+  .cm-ctrl-k-input::placeholder {
+    color: var(--text-dim, #555);
+    font-weight: 400;
+  }
+
+  /* Loader: bigger, more visible */
+  .cm-ctrl-k-loader {
+    width: 18px;
+    height: 18px;
+    border-width: 2px;
+  }
+
+  /* Controls: always visible on mobile, no expand/collapse */
   .cm-ctrl-k-controls {
-    padding: 0 16px;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 16px 12px !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    padding-top: 12px !important;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)) !important;
   }
 
-  .cm-ctrl-k-modal.expanded .cm-ctrl-k-controls {
-    padding: 12px 16px;
-    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  /* Keep controls visible even when not "expanded" */
+  .cm-ctrl-k-modal:not(.expanded) .cm-ctrl-k-controls {
+    max-height: none !important;
+    padding: 12px 16px !important;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)) !important;
+    border-top-color: rgba(255, 255, 255, 0.06);
   }
 
-  .cm-ctrl-k-btn {
-    width: 36px;
-    height: 36px;
-    font-size: 14px;
-    border-radius: 8px;
+  .cm-ctrl-k-row {
+    margin-bottom: 10px;
+    gap: 14px;
   }
 
   .cm-ctrl-k-label {
-    font-size: 13px;
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: var(--text-dim, #666);
+    width: 64px;
+  }
+
+  .cm-ctrl-k-btns {
+    gap: 6px;
+    flex: 1;
+    justify-content: flex-start;
+  }
+
+  .cm-ctrl-k-btn {
+    width: 38px;
+    height: 38px;
+    font-size: 14px;
+    font-weight: 500;
+    border-radius: 10px;
+    border-color: rgba(255, 255, 255, 0.1);
+    transition: all 0.15s ease;
+  }
+
+  .cm-ctrl-k-btn.active {
+    border-color: var(--accent, #58a6ff);
+    box-shadow: 0 0 0 1px var(--accent, #58a6ff);
+  }
+
+  /* Loading state */
+  .cm-ctrl-k-modal.loading .cm-ctrl-k-input-wrap {
+    opacity: 0.7;
+  }
+
+  .cm-ctrl-k-modal.loading .cm-ctrl-k-controls {
+    display: none !important;
+  }
+
+  /* Error state */
+  .cm-ctrl-k-modal.error {
+    border-top-color: rgba(255, 80, 80, 0.3);
   }
 }
 `;
