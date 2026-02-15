@@ -70730,16 +70730,18 @@ function showCtrlKModal(view) {
     }
   });
 
-  // Adjust position if off-screen
-  requestAnimationFrame(() => {
-    const rect = modal.getBoundingClientRect();
-    if (rect.right > window.innerWidth - 10) {
-      modal.style.left = `${Math.max(10, window.innerWidth - rect.width - 10)}px`;
-    }
-    if (rect.bottom > window.innerHeight - 10) {
-      modal.style.top = `${Math.max(10, coords.top - rect.height - 4)}px`;
-    }
-  });
+  // Adjust position if off-screen (desktop only — mobile uses CSS bottom sheet)
+  if (!isMobile) {
+    requestAnimationFrame(() => {
+      const rect = modal.getBoundingClientRect();
+      if (rect.right > window.innerWidth - 10) {
+        modal.style.left = `${Math.max(10, window.innerWidth - rect.width - 10)}px`;
+      }
+      if (coords && rect.bottom > window.innerHeight - 10) {
+        modal.style.top = `${Math.max(10, coords.top - rect.height - 4)}px`;
+      }
+    });
+  }
 
   // Focus input
   input.focus();
