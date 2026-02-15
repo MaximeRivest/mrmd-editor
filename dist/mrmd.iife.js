@@ -70557,8 +70557,10 @@ ${mobileStyles}
     // Get cursor screen coordinates
     const cursorPos = view.state.selection.main.head;
     const coords = view.coordsAtPos(cursorPos);
+    const isMobile = window.matchMedia('(max-width: 768px)').matches;
 
-    if (!coords) {
+    // On desktop, coords are required for positioning. On mobile, CSS handles it.
+    if (!coords && !isMobile) {
       console.warn('[Ctrl-K] Could not get cursor coordinates');
       return;
     }
@@ -70570,8 +70572,7 @@ ${mobileStyles}
     const modal = document.createElement('div');
     modal.className = 'cm-ctrl-k-modal';
     // On mobile, CSS positions it as a bottom sheet — don't set inline styles
-    const isMobile = window.matchMedia('(max-width: 768px)').matches;
-    if (!isMobile) {
+    if (!isMobile && coords) {
       modal.style.left = `${coords.left}px`;
       modal.style.top = `${coords.bottom + 8}px`;
     }
