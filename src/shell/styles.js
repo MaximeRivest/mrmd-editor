@@ -602,6 +602,271 @@ export const filePickerStyles = `
 `;
 
 // =============================================================================
+// MOBILE RESPONSIVE STYLES
+// =============================================================================
+
+export const mobileStyles = `
+/* ---- Status Bar: mobile-friendly ---- */
+@media (max-width: 768px) {
+  .mrmd-statusbar {
+    height: auto;
+    min-height: 44px;
+    padding: 8px 12px;
+    gap: 4px;
+    font-size: 13px;
+    flex-wrap: wrap;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .mrmd-statusbar__segment {
+    padding: 8px 12px;
+    min-height: 44px;
+    font-size: 14px;
+  }
+
+  .mrmd-statusbar__segment--files {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .mrmd-statusbar__icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  .mrmd-statusbar__dot {
+    width: 10px;
+    height: 10px;
+  }
+
+  .mrmd-statusbar__badge {
+    font-size: 10px;
+    padding: 2px 6px;
+  }
+
+  .mrmd-statusbar__separator {
+    display: none;
+  }
+
+  .mrmd-statusbar__spacer {
+    display: none;
+  }
+}
+
+/* ---- Menus → Bottom sheets on mobile ---- */
+@media (max-width: 768px) {
+  .mrmd-menu {
+    position: fixed !important;
+    top: auto !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    max-width: 100% !important;
+    min-width: 100% !important;
+    max-height: 70vh;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -4px 32px rgba(0, 0, 0, 0.4);
+    padding: 8px 0;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    animation: mrmd-slide-up 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  @keyframes mrmd-slide-up {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+
+  /* Drag handle at top of bottom sheet */
+  .mrmd-menu::before {
+    content: '';
+    display: block;
+    width: 36px;
+    height: 4px;
+    background: var(--mrmd-fg-muted, #666);
+    border-radius: 2px;
+    margin: 4px auto 8px;
+    opacity: 0.4;
+  }
+
+  .mrmd-menu__header {
+    padding: 12px 20px 8px;
+    font-size: 12px;
+  }
+
+  .mrmd-menu__item {
+    padding: 14px 20px;
+    min-height: 48px;
+    font-size: 15px;
+    gap: 14px;
+  }
+
+  .mrmd-menu__item-icon {
+    width: 22px;
+    height: 22px;
+    font-size: 18px;
+  }
+
+  .mrmd-menu__item-shortcut {
+    display: none; /* Keyboard shortcuts aren't relevant on touch */
+  }
+
+  .mrmd-menu__info {
+    padding: 10px 20px;
+    font-size: 12px;
+  }
+
+  .mrmd-menu__divider {
+    margin: 6px 16px;
+  }
+
+  .mrmd-menu__file {
+    padding: 12px 20px;
+    min-height: 48px;
+    font-size: 15px;
+  }
+}
+
+/* ---- Dialogs: full-screen on mobile ---- */
+@media (max-width: 768px) {
+  .mrmd-dialog-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+
+  .mrmd-dialog {
+    min-width: 100%;
+    max-width: 100%;
+    max-height: 90vh;
+    border-radius: 16px 16px 0 0;
+    border: none;
+    border-top: 1px solid var(--mrmd-dialog-border, var(--mrmd-border, #454545));
+    animation: mrmd-slide-up 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .mrmd-dialog__header {
+    padding: 16px 20px;
+    position: relative;
+  }
+
+  /* Drag handle */
+  .mrmd-dialog__header::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    background: var(--mrmd-fg-muted, #888);
+    border-radius: 2px;
+    opacity: 0.4;
+  }
+
+  .mrmd-dialog__title {
+    font-size: 16px;
+    padding-top: 8px;
+  }
+
+  .mrmd-dialog__close {
+    width: 44px;
+    height: 44px;
+    font-size: 22px;
+  }
+
+  .mrmd-dialog__body {
+    padding: 16px 20px;
+  }
+
+  .mrmd-dialog__footer {
+    padding: 16px 20px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    gap: 12px;
+  }
+
+  .mrmd-input {
+    padding: 12px 14px;
+    font-size: 16px; /* Prevents iOS zoom on focus */
+    border-radius: 8px;
+  }
+
+  .mrmd-button {
+    padding: 12px 20px;
+    font-size: 15px;
+    border-radius: 8px;
+    min-height: 44px;
+  }
+}
+
+/* ---- File Picker: full-height on mobile ---- */
+@media (max-width: 768px) {
+  .mrmd-filepicker {
+    min-height: 50vh;
+  }
+
+  .mrmd-filepicker__path {
+    padding: 12px 0;
+    gap: 2px;
+  }
+
+  .mrmd-filepicker__path-segment {
+    padding: 6px 10px;
+    font-size: 14px;
+    min-height: 36px;
+  }
+
+  .mrmd-filepicker__item {
+    padding: 14px 12px;
+    min-height: 52px;
+    font-size: 15px;
+    gap: 14px;
+  }
+
+  .mrmd-filepicker__item-icon {
+    font-size: 20px;
+    width: 28px;
+  }
+
+  .mrmd-filepicker__item-info {
+    font-size: 12px;
+  }
+}
+
+/* ---- Touch-specific: larger targets for coarse pointers ---- */
+@media (pointer: coarse) {
+  .mrmd-statusbar__segment {
+    min-height: 44px;
+  }
+
+  .mrmd-menu__item {
+    min-height: 48px;
+  }
+
+  .mrmd-dialog__close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .mrmd-button {
+    min-height: 44px;
+  }
+
+  .mrmd-filepicker__item {
+    min-height: 48px;
+  }
+
+  .mrmd-filepicker__path-segment {
+    min-height: 36px;
+  }
+}
+
+/* ---- Shared mobile animation keyframes ---- */
+@keyframes mrmd-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+`;
+
+// =============================================================================
 // ALL STYLES COMBINED
 // =============================================================================
 // STUDIO STYLES
@@ -672,6 +937,7 @@ ${menuStyles}
 ${dialogStyles}
 ${filePickerStyles}
 ${studioStyles}
+${mobileStyles}
 `;
 
 // =============================================================================

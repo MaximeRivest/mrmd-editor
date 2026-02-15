@@ -1015,6 +1015,132 @@ export const markdownStyles = `
 .cm-inline-html bdo {
   unicode-bidi: bidi-override;
 }
+
+/* ==========================================================================
+   MOBILE RESPONSIVE
+   
+   Quarto/Astro-inspired: content reads beautifully on narrow screens.
+   Tables scroll horizontally, images scale, code wraps or scrolls.
+   ========================================================================== */
+
+@media (max-width: 768px) {
+
+  /* Tables: horizontal scroll when they're wider than the viewport.
+     This is the exact pattern Quarto and MkDocs Material use. */
+  .cm-table-widget {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-left: -4px;
+    margin-right: -4px;
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+
+  /* Subtle fade on the right edge when table overflows */
+  .cm-table-widget::after {
+    content: '';
+    position: sticky;
+    right: 0;
+    display: block;
+    width: 16px;
+    margin-top: -100%;
+    height: 100%;
+    background: linear-gradient(to right, transparent, var(--editor-background, #fff) 80%);
+    pointer-events: none;
+    float: right;
+    opacity: 0.5;
+  }
+
+  .cm-table {
+    font-size: 0.88em;
+  }
+
+  .cm-table th,
+  .cm-table td {
+    padding: 0.4em 0.65em;
+    white-space: nowrap;
+  }
+
+  /* Images: full-width, never overflow the screen */
+  .cm-image-block-img {
+    max-width: 100%;
+    max-height: 50vh;
+  }
+
+  .cm-image-inline-img {
+    max-width: 100%;
+  }
+
+  /* Wide images: don't break out of viewport */
+  .cm-image-pos-wide {
+    width: 100%;
+    max-width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .cm-image-pos-wide .cm-image-block-img {
+    max-width: 100%;
+  }
+
+  /* Right/left aligned images: go full width on mobile */
+  .cm-image-pos-right,
+  .cm-image-pos-left {
+    text-align: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .cm-image-pos-right .cm-image-block-img,
+  .cm-image-pos-left .cm-image-block-img {
+    max-width: 100%;
+  }
+
+  /* Display math: horizontal scroll for wide equations */
+  .cm-math-display {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Blockquotes: slightly tighter */
+  .cm-md-blockquote-line {
+    padding-left: 0.75em;
+  }
+
+  /* Headings: slightly smaller on mobile for better fit */
+  .cm-md-h1 {
+    font-size: clamp(1.4em, 5vw, var(--md-heading-1-size, 1.75em));
+  }
+
+  .cm-md-h2 {
+    font-size: clamp(1.2em, 4vw, var(--md-heading-2-size, 1.4em));
+  }
+
+  /* Horizontal rule: full width */
+  .cm-md-hr-line::after {
+    left: 0;
+    right: 0;
+  }
+}
+
+/* Touch-specific: make interactive elements more tappable */
+@media (pointer: coarse) {
+
+  /* Checkboxes: bigger for finger tapping */
+  .cm-task-checkbox {
+    width: 1.2em;
+    height: 1.2em;
+    margin-right: 0.5em;
+  }
+
+  /* Links: slightly more padding to enlarge tap area */
+  .cm-md-link-text,
+  .cm-external-link,
+  .cm-file-link,
+  .cm-wiki-link {
+    padding: 2px 0;
+  }
+}
 `;
 
 /**

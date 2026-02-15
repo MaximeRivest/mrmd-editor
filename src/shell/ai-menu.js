@@ -414,6 +414,76 @@ export const AI_MENU_STYLES = `
   color: #808080;
   font-style: italic;
 }
+
+/* Mobile: AI menu becomes a bottom sheet */
+@media (max-width: 768px) {
+  .ai-menu {
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    top: auto !important;
+    min-width: 100%;
+    max-width: 100%;
+    border-radius: 16px 16px 0 0;
+    border: none;
+    border-top: 1px solid #3c3c3c;
+    box-shadow: 0 -4px 32px rgba(0, 0, 0, 0.4);
+    animation: ai-menu-slide-up 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  @keyframes ai-menu-slide-up {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+
+  .ai-menu-header {
+    padding: 16px 20px;
+    position: relative;
+  }
+
+  .ai-menu-header::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    background: #666;
+    border-radius: 2px;
+    opacity: 0.4;
+  }
+
+  .ai-menu-title {
+    font-size: 16px;
+    padding-top: 4px;
+  }
+
+  .ai-menu-juice {
+    font-size: 14px;
+    padding: 6px 12px;
+    border-radius: 8px;
+  }
+
+  .ai-menu-commands {
+    max-height: 50vh;
+    padding: 8px 0;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .ai-menu-item {
+    padding: 14px 20px;
+    min-height: 48px;
+    font-size: 16px;
+  }
+
+  .ai-menu-item-icon {
+    width: 28px;
+    font-size: 18px;
+    margin-right: 12px;
+  }
+}
 `;
 
 /**

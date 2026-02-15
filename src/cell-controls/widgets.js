@@ -492,6 +492,36 @@ export function injectCellControlsStyles() {
     .${PREFIX}-btn-terminal:hover {
       color: var(--widget-info, #60a5fa);
     }
+
+    /* ---- Mobile: larger touch targets for cell controls ---- */
+    @media (pointer: coarse) {
+      .${PREFIX}-btn {
+        width: 32px;
+        height: 32px;
+        opacity: 0.8;
+      }
+
+      .${PREFIX}-btn svg {
+        width: 16px;
+        height: 16px;
+      }
+
+      .${PREFIX} {
+        gap: 8px;
+        margin-left: 12px;
+      }
+
+      .${PREFIX}-status {
+        padding: 4px 10px;
+        font-size: 12px;
+      }
+
+      .${PREFIX}-gutter {
+        width: 32px;
+        height: 32px;
+        font-size: 14px;
+      }
+    }
   `;
 
   document.head.appendChild(style);

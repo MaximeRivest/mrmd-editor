@@ -83,8 +83,12 @@ function showCtrlKModal(view) {
   // Create modal container
   const modal = document.createElement('div');
   modal.className = 'cm-ctrl-k-modal';
-  modal.style.left = `${coords.left}px`;
-  modal.style.top = `${coords.bottom + 8}px`;
+  // On mobile, CSS positions it as a bottom sheet — don't set inline styles
+  const isMobile = window.matchMedia('(max-width: 768px)').matches;
+  if (!isMobile) {
+    modal.style.left = `${coords.left}px`;
+    modal.style.top = `${coords.bottom + 8}px`;
+  }
 
   // Track expanded/collapsed state
   let isExpanded = false;
@@ -493,6 +497,86 @@ function injectCtrlKStyles() {
 
 .cm-ctrl-k-modal.loading .cm-ctrl-k-toggle {
   display: none;
+}
+
+/* Mobile: Ctrl-K becomes a bottom sheet instead of cursor-anchored popup */
+@media (max-width: 768px) {
+  .cm-ctrl-k-modal {
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    top: auto !important;
+    min-width: 100%;
+    max-width: 100%;
+    border-radius: 16px 16px 0 0;
+    border: none;
+    border-top: 1px solid var(--border, #333);
+    box-shadow: 0 -4px 32px rgba(0, 0, 0, 0.4);
+    animation: cm-ctrl-k-slide-up 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  @keyframes cm-ctrl-k-slide-up {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+
+  .cm-ctrl-k-header {
+    cursor: default;
+    justify-content: space-between;
+    padding: 8px 16px;
+    position: relative;
+  }
+
+  /* Drag handle */
+  .cm-ctrl-k-header::before {
+    content: '';
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    background: var(--text-dim, #666);
+    border-radius: 2px;
+    opacity: 0.4;
+  }
+
+  .cm-ctrl-k-toggle,
+  .cm-ctrl-k-close {
+    width: 44px;
+    height: 44px;
+    font-size: 18px;
+  }
+
+  .cm-ctrl-k-input-wrap {
+    padding: 12px 16px;
+  }
+
+  .cm-ctrl-k-input {
+    font-size: 16px; /* Prevents iOS zoom */
+    padding: 8px 0;
+  }
+
+  .cm-ctrl-k-controls {
+    padding: 0 16px;
+  }
+
+  .cm-ctrl-k-modal.expanded .cm-ctrl-k-controls {
+    padding: 12px 16px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .cm-ctrl-k-btn {
+    width: 36px;
+    height: 36px;
+    font-size: 14px;
+    border-radius: 8px;
+  }
+
+  .cm-ctrl-k-label {
+    font-size: 13px;
+  }
 }
 `;
 

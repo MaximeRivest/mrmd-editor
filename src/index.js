@@ -731,6 +731,15 @@ const codeBlockStyles = EditorView.theme({
   '.cm-codeblock-fence::selection, .cm-codeblock-fence *::selection': {
     backgroundColor: 'var(--editor-selection, #264f78) !important',
   },
+  // Mobile: code blocks need to be larger and scroll horizontally
+  '@media (max-width: 768px)': {
+    '.cm-codeblock-line': {
+      fontSize: 'max(var(--code-font-size, 0.8em), 13px)',
+    },
+    '.cm-codeblock-fence': {
+      fontSize: '0.6em', // Slightly larger than desktop's 0.5em for visibility
+    },
+  },
 });
 // #endregion CODE_BLOCK_BACKGROUND
 
@@ -896,6 +905,11 @@ function create(target, options = {}) {
     '.cm-gutters': { display: 'none' },
     '.cm-activeLineGutter': { backgroundColor: 'transparent' },
     '&.cm-focused': { outline: 'none' },
+    // Mobile: slightly larger text, comfortable line-height
+    '@media (max-width: 768px)': {
+      '&': { fontSize: '17px' },
+      '.cm-scroller': { lineHeight: '1.7' },
+    },
   });
 
   // Inject CSS styles

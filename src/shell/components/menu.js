@@ -55,8 +55,21 @@ export function createMenu(options) {
     }
   }
 
-  // Position menu relative to anchor
+  // Detect mobile/narrow viewport
+  const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+
+  // Position menu relative to anchor (desktop) or as bottom sheet (mobile)
   function updatePosition() {
+    // On mobile, CSS handles the positioning (bottom sheet via @media queries).
+    // We just need to not set inline position styles that would conflict.
+    if (isMobile()) {
+      menu.style.top = '';
+      menu.style.left = '';
+      menu.style.right = '';
+      menu.style.bottom = '';
+      return;
+    }
+
     const anchorRect = anchor.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
 
@@ -96,10 +109,18 @@ export function createMenu(options) {
     menu.style.left = `${left}px`;
   }
 
+  // Mobile scrim backdrop (for bottom sheet pattern)
+  let scrim = null;
+
   // Close menu
   function close() {
     menu.remove();
+    if (scrim) {
+      scrim.remove();
+      scrim = null;
+    }
     document.removeEventListener('mousedown', handleOutsideClick);
+    document.removeEventListener('touchstart', handleOutsideClick);
     document.removeEventListener('keydown', handleKeydown);
     onClose?.();
   }
@@ -120,11 +141,28 @@ export function createMenu(options) {
 
   // Initialize
   render(items);
+
+  // On mobile, add a scrim backdrop behind the bottom sheet
+  if (isMobile()) {
+    scrim = document.createElement('div');
+    scrim.style.cssText = `
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.4);
+      z-index: 999;
+      animation: mrmd-fade-in 0.15s ease;
+    `;
+    scrim.addEventListener('click', close);
+    scrim.addEventListener('touchstart', close);
+    document.body.appendChild(scrim);
+  }
+
   document.body.appendChild(menu);
   updatePosition();
 
   // Add event listeners
   document.addEventListener('mousedown', handleOutsideClick);
+  document.addEventListener('touchstart', handleOutsideClick);
   document.addEventListener('keydown', handleKeydown);
 
   return {

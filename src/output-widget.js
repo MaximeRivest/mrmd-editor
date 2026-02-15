@@ -2423,6 +2423,60 @@ ${ansiStyles}
 .cm-stdin-widget[data-password="true"] .cm-stdin-content {
   letter-spacing: 0.2em;
 }
+
+/* ==========================================================================
+   MOBILE RESPONSIVE
+
+   Output blocks need to be readable on narrow screens.
+   Horizontal scroll for wide output, larger text for readability.
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  .cm-output-widget {
+    font-size: max(var(--output-font-size, 0.7em), 12px);
+    left: 0;  /* No inset on mobile — use full width */
+    right: 0;
+    padding: 8px 12px;
+  }
+
+  /* Output content lines: ensure they don't overflow */
+  .cm-output-content-line {
+    font-size: max(var(--output-font-size, 0.8em), 12px);
+  }
+
+  /* Rich output (HTML renders, plots): full width */
+  .cm-output-rich-widget {
+    max-width: 100%;
+  }
+
+  .cm-output-rich-widget iframe {
+    max-width: 100%;
+  }
+
+  /* Stdin widget: bigger input on mobile */
+  .cm-stdin-widget .cm-stdin-input {
+    font-size: 16px; /* Prevents iOS zoom */
+    padding: 10px;
+  }
+
+  .cm-stdin-widget .cm-stdin-prompt {
+    font-size: 14px;
+  }
+}
+
+@media (pointer: coarse) {
+  /* Output container: larger tap target for focus/interaction */
+  .cm-output-widget {
+    padding: 10px 14px;
+  }
+
+  /* Collapsed output: easy to tap to expand */
+  .cm-output-collapsed {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+}
 `;
 
 // #endregion STYLES
