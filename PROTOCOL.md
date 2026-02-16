@@ -2,7 +2,9 @@
 
 A simple, capability-based protocol for connecting code editors to language runtimes.
 
-**Version:** 0.1.0
+**Version:** 0.2.0
+
+> **Breaking change:** MRP no longer exposes multi-session endpoints. Runtime requests execute against the runtime's single namespace (one runtime process = one REPL).
 
 ---
 
@@ -25,7 +27,7 @@ MRP enables rich development experiences in notebook-style editors by connecting
 
 1. **Capability-based** — Runtimes declare what they support; clients adapt
 2. **JSON over HTTP** — Simple, works everywhere, SSE for streaming
-3. **Session-aware** — State persists between executions
+3. **Runtime-namespace aware** — State persists in the runtime process between executions
 4. **Language-agnostic** — Same protocol for Python, JavaScript, Bash, etc.
 5. **LSP-fallback** — Graceful degradation when runtime can't answer
 
@@ -38,11 +40,7 @@ All endpoints are prefixed with `/mrp/v1/`.
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/capabilities` | GET | What can this runtime do? |
-| `/sessions` | GET | List active sessions |
-| `/sessions` | POST | Create new session |
-| `/sessions/{id}` | GET | Session details |
-| `/sessions/{id}` | DELETE | Destroy session |
-| `/sessions/{id}/reset` | POST | Clear namespace, keep session |
+| `/reset` | POST | Clear runtime namespace |
 | `/execute` | POST | Run code, return result |
 | `/execute/stream` | POST | Run code, SSE stream output |
 | `/input` | POST | Send user input to waiting execution |
@@ -51,7 +49,7 @@ All endpoints are prefixed with `/mrp/v1/`.
 | `/complete` | POST | Completions at cursor position |
 | `/inspect` | POST | Detailed info about symbol |
 | `/hover` | POST | Quick tooltip for symbol |
-| `/variables` | POST | List session variables |
+| `/variables` | POST | List runtime variables |
 | `/variables/{name}` | POST | Drill into variable |
 | `/is_complete` | POST | Is code a complete statement? |
 | `/format` | POST | Format code (optional) |
@@ -150,70 +148,13 @@ This separation keeps the runtime simple and predictable. The `environment` fiel
 
 ---
 
-## Sessions
+## Runtime Namespace
 
-Sessions are isolated namespaces within a single runtime. Variables persist within a session until reset or destroyed. All sessions share the same Python interpreter.
+MRP now uses a **single runtime namespace** per runtime process.
 
-### `GET /sessions`
-
-List all active sessions.
-
-**Response:**
-
-```json
-{
-  "sessions": [
-    {
-      "id": "default",
-      "language": "python",
-      "created": "2024-01-15T10:30:00Z",
-      "lastActivity": "2024-01-15T11:45:00Z",
-      "executionCount": 42,
-      "variableCount": 15
-    }
-  ]
-}
-```
-
-### `POST /sessions`
-
-Create a new session (isolated namespace).
-
-**Request:**
-
-```json
-{
-  "id": "analysis-1",
-  "language": "python"
-}
-```
-
-All fields are optional. If `id` is omitted, one will be generated.
-
-**Response:**
-
-```json
-{
-  "id": "analysis-1",
-  "language": "python",
-  "created": "2024-01-15T12:00:00Z",
-  "lastActivity": "2024-01-15T12:00:00Z",
-  "executionCount": 0,
-  "variableCount": 0
-}
-```
-
-### `GET /sessions/{id}`
-
-Get session details.
-
-### `DELETE /sessions/{id}`
-
-Destroy session and free resources.
-
-### `POST /sessions/{id}/reset`
-
-Clear namespace (delete all variables) but keep session alive.
+- One runtime process = one REPL namespace
+- No `/sessions` endpoints
+- Use `POST /reset` to clear namespace state
 
 ---
 
@@ -228,7 +169,6 @@ Execute code and return result when complete.
 ```json
 {
   "code": "import pandas as pd\ndf = pd.read_csv('data.csv')\ndf.head()",
-  "session": "default",
   "storeHistory": true,
   "silent": false,
   "assetDir": "/tmp/assets",
@@ -244,7 +184,6 @@ Execute code and return result when complete.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `code` | string | required | Code to execute |
-| `session` | string | `"default"` | Session ID |
 | `storeHistory` | boolean | `true` | Add to execution history |
 | `silent` | boolean | `false` | Suppress output |
 | `assetDir` | string | | Where to save figures/assets |

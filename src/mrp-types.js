@@ -17,8 +17,6 @@
  * @property {string[]} languages - Supported language identifiers: ["python", "py", "python3"]
  * @property {CapabilityFeatures} features - What this runtime can do
  * @property {string} [lspFallback] - WebSocket URL for fallback LSP
- * @property {string} defaultSession - Default session ID
- * @property {number} [maxSessions] - Maximum concurrent sessions
  * @property {RuntimeEnvironment} [environment] - Execution environment info
  */
 
@@ -28,7 +26,7 @@
  * @property {boolean} execute - Run code and return result (always true)
  * @property {boolean} executeStream - Stream output via SSE
  * @property {boolean} interrupt - Cancel running execution
- * @property {boolean} complete - Tab completion from live session
+ * @property {boolean} complete - Tab completion from the live runtime namespace
  * @property {boolean} inspect - Get symbol info (signature, docs, source)
  * @property {boolean} hover - Quick value/type preview
  * @property {boolean} variables - List variables in namespace
@@ -50,31 +48,6 @@
 
 // #endregion CAPABILITIES
 
-// #region SESSIONS
-
-/**
- * Session info
- * @typedef {Object} Session
- * @property {string} id - Session identifier
- * @property {string} language - Primary language
- * @property {string} created - ISO timestamp
- * @property {string} lastActivity - ISO timestamp
- * @property {number} executionCount - Number of executions
- * @property {number} variableCount - Number of variables in namespace
- * @property {RuntimeEnvironment} [environment] - Session environment
- */
-
-/**
- * Create session request
- * @typedef {Object} CreateSessionRequest
- * @property {string} [id] - Session ID (auto-generated if omitted)
- * @property {string} language - Language for this session
- * @property {Partial<RuntimeEnvironment>} [environment] - Environment overrides
- * @property {string[]} [dependencies] - Package dependencies (for UV export)
- * @property {string} [pythonVersion] - Python version constraint
- */
-
-// #endregion SESSIONS
 
 // #region EXECUTION
 
@@ -82,7 +55,6 @@
  * Execute request
  * @typedef {Object} ExecuteRequest
  * @property {string} code - Code to execute
- * @property {string} [session] - Session ID (default: "default")
  * @property {boolean} [storeHistory] - Add to execution history (default: true)
  * @property {boolean} [silent] - Suppress output (default: false)
  * @property {string} [assetDir] - Where to save figures/assets
@@ -226,7 +198,6 @@
 /**
  * Send input request
  * @typedef {Object} SendInputRequest
- * @property {string} [session] - Session ID
  * @property {string} execId - Execution ID waiting for input
  * @property {string} text - User input (include \n if submitting)
  */
@@ -247,7 +218,6 @@
  * @typedef {Object} CompleteRequest
  * @property {string} code - Code in cell
  * @property {number} cursor - Cursor position (character offset)
- * @property {string} [session] - Session ID
  * @property {'invoked'|'character'|'incomplete'} [triggerKind] - What triggered completion
  * @property {string} [triggerCharacter] - Character that triggered (".", "[", etc.)
  */
@@ -289,7 +259,6 @@
  * @typedef {Object} InspectRequest
  * @property {string} code - Code in cell
  * @property {number} cursor - Cursor position
- * @property {string} [session] - Session ID
  * @property {0|1|2} [detail] - Detail level: 0=signature, 1=+docs, 2=+source
  */
 
@@ -320,7 +289,6 @@
  * @typedef {Object} HoverRequest
  * @property {string} code - Code in cell
  * @property {number} cursor - Cursor position
- * @property {string} [session] - Session ID
  */
 
 /**
@@ -340,7 +308,6 @@
 /**
  * Variables request
  * @typedef {Object} VariablesRequest
- * @property {string} [session] - Session ID
  * @property {VariablesFilter} [filter] - Filter options
  */
 
@@ -377,7 +344,6 @@
 /**
  * Variable detail request
  * @typedef {Object} VariableDetailRequest
- * @property {string} [session] - Session ID
  * @property {string[]} [path] - Drill-down path: ["key", "0", "attr"]
  * @property {number} [maxChildren] - Max children to return
  * @property {number} [maxValueLength] - Max chars for value repr
@@ -410,7 +376,6 @@
  * Is-complete request
  * @typedef {Object} IsCompleteRequest
  * @property {string} code - Code to check
- * @property {string} [session] - Session ID
  */
 
 /**
@@ -424,7 +389,6 @@
  * Format request
  * @typedef {Object} FormatRequest
  * @property {string} code - Code to format
- * @property {string} [session] - Session ID
  */
 
 /**

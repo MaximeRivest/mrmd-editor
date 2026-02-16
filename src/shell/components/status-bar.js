@@ -1402,7 +1402,7 @@ function createRuntimesSegment({ shellState, orchestratorClient, handlers, onCle
     let runtimeCount = 0;
     if (python?.running || python?.status === 'ready') runtimeCount++;
 
-    const sessions = shellState.getSessions();
+    const sessions = shellState.getRuntimes();
     const dedicatedCount = sessions.filter(s => s.info?.dedicated).length;
     runtimeCount += dedicatedCount;
 
@@ -1650,7 +1650,7 @@ function createRuntimesSegment({ shellState, orchestratorClient, handlers, onCle
       items.push({ type: 'divider' });
       items.push({
         type: 'header',
-        label: `Active Sessions (${runtimes.sessions.length})`,
+        label: `Active Runtime Attachments (${runtimes.sessions.length})`,
       });
 
       for (const session of runtimes.sessions) {
@@ -1671,16 +1671,16 @@ function createRuntimesSegment({ shellState, orchestratorClient, handlers, onCle
         });
         items.push({
           icon: '✖',
-          label: `Close "${session.doc}" session`,
+          label: `Detach runtime from "${session.doc}"`,
           description: 'Stops monitor',
           onClick: async () => {
             try {
-              await orchestratorClient.destroySession(session.doc);
+              await orchestratorClient.destroyRuntimeAttachment(session.doc);
               cachedRuntimes = null;
               lastFetchTime = 0;
               render();
             } catch (err) {
-              console.error('Failed to close session:', err);
+              console.error('Failed to detach runtime attachment:', err);
             }
           },
         });

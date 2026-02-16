@@ -11,9 +11,9 @@
  * const extensions = createRuntimeCodeLensExtensions({
  *   projectName: 'my-project',
  *   getSessionStatus: (name) => shellState.get(`runtimes.sessions.${name}`),
- *   onStart: async (runtime) => { await electronAPI.session.start(runtime); },
- *   onStop: async (name) => { await electronAPI.session.stop(name); },
- *   onRestart: async (name) => { await electronAPI.session.restart(name); },
+ *   onStart: async (runtime) => { await electronAPI.runtime.start(runtime); },
+ *   onStop: async (name) => { await electronAPI.runtime.stop(name); },
+ *   onRestart: async (name) => { await electronAPI.runtime.restart(name); },
  *   onRestartAll: async () => { ... },
  * });
  * ```

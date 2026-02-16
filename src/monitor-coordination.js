@@ -99,11 +99,10 @@ export class MonitorCoordination {
    * @param {string} options.code - Code to execute
    * @param {string} options.language - Language identifier
    * @param {string} options.runtimeUrl - MRP runtime URL
-   * @param {string} [options.session] - MRP session ID
    * @param {string} [options.cellId] - Cell ID for tracking
    * @returns {string} execId
    */
-  requestExecution({ code, language, runtimeUrl, session = 'default', cellId }) {
+  requestExecution({ code, language, runtimeUrl, cellId }) {
     const execId = MonitorCoordination.generateExecId();
 
     this.executions.set(execId, {
@@ -112,7 +111,6 @@ export class MonitorCoordination {
       code,
       language,
       runtimeUrl,
-      session,
       status: EXECUTION_STATUS.REQUESTED,
       requestedBy: this.clientId,
       requestedAt: Date.now(),

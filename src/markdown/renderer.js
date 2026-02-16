@@ -122,6 +122,33 @@ function extractWikiLinks(text) {
 }
 
 /**
+ * Find YAML frontmatter at the top of the document (--- ... ---).
+ *
+ * We use this to suppress markdown rendering inside frontmatter since the
+ * opening/closing `---` lines are parsed as HorizontalRule nodes by markdown.
+ */
+function findFrontmatterRange(doc) {
+  if (doc.lines < 2) return null;
+
+  const firstLine = doc.line(1);
+  if (firstLine.text.trim() !== '---') return null;
+
+  for (let i = 2; i <= doc.lines; i++) {
+    const line = doc.line(i);
+    if (line.text.trim() === '---') {
+      return {
+        from: firstLine.from,
+        to: line.to,
+        startLine: 1,
+        endLine: i,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
  * BlockImageWidget wrapper that caches its rendered height for stable layout.
  */
 class BlockImageWidgetWithHeightCache extends BlockImageWidget {
@@ -223,6 +250,7 @@ function buildDecorations(view) {
   const doc = view.state.doc;
   const cursorPos = view.state.selection.main.head;
   const cursorLine = doc.lineAt(cursorPos).number;
+  const frontmatterRange = findFrontmatterRange(doc);
 
   // Get asset resolver from facet (may be null)
   const assetResolver = view.state.facet(assetResolverFacet);
@@ -249,6 +277,21 @@ function buildDecorations(view) {
     to: view.viewport.to,
     enter: (node) => {
       const lineNum = doc.lineAt(node.from).number;
+
+      // Never apply markdown rendering/styling inside YAML frontmatter.
+      // Frontmatter is rendered separately by block-decorations.
+      // Use line-based start detection so we still skip nodes that may extend
+      // past the line boundary (e.g., HorizontalRule tokens including newline).
+      if (frontmatterRange && node.name !== 'Document') {
+        const nodeStartLine = doc.lineAt(node.from).number;
+        if (
+          nodeStartLine >= frontmatterRange.startLine &&
+          nodeStartLine <= frontmatterRange.endLine
+        ) {
+          return false;
+        }
+      }
+
       const isActiveLine = lineNum === cursorLine;
 
       // Marker class: hidden on blur, muted on focus
@@ -735,6 +778,9 @@ function buildDecorations(view) {
     const line = doc.line(i);
     const isActiveLine = i === cursorLine;
 
+    // Skip frontmatter lines
+    if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
+
     // Skip lines inside code blocks
     if (codeBlockLines.has(i)) continue;
 
@@ -769,6 +815,9 @@ function buildDecorations(view) {
   for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
     const line = doc.line(i);
     const isActiveLine = i === cursorLine;
+
+    // Skip frontmatter lines
+    if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
 
     // Skip lines inside code blocks (using syntax tree detection)
     if (codeBlockLines.has(i)) continue;
@@ -810,11 +859,11 @@ function buildDecorations(view) {
     const line = doc.line(i);
     const isActiveLine = i === cursorLine;
 
+    // Skip frontmatter lines
+    if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
+
     // Skip lines inside code blocks (using syntax tree detection)
     if (codeBlockLines.has(i)) continue;
-
-    // Skip frontmatter (YAML between ---)
-    // This is a simple check - a full solution would track state
 
     const htmlElements = extractHtmlElements(line.text);
 

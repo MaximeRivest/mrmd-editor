@@ -53861,7 +53861,7 @@ var mrmd = (function (exports) {
    * @param {string} content - Document content
    * @returns {Array<{
    *   language: string,
-   *   session: string|null, // session name if specified (e.g., ```js mysession)
+   *   context: string|null, // execution context if specified (e.g., ```js sandbox)
    *   code: string,
    *   start: number,      // start of opening fence
    *   end: number,        // end of closing fence
@@ -53880,7 +53880,7 @@ var mrmd = (function (exports) {
     let inBlock = false;
     let blockStart = 0;
     let blockLanguage = '';
-    let blockSession = null;
+    let blockContext = null;
     let codeStart = 0;
     let blockLine = 0;
     let charOffset = 0;
@@ -53890,7 +53890,7 @@ var mrmd = (function (exports) {
       const lineStart = charOffset;
 
       if (!inBlock) {
-        // Look for opening fence: ```language [session]
+        // Look for opening fence: ```language [context]
         // Examples: ```js, ```js sandbox, ```python myenv, ```html:artifact, ```css:myapp
         // Language can include colon for targets (html:name, css:name, js:name, term:session)
         const match = line.match(/^(`{3,})([\w:.-]*)(?:\s+(\S+))?/);
@@ -53898,7 +53898,7 @@ var mrmd = (function (exports) {
           inBlock = true;
           blockStart = lineStart;
           blockLanguage = match[2].toLowerCase();
-          blockSession = match[3] || null; // session name after language
+          blockContext = match[3] || null; // optional context name after language
           codeStart = lineStart + line.length + 1; // +1 for newline
           blockLine = i;
         }
@@ -53908,10 +53908,10 @@ var mrmd = (function (exports) {
           const codeEnd = lineStart;
           const blockEnd = lineStart + line.length;
 
-          // Parse terminal language for session support
+          // Parse terminal language for named terminal runtime support
           const terminalInfo = parseTerminalLanguage(blockLanguage);
-          // Terminal session can come from term:session or from space-separated session
-          const terminalSession = terminalInfo.sessionName || (terminalInfo.isTerminal ? blockSession : null);
+          // Terminal runtime name can come from term:session or from space-separated context
+          const terminalSession = terminalInfo.sessionName || (terminalInfo.isTerminal ? blockContext : null);
 
           // Parse artifact language for artifact panel support
           const artifactInfo = parseArtifactLanguage(blockLanguage);
@@ -53922,7 +53922,7 @@ var mrmd = (function (exports) {
           blocks.push({
             language: blockLanguage,
             baseLanguage: effectiveLanguage, // The language without :target suffix
-            session: blockSession,
+            context: blockContext,
             code: content.slice(codeStart, codeEnd),
             start: blockStart,
             end: blockEnd,
@@ -53940,7 +53940,7 @@ var mrmd = (function (exports) {
           });
 
           inBlock = false;
-          blockSession = null;
+          blockContext = null;
         }
       }
 
@@ -57977,11 +57977,10 @@ ${ansiStyles}
      * @param {string} options.code - Code to execute
      * @param {string} options.language - Language identifier
      * @param {string} options.runtimeUrl - MRP runtime URL
-     * @param {string} [options.session] - MRP session ID
      * @param {string} [options.cellId] - Cell ID for tracking
      * @returns {string} execId
      */
-    requestExecution({ code, language, runtimeUrl, session = 'default', cellId }) {
+    requestExecution({ code, language, runtimeUrl, cellId }) {
       const execId = MonitorCoordination.generateExecId();
 
       this.executions.set(execId, {
@@ -57990,7 +57989,6 @@ ${ansiStyles}
         code,
         language,
         runtimeUrl,
-        session,
         status: EXECUTION_STATUS.REQUESTED,
         requestedBy: this.clientId,
         requestedAt: Date.now(),
@@ -58305,9 +58303,6 @@ ${ansiStyles}
       /** @type {string|null} Default runtime URL for monitor mode */
       this._defaultRuntimeUrl = null;
 
-      /** @type {string} Session name for execution isolation */
-      this._monitorSession = 'default';
-
       /** @type {Map<string, Function>} Unsubscribe functions for monitor status watchers */
       this._monitorUnsubscribes = new Map();
 
@@ -58330,9 +58325,8 @@ ${ansiStyles}
      * @param {Y.Doc} options.ydoc - Yjs document
      * @param {string} options.runtimeUrl - Default runtime URL for MRP
      * @param {import('y-protocols/awareness').Awareness} [options.awareness] - For monitor detection
-     * @param {string} [options.session] - Session name for execution isolation (defaults to 'default')
      */
-    enableMonitorMode({ ydoc, runtimeUrl, awareness, session }) {
+    enableMonitorMode({ ydoc, runtimeUrl, awareness }) {
       if (this.coordination) {
         this.coordination.destroy();
       }
@@ -58341,9 +58335,8 @@ ${ansiStyles}
       this._defaultRuntimeUrl = runtimeUrl;
       this._monitorMode = true;
       this._awareness = awareness;
-      this._monitorSession = session || 'default';
 
-      console.log('[ExecutionManager] Monitor mode enabled, runtimeUrl:', runtimeUrl, 'session:', this._monitorSession);
+      console.log('[ExecutionManager] Monitor mode enabled, runtimeUrl:', runtimeUrl);
     }
 
     /**
@@ -59206,11 +59199,11 @@ ${ansiStyles}
 
         // Execute with streaming (pass onStdinRequest for input() support)
         // Pass execId so hub runtimes can find the output block
-        // Pass session name for named session support (e.g., ```js sandbox)
+        // Pass context hint for runtime-specific isolation (e.g., ```js sandbox)
         const result = await this.registry.executeStreaming(code, runtimeLanguage, onChunk, onStdinRequest, {
           execId,
           cellId: cell.id || `cell-${index}`,
-          session: cell.session,
+          context: cell.context,
           onAsset,
         });
 
@@ -59376,7 +59369,6 @@ ${ansiStyles}
         code,
         language,
         runtimeUrl,
-        session: this._monitorSession,
         cellId: cell.id || `cell-${index}`,
       });
 
@@ -59636,12 +59628,14 @@ ${ansiStyles}
    *
    * Connects mrmd-editor to any MRMD Runtime Protocol server.
    *
+   * Runtime model (simplified): one runtime process = one REPL namespace.
+   * There are no client-managed MRP sessions.
+   *
    * @module mrp-client
    */
 
   // JSDoc imports for type hints
   /** @typedef {import('./mrp-types.js').Capabilities} Capabilities */
-  /** @typedef {import('./mrp-types.js').Session} Session */
   /** @typedef {import('./mrp-types.js').ExecuteRequest} ExecuteRequest */
   /** @typedef {import('./mrp-types.js').ExecuteResult} ExecuteResult */
   /** @typedef {import('./mrp-types.js').CompleteRequest} CompleteRequest */
@@ -59667,9 +59661,6 @@ ${ansiStyles}
     /** @type {string} */
     #endpoint;
 
-    /** @type {string} */
-    #defaultSession;
-
     /** @type {Capabilities|null} */
     #capabilities = null;
 
@@ -59687,13 +59678,11 @@ ${ansiStyles}
      *
      * @param {string} endpoint - Base URL for MRP endpoints (e.g., "http://localhost:8000/mrp/v1")
      * @param {Object} [options]
-     * @param {string} [options.session='default'] - Default session ID
      * @param {string[]} [options.languages] - Fallback languages if capabilities haven't loaded yet
      * @param {boolean} [options.prefetch=true] - Auto-fetch capabilities on construction
      */
     constructor(endpoint, options = {}) {
       this.#endpoint = endpoint.replace(/\/$/, ''); // Remove trailing slash
-      this.#defaultSession = options.session || 'default';
       this.#fallbackLanguages = options.languages || null;
 
       // Expose runtime URL for ExecutionManager to use in monitor mode routing
@@ -59791,79 +59780,6 @@ ${ansiStyles}
     }
 
     // ===========================================================================
-    // Sessions
-    // ===========================================================================
-
-    /**
-     * List active sessions
-     *
-     * @returns {Promise<Session[]>}
-     */
-    async listSessions() {
-      const res = await fetch(`${this.#endpoint}/sessions`);
-      if (!res.ok) throw new Error(`Failed to list sessions: ${res.status}`);
-      const data = await res.json();
-      return data.sessions;
-    }
-
-    /**
-     * Create a new session
-     *
-     * @param {import('./mrp-types.js').CreateSessionRequest} request
-     * @returns {Promise<Session>}
-     */
-    async createSession(request) {
-      const res = await fetch(`${this.#endpoint}/sessions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
-      });
-      if (!res.ok) throw new Error(`Failed to create session: ${res.status}`);
-      return res.json();
-    }
-
-    /**
-     * Get session info
-     *
-     * @param {string} [session]
-     * @returns {Promise<Session>}
-     */
-    async getSession(session) {
-      const sid = session || this.#defaultSession;
-      const res = await fetch(`${this.#endpoint}/sessions/${encodeURIComponent(sid)}`);
-      if (!res.ok) throw new Error(`Failed to get session: ${res.status}`);
-      return res.json();
-    }
-
-    /**
-     * Destroy a session
-     *
-     * @param {string} [session]
-     * @returns {Promise<void>}
-     */
-    async destroySession(session) {
-      const sid = session || this.#defaultSession;
-      const res = await fetch(`${this.#endpoint}/sessions/${encodeURIComponent(sid)}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) throw new Error(`Failed to destroy session: ${res.status}`);
-    }
-
-    /**
-     * Reset session (clear namespace)
-     *
-     * @param {string} [session]
-     * @returns {Promise<void>}
-     */
-    async reset(session) {
-      const sid = session || this.#defaultSession;
-      const res = await fetch(`${this.#endpoint}/sessions/${encodeURIComponent(sid)}/reset`, {
-        method: 'POST',
-      });
-      if (!res.ok) throw new Error(`Failed to reset session: ${res.status}`);
-    }
-
-    // ===========================================================================
     // Execution
     // ===========================================================================
 
@@ -59881,7 +59797,6 @@ ${ansiStyles}
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           code,
-          session: this.#defaultSession,
           ...options,
         }),
       });
@@ -59933,7 +59848,6 @@ ${ansiStyles}
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             code,
-            session: this.#defaultSession,
             ...executeOptions,
           }),
           signal: controller.signal,
@@ -59972,14 +59886,8 @@ ${ansiStyles}
                 } else if (currentEvent === 'stdin_request') {
                   // Runtime needs user input - call handler and send response
                   if (onStdinRequest) {
-                    // onStdinRequest returns Promise<string> with user's input
-                    // We handle this async but don't block the SSE reading
-                    // The server will wait for our /input POST
                     Promise.resolve(onStdinRequest(data))
-                      .then((input) => {
-                        // Send the input back to the server
-                        return this.sendInput(data.execId, input);
-                      })
+                      .then((input) => this.sendInput(data.execId, input))
                       .catch((err) => {
                         // User cancelled input (e.g., pressed Escape)
                         // Notify server to unblock the waiting execution
@@ -59990,9 +59898,6 @@ ${ansiStyles}
                       });
                   }
                 } else if (currentEvent === 'asset' || currentEvent === 'display') {
-                  // Rich output: images, plots, HTML, etc.
-                  // data contains: { path, url, mimeType, assetType, size } for assets
-                  // or { data: { 'image/png': base64, ... }, metadata } for display
                   if (onAsset) {
                     onAsset(data, currentEvent);
                   }
@@ -60036,15 +59941,13 @@ ${ansiStyles}
      *
      * @param {string} execId - Execution ID waiting for input
      * @param {string} text - User input (include \n if submitting)
-     * @param {string} [session] - Session ID
      * @returns {Promise<SendInputResult>}
      */
-    async sendInput(execId, text, session) {
+    async sendInput(execId, text) {
       const res = await fetch(`${this.#endpoint}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          session: session || this.#defaultSession,
           exec_id: execId,
           text,
         }),
@@ -60056,10 +59959,9 @@ ${ansiStyles}
     /**
      * Interrupt running execution
      *
-     * @param {string} [session]
      * @returns {Promise<void>}
      */
-    async interrupt(session) {
+    async interrupt() {
       // Abort fetch if in progress
       if (this.#currentExecution) {
         this.#currentExecution.abort();
@@ -60070,39 +59972,9 @@ ${ansiStyles}
       const res = await fetch(`${this.#endpoint}/interrupt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session: session || this.#defaultSession }),
+        body: JSON.stringify({}),
       });
       if (!res.ok) throw new Error(`Failed to interrupt: ${res.status}`);
-    }
-
-    // ===========================================================================
-    // Input
-    // ===========================================================================
-
-    /**
-     * Send user input to a waiting execution (stdin_request response)
-     *
-     * @param {string} execId - The execution ID that requested input
-     * @param {string} text - The user input text (should include newline if submitting)
-     * @param {string} [session]
-     * @returns {Promise<{accepted: boolean, error?: string}>}
-     */
-    async sendInput(execId, text, session) {
-      const res = await fetch(`${this.#endpoint}/input`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session: session || this.#defaultSession,
-          exec_id: execId,
-          text,
-        }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`Failed to send input: ${res.status}`);
-      }
-
-      return res.json();
     }
 
     /**
@@ -60112,15 +59984,13 @@ ${ansiStyles}
      * This unblocks the waiting execution on the server.
      *
      * @param {string} execId - The execution ID waiting for input
-     * @param {string} [session]
      * @returns {Promise<{cancelled: boolean, error?: string}>}
      */
-    async cancelInput(execId, session) {
+    async cancelInput(execId) {
       const res = await fetch(`${this.#endpoint}/input/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          session: session || this.#defaultSession,
           exec_id: execId,
         }),
       });
@@ -60129,6 +59999,31 @@ ${ansiStyles}
         throw new Error(`Failed to cancel input: ${res.status}`);
       }
 
+      return res.json();
+    }
+
+    /**
+     * Reset runtime namespace (clear variables)
+     *
+     * @returns {Promise<{success: boolean}>}
+     */
+    async reset() {
+      let res = await fetch(`${this.#endpoint}/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+      // Backward compatibility for runtimes that still expose session reset
+      if (!res.ok && res.status === 404) {
+        res = await fetch(`${this.#endpoint}/sessions/default/reset`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+      }
+
+      if (!res.ok) throw new Error(`Failed to reset runtime: ${res.status}`);
       return res.json();
     }
 
@@ -60154,7 +60049,6 @@ ${ansiStyles}
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...request,
-          session: request.session || this.#defaultSession,
         }),
       });
 
@@ -60184,7 +60078,6 @@ ${ansiStyles}
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...request,
-          session: request.session || this.#defaultSession,
         }),
       });
 
@@ -60210,7 +60103,6 @@ ${ansiStyles}
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...request,
-          session: request.session || this.#defaultSession,
         }),
       });
 
@@ -60223,13 +60115,12 @@ ${ansiStyles}
     // ===========================================================================
 
     /**
-     * List variables in session
+     * List variables in runtime namespace
      *
-     * @param {string} [session]
      * @param {import('./mrp-types.js').VariablesFilter} [filter]
      * @returns {Promise<VariablesResult>}
      */
-    async getVariables(session, filter) {
+    async getVariables(filter) {
       const caps = await this.getCapabilities();
 
       if (!caps.features.variables) {
@@ -60239,10 +60130,7 @@ ${ansiStyles}
       const res = await fetch(`${this.#endpoint}/variables`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session: session || this.#defaultSession,
-          filter,
-        }),
+        body: JSON.stringify({ filter }),
       });
 
       if (!res.ok) throw new Error(`Variables failed: ${res.status}`);
@@ -60254,7 +60142,6 @@ ${ansiStyles}
      *
      * @param {string} name - Variable name
      * @param {Object} [options]
-     * @param {string} [options.session] - Session ID
      * @param {string[]} [options.path] - Drill-down path
      * @param {number} [options.maxChildren] - Max children to return
      * @param {number} [options.maxValueLength] - Max value length
@@ -60271,7 +60158,6 @@ ${ansiStyles}
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          session: options.session || this.#defaultSession,
           path: options.path,
           maxChildren: options.maxChildren,
           maxValueLength: options.maxValueLength,
@@ -60290,10 +60176,9 @@ ${ansiStyles}
      * Check if code is a complete statement
      *
      * @param {string} code
-     * @param {string} [session]
      * @returns {Promise<IsCompleteResult>}
      */
-    async isComplete(code, session) {
+    async isComplete(code) {
       const caps = await this.getCapabilities();
 
       if (!caps.features.isComplete) {
@@ -60303,10 +60188,7 @@ ${ansiStyles}
       const res = await fetch(`${this.#endpoint}/is_complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code,
-          session: session || this.#defaultSession,
-        }),
+        body: JSON.stringify({ code }),
       });
 
       if (!res.ok) throw new Error(`isComplete failed: ${res.status}`);
@@ -60317,10 +60199,9 @@ ${ansiStyles}
      * Format code
      *
      * @param {string} code
-     * @param {string} [session]
      * @returns {Promise<FormatResult>}
      */
-    async format(code, session) {
+    async format(code) {
       const caps = await this.getCapabilities();
 
       if (!caps.features.format) {
@@ -60330,10 +60211,7 @@ ${ansiStyles}
       const res = await fetch(`${this.#endpoint}/format`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code,
-          session: session || this.#defaultSession,
-        }),
+        body: JSON.stringify({ code }),
       });
 
       if (!res.ok) throw new Error(`Format failed: ${res.status}`);
@@ -60361,24 +60239,6 @@ ${ansiStyles}
      */
     get endpoint() {
       return this.#endpoint;
-    }
-
-    /**
-     * Get the default session ID
-     *
-     * @returns {string}
-     */
-    get defaultSession() {
-      return this.#defaultSession;
-    }
-
-    /**
-     * Set the default session ID
-     *
-     * @param {string} session
-     */
-    set defaultSession(session) {
-      this.#defaultSession = session;
     }
   }
 
@@ -60666,53 +60526,95 @@ ${ansiStyles}
     }
 
     // ===========================================================================
-    // Session Management
+    // Runtime Attachments
     // ===========================================================================
 
     /**
-     * Create a session for a document
+     * Create a runtime attachment for a document
      * @param {string} doc - Document name
      * @param {'shared'|'dedicated'} python - Python runtime mode
      * @param {string} [venv] - Path to virtual environment (for dedicated runtimes)
      * @returns {Promise<Object>}
      */
-    async createSession(doc, python = 'shared', venv = null) {
+    async createRuntimeAttachment(doc, python = 'shared', venv = null) {
       const body = { doc, python };
       if (venv) {
         body.venv = venv;
       }
-      return this._fetch('/api/sessions', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
+
+      try {
+        return await this._fetch('/api/runtimes', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        });
+      } catch (err) {
+        // Legacy orchestrator compatibility
+        return this._fetch('/api/sessions', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        });
+      }
     }
 
     /**
-     * Get session info for a document
+     * Get runtime attachment info for a document
      * @param {string} doc - Document name
      * @returns {Promise<Object>}
      */
-    async getSession(doc) {
-      return this._fetch(`/api/sessions/${encodeURIComponent(doc)}`);
+    async getRuntimeAttachment(doc) {
+      const encoded = encodeURIComponent(doc);
+      try {
+        return await this._fetch(`/api/runtimes/${encoded}`);
+      } catch (err) {
+        return this._fetch(`/api/sessions/${encoded}`);
+      }
     }
 
     /**
-     * Destroy a session
+     * Destroy a runtime attachment
      * @param {string} doc - Document name
      * @returns {Promise<{doc: string, status: string}>}
      */
-    async destroySession(doc) {
-      return this._fetch(`/api/sessions/${encodeURIComponent(doc)}`, {
-        method: 'DELETE',
-      });
+    async destroyRuntimeAttachment(doc) {
+      const encoded = encodeURIComponent(doc);
+      try {
+        return await this._fetch(`/api/runtimes/${encoded}`, {
+          method: 'DELETE',
+        });
+      } catch (err) {
+        return this._fetch(`/api/sessions/${encoded}`, {
+          method: 'DELETE',
+        });
+      }
     }
 
     /**
-     * List all active sessions
-     * @returns {Promise<{sessions: Array}>}
+     * List all runtime attachments
+     * @returns {Promise<{runtimes?: Array, sessions?: Array}>}
      */
+    async listRuntimeAttachments() {
+      try {
+        return await this._fetch('/api/runtimes');
+      } catch (err) {
+        return this._fetch('/api/sessions');
+      }
+    }
+
+    // Legacy aliases
+    async createSession(doc, python = 'shared', venv = null) {
+      return this.createRuntimeAttachment(doc, python, venv);
+    }
+
+    async getSession(doc) {
+      return this.getRuntimeAttachment(doc);
+    }
+
+    async destroySession(doc) {
+      return this.destroyRuntimeAttachment(doc);
+    }
+
     async listSessions() {
-      return this._fetch('/api/sessions');
+      return this.listRuntimeAttachments();
     }
 
     // ===========================================================================
@@ -60938,12 +60840,12 @@ ${ansiStyles}
       runtimes: {
         // Legacy: single Python runtime info (for backward compat)
         python: null,
-        // New: multiple runtime sessions
+        // Runtime registry
         sessions: {
           // 'shared': { id, url, status, venv, cwd, ... }
           // 'python-8001': { id, url, status, venv, cwd, dedicated: true, port: 8001 }
         },
-        // Document → session attachment
+        // Document → runtime attachment
         attachments: {
           // 'my-notebook': 'shared'
           // 'data-analysis': 'python-8001'
@@ -61333,55 +61235,55 @@ ${ansiStyles}
     }
 
     // ===========================================================================
-    // Runtime Session Management
+    // Runtime Attachment Management
     // ===========================================================================
 
     /**
-     * Get the session attached to a document
+     * Get the runtime attached to a document
      * @param {string} docName - Document name
-     * @returns {string} Session ID (defaults to 'shared')
+     * @returns {string} Runtime ID (defaults to 'shared')
      */
-    getDocumentSession(docName) {
+    getDocumentRuntime(docName) {
       return this.get(`runtimes.attachments.${docName}`) || 'shared';
     }
 
     /**
-     * Get session info
-     * @param {string} sessionId - Session ID
+     * Get runtime info
+     * @param {string} runtimeId - Runtime ID
      * @returns {Object|null}
      */
-    getSession(sessionId) {
-      return this.get(`runtimes.sessions.${sessionId}`) || null;
+    getRuntime(runtimeId) {
+      return this.get(`runtimes.sessions.${runtimeId}`) || null;
     }
 
     /**
-     * Get all available sessions
+     * Get all available runtimes
      * @returns {Array<{id: string, info: Object}>}
      */
-    getSessions() {
-      const sessions = this.get('runtimes.sessions') || {};
-      return Object.entries(sessions).map(([id, info]) => ({ id, info }));
+    getRuntimes() {
+      const runtimes = this.get('runtimes.sessions') || {};
+      return Object.entries(runtimes).map(([id, info]) => ({ id, info }));
     }
 
     /**
-     * Attach a document to a session
+     * Attach a document to a runtime
      * @param {string} docName - Document name
-     * @param {string} sessionId - Session ID to attach to
+     * @param {string} runtimeId - Runtime ID to attach to
      */
-    attachDocument(docName, sessionId) {
-      this._set(`runtimes.attachments.${docName}`, sessionId);
+    attachDocument(docName, runtimeId) {
+      this._set(`runtimes.attachments.${docName}`, runtimeId);
     }
 
     /**
-     * Register a runtime session
-     * @param {string} sessionId - Session ID
-     * @param {Object} info - Session info (url, status, venv, cwd, etc.)
+     * Register runtime metadata
+     * @param {string} runtimeId - Runtime ID
+     * @param {Object} info - Runtime info (url, status, venv, cwd, etc.)
      */
-    registerSession(sessionId, info) {
-      this._set(`runtimes.sessions.${sessionId}`, info);
+    registerRuntime(runtimeId, info) {
+      this._set(`runtimes.sessions.${runtimeId}`, info);
 
-      // Also update legacy python state if this is the shared session
-      if (sessionId === 'shared' && info.language === 'python') {
+      // Also update legacy python state if this is the shared runtime
+      if (runtimeId === 'shared' && info.language === 'python') {
         this._set('runtimes.python', {
           language: 'python',
           version: info.version,
@@ -61396,20 +61298,20 @@ ${ansiStyles}
     }
 
     /**
-     * Create a new dedicated runtime session
-     * @param {string} docName - Document to attach the session to
+     * Create and attach a runtime
+     * @param {string} docName - Document to attach runtime to
      * @param {'shared'|'dedicated'} mode - Runtime mode
      * @param {string} [venv] - Path to virtual environment (for dedicated runtimes)
-     * @returns {Promise<Object>} Session info
+     * @returns {Promise<Object>} Runtime info
      */
-    async createSession(docName, mode = 'dedicated', venv = null) {
+    async createRuntime(docName, mode = 'dedicated', venv = null) {
       try {
-        const result = await this._client.createSession(docName, mode, venv);
+        const result = await this._client.createRuntimeAttachment(docName, mode, venv);
 
-        const sessionId = result.id || (mode === 'dedicated' ? `python-${result.runtimes?.python?.port || Date.now()}` : 'shared');
+        const runtimeId = result.id || (mode === 'dedicated' ? `python-${result.runtimes?.python?.port || Date.now()}` : 'shared');
 
-        const sessionInfo = {
-          id: sessionId,
+        const runtimeInfo = {
+          id: runtimeId,
           url: result.runtimes?.python?.url || result.sync,
           status: 'ready',
           dedicated: mode === 'dedicated',
@@ -61419,15 +61321,15 @@ ${ansiStyles}
           docName,
         };
 
-        // Register the session
-        this.registerSession(sessionId, sessionInfo);
+        // Register runtime
+        this.registerRuntime(runtimeId, runtimeInfo);
 
-        // Attach the document to this session
-        this.attachDocument(docName, sessionId);
+        // Attach document to runtime
+        this.attachDocument(docName, runtimeId);
 
-        return sessionInfo;
+        return runtimeInfo;
       } catch (error) {
-        console.error('Failed to create session:', error);
+        console.error('Failed to create runtime:', error);
         throw error;
       }
     }
@@ -61438,9 +61340,30 @@ ${ansiStyles}
      * @returns {string|null} Runtime URL
      */
     getRuntimeUrl(docName) {
-      const sessionId = this.getDocumentSession(docName);
-      const session = this.getSession(sessionId);
-      return session?.url || null;
+      const runtimeId = this.getDocumentRuntime(docName);
+      const runtime = this.getRuntime(runtimeId);
+      return runtime?.url || null;
+    }
+
+    // Legacy aliases
+    getDocumentSession(docName) {
+      return this.getDocumentRuntime(docName);
+    }
+
+    getSession(sessionId) {
+      return this.getRuntime(sessionId);
+    }
+
+    getSessions() {
+      return this.getRuntimes();
+    }
+
+    registerSession(sessionId, info) {
+      this.registerRuntime(sessionId, info);
+    }
+
+    async createSession(docName, mode = 'dedicated', venv = null) {
+      return this.createRuntime(docName, mode, venv);
     }
 
     // ===========================================================================
@@ -62095,6 +62018,9 @@ ${ansiStyles}
    */
 
 
+  const FILE_PICKER_HISTORY_KEY = 'mrmd:file-picker-history:v1';
+  const FILE_PICKER_HISTORY_LIMIT = 400;
+
   // =============================================================================
   // FILE PICKER
   // =============================================================================
@@ -62131,6 +62057,7 @@ ${ansiStyles}
     let entries = [];
     let selectedEntry = null;
     let isLoading = false;
+    let pickerHistory = loadFilePickerHistory();
 
     // Create content
     const content = document.createElement('div');
@@ -62227,10 +62154,20 @@ ${ansiStyles}
         return;
       }
 
-      // Sort: directories first, then files
+      // Sort: directories first, then recency/frequency score, then name
+      const nowMs = Date.now();
       const sorted = [...entries].sort((a, b) => {
         if (a.type === 'directory' && b.type !== 'directory') return -1;
         if (a.type !== 'directory' && b.type === 'directory') return 1;
+
+        const aScore = getHistoryScore(pickerHistory.get(a.path), nowMs);
+        const bScore = getHistoryScore(pickerHistory.get(b.path), nowMs);
+        if (aScore !== bScore) return bScore - aScore;
+
+        const aModified = Number(a.modified || 0);
+        const bModified = Number(b.modified || 0);
+        if (aModified !== bModified) return bModified - aModified;
+
         return a.name.localeCompare(b.name);
       });
 
@@ -62252,11 +62189,26 @@ ${ansiStyles}
         name.textContent = entry.name;
         item.appendChild(name);
 
-        if (entry.type === 'file' && entry.size !== undefined) {
-          const info = document.createElement('span');
-          info.className = 'mrmd-filepicker__item-info';
-          info.textContent = formatSize(entry.size);
-          item.appendChild(info);
+        if (entry.type === 'file') {
+          const infoParts = [];
+          if (entry.size !== undefined) {
+            infoParts.push(formatSize(entry.size));
+          }
+
+          const history = pickerHistory.get(entry.path);
+          if (history?.lastOpened) {
+            infoParts.push(formatTimeAgo(history.lastOpened));
+          }
+          if ((history?.count || 0) > 1) {
+            infoParts.push(`${Math.round(history.count)}x`);
+          }
+
+          if (infoParts.length > 0) {
+            const info = document.createElement('span');
+            info.className = 'mrmd-filepicker__item-info';
+            info.textContent = infoParts.join(' • ');
+            item.appendChild(info);
+          }
         }
 
         // Click handler
@@ -62294,6 +62246,13 @@ ${ansiStyles}
         const result = await orchestratorClient.browse({ path, type: 'all' });
         currentPath = result.path;
         entries = result.entries;
+
+        // Track directory navigation with a lighter weight than file opens
+        pickerHistory = touchFilePickerHistory(pickerHistory, currentPath, {
+          timestamp: new Date().toISOString(),
+          weight: 0.25,
+        });
+        saveFilePickerHistory(pickerHistory);
       } catch (error) {
         console.error('Failed to browse:', error);
         entries = [];
@@ -62306,6 +62265,12 @@ ${ansiStyles}
 
     // Select a file
     function selectFile(path) {
+      pickerHistory = touchFilePickerHistory(pickerHistory, path, {
+        timestamp: new Date().toISOString(),
+        weight: 1,
+      });
+      saveFilePickerHistory(pickerHistory);
+
       dialog.close();
       onSelect(path);
     }
@@ -62536,6 +62501,125 @@ ${ansiStyles}
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  function formatTimeAgo(value) {
+    if (!value) return '';
+    const ts = Date.parse(value);
+    if (!Number.isFinite(ts)) return '';
+
+    const diffMs = Math.max(0, Date.now() - ts);
+    const mins = Math.floor(diffMs / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+
+    const days = Math.floor(hours / 24);
+    if (days < 30) return `${days}d ago`;
+
+    const months = Math.floor(days / 30);
+    return `${months}mo ago`;
+  }
+
+  function getStorage() {
+    if (typeof window === 'undefined') return null;
+    try {
+      return window.localStorage || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function loadFilePickerHistory() {
+    const storage = getStorage();
+    if (!storage) return new Map();
+
+    try {
+      const raw = storage.getItem(FILE_PICKER_HISTORY_KEY);
+      if (!raw) return new Map();
+
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return new Map();
+
+      const byPath = new Map();
+      for (const [filePath, value] of Object.entries(parsed)) {
+        if (!filePath || !value || typeof value !== 'object') continue;
+
+        const count = Number(value.count || 0);
+        byPath.set(filePath, {
+          path: filePath,
+          lastOpened: typeof value.lastOpened === 'string' ? value.lastOpened : null,
+          count: Number.isFinite(count) && count > 0 ? count : 1,
+        });
+      }
+
+      return byPath;
+    } catch {
+      return new Map();
+    }
+  }
+
+  function saveFilePickerHistory(historyMap) {
+    const storage = getStorage();
+    if (!storage) return;
+
+    try {
+      const items = Array.from(historyMap.values())
+        .filter(item => item?.path)
+        .sort((a, b) => {
+          const aTs = Date.parse(a.lastOpened || 0) || 0;
+          const bTs = Date.parse(b.lastOpened || 0) || 0;
+          if (aTs !== bTs) return bTs - aTs;
+          return (b.count || 0) - (a.count || 0);
+        })
+        .slice(0, FILE_PICKER_HISTORY_LIMIT);
+
+      const serialized = {};
+      for (const item of items) {
+        serialized[item.path] = {
+          lastOpened: item.lastOpened || null,
+          count: item.count || 1,
+        };
+      }
+
+      storage.setItem(FILE_PICKER_HISTORY_KEY, JSON.stringify(serialized));
+    } catch {
+      // Best-effort persistence only
+    }
+  }
+
+  function touchFilePickerHistory(historyMap, filePath, { timestamp, weight = 1 } = {}) {
+    if (!filePath) return historyMap;
+
+    const next = new Map(historyMap);
+    const existing = next.get(filePath);
+    const nextCount = Math.max(0.1, Number(existing?.count || 0) + Math.max(0.1, Number(weight) || 0.1));
+
+    next.set(filePath, {
+      path: filePath,
+      lastOpened: timestamp || new Date().toISOString(),
+      count: nextCount,
+    });
+
+    return next;
+  }
+
+  function getHistoryScore(historyEntry, nowMs = Date.now()) {
+    if (!historyEntry) return 0;
+
+    const count = Math.max(1, Number(historyEntry.count) || 1);
+    const openedMs = Date.parse(historyEntry.lastOpened || '');
+
+    let recencyScore = 0;
+    if (Number.isFinite(openedMs)) {
+      const ageHours = Math.max(0, (nowMs - openedMs) / 3600000);
+      recencyScore = Math.max(0, 220 - Math.log2(ageHours + 1) * 36);
+    }
+
+    const frequencyScore = Math.min(180, Math.log2(count + 1) * 60);
+    return recencyScore + frequencyScore;
   }
 
   /**
@@ -63940,7 +64024,7 @@ ${ansiStyles}
       let runtimeCount = 0;
       if (python?.running || python?.status === 'ready') runtimeCount++;
 
-      const sessions = shellState.getSessions();
+      const sessions = shellState.getRuntimes();
       const dedicatedCount = sessions.filter(s => s.info?.dedicated).length;
       runtimeCount += dedicatedCount;
 
@@ -64188,7 +64272,7 @@ ${ansiStyles}
         items.push({ type: 'divider' });
         items.push({
           type: 'header',
-          label: `Active Sessions (${runtimes.sessions.length})`,
+          label: `Active Runtime Attachments (${runtimes.sessions.length})`,
         });
 
         for (const session of runtimes.sessions) {
@@ -64209,16 +64293,16 @@ ${ansiStyles}
           });
           items.push({
             icon: '✖',
-            label: `Close "${session.doc}" session`,
+            label: `Detach runtime from "${session.doc}"`,
             description: 'Stops monitor',
             onClick: async () => {
               try {
-                await orchestratorClient.destroySession(session.doc);
+                await orchestratorClient.destroyRuntimeAttachment(session.doc);
                 cachedRuntimes = null;
                 lastFetchTime = 0;
                 render();
               } catch (err) {
-                console.error('Failed to close session:', err);
+                console.error('Failed to detach runtime attachment:', err);
               }
             },
           });
@@ -67093,9 +67177,9 @@ ${mobileStyles}
         throw new Error('No sync URL returned from orchestrator');
       }
 
-      // Register the shared session in shell state
+      // Register the shared runtime in shell state
       if (runtimeUrls.python) {
-        shellState.registerSession('shared', {
+        shellState.registerRuntime('shared', {
           id: 'shared',
           url: runtimeUrls.python,
           status: 'ready',
@@ -67210,7 +67294,6 @@ ${mobileStyles}
           ydoc: handle.ydoc,
           awareness: handle.awareness,
           runtimeUrl: monitorRuntimeUrl,
-          session: docName,
         });
       }
 
@@ -67400,11 +67483,11 @@ ${mobileStyles}
         editor = createEditorForDocument(handle, normalizedName);
         currentDocName = normalizedName;
 
-        // Ensure session exists (starts monitor if needed)
+        // Ensure runtime attachment exists (starts monitor if needed)
         try {
-          await orchestratorClient.createSession(normalizedName, 'shared');
+          await orchestratorClient.createRuntimeAttachment(normalizedName, 'shared');
         } catch (e) {
-          console.warn('Failed to create session for', normalizedName, e);
+          console.warn('Failed to create runtime attachment for', normalizedName, e);
         }
 
         // Update shell state
@@ -67439,11 +67522,11 @@ ${mobileStyles}
       editor = createEditorForDocument(handle, docToOpen);
       currentDocName = docToOpen;
 
-      // Ensure session exists (starts monitor if needed)
+      // Ensure runtime attachment exists (starts monitor if needed)
       try {
-        await orchestratorClient.createSession(docToOpen, 'shared');
+        await orchestratorClient.createRuntimeAttachment(docToOpen, 'shared');
       } catch (e) {
-        console.warn('Failed to create session for initial doc:', e);
+        console.warn('Failed to create runtime attachment for initial doc:', e);
       }
     } catch (e) {
       console.error('Failed to open initial document:', e);
@@ -81562,7 +81645,7 @@ ${mobileStyles}
 
 
   /** Supported runtime languages */
-  const RUNTIME_LANGUAGES = ['python', 'bash', 'node', 'julia', 'r', 'shell'];
+  const RUNTIME_LANGUAGES$1 = ['python', 'bash', 'node', 'julia', 'r', 'shell'];
 
   /**
    * @typedef {Object} RuntimeConfig
@@ -81714,7 +81797,7 @@ ${mobileStyles}
       }
 
       // Check for each supported runtime language
-      for (const language of RUNTIME_LANGUAGES) {
+      for (const language of RUNTIME_LANGUAGES$1) {
         const config = sessionConfig[language];
         if (config) {
           // Find the line where this runtime is declared
@@ -81780,7 +81863,7 @@ ${mobileStyles}
     const sessionConfig = {};
     let hasRuntime = false;
 
-    for (const language of RUNTIME_LANGUAGES) {
+    for (const language of RUNTIME_LANGUAGES$1) {
       if (language in parsed) {
         const value = parsed[language];
         hasRuntime = true;
@@ -82384,9 +82467,9 @@ ${mobileStyles}
    * const extensions = createRuntimeCodeLensExtensions({
    *   projectName: 'my-project',
    *   getSessionStatus: (name) => shellState.get(`runtimes.sessions.${name}`),
-   *   onStart: async (runtime) => { await electronAPI.session.start(runtime); },
-   *   onStop: async (name) => { await electronAPI.session.stop(name); },
-   *   onRestart: async (name) => { await electronAPI.session.restart(name); },
+   *   onStart: async (runtime) => { await electronAPI.runtime.start(runtime); },
+   *   onStop: async (name) => { await electronAPI.runtime.stop(name); },
+   *   onRestart: async (name) => { await electronAPI.runtime.restart(name); },
    *   onRestartAll: async () => { ... },
    * });
    * ```
@@ -114647,7 +114730,7 @@ $1 $2
   /**
    * Find frontmatter range at the start of the document (--- ... ---)
    */
-  function findFrontmatterRange(state) {
+  function findFrontmatterRange$1(state) {
     const doc = state.doc;
     if (doc.lines < 2) return null;
 
@@ -114780,7 +114863,7 @@ $1 $2
     }
 
     // Find and process frontmatter
-    const fmRange = findFrontmatterRange(state);
+    const fmRange = findFrontmatterRange$1(state);
 
     if (fmRange) {
       const cursorInFrontmatter = cursorLine >= fmRange.startLine && cursorLine <= fmRange.endLine;
@@ -114974,6 +115057,33 @@ $1 $2
   }
 
   /**
+   * Find YAML frontmatter at the top of the document (--- ... ---).
+   *
+   * We use this to suppress markdown rendering inside frontmatter since the
+   * opening/closing `---` lines are parsed as HorizontalRule nodes by markdown.
+   */
+  function findFrontmatterRange(doc) {
+    if (doc.lines < 2) return null;
+
+    const firstLine = doc.line(1);
+    if (firstLine.text.trim() !== '---') return null;
+
+    for (let i = 2; i <= doc.lines; i++) {
+      const line = doc.line(i);
+      if (line.text.trim() === '---') {
+        return {
+          from: firstLine.from,
+          to: line.to,
+          startLine: 1,
+          endLine: i,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * BlockImageWidget wrapper that caches its rendered height for stable layout.
    */
   class BlockImageWidgetWithHeightCache extends BlockImageWidget {
@@ -115040,6 +115150,7 @@ $1 $2
     const doc = view.state.doc;
     const cursorPos = view.state.selection.main.head;
     const cursorLine = doc.lineAt(cursorPos).number;
+    const frontmatterRange = findFrontmatterRange(doc);
 
     // Get asset resolver from facet (may be null)
     const assetResolver = view.state.facet(assetResolverFacet);
@@ -115066,6 +115177,21 @@ $1 $2
       to: view.viewport.to,
       enter: (node) => {
         const lineNum = doc.lineAt(node.from).number;
+
+        // Never apply markdown rendering/styling inside YAML frontmatter.
+        // Frontmatter is rendered separately by block-decorations.
+        // Use line-based start detection so we still skip nodes that may extend
+        // past the line boundary (e.g., HorizontalRule tokens including newline).
+        if (frontmatterRange && node.name !== 'Document') {
+          const nodeStartLine = doc.lineAt(node.from).number;
+          if (
+            nodeStartLine >= frontmatterRange.startLine &&
+            nodeStartLine <= frontmatterRange.endLine
+          ) {
+            return false;
+          }
+        }
+
         const isActiveLine = lineNum === cursorLine;
 
         // Marker class: hidden on blur, muted on focus
@@ -115552,6 +115678,9 @@ $1 $2
       const line = doc.line(i);
       const isActiveLine = i === cursorLine;
 
+      // Skip frontmatter lines
+      if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
+
       // Skip lines inside code blocks
       if (codeBlockLines.has(i)) continue;
 
@@ -115586,6 +115715,9 @@ $1 $2
     for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
       const line = doc.line(i);
       const isActiveLine = i === cursorLine;
+
+      // Skip frontmatter lines
+      if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
 
       // Skip lines inside code blocks (using syntax tree detection)
       if (codeBlockLines.has(i)) continue;
@@ -115627,11 +115759,11 @@ $1 $2
       const line = doc.line(i);
       const isActiveLine = i === cursorLine;
 
+      // Skip frontmatter lines
+      if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
+
       // Skip lines inside code blocks (using syntax tree detection)
       if (codeBlockLines.has(i)) continue;
-
-      // Skip frontmatter (YAML between ---)
-      // This is a simple check - a full solution would track state
 
       const htmlElements = extractHtmlElements(line.text);
 
@@ -126913,6 +127045,336 @@ $1 $2
   };
 
   /**
+   * Document Language Detection
+   *
+   * Scans a document's content for fenced code blocks and extracts
+   * the set of executable programming languages used.
+   *
+   * Used by the notebook-scoped runtimes panel to show only relevant runtimes.
+   *
+   * @module document-languages
+   */
+
+  // Languages that have runtimes (executable code blocks)
+  const RUNTIME_LANGUAGES = new Set([
+    'python', 'bash', 'javascript', 'julia', 'r', 'shell', 'node', 'typescript',
+  ]);
+
+  // Non-executable languages (display-only, config, or markup)
+  const NON_EXECUTABLE_LANGUAGES = new Set([
+    'yaml', 'json', 'toml', 'xml', 'html', 'css', 'mermaid',
+    'output', 'markdown', 'md', 'text', 'txt', 'diff', 'csv',
+    'sql', 'graphql', 'latex', 'tex', 'bibtex',
+  ]);
+
+  // Language alias normalization map
+  const LANGUAGE_ALIASES = {
+    py: 'python',
+    python3: 'python',
+    js: 'javascript',
+    node: 'javascript',
+    ts: 'typescript',
+    typescript: 'javascript', // Same runtime as JS
+    jl: 'julia',
+    sh: 'bash',
+    shell: 'bash',
+    zsh: 'bash',
+    rlang: 'r',
+  };
+
+  /**
+   * Extract the set of executable programming languages from a document.
+   *
+   * Scans for fenced code blocks (``` or ~~~) and collects their language tags,
+   * filtering out non-executable languages (yaml, json, html, css, mermaid, output, etc.)
+   * and normalizing aliases (py → python, js → javascript, etc.)
+   *
+   * @param {string} content - Document content (full markdown text)
+   * @returns {Set<string>} Set of normalized language names (e.g. Set(['python', 'bash']))
+   */
+  function getDocumentLanguages(content) {
+    const languages = new Set();
+    // Match opening fences: ```python or ~~~julia
+    // Also handle ```python config (skip config blocks)
+    const fenceRegex = /^(`{3,}|~{3,})(\w+)(?:\s+(.*))?$/gm;
+    let match;
+
+    while ((match = fenceRegex.exec(content))) {
+      const rawLang = match[2].toLowerCase();
+      const extra = (match[3] || '').trim().toLowerCase();
+
+      // Skip config blocks (```yaml config)
+      if (extra === 'config') continue;
+
+      // Skip non-executable languages
+      if (NON_EXECUTABLE_LANGUAGES.has(rawLang)) continue;
+
+      // Normalize aliases
+      const normalized = LANGUAGE_ALIASES[rawLang] || rawLang;
+
+      // Only include if it's a known runtime language
+      // (to avoid random annotation languages like "diagram" etc.)
+      if (RUNTIME_LANGUAGES.has(rawLang) || RUNTIME_LANGUAGES.has(normalized)) {
+        languages.add(normalized);
+      }
+    }
+
+    return languages;
+  }
+
+  /**
+   * Map a normalized language name to its display label and badge color.
+   *
+   * @param {string} language - Normalized language name
+   * @returns {{ label: string, badgeClass: string }}
+   */
+  function getLanguageDisplay(language) {
+    const displays = {
+      python: { label: 'Python', badgeClass: 'python' },
+      javascript: { label: 'JavaScript', badgeClass: 'javascript' },
+      bash: { label: 'Bash', badgeClass: 'bash' },
+      julia: { label: 'Julia', badgeClass: 'julia' },
+      r: { label: 'R', badgeClass: 'r' },
+    };
+    return displays[language] || { label: language, badgeClass: language };
+  }
+
+  /**
+   * Check if a language is executable (has a runtime).
+   *
+   * @param {string} language - Language name (raw or normalized)
+   * @returns {boolean}
+   */
+  function isExecutableLanguage(language) {
+    const normalized = LANGUAGE_ALIASES[language.toLowerCase()] || language.toLowerCase();
+    return RUNTIME_LANGUAGES.has(normalized);
+  }
+
+  /**
+   * Frontmatter Session Updater
+   *
+   * Programmatically updates session/runtime configuration in a document's
+   * YAML frontmatter. Used by the runtimes panel UI to persist configuration
+   * changes back to the document.
+   *
+   * @module frontmatter-updater
+   */
+
+
+  /**
+   * @typedef {Object} SessionConfig
+   * @property {string} [name] - Session name
+   * @property {string} [venv] - Virtual environment path (Python)
+   * @property {string} [cwd] - Working directory
+   * @property {boolean} [auto_start] - Auto-start on project open
+   */
+
+  /**
+   * Parse existing frontmatter from document content.
+   *
+   * @param {string} content - Full document content
+   * @returns {{ exists: boolean, yaml: object|null, range: {start: number, end: number}|null, raw: string|null }}
+   */
+  function parseFrontmatter(content) {
+    if (!content.startsWith('---')) {
+      return { exists: false, yaml: null, range: null, raw: null };
+    }
+
+    const endIdx = content.indexOf('\n---', 3);
+    if (endIdx === -1) {
+      return { exists: false, yaml: null, range: null, raw: null };
+    }
+
+    const rawYaml = content.slice(4, endIdx); // Skip opening ---\n
+    const endOfClosing = endIdx + 4; // Include \n---
+
+    try {
+      const parsed = YAML.parse(rawYaml) || {};
+      return {
+        exists: true,
+        yaml: parsed,
+        range: { start: 0, end: endOfClosing },
+        raw: rawYaml,
+      };
+    } catch (e) {
+      console.warn('[frontmatter-updater] Failed to parse YAML:', e.message);
+      return { exists: true, yaml: null, range: { start: 0, end: endOfClosing }, raw: rawYaml };
+    }
+  }
+
+  /**
+   * Build frontmatter YAML string from an object.
+   *
+   * @param {object} data - Frontmatter data
+   * @returns {string} Complete frontmatter block including --- delimiters
+   */
+  function buildFrontmatter(data) {
+    // Remove empty/null values
+    const cleaned = cleanObject(data);
+
+    if (!cleaned || Object.keys(cleaned).length === 0) {
+      return '';
+    }
+
+    const yamlStr = YAML.stringify(cleaned, {
+      indent: 2,
+      lineWidth: 0, // Don't wrap lines
+    }).trimEnd();
+
+    return `---\n${yamlStr}\n---`;
+  }
+
+  /**
+   * Recursively remove null, undefined, and empty object values.
+   * @param {any} obj
+   * @returns {any}
+   */
+  function cleanObject(obj) {
+    if (obj === null || obj === undefined) return undefined;
+    if (typeof obj !== 'object' || Array.isArray(obj)) return obj;
+
+    const result = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (value === null || value === undefined) continue;
+      if (typeof value === 'object' && !Array.isArray(value)) {
+        const cleaned = cleanObject(value);
+        if (cleaned && Object.keys(cleaned).length > 0) {
+          result[key] = cleaned;
+        }
+      } else {
+        result[key] = value;
+      }
+    }
+    return Object.keys(result).length > 0 ? result : undefined;
+  }
+
+  /**
+   * Update session configuration in document frontmatter.
+   *
+   * If frontmatter doesn't exist, creates it.
+   * If values match project defaults, omits them (keeps frontmatter clean).
+   *
+   * @param {import('@codemirror/view').EditorView} view - CodeMirror editor view
+   * @param {string} language - Runtime language (e.g. 'python', 'bash', 'r', 'julia')
+   * @param {SessionConfig} config - Session configuration to set
+   * @param {SessionConfig} [projectDefaults] - Defaults from mrmd.md to diff against
+   */
+  function updateFrontmatterSession(view, language, config, projectDefaults = {}) {
+    const doc = view.state.doc;
+    const content = doc.toString();
+    const fm = parseFrontmatter(content);
+
+    // Start with existing frontmatter data or empty object
+    const data = fm.yaml ? { ...fm.yaml } : {};
+
+    // Build session config, omitting values that match project defaults
+    const sessionConfig = {};
+
+    if (config.name !== undefined && config.name !== (projectDefaults.name || 'default')) {
+      sessionConfig.name = config.name;
+    }
+    if (config.venv !== undefined && config.venv !== (projectDefaults.venv || '.venv')) {
+      sessionConfig.venv = config.venv;
+    }
+    if (config.cwd !== undefined && config.cwd !== (projectDefaults.cwd || '.')) {
+      sessionConfig.cwd = config.cwd;
+    }
+    if (config.auto_start !== undefined && config.auto_start !== true) {
+      sessionConfig.auto_start = config.auto_start;
+    }
+
+    // Update the session section
+    if (Object.keys(sessionConfig).length > 0) {
+      if (!data.session) data.session = {};
+      data.session[language] = {
+        ...(data.session[language] || {}),
+        ...sessionConfig,
+      };
+    } else {
+      // All values match defaults — remove the language key if it exists
+      if (data.session && data.session[language]) {
+        delete data.session[language];
+        if (Object.keys(data.session).length === 0) {
+          delete data.session;
+        }
+      }
+    }
+
+    // Build new frontmatter string
+    const newFrontmatter = buildFrontmatter(data);
+
+    // Apply the change to the editor
+    if (fm.exists && fm.range) {
+      // Replace existing frontmatter
+      if (newFrontmatter) {
+        view.dispatch({
+          changes: { from: fm.range.start, to: fm.range.end, insert: newFrontmatter },
+        });
+      } else {
+        // Remove frontmatter entirely (and trailing newline if present)
+        let removeEnd = fm.range.end;
+        if (content[removeEnd] === '\n') removeEnd++;
+        view.dispatch({
+          changes: { from: fm.range.start, to: removeEnd, insert: '' },
+        });
+      }
+    } else if (newFrontmatter) {
+      // Insert new frontmatter at the top
+      view.dispatch({
+        changes: { from: 0, to: 0, insert: newFrontmatter + '\n\n' },
+      });
+    }
+  }
+
+  /**
+   * Read current session configuration from document frontmatter.
+   *
+   * @param {string} content - Document content
+   * @param {string} language - Runtime language
+   * @returns {SessionConfig} Current session config (may be empty object if using defaults)
+   */
+  function readFrontmatterSession(content, language) {
+    const fm = parseFrontmatter(content);
+    if (!fm.yaml) return {};
+
+    // Check verbose syntax: session.python.venv
+    if (fm.yaml.session && fm.yaml.session[language]) {
+      return { ...fm.yaml.session[language] };
+    }
+
+    // Check minimal syntax: python: ".venv"
+    if (fm.yaml[language]) {
+      const value = fm.yaml[language];
+      if (typeof value === 'string') {
+        if (language === 'python') return { venv: value };
+        return { cwd: value };
+      }
+      if (typeof value === 'object') return { ...value };
+    }
+
+    return {};
+  }
+
+  /**
+   * Get the effective session configuration for a document,
+   * merging project defaults with document-level overrides.
+   *
+   * @param {string} content - Document content
+   * @param {string} language - Runtime language
+   * @param {SessionConfig} projectDefaults - Defaults from mrmd.md
+   * @returns {SessionConfig} Effective configuration
+   */
+  function getEffectiveSessionConfig(content, language, projectDefaults = {}) {
+    const docConfig = readFrontmatterSession(content, language);
+    return {
+      name: docConfig.name || projectDefaults.name || 'default',
+      venv: docConfig.venv || projectDefaults.venv || '.venv',
+      cwd: docConfig.cwd || projectDefaults.cwd || '.',
+      auto_start: docConfig.auto_start ?? projectDefaults.auto_start ?? true,
+    };
+  }
+
+  /**
    * mrmd - Markdown editor with realtime collaboration
    *
    * A markdown editor where humans, code, and AI all collaborate through
@@ -127011,55 +127473,55 @@ $1 $2
   function createJavaScriptRuntime(options = {}) {
     const rt = createRuntime(options);
 
-    // Track named sessions - each can have different isolation
-    // Session naming:
-    //   null/undefined/'default'/'main'/'none' → main context (no isolation)
+    // Track named execution contexts - each can have different isolation
+    // Context naming:
+    //   null/undefined/'default'/'main'/'none' → configured default isolation
     //   'sandbox'/'iframe' → sandboxed iframe
     //   other names → sandboxed iframe with separate scope
-    const sessions = new Map();
+    const contexts = new Map();
     const defaultIsolation = options.defaultIsolation || 'iframe';
 
     /**
-     * Get or create a session by name
-     * @param {string|null} sessionName
+     * Get or create a context by name
+     * @param {string|null} contextName
      * @returns {Session}
      */
-    function getOrCreateSession(sessionName) {
-      // Normalize session name
-      const name = sessionName || 'default';
+    function getOrCreateContext(contextName) {
+      // Normalize context name
+      const name = contextName || 'default';
 
-      // Return existing session
-      if (sessions.has(name)) {
-        return sessions.get(name);
+      // Return existing context
+      if (contexts.has(name)) {
+        return contexts.get(name);
       }
 
-      // Determine isolation mode based on session name
+      // Determine isolation mode based on context name
       let isolation;
-      if (!sessionName || sessionName === 'default' || sessionName === 'main' || sessionName === 'none') {
-        // Default session uses the configured default isolation
+      if (!contextName || contextName === 'default' || contextName === 'main' || contextName === 'none') {
+        // Default context uses the configured default isolation
         isolation = defaultIsolation;
-      } else if (sessionName === 'sandbox' || sessionName === 'iframe') {
+      } else if (contextName === 'sandbox' || contextName === 'iframe') {
         // Explicit sandbox request
         isolation = 'iframe';
       } else {
-        // Named sessions are sandboxed by default (separate scope)
+        // Named contexts are sandboxed by default (separate scope)
         isolation = 'iframe';
       }
 
-      // Create new session with appropriate isolation
-      const session = rt.createSession({
+      // Create new execution context with appropriate isolation
+      const context = rt.createSession({
         language: 'javascript',
         isolation,
         id: name,
       });
 
-      sessions.set(name, session);
-      console.log(`[JS Runtime] Created session '${name}' with isolation: ${isolation}`);
-      return session;
+      contexts.set(name, context);
+      console.log(`[JS Runtime] Created context '${name}' with isolation: ${isolation}`);
+      return context;
     }
 
-    // Create default session eagerly
-    const defaultSession = getOrCreateSession('default');
+    // Create default context eagerly
+    const defaultContext = getOrCreateContext('default');
 
     // Languages supported by mrmd-js
     const supportedLanguages = {
@@ -127086,8 +127548,9 @@ $1 $2
       /** Execute code (non-streaming) */
       async execute(code, language, execOptions = {}) {
         const lang = supportedLanguages[language.toLowerCase()] || 'javascript';
-        const session = getOrCreateSession(execOptions.session);
-        const result = await session.execute(code, { language: lang });
+        const contextName = execOptions.context ?? execOptions.session;
+        const context = getOrCreateContext(contextName);
+        const result = await context.execute(code, { language: lang });
         return {
           success: result.success,
           stdout: result.stdout || '',
@@ -127101,8 +127564,9 @@ $1 $2
       /** Execute code with streaming output */
       async executeStreaming(code, language, onChunk, onStdinRequest, execOptions = {}) {
         const lang = supportedLanguages[language.toLowerCase()] || 'javascript';
-        const session = getOrCreateSession(execOptions.session);
-        const result = await session.execute(code, { language: lang });
+        const contextName = execOptions.context ?? execOptions.session;
+        const context = getOrCreateContext(contextName);
+        const result = await context.execute(code, { language: lang });
 
         // Handle different output types
         let output = result.stdout || '';
@@ -127141,18 +127605,18 @@ $1 $2
         };
       },
 
-      /** Reset a session (clear all variables) */
-      reset(sessionName) {
-        const session = sessions.get(sessionName || 'default');
-        if (session) {
-          session.reset();
+      /** Reset a context (clear all variables) */
+      reset(contextName) {
+        const context = contexts.get(contextName || 'default');
+        if (context) {
+          context.reset();
         }
       },
 
-      /** Reset all sessions */
+      /** Reset all contexts */
       resetAll() {
-        for (const session of sessions.values()) {
-          session.reset();
+        for (const context of contexts.values()) {
+          context.reset();
         }
       },
 
@@ -127161,23 +127625,32 @@ $1 $2
         return rt;
       },
 
-      /** Get a session by name (default if not specified) */
-      getSession(sessionName) {
-        return getOrCreateSession(sessionName);
+      /** Get a context by name (default if not specified) */
+      getContext(contextName) {
+        return getOrCreateContext(contextName);
       },
 
-      /** List all session names */
+      /** List all context names */
+      listContexts() {
+        return Array.from(contexts.keys());
+      },
+
+      // Legacy aliases (kept for compatibility inside monorepo)
+      getSession(contextName) {
+        return getOrCreateContext(contextName);
+      },
+
       listSessions() {
-        return Array.from(sessions.keys());
+        return Array.from(contexts.keys());
       },
 
-      /** Destroy the runtime and all sessions */
+      /** Destroy the runtime and all contexts */
       destroy() {
         rt.destroy();
       },
 
       // =========================================================================
-      // LSP Features (powered by mrmd-js session)
+      // LSP Features (powered by mrmd-js default context)
       // =========================================================================
 
       /**
@@ -127189,7 +127662,7 @@ $1 $2
        * @returns {{found: boolean, name?: string, type?: string, value?: string, signature?: string}|null}
        */
       hover(code, cursor) {
-        return defaultSession.hover(code, cursor);
+        return defaultContext.hover(code, cursor);
       },
 
       /**
@@ -127201,7 +127674,7 @@ $1 $2
        * @returns {{matches: Array, cursorStart: number, cursorEnd: number}}
        */
       complete(code, cursor) {
-        return defaultSession.complete(code, cursor);
+        return defaultContext.complete(code, cursor);
       },
 
       /**
@@ -127213,18 +127686,18 @@ $1 $2
        * @returns {Object|null}
        */
       inspect(code, cursor, options = {}) {
-        return defaultSession.inspect(code, cursor, options);
+        return defaultContext.inspect(code, cursor, options);
       },
 
       /**
-       * List all variables in a session namespace.
+       * List all variables in a context namespace.
        *
        * @param {Object} [filter]
-       * @param {string} [sessionName='default']
+       * @param {string} [contextName='default']
        * @returns {Array<{name: string, type: string, value: string, expandable?: boolean}>}
        */
-      listVariables(filter = {}, sessionName = 'default') {
-        return getOrCreateSession(sessionName).listVariables(filter);
+      listVariables(filter = {}, contextName = 'default') {
+        return getOrCreateContext(contextName).listVariables(filter);
       },
 
       /**
@@ -127235,7 +127708,7 @@ $1 $2
        * @returns {Object}
        */
       getVariable(name, options = {}) {
-        return defaultSession.getVariable(name, options);
+        return defaultContext.getVariable(name, options);
       },
 
       /**
@@ -127245,7 +127718,7 @@ $1 $2
        * @returns {{status: 'complete'|'incomplete'|'invalid'|'unknown', indent?: string}}
        */
       isComplete(code) {
-        return defaultSession.isComplete(code);
+        return defaultContext.isComplete(code);
       },
 
       /**
@@ -127255,7 +127728,7 @@ $1 $2
        * @returns {Promise<{formatted: string, changed: boolean}>}
        */
       format(code) {
-        return defaultSession.format(code);
+        return defaultContext.format(code);
       },
 
       /**
@@ -127263,7 +127736,7 @@ $1 $2
        * @returns {import('./runtime-lsp.js').RuntimeLSPProvider}
        */
       getLSPProvider() {
-        return adaptMrmdJsSession(defaultSession);
+        return adaptMrmdJsSession(defaultContext);
       },
     };
   }
@@ -128763,17 +129236,16 @@ $1 $2
        * Refresh variables from all MRP runtimes
        * Fetches current variable state and updates state.variables
        *
-       * @param {string} [sessionId] - Specific session to refresh (optional)
        * @returns {Promise<void>}
        */
-      async refreshVariables(sessionId) {
+      async refreshVariables() {
         for (const [name, runtime] of registry.runtimes) {
           // Check if runtime is an MRP client (has getVariables method)
           if (typeof runtime.getVariables === 'function') {
             try {
-              const result = await runtime.getVariables(sessionId);
+              const result = await runtime.getVariables();
               if (result && result.variables) {
-                const session = sessionId || 'default';
+                const session = 'default';
                 const variables = {};
                 for (const v of result.variables) {
                   variables[v.name] = {
@@ -129263,12 +129735,12 @@ $1 $2
   }
   // #endregion CREATE
 
-  // #region SESSION
+  // #region RUNTIME
   /**
-   * Create an editor session via orchestrator.
+   * Create an editor runtime attachment via orchestrator.
    *
    * This is the simplest way to use mrmd with full features:
-   * - Automatically creates session with orchestrator
+   * - Automatically creates/attaches runtime with orchestrator
    * - Connects to sync server
    * - Sets up Python runtime (shared or dedicated)
    * - Enables monitor mode for long-running executions
@@ -129279,28 +129751,28 @@ $1 $2
    * @param {string} options.doc - Document name (required)
    * @param {string} [options.python='shared'] - 'shared' or 'dedicated'
    * @param {Object} [options.editor] - Additional editor options
-   * @returns {Promise<Object>} Editor instance with destroySession() method
+   * @returns {Promise<Object>} Editor instance with destroyRuntime() method
    *
    * @example
    * // Basic usage
-   * const editor = await mrmd.session('http://localhost:8080', '#editor', {
+   * const editor = await mrmd.runtime('http://localhost:8080', '#editor', {
    *   doc: 'my-notebook',
    * });
    *
    * // With dedicated Python runtime
-   * const editor = await mrmd.session('http://localhost:8080', '#editor', {
+   * const editor = await mrmd.runtime('http://localhost:8080', '#editor', {
    *   doc: 'my-notebook',
    *   python: 'dedicated',
    * });
    *
    * // Clean up when done
-   * await editor.destroySession();
+   * await editor.destroyRuntime();
    */
-  async function session(orchestratorUrl, target, options = {}) {
+  async function runtime(orchestratorUrl, target, options = {}) {
     const { doc, python = 'shared', editor: editorOptions = {} } = options;
 
     if (!doc) {
-      throw new Error('mrmd.session: doc option is required');
+      throw new Error('mrmd.runtime: doc option is required');
     }
 
     // Normalize orchestrator URL
@@ -129309,24 +129781,33 @@ $1 $2
       baseUrl = baseUrl.slice(0, -1);
     }
 
-    // Create session with orchestrator
-    console.log(`[mrmd.session] Creating session for '${doc}' (python=${python})`);
+    // Create runtime attachment with orchestrator
+    console.log(`[mrmd.runtime] Creating runtime for '${doc}' (python=${python})`);
 
-    const response = await fetch(`${baseUrl}/api/sessions`, {
+    // Prefer /api/runtimes, fall back to /api/sessions for legacy orchestrators
+    let response = await fetch(`${baseUrl}/api/runtimes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ doc, python }),
     });
 
+    if (!response.ok && response.status === 404) {
+      response = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc, python }),
+      });
+    }
+
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`Failed to create session: ${error}`);
+      throw new Error(`Failed to create runtime attachment: ${error}`);
     }
 
     const sessionInfo = await response.json();
-    console.log('[mrmd.session] Session created:', sessionInfo);
+    console.log('[mrmd.runtime] Runtime created:', sessionInfo);
 
-    // Extract URLs from session info
+    // Extract URLs from response
     const syncUrl = sessionInfo.sync;
     const runtimeUrl = sessionInfo.runtimes?.python?.url;
 
@@ -129351,17 +129832,16 @@ $1 $2
         ydoc: editor.ydoc,
         runtimeUrl,
         awareness: editor.awareness,
-        session: doc,
       });
     }
 
-    // Store session info on editor
+    // Store runtime info on editor
     editor._sessionInfo = sessionInfo;
     editor._orchestratorUrl = baseUrl;
 
-    // Add destroySession method
-    editor.destroySession = async function() {
-      console.log(`[mrmd.session] Destroying session for '${doc}'`);
+    // Add destroyRuntime method
+    editor.destroyRuntime = async function() {
+      console.log(`[mrmd.runtime] Destroying runtime for '${doc}'`);
 
       // Disconnect from sync
       if (editor.disconnect) {
@@ -129370,28 +129850,33 @@ $1 $2
 
       // Call orchestrator to clean up
       try {
-        const resp = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(doc)}`, {
+        let resp = await fetch(`${baseUrl}/api/runtimes/${encodeURIComponent(doc)}`, {
           method: 'DELETE',
         });
+        if (!resp.ok && resp.status === 404) {
+          resp = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(doc)}`, {
+            method: 'DELETE',
+          });
+        }
         if (!resp.ok) {
-          console.warn(`[mrmd.session] Failed to destroy session: ${resp.statusText}`);
+          console.warn(`[mrmd.runtime] Failed to destroy runtime: ${resp.statusText}`);
         }
       } catch (err) {
-        console.warn(`[mrmd.session] Failed to destroy session:`, err);
+        console.warn(`[mrmd.runtime] Failed to destroy runtime:`, err);
       }
 
       // Destroy editor
       editor.destroy();
     };
 
-    // Add method to get session info
-    editor.getSessionInfo = function() {
+    // Add method to get runtime info
+    editor.getRuntimeInfo = function() {
       return this._sessionInfo;
     };
 
     return editor;
   }
-  // #endregion SESSION
+  // #endregion RUNTIME
 
   // #region DRIVE
   /**
@@ -129755,7 +130240,7 @@ $1 $2
     version: VERSION,
     create,
     drive,
-    session,
+    runtime,
     yjs,
     codemirror,
     terminal,
@@ -129886,6 +130371,9 @@ $1 $2
     findYamlConfigBlocks: findYamlConfigBlocks,
     generateTableId: generateTableId,
     generateThemeCSS: generateThemeCSS,
+    getDocumentLanguages: getDocumentLanguages,
+    getEffectiveSessionConfig: getEffectiveSessionConfig,
+    getLanguageDisplay: getLanguageDisplay,
     getTheme: getTheme,
     getThemeNames: getThemeNames,
     getWikiLinkCompletionSource: getWikiLinkCompletionSource,
@@ -129900,6 +130388,7 @@ $1 $2
     injectShellStyles: injectShellStyles,
     injectTermWidgetStyles: injectTermWidgetStyles,
     injectWikiLinkCompletionStyles: injectWikiLinkCompletionStyles,
+    isExecutableLanguage: isExecutableLanguage,
     isFullySerializable: isFullySerializable,
     isTableDelimiter: isTableDelimiter,
     isTableLine: isTableLine,
@@ -129914,21 +130403,23 @@ $1 $2
     midnightTheme: midnightTheme,
     minimalAwarenessConfig: minimalAwarenessConfig,
     normalizeOptions: normalizeOptions,
+    parseFrontmatter: parseFrontmatter,
     parseImageMarkdown: parseImageMarkdown,
     parseTable: parseTable,
     processTerminalOutput: processTerminalOutput,
     projectFilesFacet: projectFilesFacet,
+    readFrontmatterSession: readFrontmatterSession,
     rebuildRuntimeCodeLens: rebuildRuntimeCodeLens,
     rebuildRuntimeCodeLensEffect: rebuildRuntimeCodeLensEffect,
     registerTheme: registerTheme,
     removeRuntimeCodeLensStyles: removeRuntimeCodeLensStyles,
+    runtime: runtime,
     runtimeCodeLens: runtimeCodeLensExports,
     runtimeCodeLensExports: runtimeCodeLensExports,
     runtimeCodeLensFacet: runtimeCodeLensFacet,
     runtimeCodeLensPlugin: runtimeCodeLensPlugin,
     runtimeLspExports: runtimeLspExports,
     serializeConfig: serializeConfig,
-    session: session,
     shell: shellModule,
     stateExports: stateExports,
     stripAnsi: stripAnsi,
@@ -129940,6 +130431,7 @@ $1 $2
     terminalToHtml: terminalToHtml,
     terminalWidget: terminalWidget,
     toggleDevPanel: toggleDevPanel,
+    updateFrontmatterSession: updateFrontmatterSession,
     watchTheme: watchTheme,
     widgets: widgets,
     wikiLinkExports: wikiLinkExports,
@@ -130017,6 +130509,9 @@ $1 $2
   exports.findYamlConfigBlocks = findYamlConfigBlocks;
   exports.generateTableId = generateTableId;
   exports.generateThemeCSS = generateThemeCSS;
+  exports.getDocumentLanguages = getDocumentLanguages;
+  exports.getEffectiveSessionConfig = getEffectiveSessionConfig;
+  exports.getLanguageDisplay = getLanguageDisplay;
   exports.getTheme = getTheme;
   exports.getThemeNames = getThemeNames;
   exports.getWikiLinkCompletionSource = getWikiLinkCompletionSource;
@@ -130031,6 +130526,7 @@ $1 $2
   exports.injectShellStyles = injectShellStyles;
   exports.injectTermWidgetStyles = injectTermWidgetStyles;
   exports.injectWikiLinkCompletionStyles = injectWikiLinkCompletionStyles;
+  exports.isExecutableLanguage = isExecutableLanguage;
   exports.isFullySerializable = isFullySerializable;
   exports.isTableDelimiter = isTableDelimiter;
   exports.isTableLine = isTableLine;
@@ -130045,21 +130541,23 @@ $1 $2
   exports.midnightTheme = midnightTheme;
   exports.minimalAwarenessConfig = minimalAwarenessConfig;
   exports.normalizeOptions = normalizeOptions;
+  exports.parseFrontmatter = parseFrontmatter;
   exports.parseImageMarkdown = parseImageMarkdown;
   exports.parseTable = parseTable;
   exports.processTerminalOutput = processTerminalOutput;
   exports.projectFilesFacet = projectFilesFacet;
+  exports.readFrontmatterSession = readFrontmatterSession;
   exports.rebuildRuntimeCodeLens = rebuildRuntimeCodeLens;
   exports.rebuildRuntimeCodeLensEffect = rebuildRuntimeCodeLensEffect;
   exports.registerTheme = registerTheme;
   exports.removeRuntimeCodeLensStyles = removeRuntimeCodeLensStyles;
+  exports.runtime = runtime;
   exports.runtimeCodeLens = runtimeCodeLensExports;
   exports.runtimeCodeLensExports = runtimeCodeLensExports;
   exports.runtimeCodeLensFacet = runtimeCodeLensFacet;
   exports.runtimeCodeLensPlugin = runtimeCodeLensPlugin;
   exports.runtimeLspExports = runtimeLspExports;
   exports.serializeConfig = serializeConfig;
-  exports.session = session;
   exports.shell = shellModule;
   exports.stateExports = stateExports;
   exports.stripAnsi = stripAnsi;
@@ -130071,6 +130569,7 @@ $1 $2
   exports.terminalToHtml = terminalToHtml;
   exports.terminalWidget = terminalWidget;
   exports.toggleDevPanel = toggleDevPanel;
+  exports.updateFrontmatterSession = updateFrontmatterSession;
   exports.watchTheme = watchTheme;
   exports.widgets = widgets;
   exports.wikiLinkExports = wikiLinkExports;

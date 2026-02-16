@@ -304,55 +304,55 @@ function parseProgress(output) {
 function createJavaScriptRuntime(options = {}) {
   const rt = createMrmdJsRuntime(options);
 
-  // Track named sessions - each can have different isolation
-  // Session naming:
-  //   null/undefined/'default'/'main'/'none' → main context (no isolation)
+  // Track named execution contexts - each can have different isolation
+  // Context naming:
+  //   null/undefined/'default'/'main'/'none' → configured default isolation
   //   'sandbox'/'iframe' → sandboxed iframe
   //   other names → sandboxed iframe with separate scope
-  const sessions = new Map();
+  const contexts = new Map();
   const defaultIsolation = options.defaultIsolation || 'iframe';
 
   /**
-   * Get or create a session by name
-   * @param {string|null} sessionName
+   * Get or create a context by name
+   * @param {string|null} contextName
    * @returns {Session}
    */
-  function getOrCreateSession(sessionName) {
-    // Normalize session name
-    const name = sessionName || 'default';
+  function getOrCreateContext(contextName) {
+    // Normalize context name
+    const name = contextName || 'default';
 
-    // Return existing session
-    if (sessions.has(name)) {
-      return sessions.get(name);
+    // Return existing context
+    if (contexts.has(name)) {
+      return contexts.get(name);
     }
 
-    // Determine isolation mode based on session name
+    // Determine isolation mode based on context name
     let isolation;
-    if (!sessionName || sessionName === 'default' || sessionName === 'main' || sessionName === 'none') {
-      // Default session uses the configured default isolation
+    if (!contextName || contextName === 'default' || contextName === 'main' || contextName === 'none') {
+      // Default context uses the configured default isolation
       isolation = defaultIsolation;
-    } else if (sessionName === 'sandbox' || sessionName === 'iframe') {
+    } else if (contextName === 'sandbox' || contextName === 'iframe') {
       // Explicit sandbox request
       isolation = 'iframe';
     } else {
-      // Named sessions are sandboxed by default (separate scope)
+      // Named contexts are sandboxed by default (separate scope)
       isolation = 'iframe';
     }
 
-    // Create new session with appropriate isolation
-    const session = rt.createSession({
+    // Create new execution context with appropriate isolation
+    const context = rt.createSession({
       language: 'javascript',
       isolation,
       id: name,
     });
 
-    sessions.set(name, session);
-    console.log(`[JS Runtime] Created session '${name}' with isolation: ${isolation}`);
-    return session;
+    contexts.set(name, context);
+    console.log(`[JS Runtime] Created context '${name}' with isolation: ${isolation}`);
+    return context;
   }
 
-  // Create default session eagerly
-  const defaultSession = getOrCreateSession('default');
+  // Create default context eagerly
+  const defaultContext = getOrCreateContext('default');
 
   // Languages supported by mrmd-js
   const supportedLanguages = {
@@ -379,8 +379,9 @@ function createJavaScriptRuntime(options = {}) {
     /** Execute code (non-streaming) */
     async execute(code, language, execOptions = {}) {
       const lang = supportedLanguages[language.toLowerCase()] || 'javascript';
-      const session = getOrCreateSession(execOptions.session);
-      const result = await session.execute(code, { language: lang });
+      const contextName = execOptions.context ?? execOptions.session;
+      const context = getOrCreateContext(contextName);
+      const result = await context.execute(code, { language: lang });
       return {
         success: result.success,
         stdout: result.stdout || '',
@@ -394,8 +395,9 @@ function createJavaScriptRuntime(options = {}) {
     /** Execute code with streaming output */
     async executeStreaming(code, language, onChunk, onStdinRequest, execOptions = {}) {
       const lang = supportedLanguages[language.toLowerCase()] || 'javascript';
-      const session = getOrCreateSession(execOptions.session);
-      const result = await session.execute(code, { language: lang });
+      const contextName = execOptions.context ?? execOptions.session;
+      const context = getOrCreateContext(contextName);
+      const result = await context.execute(code, { language: lang });
 
       // Handle different output types
       let output = result.stdout || '';
@@ -434,18 +436,18 @@ function createJavaScriptRuntime(options = {}) {
       };
     },
 
-    /** Reset a session (clear all variables) */
-    reset(sessionName) {
-      const session = sessions.get(sessionName || 'default');
-      if (session) {
-        session.reset();
+    /** Reset a context (clear all variables) */
+    reset(contextName) {
+      const context = contexts.get(contextName || 'default');
+      if (context) {
+        context.reset();
       }
     },
 
-    /** Reset all sessions */
+    /** Reset all contexts */
     resetAll() {
-      for (const session of sessions.values()) {
-        session.reset();
+      for (const context of contexts.values()) {
+        context.reset();
       }
     },
 
@@ -454,23 +456,32 @@ function createJavaScriptRuntime(options = {}) {
       return rt;
     },
 
-    /** Get a session by name (default if not specified) */
-    getSession(sessionName) {
-      return getOrCreateSession(sessionName);
+    /** Get a context by name (default if not specified) */
+    getContext(contextName) {
+      return getOrCreateContext(contextName);
     },
 
-    /** List all session names */
+    /** List all context names */
+    listContexts() {
+      return Array.from(contexts.keys());
+    },
+
+    // Legacy aliases (kept for compatibility inside monorepo)
+    getSession(contextName) {
+      return getOrCreateContext(contextName);
+    },
+
     listSessions() {
-      return Array.from(sessions.keys());
+      return Array.from(contexts.keys());
     },
 
-    /** Destroy the runtime and all sessions */
+    /** Destroy the runtime and all contexts */
     destroy() {
       rt.destroy();
     },
 
     // =========================================================================
-    // LSP Features (powered by mrmd-js session)
+    // LSP Features (powered by mrmd-js default context)
     // =========================================================================
 
     /**
@@ -482,7 +493,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {{found: boolean, name?: string, type?: string, value?: string, signature?: string}|null}
      */
     hover(code, cursor) {
-      return defaultSession.hover(code, cursor);
+      return defaultContext.hover(code, cursor);
     },
 
     /**
@@ -494,7 +505,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {{matches: Array, cursorStart: number, cursorEnd: number}}
      */
     complete(code, cursor) {
-      return defaultSession.complete(code, cursor);
+      return defaultContext.complete(code, cursor);
     },
 
     /**
@@ -506,18 +517,18 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {Object|null}
      */
     inspect(code, cursor, options = {}) {
-      return defaultSession.inspect(code, cursor, options);
+      return defaultContext.inspect(code, cursor, options);
     },
 
     /**
-     * List all variables in a session namespace.
+     * List all variables in a context namespace.
      *
      * @param {Object} [filter]
-     * @param {string} [sessionName='default']
+     * @param {string} [contextName='default']
      * @returns {Array<{name: string, type: string, value: string, expandable?: boolean}>}
      */
-    listVariables(filter = {}, sessionName = 'default') {
-      return getOrCreateSession(sessionName).listVariables(filter);
+    listVariables(filter = {}, contextName = 'default') {
+      return getOrCreateContext(contextName).listVariables(filter);
     },
 
     /**
@@ -528,7 +539,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {Object}
      */
     getVariable(name, options = {}) {
-      return defaultSession.getVariable(name, options);
+      return defaultContext.getVariable(name, options);
     },
 
     /**
@@ -538,7 +549,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {{status: 'complete'|'incomplete'|'invalid'|'unknown', indent?: string}}
      */
     isComplete(code) {
-      return defaultSession.isComplete(code);
+      return defaultContext.isComplete(code);
     },
 
     /**
@@ -548,7 +559,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {Promise<{formatted: string, changed: boolean}>}
      */
     format(code) {
-      return defaultSession.format(code);
+      return defaultContext.format(code);
     },
 
     /**
@@ -556,7 +567,7 @@ function createJavaScriptRuntime(options = {}) {
      * @returns {import('./runtime-lsp.js').RuntimeLSPProvider}
      */
     getLSPProvider() {
-      return adaptMrmdJsSession(defaultSession);
+      return adaptMrmdJsSession(defaultContext);
     },
   };
 }
@@ -2060,17 +2071,16 @@ function create(target, options = {}) {
      * Refresh variables from all MRP runtimes
      * Fetches current variable state and updates state.variables
      *
-     * @param {string} [sessionId] - Specific session to refresh (optional)
      * @returns {Promise<void>}
      */
-    async refreshVariables(sessionId) {
+    async refreshVariables() {
       for (const [name, runtime] of registry.runtimes) {
         // Check if runtime is an MRP client (has getVariables method)
         if (typeof runtime.getVariables === 'function') {
           try {
-            const result = await runtime.getVariables(sessionId);
+            const result = await runtime.getVariables();
             if (result && result.variables) {
-              const session = sessionId || 'default';
+              const session = 'default';
               const variables = {};
               for (const v of result.variables) {
                 variables[v.name] = {
@@ -2560,12 +2570,12 @@ function create(target, options = {}) {
 }
 // #endregion CREATE
 
-// #region SESSION
+// #region RUNTIME
 /**
- * Create an editor session via orchestrator.
+ * Create an editor runtime attachment via orchestrator.
  *
  * This is the simplest way to use mrmd with full features:
- * - Automatically creates session with orchestrator
+ * - Automatically creates/attaches runtime with orchestrator
  * - Connects to sync server
  * - Sets up Python runtime (shared or dedicated)
  * - Enables monitor mode for long-running executions
@@ -2576,28 +2586,28 @@ function create(target, options = {}) {
  * @param {string} options.doc - Document name (required)
  * @param {string} [options.python='shared'] - 'shared' or 'dedicated'
  * @param {Object} [options.editor] - Additional editor options
- * @returns {Promise<Object>} Editor instance with destroySession() method
+ * @returns {Promise<Object>} Editor instance with destroyRuntime() method
  *
  * @example
  * // Basic usage
- * const editor = await mrmd.session('http://localhost:8080', '#editor', {
+ * const editor = await mrmd.runtime('http://localhost:8080', '#editor', {
  *   doc: 'my-notebook',
  * });
  *
  * // With dedicated Python runtime
- * const editor = await mrmd.session('http://localhost:8080', '#editor', {
+ * const editor = await mrmd.runtime('http://localhost:8080', '#editor', {
  *   doc: 'my-notebook',
  *   python: 'dedicated',
  * });
  *
  * // Clean up when done
- * await editor.destroySession();
+ * await editor.destroyRuntime();
  */
-async function session(orchestratorUrl, target, options = {}) {
+async function runtime(orchestratorUrl, target, options = {}) {
   const { doc, python = 'shared', editor: editorOptions = {} } = options;
 
   if (!doc) {
-    throw new Error('mrmd.session: doc option is required');
+    throw new Error('mrmd.runtime: doc option is required');
   }
 
   // Normalize orchestrator URL
@@ -2606,24 +2616,33 @@ async function session(orchestratorUrl, target, options = {}) {
     baseUrl = baseUrl.slice(0, -1);
   }
 
-  // Create session with orchestrator
-  console.log(`[mrmd.session] Creating session for '${doc}' (python=${python})`);
+  // Create runtime attachment with orchestrator
+  console.log(`[mrmd.runtime] Creating runtime for '${doc}' (python=${python})`);
 
-  const response = await fetch(`${baseUrl}/api/sessions`, {
+  // Prefer /api/runtimes, fall back to /api/sessions for legacy orchestrators
+  let response = await fetch(`${baseUrl}/api/runtimes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ doc, python }),
   });
 
+  if (!response.ok && response.status === 404) {
+    response = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ doc, python }),
+    });
+  }
+
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`Failed to create session: ${error}`);
+    throw new Error(`Failed to create runtime attachment: ${error}`);
   }
 
   const sessionInfo = await response.json();
-  console.log('[mrmd.session] Session created:', sessionInfo);
+  console.log('[mrmd.runtime] Runtime created:', sessionInfo);
 
-  // Extract URLs from session info
+  // Extract URLs from response
   const syncUrl = sessionInfo.sync;
   const runtimeUrl = sessionInfo.runtimes?.python?.url;
 
@@ -2648,17 +2667,16 @@ async function session(orchestratorUrl, target, options = {}) {
       ydoc: editor.ydoc,
       runtimeUrl,
       awareness: editor.awareness,
-      session: doc,
     });
   }
 
-  // Store session info on editor
+  // Store runtime info on editor
   editor._sessionInfo = sessionInfo;
   editor._orchestratorUrl = baseUrl;
 
-  // Add destroySession method
-  editor.destroySession = async function() {
-    console.log(`[mrmd.session] Destroying session for '${doc}'`);
+  // Add destroyRuntime method
+  editor.destroyRuntime = async function() {
+    console.log(`[mrmd.runtime] Destroying runtime for '${doc}'`);
 
     // Disconnect from sync
     if (editor.disconnect) {
@@ -2667,28 +2685,33 @@ async function session(orchestratorUrl, target, options = {}) {
 
     // Call orchestrator to clean up
     try {
-      const resp = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(doc)}`, {
+      let resp = await fetch(`${baseUrl}/api/runtimes/${encodeURIComponent(doc)}`, {
         method: 'DELETE',
       });
+      if (!resp.ok && resp.status === 404) {
+        resp = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(doc)}`, {
+          method: 'DELETE',
+        });
+      }
       if (!resp.ok) {
-        console.warn(`[mrmd.session] Failed to destroy session: ${resp.statusText}`);
+        console.warn(`[mrmd.runtime] Failed to destroy runtime: ${resp.statusText}`);
       }
     } catch (err) {
-      console.warn(`[mrmd.session] Failed to destroy session:`, err);
+      console.warn(`[mrmd.runtime] Failed to destroy runtime:`, err);
     }
 
     // Destroy editor
     editor.destroy();
   };
 
-  // Add method to get session info
-  editor.getSessionInfo = function() {
+  // Add method to get runtime info
+  editor.getRuntimeInfo = function() {
     return this._sessionInfo;
   };
 
   return editor;
 }
-// #endregion SESSION
+// #endregion RUNTIME
 
 // #region DRIVE
 /**
@@ -3052,7 +3075,7 @@ const mrmd = {
   version: VERSION,
   create,
   drive,
-  session,
+  runtime,
   yjs,
   codemirror,
   terminal,
@@ -3110,7 +3133,7 @@ export default mrmd;
 export {
   create,
   drive,
-  session,
+  runtime,
   yjs,
   codemirror,
   terminal,
@@ -3246,4 +3269,8 @@ export {
 
 // Re-export shell components for direct imports
 export const { createStudio, OrchestratorClient, Drive, createDrive, ShellStateManager, injectShellStyles } = shellModule;
+
+// Document language detection and frontmatter updater
+export { getDocumentLanguages, getLanguageDisplay, isExecutableLanguage } from './document-languages.js';
+export { parseFrontmatter, updateFrontmatterSession, readFrontmatterSession, getEffectiveSessionConfig } from './frontmatter-updater.js';
 // #endregion EXPORTS

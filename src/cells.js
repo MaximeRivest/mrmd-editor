@@ -105,7 +105,7 @@ function parseArtifactLanguage(lang) {
  * @param {string} content - Document content
  * @returns {Array<{
  *   language: string,
- *   session: string|null, // session name if specified (e.g., ```js mysession)
+ *   context: string|null, // execution context if specified (e.g., ```js sandbox)
  *   code: string,
  *   start: number,      // start of opening fence
  *   end: number,        // end of closing fence
@@ -124,7 +124,7 @@ export function findCodeBlocks(content) {
   let inBlock = false;
   let blockStart = 0;
   let blockLanguage = '';
-  let blockSession = null;
+  let blockContext = null;
   let codeStart = 0;
   let blockLine = 0;
   let charOffset = 0;
@@ -134,7 +134,7 @@ export function findCodeBlocks(content) {
     const lineStart = charOffset;
 
     if (!inBlock) {
-      // Look for opening fence: ```language [session]
+      // Look for opening fence: ```language [context]
       // Examples: ```js, ```js sandbox, ```python myenv, ```html:artifact, ```css:myapp
       // Language can include colon for targets (html:name, css:name, js:name, term:session)
       const match = line.match(/^(`{3,})([\w:.-]*)(?:\s+(\S+))?/);
@@ -142,7 +142,7 @@ export function findCodeBlocks(content) {
         inBlock = true;
         blockStart = lineStart;
         blockLanguage = match[2].toLowerCase();
-        blockSession = match[3] || null; // session name after language
+        blockContext = match[3] || null; // optional context name after language
         codeStart = lineStart + line.length + 1; // +1 for newline
         blockLine = i;
       }
@@ -152,10 +152,10 @@ export function findCodeBlocks(content) {
         const codeEnd = lineStart;
         const blockEnd = lineStart + line.length;
 
-        // Parse terminal language for session support
+        // Parse terminal language for named terminal runtime support
         const terminalInfo = parseTerminalLanguage(blockLanguage);
-        // Terminal session can come from term:session or from space-separated session
-        const terminalSession = terminalInfo.sessionName || (terminalInfo.isTerminal ? blockSession : null);
+        // Terminal runtime name can come from term:session or from space-separated context
+        const terminalSession = terminalInfo.sessionName || (terminalInfo.isTerminal ? blockContext : null);
 
         // Parse artifact language for artifact panel support
         const artifactInfo = parseArtifactLanguage(blockLanguage);
@@ -166,7 +166,7 @@ export function findCodeBlocks(content) {
         blocks.push({
           language: blockLanguage,
           baseLanguage: effectiveLanguage, // The language without :target suffix
-          session: blockSession,
+          context: blockContext,
           code: content.slice(codeStart, codeEnd),
           start: blockStart,
           end: blockEnd,
@@ -184,7 +184,7 @@ export function findCodeBlocks(content) {
         });
 
         inBlock = false;
-        blockSession = null;
+        blockContext = null;
       }
     }
 

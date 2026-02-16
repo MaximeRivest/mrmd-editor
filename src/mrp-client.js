@@ -3,12 +3,14 @@
  *
  * Connects mrmd-editor to any MRMD Runtime Protocol server.
  *
+ * Runtime model (simplified): one runtime process = one REPL namespace.
+ * There are no client-managed MRP sessions.
+ *
  * @module mrp-client
  */
 
 // JSDoc imports for type hints
 /** @typedef {import('./mrp-types.js').Capabilities} Capabilities */
-/** @typedef {import('./mrp-types.js').Session} Session */
 /** @typedef {import('./mrp-types.js').ExecuteRequest} ExecuteRequest */
 /** @typedef {import('./mrp-types.js').ExecuteResult} ExecuteResult */
 /** @typedef {import('./mrp-types.js').CompleteRequest} CompleteRequest */
@@ -34,9 +36,6 @@ export class MRPClient {
   /** @type {string} */
   #endpoint;
 
-  /** @type {string} */
-  #defaultSession;
-
   /** @type {Capabilities|null} */
   #capabilities = null;
 
@@ -54,13 +53,11 @@ export class MRPClient {
    *
    * @param {string} endpoint - Base URL for MRP endpoints (e.g., "http://localhost:8000/mrp/v1")
    * @param {Object} [options]
-   * @param {string} [options.session='default'] - Default session ID
    * @param {string[]} [options.languages] - Fallback languages if capabilities haven't loaded yet
    * @param {boolean} [options.prefetch=true] - Auto-fetch capabilities on construction
    */
   constructor(endpoint, options = {}) {
     this.#endpoint = endpoint.replace(/\/$/, ''); // Remove trailing slash
-    this.#defaultSession = options.session || 'default';
     this.#fallbackLanguages = options.languages || null;
 
     // Expose runtime URL for ExecutionManager to use in monitor mode routing
@@ -158,79 +155,6 @@ export class MRPClient {
   }
 
   // ===========================================================================
-  // Sessions
-  // ===========================================================================
-
-  /**
-   * List active sessions
-   *
-   * @returns {Promise<Session[]>}
-   */
-  async listSessions() {
-    const res = await fetch(`${this.#endpoint}/sessions`);
-    if (!res.ok) throw new Error(`Failed to list sessions: ${res.status}`);
-    const data = await res.json();
-    return data.sessions;
-  }
-
-  /**
-   * Create a new session
-   *
-   * @param {import('./mrp-types.js').CreateSessionRequest} request
-   * @returns {Promise<Session>}
-   */
-  async createSession(request) {
-    const res = await fetch(`${this.#endpoint}/sessions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    });
-    if (!res.ok) throw new Error(`Failed to create session: ${res.status}`);
-    return res.json();
-  }
-
-  /**
-   * Get session info
-   *
-   * @param {string} [session]
-   * @returns {Promise<Session>}
-   */
-  async getSession(session) {
-    const sid = session || this.#defaultSession;
-    const res = await fetch(`${this.#endpoint}/sessions/${encodeURIComponent(sid)}`);
-    if (!res.ok) throw new Error(`Failed to get session: ${res.status}`);
-    return res.json();
-  }
-
-  /**
-   * Destroy a session
-   *
-   * @param {string} [session]
-   * @returns {Promise<void>}
-   */
-  async destroySession(session) {
-    const sid = session || this.#defaultSession;
-    const res = await fetch(`${this.#endpoint}/sessions/${encodeURIComponent(sid)}`, {
-      method: 'DELETE',
-    });
-    if (!res.ok) throw new Error(`Failed to destroy session: ${res.status}`);
-  }
-
-  /**
-   * Reset session (clear namespace)
-   *
-   * @param {string} [session]
-   * @returns {Promise<void>}
-   */
-  async reset(session) {
-    const sid = session || this.#defaultSession;
-    const res = await fetch(`${this.#endpoint}/sessions/${encodeURIComponent(sid)}/reset`, {
-      method: 'POST',
-    });
-    if (!res.ok) throw new Error(`Failed to reset session: ${res.status}`);
-  }
-
-  // ===========================================================================
   // Execution
   // ===========================================================================
 
@@ -248,7 +172,6 @@ export class MRPClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         code,
-        session: this.#defaultSession,
         ...options,
       }),
     });
@@ -300,7 +223,6 @@ export class MRPClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           code,
-          session: this.#defaultSession,
           ...executeOptions,
         }),
         signal: controller.signal,
@@ -339,14 +261,8 @@ export class MRPClient {
               } else if (currentEvent === 'stdin_request') {
                 // Runtime needs user input - call handler and send response
                 if (onStdinRequest) {
-                  // onStdinRequest returns Promise<string> with user's input
-                  // We handle this async but don't block the SSE reading
-                  // The server will wait for our /input POST
                   Promise.resolve(onStdinRequest(data))
-                    .then((input) => {
-                      // Send the input back to the server
-                      return this.sendInput(data.execId, input);
-                    })
+                    .then((input) => this.sendInput(data.execId, input))
                     .catch((err) => {
                       // User cancelled input (e.g., pressed Escape)
                       // Notify server to unblock the waiting execution
@@ -357,9 +273,6 @@ export class MRPClient {
                     });
                 }
               } else if (currentEvent === 'asset' || currentEvent === 'display') {
-                // Rich output: images, plots, HTML, etc.
-                // data contains: { path, url, mimeType, assetType, size } for assets
-                // or { data: { 'image/png': base64, ... }, metadata } for display
                 if (onAsset) {
                   onAsset(data, currentEvent);
                 }
@@ -403,15 +316,13 @@ export class MRPClient {
    *
    * @param {string} execId - Execution ID waiting for input
    * @param {string} text - User input (include \n if submitting)
-   * @param {string} [session] - Session ID
    * @returns {Promise<SendInputResult>}
    */
-  async sendInput(execId, text, session) {
+  async sendInput(execId, text) {
     const res = await fetch(`${this.#endpoint}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        session: session || this.#defaultSession,
         exec_id: execId,
         text,
       }),
@@ -423,10 +334,9 @@ export class MRPClient {
   /**
    * Interrupt running execution
    *
-   * @param {string} [session]
    * @returns {Promise<void>}
    */
-  async interrupt(session) {
+  async interrupt() {
     // Abort fetch if in progress
     if (this.#currentExecution) {
       this.#currentExecution.abort();
@@ -437,39 +347,9 @@ export class MRPClient {
     const res = await fetch(`${this.#endpoint}/interrupt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session: session || this.#defaultSession }),
+      body: JSON.stringify({}),
     });
     if (!res.ok) throw new Error(`Failed to interrupt: ${res.status}`);
-  }
-
-  // ===========================================================================
-  // Input
-  // ===========================================================================
-
-  /**
-   * Send user input to a waiting execution (stdin_request response)
-   *
-   * @param {string} execId - The execution ID that requested input
-   * @param {string} text - The user input text (should include newline if submitting)
-   * @param {string} [session]
-   * @returns {Promise<{accepted: boolean, error?: string}>}
-   */
-  async sendInput(execId, text, session) {
-    const res = await fetch(`${this.#endpoint}/input`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        session: session || this.#defaultSession,
-        exec_id: execId,
-        text,
-      }),
-    });
-
-    if (!res.ok) {
-      throw new Error(`Failed to send input: ${res.status}`);
-    }
-
-    return res.json();
   }
 
   /**
@@ -479,15 +359,13 @@ export class MRPClient {
    * This unblocks the waiting execution on the server.
    *
    * @param {string} execId - The execution ID waiting for input
-   * @param {string} [session]
    * @returns {Promise<{cancelled: boolean, error?: string}>}
    */
-  async cancelInput(execId, session) {
+  async cancelInput(execId) {
     const res = await fetch(`${this.#endpoint}/input/cancel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        session: session || this.#defaultSession,
         exec_id: execId,
       }),
     });
@@ -496,6 +374,31 @@ export class MRPClient {
       throw new Error(`Failed to cancel input: ${res.status}`);
     }
 
+    return res.json();
+  }
+
+  /**
+   * Reset runtime namespace (clear variables)
+   *
+   * @returns {Promise<{success: boolean}>}
+   */
+  async reset() {
+    let res = await fetch(`${this.#endpoint}/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    // Backward compatibility for runtimes that still expose session reset
+    if (!res.ok && res.status === 404) {
+      res = await fetch(`${this.#endpoint}/sessions/default/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+    }
+
+    if (!res.ok) throw new Error(`Failed to reset runtime: ${res.status}`);
     return res.json();
   }
 
@@ -521,7 +424,6 @@ export class MRPClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...request,
-        session: request.session || this.#defaultSession,
       }),
     });
 
@@ -551,7 +453,6 @@ export class MRPClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...request,
-        session: request.session || this.#defaultSession,
       }),
     });
 
@@ -577,7 +478,6 @@ export class MRPClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...request,
-        session: request.session || this.#defaultSession,
       }),
     });
 
@@ -590,13 +490,12 @@ export class MRPClient {
   // ===========================================================================
 
   /**
-   * List variables in session
+   * List variables in runtime namespace
    *
-   * @param {string} [session]
    * @param {import('./mrp-types.js').VariablesFilter} [filter]
    * @returns {Promise<VariablesResult>}
    */
-  async getVariables(session, filter) {
+  async getVariables(filter) {
     const caps = await this.getCapabilities();
 
     if (!caps.features.variables) {
@@ -606,10 +505,7 @@ export class MRPClient {
     const res = await fetch(`${this.#endpoint}/variables`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        session: session || this.#defaultSession,
-        filter,
-      }),
+      body: JSON.stringify({ filter }),
     });
 
     if (!res.ok) throw new Error(`Variables failed: ${res.status}`);
@@ -621,7 +517,6 @@ export class MRPClient {
    *
    * @param {string} name - Variable name
    * @param {Object} [options]
-   * @param {string} [options.session] - Session ID
    * @param {string[]} [options.path] - Drill-down path
    * @param {number} [options.maxChildren] - Max children to return
    * @param {number} [options.maxValueLength] - Max value length
@@ -638,7 +533,6 @@ export class MRPClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        session: options.session || this.#defaultSession,
         path: options.path,
         maxChildren: options.maxChildren,
         maxValueLength: options.maxValueLength,
@@ -657,10 +551,9 @@ export class MRPClient {
    * Check if code is a complete statement
    *
    * @param {string} code
-   * @param {string} [session]
    * @returns {Promise<IsCompleteResult>}
    */
-  async isComplete(code, session) {
+  async isComplete(code) {
     const caps = await this.getCapabilities();
 
     if (!caps.features.isComplete) {
@@ -670,10 +563,7 @@ export class MRPClient {
     const res = await fetch(`${this.#endpoint}/is_complete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        code,
-        session: session || this.#defaultSession,
-      }),
+      body: JSON.stringify({ code }),
     });
 
     if (!res.ok) throw new Error(`isComplete failed: ${res.status}`);
@@ -684,10 +574,9 @@ export class MRPClient {
    * Format code
    *
    * @param {string} code
-   * @param {string} [session]
    * @returns {Promise<FormatResult>}
    */
-  async format(code, session) {
+  async format(code) {
     const caps = await this.getCapabilities();
 
     if (!caps.features.format) {
@@ -697,10 +586,7 @@ export class MRPClient {
     const res = await fetch(`${this.#endpoint}/format`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        code,
-        session: session || this.#defaultSession,
-      }),
+      body: JSON.stringify({ code }),
     });
 
     if (!res.ok) throw new Error(`Format failed: ${res.status}`);
@@ -729,24 +615,6 @@ export class MRPClient {
   get endpoint() {
     return this.#endpoint;
   }
-
-  /**
-   * Get the default session ID
-   *
-   * @returns {string}
-   */
-  get defaultSession() {
-    return this.#defaultSession;
-  }
-
-  /**
-   * Set the default session ID
-   *
-   * @param {string} session
-   */
-  set defaultSession(session) {
-    this.#defaultSession = session;
-  }
 }
 
 // #endregion MRP_CLIENT
@@ -758,7 +626,6 @@ export class MRPClient {
  *
  * @param {string} endpoint - Base URL for MRP endpoints
  * @param {Object} [options]
- * @param {string} [options.session='default'] - Default session ID
  * @returns {MRPClient}
  */
 export function createMRPClient(endpoint, options = {}) {

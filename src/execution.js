@@ -105,9 +105,6 @@ export class ExecutionManager {
     /** @type {string|null} Default runtime URL for monitor mode */
     this._defaultRuntimeUrl = null;
 
-    /** @type {string} Session name for execution isolation */
-    this._monitorSession = 'default';
-
     /** @type {Map<string, Function>} Unsubscribe functions for monitor status watchers */
     this._monitorUnsubscribes = new Map();
 
@@ -130,9 +127,8 @@ export class ExecutionManager {
    * @param {Y.Doc} options.ydoc - Yjs document
    * @param {string} options.runtimeUrl - Default runtime URL for MRP
    * @param {import('y-protocols/awareness').Awareness} [options.awareness] - For monitor detection
-   * @param {string} [options.session] - Session name for execution isolation (defaults to 'default')
    */
-  enableMonitorMode({ ydoc, runtimeUrl, awareness, session }) {
+  enableMonitorMode({ ydoc, runtimeUrl, awareness }) {
     if (this.coordination) {
       this.coordination.destroy();
     }
@@ -141,9 +137,8 @@ export class ExecutionManager {
     this._defaultRuntimeUrl = runtimeUrl;
     this._monitorMode = true;
     this._awareness = awareness;
-    this._monitorSession = session || 'default';
 
-    console.log('[ExecutionManager] Monitor mode enabled, runtimeUrl:', runtimeUrl, 'session:', this._monitorSession);
+    console.log('[ExecutionManager] Monitor mode enabled, runtimeUrl:', runtimeUrl);
   }
 
   /**
@@ -1006,11 +1001,11 @@ export class ExecutionManager {
 
       // Execute with streaming (pass onStdinRequest for input() support)
       // Pass execId so hub runtimes can find the output block
-      // Pass session name for named session support (e.g., ```js sandbox)
+      // Pass context hint for runtime-specific isolation (e.g., ```js sandbox)
       const result = await this.registry.executeStreaming(code, runtimeLanguage, onChunk, onStdinRequest, {
         execId,
         cellId: cell.id || `cell-${index}`,
-        session: cell.session,
+        context: cell.context,
         onAsset,
       });
 
@@ -1176,7 +1171,6 @@ export class ExecutionManager {
       code,
       language,
       runtimeUrl,
-      session: this._monitorSession,
       cellId: cell.id || `cell-${index}`,
     });
 

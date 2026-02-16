@@ -212,9 +212,9 @@ export async function createStudio(target, options = {}) {
       throw new Error('No sync URL returned from orchestrator');
     }
 
-    // Register the shared session in shell state
+    // Register the shared runtime in shell state
     if (runtimeUrls.python) {
-      shellState.registerSession('shared', {
+      shellState.registerRuntime('shared', {
         id: 'shared',
         url: runtimeUrls.python,
         status: 'ready',
@@ -329,7 +329,6 @@ export async function createStudio(target, options = {}) {
         ydoc: handle.ydoc,
         awareness: handle.awareness,
         runtimeUrl: monitorRuntimeUrl,
-        session: docName,
       });
     }
 
@@ -519,11 +518,11 @@ export async function createStudio(target, options = {}) {
       editor = createEditorForDocument(handle, normalizedName);
       currentDocName = normalizedName;
 
-      // Ensure session exists (starts monitor if needed)
+      // Ensure runtime attachment exists (starts monitor if needed)
       try {
-        await orchestratorClient.createSession(normalizedName, 'shared');
+        await orchestratorClient.createRuntimeAttachment(normalizedName, 'shared');
       } catch (e) {
-        console.warn('Failed to create session for', normalizedName, e);
+        console.warn('Failed to create runtime attachment for', normalizedName, e);
       }
 
       // Update shell state
@@ -558,11 +557,11 @@ export async function createStudio(target, options = {}) {
     editor = createEditorForDocument(handle, docToOpen);
     currentDocName = docToOpen;
 
-    // Ensure session exists (starts monitor if needed)
+    // Ensure runtime attachment exists (starts monitor if needed)
     try {
-      await orchestratorClient.createSession(docToOpen, 'shared');
+      await orchestratorClient.createRuntimeAttachment(docToOpen, 'shared');
     } catch (e) {
-      console.warn('Failed to create session for initial doc:', e);
+      console.warn('Failed to create runtime attachment for initial doc:', e);
     }
   } catch (e) {
     console.error('Failed to open initial document:', e);

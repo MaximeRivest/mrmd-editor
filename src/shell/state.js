@@ -69,12 +69,12 @@ function getInitialState() {
     runtimes: {
       // Legacy: single Python runtime info (for backward compat)
       python: null,
-      // New: multiple runtime sessions
+      // Runtime registry
       sessions: {
         // 'shared': { id, url, status, venv, cwd, ... }
         // 'python-8001': { id, url, status, venv, cwd, dedicated: true, port: 8001 }
       },
-      // Document → session attachment
+      // Document → runtime attachment
       attachments: {
         // 'my-notebook': 'shared'
         // 'data-analysis': 'python-8001'
@@ -464,55 +464,55 @@ export class ShellStateManager {
   }
 
   // ===========================================================================
-  // Runtime Session Management
+  // Runtime Attachment Management
   // ===========================================================================
 
   /**
-   * Get the session attached to a document
+   * Get the runtime attached to a document
    * @param {string} docName - Document name
-   * @returns {string} Session ID (defaults to 'shared')
+   * @returns {string} Runtime ID (defaults to 'shared')
    */
-  getDocumentSession(docName) {
+  getDocumentRuntime(docName) {
     return this.get(`runtimes.attachments.${docName}`) || 'shared';
   }
 
   /**
-   * Get session info
-   * @param {string} sessionId - Session ID
+   * Get runtime info
+   * @param {string} runtimeId - Runtime ID
    * @returns {Object|null}
    */
-  getSession(sessionId) {
-    return this.get(`runtimes.sessions.${sessionId}`) || null;
+  getRuntime(runtimeId) {
+    return this.get(`runtimes.sessions.${runtimeId}`) || null;
   }
 
   /**
-   * Get all available sessions
+   * Get all available runtimes
    * @returns {Array<{id: string, info: Object}>}
    */
-  getSessions() {
-    const sessions = this.get('runtimes.sessions') || {};
-    return Object.entries(sessions).map(([id, info]) => ({ id, info }));
+  getRuntimes() {
+    const runtimes = this.get('runtimes.sessions') || {};
+    return Object.entries(runtimes).map(([id, info]) => ({ id, info }));
   }
 
   /**
-   * Attach a document to a session
+   * Attach a document to a runtime
    * @param {string} docName - Document name
-   * @param {string} sessionId - Session ID to attach to
+   * @param {string} runtimeId - Runtime ID to attach to
    */
-  attachDocument(docName, sessionId) {
-    this._set(`runtimes.attachments.${docName}`, sessionId);
+  attachDocument(docName, runtimeId) {
+    this._set(`runtimes.attachments.${docName}`, runtimeId);
   }
 
   /**
-   * Register a runtime session
-   * @param {string} sessionId - Session ID
-   * @param {Object} info - Session info (url, status, venv, cwd, etc.)
+   * Register runtime metadata
+   * @param {string} runtimeId - Runtime ID
+   * @param {Object} info - Runtime info (url, status, venv, cwd, etc.)
    */
-  registerSession(sessionId, info) {
-    this._set(`runtimes.sessions.${sessionId}`, info);
+  registerRuntime(runtimeId, info) {
+    this._set(`runtimes.sessions.${runtimeId}`, info);
 
-    // Also update legacy python state if this is the shared session
-    if (sessionId === 'shared' && info.language === 'python') {
+    // Also update legacy python state if this is the shared runtime
+    if (runtimeId === 'shared' && info.language === 'python') {
       this._set('runtimes.python', {
         language: 'python',
         version: info.version,
@@ -527,20 +527,20 @@ export class ShellStateManager {
   }
 
   /**
-   * Create a new dedicated runtime session
-   * @param {string} docName - Document to attach the session to
+   * Create and attach a runtime
+   * @param {string} docName - Document to attach runtime to
    * @param {'shared'|'dedicated'} mode - Runtime mode
    * @param {string} [venv] - Path to virtual environment (for dedicated runtimes)
-   * @returns {Promise<Object>} Session info
+   * @returns {Promise<Object>} Runtime info
    */
-  async createSession(docName, mode = 'dedicated', venv = null) {
+  async createRuntime(docName, mode = 'dedicated', venv = null) {
     try {
-      const result = await this._client.createSession(docName, mode, venv);
+      const result = await this._client.createRuntimeAttachment(docName, mode, venv);
 
-      const sessionId = result.id || (mode === 'dedicated' ? `python-${result.runtimes?.python?.port || Date.now()}` : 'shared');
+      const runtimeId = result.id || (mode === 'dedicated' ? `python-${result.runtimes?.python?.port || Date.now()}` : 'shared');
 
-      const sessionInfo = {
-        id: sessionId,
+      const runtimeInfo = {
+        id: runtimeId,
         url: result.runtimes?.python?.url || result.sync,
         status: 'ready',
         dedicated: mode === 'dedicated',
@@ -550,15 +550,15 @@ export class ShellStateManager {
         docName,
       };
 
-      // Register the session
-      this.registerSession(sessionId, sessionInfo);
+      // Register runtime
+      this.registerRuntime(runtimeId, runtimeInfo);
 
-      // Attach the document to this session
-      this.attachDocument(docName, sessionId);
+      // Attach document to runtime
+      this.attachDocument(docName, runtimeId);
 
-      return sessionInfo;
+      return runtimeInfo;
     } catch (error) {
-      console.error('Failed to create session:', error);
+      console.error('Failed to create runtime:', error);
       throw error;
     }
   }
@@ -569,9 +569,30 @@ export class ShellStateManager {
    * @returns {string|null} Runtime URL
    */
   getRuntimeUrl(docName) {
-    const sessionId = this.getDocumentSession(docName);
-    const session = this.getSession(sessionId);
-    return session?.url || null;
+    const runtimeId = this.getDocumentRuntime(docName);
+    const runtime = this.getRuntime(runtimeId);
+    return runtime?.url || null;
+  }
+
+  // Legacy aliases
+  getDocumentSession(docName) {
+    return this.getDocumentRuntime(docName);
+  }
+
+  getSession(sessionId) {
+    return this.getRuntime(sessionId);
+  }
+
+  getSessions() {
+    return this.getRuntimes();
+  }
+
+  registerSession(sessionId, info) {
+    this.registerRuntime(sessionId, info);
+  }
+
+  async createSession(docName, mode = 'dedicated', venv = null) {
+    return this.createRuntime(docName, mode, venv);
   }
 
   // ===========================================================================

@@ -280,53 +280,95 @@ export class OrchestratorClient {
   }
 
   // ===========================================================================
-  // Session Management
+  // Runtime Attachments
   // ===========================================================================
 
   /**
-   * Create a session for a document
+   * Create a runtime attachment for a document
    * @param {string} doc - Document name
    * @param {'shared'|'dedicated'} python - Python runtime mode
    * @param {string} [venv] - Path to virtual environment (for dedicated runtimes)
    * @returns {Promise<Object>}
    */
-  async createSession(doc, python = 'shared', venv = null) {
+  async createRuntimeAttachment(doc, python = 'shared', venv = null) {
     const body = { doc, python };
     if (venv) {
       body.venv = venv;
     }
-    return this._fetch('/api/sessions', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
+
+    try {
+      return await this._fetch('/api/runtimes', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      // Legacy orchestrator compatibility
+      return this._fetch('/api/sessions', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    }
   }
 
   /**
-   * Get session info for a document
+   * Get runtime attachment info for a document
    * @param {string} doc - Document name
    * @returns {Promise<Object>}
    */
-  async getSession(doc) {
-    return this._fetch(`/api/sessions/${encodeURIComponent(doc)}`);
+  async getRuntimeAttachment(doc) {
+    const encoded = encodeURIComponent(doc);
+    try {
+      return await this._fetch(`/api/runtimes/${encoded}`);
+    } catch (err) {
+      return this._fetch(`/api/sessions/${encoded}`);
+    }
   }
 
   /**
-   * Destroy a session
+   * Destroy a runtime attachment
    * @param {string} doc - Document name
    * @returns {Promise<{doc: string, status: string}>}
    */
-  async destroySession(doc) {
-    return this._fetch(`/api/sessions/${encodeURIComponent(doc)}`, {
-      method: 'DELETE',
-    });
+  async destroyRuntimeAttachment(doc) {
+    const encoded = encodeURIComponent(doc);
+    try {
+      return await this._fetch(`/api/runtimes/${encoded}`, {
+        method: 'DELETE',
+      });
+    } catch (err) {
+      return this._fetch(`/api/sessions/${encoded}`, {
+        method: 'DELETE',
+      });
+    }
   }
 
   /**
-   * List all active sessions
-   * @returns {Promise<{sessions: Array}>}
+   * List all runtime attachments
+   * @returns {Promise<{runtimes?: Array, sessions?: Array}>}
    */
+  async listRuntimeAttachments() {
+    try {
+      return await this._fetch('/api/runtimes');
+    } catch (err) {
+      return this._fetch('/api/sessions');
+    }
+  }
+
+  // Legacy aliases
+  async createSession(doc, python = 'shared', venv = null) {
+    return this.createRuntimeAttachment(doc, python, venv);
+  }
+
+  async getSession(doc) {
+    return this.getRuntimeAttachment(doc);
+  }
+
+  async destroySession(doc) {
+    return this.destroyRuntimeAttachment(doc);
+  }
+
   async listSessions() {
-    return this._fetch('/api/sessions');
+    return this.listRuntimeAttachments();
   }
 
   // ===========================================================================
