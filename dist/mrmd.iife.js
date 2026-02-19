@@ -62089,6 +62089,7 @@ ${ansiStyles}
     let catalogData = null;    // {machines: [...], cloudOnlyProjects: [...]}
     let activeMachineTab = null; // machineId or 'local' or 'cloud'
     let catalogView = false;   // true when showing catalog project/doc tree
+    let catalogRoot = '';      // absolute docs root (e.g. /home/ubuntu)
 
     // Create content
     const content = document.createElement('div');
@@ -62111,8 +62112,14 @@ ${ansiStyles}
     content.appendChild(fileList);
 
     // Fetch catalog in background (non-blocking)
-    orchestratorClient.getCatalog().then(data => {
-      if (data?.machines?.length > 0) {
+    Promise.all([
+      orchestratorClient.getCatalog().catch(() => null),
+      orchestratorClient.listFiles().catch(() => null),
+    ]).then(([data, files]) => {
+      if (files?.root) {
+        catalogRoot = String(files.root).replace(/\/$/, '');
+      }
+      if (data?.machines?.length > 0 || data?.cloudOnlyProjects?.length > 0) {
         catalogData = data;
         renderMachineBar();
       }
@@ -62139,6 +62146,13 @@ ${ansiStyles}
       newFileRow.appendChild(filenameInput);
 
       content.appendChild(newFileRow);
+    }
+
+    function catalogDocAbsolutePath(projectName, docPath) {
+      const root = catalogRoot || '';
+      const normalizedRoot = root.replace(/\/$/, '');
+      if (normalizedRoot) return `${normalizedRoot}/${projectName}/${docPath}.md`;
+      return `/${projectName}/${docPath}.md`;
     }
 
     // ── Machine tab bar ──
@@ -62258,12 +62272,13 @@ ${ansiStyles}
 
           // Click to select, double-click to open
           docItem.addEventListener('click', () => {
-            selectedEntry = { name: doc.docPath, path: `~/${project.name}/${doc.docPath}.md`, type: 'file' };
+            const fullPath = catalogDocAbsolutePath(project.name, doc.docPath);
+            selectedEntry = { name: doc.docPath, path: fullPath, type: 'file' };
             fileList.querySelectorAll('.mrmd-filepicker__item--selected').forEach(el => el.classList.remove('mrmd-filepicker__item--selected'));
             docItem.classList.add('mrmd-filepicker__item--selected');
           });
           docItem.addEventListener('dblclick', () => {
-            selectFile(`~/${project.name}/${doc.docPath}.md`);
+            selectFile(catalogDocAbsolutePath(project.name, doc.docPath));
           });
 
           fileList.appendChild(docItem);
@@ -62302,7 +62317,8 @@ ${ansiStyles}
         item.appendChild(name);
 
         item.addEventListener('dblclick', () => {
-          navigateTo(`~/${projectName}`);
+          const root = catalogRoot || '~';
+          navigateTo(`${root.replace(/\/$/, '')}/${projectName}`);
           catalogView = false;
           activeMachineTab = null;
           renderMachineBar();
