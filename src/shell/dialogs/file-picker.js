@@ -146,11 +146,14 @@ export function showFilePicker(options) {
     for (const machine of catalogData.machines) {
       const tab = document.createElement('button');
       const isActive = catalogView && activeMachineTab === machine.machineId;
-      tab.className = 'mrmd-filepicker__machine-tab' + (isActive ? ' mrmd-filepicker__machine-tab--active' : '');
+      const online = machine.connected !== false && machine.status !== 'offline';
+      tab.className = 'mrmd-filepicker__machine-tab'
+        + (isActive ? ' mrmd-filepicker__machine-tab--active' : '')
+        + (!online ? ' mrmd-filepicker__machine-tab--offline' : '');
 
-      const dot = machine.connected !== false ? '🟢' : '⚫';
+      const dot = online ? '🟢' : '⚫';
       tab.textContent = `${dot} ${machine.machineName || machine.machineId}`;
-      tab.title = `${machine.hostname || machine.machineId}\n${(machine.capabilities || []).join(', ')}`;
+      tab.title = `${machine.hostname || machine.machineId}\n${(machine.capabilities || []).join(', ')}\n${online ? 'online' : 'offline (opens cached snapshot)'}`;
 
       tab.addEventListener('click', () => {
         catalogView = true;
@@ -183,7 +186,8 @@ export function showFilePicker(options) {
     pathBar.innerHTML = '';
     const label = document.createElement('span');
     label.className = 'mrmd-filepicker__path-segment';
-    label.textContent = `${machine.machineName || machine.machineId} — ${machine.projects?.length || 0} projects`;
+    const online = machine.connected !== false && machine.status !== 'offline';
+    label.textContent = `${machine.machineName || machine.machineId} — ${machine.projects?.length || 0} projects${online ? '' : ' (offline snapshots)'}`;
     pathBar.appendChild(label);
 
     fileList.innerHTML = '';

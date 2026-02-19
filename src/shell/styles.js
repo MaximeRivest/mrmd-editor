@@ -160,6 +160,24 @@ export const statusBarStyles = `
   margin-left: 4px;
 }
 
+/* Active machine pill (simple status bar mode) */
+.mrmd-statusbar__machine-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--mrmd-border, #333);
+  background: var(--mrmd-hover-bg, rgba(255,255,255,0.06));
+  color: var(--mrmd-fg, #ccc);
+  font-size: 10px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.mrmd-statusbar__machine-pill:hover {
+  border-color: var(--mrmd-accent, #58a6ff);
+}
+
 /* Unified files segment - takes more space */
 .mrmd-statusbar__segment--files {
   min-width: 120px;
@@ -542,6 +560,11 @@ export const filePickerStyles = `
   background: var(--mrmd-selection-bg, rgba(0, 122, 204, 0.2));
   color: var(--mrmd-fg, #ccc);
   border-color: var(--mrmd-accent, #58a6ff);
+}
+
+.mrmd-filepicker__machine-tab--offline {
+  opacity: 0.7;
+  border-style: dashed;
 }
 
 /* Path bar */

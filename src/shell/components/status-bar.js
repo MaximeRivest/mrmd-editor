@@ -861,6 +861,80 @@ function createRuntimeSegment({ shellState, orchestratorClient, handlers, onClea
       });
     }
 
+    // Runtime machine selection
+    if (machineState.supported) {
+      items.push({ type: 'divider' });
+      items.push({ type: 'header', label: 'Runtime Machine' });
+
+      items.push({
+        icon: activeMachineId ? '○' : '✓',
+        label: 'Auto-select',
+        active: !activeMachineId,
+        onClick: async () => {
+          try {
+            await orchestratorClient.setActiveMachine?.(null);
+            await refreshMachineState({ doRender: true });
+          } catch (err) {
+            console.error('Failed to set auto machine:', err);
+          }
+        },
+      });
+
+      for (const m of machineList) {
+        const online = m.status === 'online' || m.connected === true;
+        const isActiveMachine = activeMachineId === m.machineId;
+        items.push({
+          icon: isActiveMachine ? '✓' : (online ? '●' : '○'),
+          label: `${m.machineName || m.machineId}${online ? '' : ' (offline)'}`,
+          active: isActiveMachine,
+          onClick: async () => {
+            try {
+              await orchestratorClient.setActiveMachine?.(m.machineId);
+              await refreshMachineState({ doRender: true });
+            } catch (err) {
+              console.error('Failed to switch machine:', err);
+            }
+          },
+        });
+      }
+
+      if (projectRoot) {
+        const pref = getProjectMachinePreference(projectRoot);
+        items.push({ type: 'divider' });
+        items.push({ type: 'header', label: 'Project Machine Preference' });
+
+        items.push({
+          icon: pref === undefined ? '✓' : '○',
+          label: 'No preference (manual/global)',
+          active: pref === undefined,
+          onClick: () => {
+            setProjectMachinePreference(projectRoot, undefined);
+          },
+        });
+
+        items.push({
+          icon: pref === null ? '✓' : '○',
+          label: 'Prefer auto-select',
+          active: pref === null,
+          onClick: () => {
+            setProjectMachinePreference(projectRoot, null);
+          },
+        });
+
+        for (const m of machineList) {
+          const isPref = pref === m.machineId;
+          items.push({
+            icon: isPref ? '✓' : '📌',
+            label: `Prefer ${m.machineName || m.machineId}`,
+            active: isPref,
+            onClick: () => {
+              setProjectMachinePreference(projectRoot, m.machineId);
+            },
+          });
+        }
+      }
+    }
+
     // Refresh action
     items.push({ type: 'divider' });
     items.push({
@@ -870,6 +944,7 @@ function createRuntimeSegment({ shellState, orchestratorClient, handlers, onClea
         cachedRuntimes = null;
         cachedVenvs = null;
         await fetchRuntimes();
+        await refreshMachineState({ doRender: false });
         render();
       },
     });
@@ -885,13 +960,30 @@ function createRuntimeSegment({ shellState, orchestratorClient, handlers, onClea
   segment.addEventListener('click', openMenu);
 
   // Initial fetch
-  fetchRuntimes().then(render);
+  Promise.all([
+    fetchRuntimes(),
+    refreshMachineState({ doRender: false }),
+  ]).then(async () => {
+    render();
+    await applyProjectPreference();
+  });
 
   // Subscribe to state changes
   const unsubscribe1 = shellState.onPath('runtimes', render);
   const unsubscribe2 = shellState.onPath('file', render);
+  const unsubscribe3 = shellState.onPath('projectRoot', () => {
+    applyProjectPreference();
+    render();
+  });
+
+  const machinePoll = setInterval(() => {
+    refreshMachineState({ doRender: true });
+  }, 15000);
+
   onCleanup(unsubscribe1);
   onCleanup(unsubscribe2);
+  onCleanup(unsubscribe3);
+  onCleanup(() => clearInterval(machinePoll));
   onCleanup(() => currentMenu?.close());
 
   render();
@@ -1746,6 +1838,101 @@ function createSimpleSegment({ shellState, orchestratorClient, handlers, onClean
 
   let currentMenu = null;
   let runtimeState = 'disconnected'; // 'connected', 'disconnected', 'error'
+  let machineState = {
+    supported: false,
+    activeMachineId: null,
+    activeMachineName: null,
+    machines: [],
+  };
+
+  const PROJECT_MACHINE_PREF_KEY = 'mrmd:project-machine-pref:v1';
+  let projectMachinePrefs = loadProjectMachinePrefs();
+  let lastAppliedProjectPrefKey = null;
+
+  function loadProjectMachinePrefs() {
+    try {
+      const raw = window.localStorage?.getItem(PROJECT_MACHINE_PREF_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveProjectMachinePrefs() {
+    try {
+      window.localStorage?.setItem(PROJECT_MACHINE_PREF_KEY, JSON.stringify(projectMachinePrefs));
+    } catch {
+      // ignore
+    }
+  }
+
+  function getProjectMachinePreference(projectRoot) {
+    if (!projectRoot || !(projectRoot in projectMachinePrefs)) return undefined;
+    const value = projectMachinePrefs[projectRoot];
+    return value === '__auto__' ? null : value;
+  }
+
+  function setProjectMachinePreference(projectRoot, machineIdOrNullOrUndefined) {
+    if (!projectRoot) return;
+    if (machineIdOrNullOrUndefined === undefined) {
+      delete projectMachinePrefs[projectRoot];
+    } else if (machineIdOrNullOrUndefined === null) {
+      projectMachinePrefs[projectRoot] = '__auto__';
+    } else {
+      projectMachinePrefs[projectRoot] = machineIdOrNullOrUndefined;
+    }
+    saveProjectMachinePrefs();
+  }
+
+  async function refreshMachineState({ doRender = true } = {}) {
+    try {
+      const [machinesRes, activeRes] = await Promise.all([
+        orchestratorClient.getMachines?.(),
+        orchestratorClient.getActiveMachine?.(),
+      ]);
+
+      const machines = machinesRes?.machines || [];
+      const activeMachineId = activeRes?.activeMachineId || null;
+      const activeMachine = machines.find(m => m.machineId === activeMachineId) || null;
+
+      machineState = {
+        supported: true,
+        activeMachineId,
+        activeMachineName: activeMachine?.machineName || activeMachine?.machineId || null,
+        machines,
+      };
+    } catch {
+      machineState = {
+        supported: false,
+        activeMachineId: null,
+        activeMachineName: null,
+        machines: [],
+      };
+    }
+
+    if (doRender) render();
+    return machineState;
+  }
+
+  async function applyProjectPreference() {
+    const projectRoot = shellState.get('projectRoot');
+    if (!projectRoot || !machineState.supported) return;
+
+    const pref = getProjectMachinePreference(projectRoot);
+    if (pref === undefined) return; // no preference set
+
+    const key = `${projectRoot}|${pref === null ? '__auto__' : pref}`;
+    if (key === lastAppliedProjectPrefKey) return;
+    lastAppliedProjectPrefKey = key;
+
+    try {
+      await orchestratorClient.setActiveMachine?.(pref);
+      await refreshMachineState({ doRender: true });
+    } catch {
+      // ignore
+    }
+  }
 
   function render() {
     const file = shellState.get('file');
@@ -1777,11 +1964,18 @@ function createSimpleSegment({ shellState, orchestratorClient, handlers, onClean
       error: 'No venv selected - click to pick one',
     }[runtimeState];
 
+    const machinePill = machineState.supported
+      ? `<span class="mrmd-statusbar__machine-pill" title="Active runtime machine — click to change">⚡ ${machineState.activeMachineName || 'Auto'}</span>`
+      : '';
+
     segment.innerHTML = `
       <span class="mrmd-statusbar__filename" style="font-weight: 500;">${filename}</span>
-      <span class="mrmd-statusbar__runtime-dot"
-            style="width: 10px; height: 10px; border-radius: 50%; background: ${dotColor}; cursor: pointer; ${runtimeState === 'error' ? 'animation: blink 1s infinite;' : ''}"
-            title="${dotTitle}"></span>
+      <span style="display:inline-flex; align-items:center; gap:8px;">
+        ${machinePill}
+        <span class="mrmd-statusbar__runtime-dot"
+              style="width: 10px; height: 10px; border-radius: 50%; background: ${dotColor}; cursor: pointer; ${runtimeState === 'error' ? 'animation: blink 1s infinite;' : ''}"
+              title="${dotTitle}"></span>
+      </span>
     `;
 
     // Add blink animation if needed
@@ -1794,8 +1988,10 @@ function createSimpleSegment({ shellState, orchestratorClient, handlers, onClean
   }
 
   async function openMenu(e) {
-    // Only open menu when clicking the dot
-    if (!e.target.classList.contains('mrmd-statusbar__runtime-dot')) {
+    // Only open menu when clicking the dot or machine pill
+    const isRuntimeDot = e.target.classList.contains('mrmd-statusbar__runtime-dot');
+    const isMachinePill = e.target.classList.contains('mrmd-statusbar__machine-pill');
+    if (!isRuntimeDot && !isMachinePill) {
       return;
     }
 
@@ -1831,6 +2027,12 @@ function createSimpleSegment({ shellState, orchestratorClient, handlers, onClean
     } catch (err) {
       console.error('Failed to fetch runtimes/venvs:', err);
     }
+
+    // Fetch machine state (if available in cloud mode)
+    await refreshMachineState({ doRender: false });
+    const machineList = machineState.machines || [];
+    const activeMachineId = machineState.activeMachineId || null;
+    const projectRoot = shellState.get('projectRoot');
 
     // Section 1: Running Runtimes
     items.push({

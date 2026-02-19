@@ -243,6 +243,26 @@ export class OrchestratorClient {
     return this._fetch('/api/machines');
   }
 
+  /**
+   * Get currently active runtime machine.
+   * @returns {Promise<{activeMachineId: string|null, provider: Object|null}>}
+   */
+  async getActiveMachine() {
+    return this._fetch('/api/machines/active');
+  }
+
+  /**
+   * Set active runtime machine.
+   * @param {string|null} machineId
+   * @returns {Promise<{ok: boolean, activeMachineId: string|null, provider: Object|null}>}
+   */
+  async setActiveMachine(machineId) {
+    return this._fetch('/api/machines/active', {
+      method: 'POST',
+      body: JSON.stringify({ machineId: machineId ?? null }),
+    });
+  }
+
   // ===========================================================================
   // Environment Management
   // ===========================================================================
