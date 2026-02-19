@@ -505,6 +505,45 @@ export const filePickerStyles = `
   min-height: 300px;
 }
 
+/* Machine tab bar */
+.mrmd-filepicker__machines {
+  display: flex;
+  gap: 4px;
+  padding: 6px 0;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--mrmd-border, #333);
+  overflow-x: auto;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mrmd-filepicker__machine-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--mrmd-border, #333);
+  background: transparent;
+  color: var(--mrmd-fg-muted, #888);
+  font-size: var(--mrmd-ui-font-size-sm, 11px);
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.mrmd-filepicker__machine-tab:hover {
+  background: var(--mrmd-hover-bg, rgba(255, 255, 255, 0.08));
+  color: var(--mrmd-fg, #ccc);
+}
+
+.mrmd-filepicker__machine-tab--active {
+  background: var(--mrmd-selection-bg, rgba(0, 122, 204, 0.2));
+  color: var(--mrmd-fg, #ccc);
+  border-color: var(--mrmd-accent, #58a6ff);
+}
+
 /* Path bar */
 .mrmd-filepicker__path {
   display: flex;

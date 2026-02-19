@@ -219,6 +219,31 @@ export class OrchestratorClient {
   }
 
   // ===========================================================================
+  // Machine Catalog (multi-machine sync)
+  // ===========================================================================
+
+  /**
+   * Get catalog of files across all connected machines.
+   * @param {Object} [options]
+   * @param {string} [options.project] - Filter to a specific project
+   * @returns {Promise<{userId: string, machines: Array, cloudOnlyProjects?: string[]}>}
+   */
+  async getCatalog(options = {}) {
+    const params = new URLSearchParams();
+    if (options.project) params.set('project', options.project);
+    const query = params.toString();
+    return this._fetch(`/api/catalog${query ? '?' + query : ''}`);
+  }
+
+  /**
+   * Get list of connected machines.
+   * @returns {Promise<{userId: string, machines: Array}>}
+   */
+  async getMachines() {
+    return this._fetch('/api/machines');
+  }
+
+  // ===========================================================================
   // Environment Management
   // ===========================================================================
 

@@ -60465,6 +60465,31 @@ ${ansiStyles}
     }
 
     // ===========================================================================
+    // Machine Catalog (multi-machine sync)
+    // ===========================================================================
+
+    /**
+     * Get catalog of files across all connected machines.
+     * @param {Object} [options]
+     * @param {string} [options.project] - Filter to a specific project
+     * @returns {Promise<{userId: string, machines: Array, cloudOnlyProjects?: string[]}>}
+     */
+    async getCatalog(options = {}) {
+      const params = new URLSearchParams();
+      if (options.project) params.set('project', options.project);
+      const query = params.toString();
+      return this._fetch(`/api/catalog${query ? '?' + query : ''}`);
+    }
+
+    /**
+     * Get list of connected machines.
+     * @returns {Promise<{userId: string, machines: Array}>}
+     */
+    async getMachines() {
+      return this._fetch('/api/machines');
+    }
+
+    // ===========================================================================
     // Environment Management
     // ===========================================================================
 
@@ -62015,6 +62040,7 @@ ${ansiStyles}
    *
    * A dialog for browsing and selecting files.
    * Supports both project files and system-wide browsing.
+   * When connected to cloud machines, shows a machine tab bar for multi-machine browsing.
    */
 
 
@@ -62059,9 +62085,20 @@ ${ansiStyles}
     let isLoading = false;
     let pickerHistory = loadFilePickerHistory();
 
+    // ── Machine catalog state ──
+    let catalogData = null;    // {machines: [...], cloudOnlyProjects: [...]}
+    let activeMachineTab = null; // machineId or 'local' or 'cloud'
+    let catalogView = false;   // true when showing catalog project/doc tree
+
     // Create content
     const content = document.createElement('div');
     content.className = 'mrmd-filepicker';
+
+    // Machine tab bar (hidden until catalog loads)
+    const machineBar = document.createElement('div');
+    machineBar.className = 'mrmd-filepicker__machines';
+    machineBar.style.display = 'none';
+    content.appendChild(machineBar);
 
     // Path bar
     const pathBar = document.createElement('div');
@@ -62072,6 +62109,14 @@ ${ansiStyles}
     const fileList = document.createElement('div');
     fileList.className = 'mrmd-filepicker__list';
     content.appendChild(fileList);
+
+    // Fetch catalog in background (non-blocking)
+    orchestratorClient.getCatalog().then(data => {
+      if (data?.machines?.length > 0) {
+        catalogData = data;
+        renderMachineBar();
+      }
+    }).catch(() => { /* catalog unavailable — filesystem-only mode */ });
 
     // New file input (for save mode)
     let filenameInput = null;
@@ -62094,6 +62139,177 @@ ${ansiStyles}
       newFileRow.appendChild(filenameInput);
 
       content.appendChild(newFileRow);
+    }
+
+    // ── Machine tab bar ──
+    function renderMachineBar() {
+      if (!catalogData?.machines?.length) {
+        machineBar.style.display = 'none';
+        return;
+      }
+
+      machineBar.style.display = 'flex';
+      machineBar.innerHTML = '';
+
+      // "Local" tab (filesystem browsing — current behavior)
+      const localTab = document.createElement('button');
+      localTab.className = 'mrmd-filepicker__machine-tab' + (!catalogView ? ' mrmd-filepicker__machine-tab--active' : '');
+      localTab.textContent = '📁 Files';
+      localTab.title = 'Browse local filesystem';
+      localTab.addEventListener('click', () => {
+        catalogView = false;
+        activeMachineTab = null;
+        renderMachineBar();
+        navigateTo(currentPath);
+      });
+      machineBar.appendChild(localTab);
+
+      // One tab per connected machine
+      for (const machine of catalogData.machines) {
+        const tab = document.createElement('button');
+        const isActive = catalogView && activeMachineTab === machine.machineId;
+        tab.className = 'mrmd-filepicker__machine-tab' + (isActive ? ' mrmd-filepicker__machine-tab--active' : '');
+
+        const dot = machine.connected !== false ? '🟢' : '⚫';
+        tab.textContent = `${dot} ${machine.machineName || machine.machineId}`;
+        tab.title = `${machine.hostname || machine.machineId}\n${(machine.capabilities || []).join(', ')}`;
+
+        tab.addEventListener('click', () => {
+          catalogView = true;
+          activeMachineTab = machine.machineId;
+          renderMachineBar();
+          renderCatalogView(machine);
+        });
+        machineBar.appendChild(tab);
+      }
+
+      // Cloud tab (cloud-only projects)
+      if (catalogData.cloudOnlyProjects?.length > 0) {
+        const cloudTab = document.createElement('button');
+        const isActive = catalogView && activeMachineTab === 'cloud';
+        cloudTab.className = 'mrmd-filepicker__machine-tab' + (isActive ? ' mrmd-filepicker__machine-tab--active' : '');
+        cloudTab.textContent = '☁️ Cloud';
+        cloudTab.title = 'Projects only in cloud (not on any machine)';
+        cloudTab.addEventListener('click', () => {
+          catalogView = true;
+          activeMachineTab = 'cloud';
+          renderMachineBar();
+          renderCloudOnlyView();
+        });
+        machineBar.appendChild(cloudTab);
+      }
+    }
+
+    // ── Catalog view: show projects/docs for a machine ──
+    function renderCatalogView(machine) {
+      pathBar.innerHTML = '';
+      const label = document.createElement('span');
+      label.className = 'mrmd-filepicker__path-segment';
+      label.textContent = `${machine.machineName || machine.machineId} — ${machine.projects?.length || 0} projects`;
+      pathBar.appendChild(label);
+
+      fileList.innerHTML = '';
+      const projects = machine.projects || [];
+
+      if (projects.length === 0) {
+        fileList.innerHTML = '<div class="mrmd-filepicker__empty">No projects on this machine</div>';
+        return;
+      }
+
+      for (const project of projects) {
+        // Project header
+        const projectItem = document.createElement('div');
+        projectItem.className = 'mrmd-filepicker__item mrmd-filepicker__item--project';
+        projectItem.style.cursor = 'default';
+
+        const icon = document.createElement('span');
+        icon.className = 'mrmd-filepicker__item-icon';
+        icon.textContent = '📁';
+        projectItem.appendChild(icon);
+
+        const name = document.createElement('span');
+        name.className = 'mrmd-filepicker__item-name';
+        name.style.fontWeight = '600';
+        name.textContent = project.name;
+        projectItem.appendChild(name);
+
+        const info = document.createElement('span');
+        info.className = 'mrmd-filepicker__item-info';
+        info.textContent = `${project.docCount || project.documents?.length || 0} docs`;
+        projectItem.appendChild(info);
+
+        fileList.appendChild(projectItem);
+
+        // Documents under this project
+        for (const doc of (project.documents || [])) {
+          const docItem = document.createElement('div');
+          docItem.className = 'mrmd-filepicker__item';
+          docItem.style.paddingLeft = '30px';
+
+          const docIcon = document.createElement('span');
+          docIcon.className = 'mrmd-filepicker__item-icon';
+          docIcon.textContent = '📄';
+          docItem.appendChild(docIcon);
+
+          const docName = document.createElement('span');
+          docName.className = 'mrmd-filepicker__item-name';
+          docName.textContent = doc.docPath;
+          docItem.appendChild(docName);
+
+          // Click to select, double-click to open
+          docItem.addEventListener('click', () => {
+            selectedEntry = { name: doc.docPath, path: `~/${project.name}/${doc.docPath}.md`, type: 'file' };
+            fileList.querySelectorAll('.mrmd-filepicker__item--selected').forEach(el => el.classList.remove('mrmd-filepicker__item--selected'));
+            docItem.classList.add('mrmd-filepicker__item--selected');
+          });
+          docItem.addEventListener('dblclick', () => {
+            selectFile(`~/${project.name}/${doc.docPath}.md`);
+          });
+
+          fileList.appendChild(docItem);
+        }
+      }
+    }
+
+    // ── Cloud-only view ──
+    function renderCloudOnlyView() {
+      pathBar.innerHTML = '';
+      const label = document.createElement('span');
+      label.className = 'mrmd-filepicker__path-segment';
+      label.textContent = 'Cloud-only projects (not on any machine)';
+      pathBar.appendChild(label);
+
+      fileList.innerHTML = '';
+      const projects = catalogData?.cloudOnlyProjects || [];
+
+      if (projects.length === 0) {
+        fileList.innerHTML = '<div class="mrmd-filepicker__empty">No cloud-only projects</div>';
+        return;
+      }
+
+      for (const projectName of projects) {
+        const item = document.createElement('div');
+        item.className = 'mrmd-filepicker__item';
+
+        const icon = document.createElement('span');
+        icon.className = 'mrmd-filepicker__item-icon';
+        icon.textContent = '📁';
+        item.appendChild(icon);
+
+        const name = document.createElement('span');
+        name.className = 'mrmd-filepicker__item-name';
+        name.textContent = projectName;
+        item.appendChild(name);
+
+        item.addEventListener('dblclick', () => {
+          navigateTo(`~/${projectName}`);
+          catalogView = false;
+          activeMachineTab = null;
+          renderMachineBar();
+        });
+
+        fileList.appendChild(item);
+      }
     }
 
     // Render path bar
@@ -65179,6 +65395,45 @@ ${ansiStyles}
 /* File Picker */
 .mrmd-filepicker {
   min-height: 300px;
+}
+
+/* Machine tab bar */
+.mrmd-filepicker__machines {
+  display: flex;
+  gap: 4px;
+  padding: 6px 0;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--mrmd-border, #333);
+  overflow-x: auto;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mrmd-filepicker__machine-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--mrmd-border, #333);
+  background: transparent;
+  color: var(--mrmd-fg-muted, #888);
+  font-size: var(--mrmd-ui-font-size-sm, 11px);
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.mrmd-filepicker__machine-tab:hover {
+  background: var(--mrmd-hover-bg, rgba(255, 255, 255, 0.08));
+  color: var(--mrmd-fg, #ccc);
+}
+
+.mrmd-filepicker__machine-tab--active {
+  background: var(--mrmd-selection-bg, rgba(0, 122, 204, 0.2));
+  color: var(--mrmd-fg, #ccc);
+  border-color: var(--mrmd-accent, #58a6ff);
 }
 
 /* Path bar */
@@ -92424,7 +92679,20 @@ $1 $2
         };
 
         this.ws.onmessage = (event) => {
-          this.config.onData(event.data);
+          // Handle both text and binary messages. Text is the normal case
+          // (PTY sends terminal output as text). Binary may arrive if the
+          // tunnel proxy incorrectly marks a frame as binary — convert to
+          // string so xterm.js can render it (xterm doesn't handle Blobs).
+          const data = event.data;
+          if (typeof data === 'string') {
+            this.config.onData(data);
+          } else if (data instanceof Blob) {
+            data.text().then(text => this.config.onData(text));
+          } else if (data instanceof ArrayBuffer) {
+            this.config.onData(new TextDecoder().decode(data));
+          } else {
+            this.config.onData(data);
+          }
         };
 
         this.ws.onerror = (event) => {
