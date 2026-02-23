@@ -124,7 +124,20 @@ export class PtyClient {
       };
 
       this.ws.onmessage = (event) => {
-        this.config.onData(event.data);
+        // Handle both text and binary messages. Text is the normal case
+        // (PTY sends terminal output as text). Binary may arrive if the
+        // tunnel proxy incorrectly marks a frame as binary — convert to
+        // string so xterm.js can render it (xterm doesn't handle Blobs).
+        const data = event.data;
+        if (typeof data === 'string') {
+          this.config.onData(data);
+        } else if (data instanceof Blob) {
+          data.text().then(text => this.config.onData(text));
+        } else if (data instanceof ArrayBuffer) {
+          this.config.onData(new TextDecoder().decode(data));
+        } else {
+          this.config.onData(data);
+        }
       };
 
       this.ws.onerror = (event) => {

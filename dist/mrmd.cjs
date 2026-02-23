@@ -60490,6 +60490,26 @@ let OrchestratorClient$1 = class OrchestratorClient {
     return this._fetch('/api/machines');
   }
 
+  /**
+   * Get currently active runtime machine.
+   * @returns {Promise<{activeMachineId: string|null, provider: Object|null}>}
+   */
+  async getActiveMachine() {
+    return this._fetch('/api/machines/active');
+  }
+
+  /**
+   * Set active runtime machine.
+   * @param {string|null} machineId
+   * @returns {Promise<{ok: boolean, activeMachineId: string|null, provider: Object|null}>}
+   */
+  async setActiveMachine(machineId) {
+    return this._fetch('/api/machines/active', {
+      method: 'POST',
+      body: JSON.stringify({ machineId: machineId ?? null }),
+    });
+  }
+
   // ===========================================================================
   // Environment Management
   // ===========================================================================
@@ -62090,6 +62110,7 @@ function showFilePicker(options) {
   let catalogData = null;    // {machines: [...], cloudOnlyProjects: [...]}
   let activeMachineTab = null; // machineId or 'local' or 'cloud'
   let catalogView = false;   // true when showing catalog project/doc tree
+  let catalogRoot = '';      // absolute docs root (e.g. /home/ubuntu)
 
   // Create content
   const content = document.createElement('div');
@@ -62112,8 +62133,14 @@ function showFilePicker(options) {
   content.appendChild(fileList);
 
   // Fetch catalog in background (non-blocking)
-  orchestratorClient.getCatalog().then(data => {
-    if (data?.machines?.length > 0) {
+  Promise.all([
+    orchestratorClient.getCatalog().catch(() => null),
+    orchestratorClient.listFiles().catch(() => null),
+  ]).then(([data, files]) => {
+    if (files?.root) {
+      catalogRoot = String(files.root).replace(/\/$/, '');
+    }
+    if (data?.machines?.length > 0 || data?.cloudOnlyProjects?.length > 0) {
       catalogData = data;
       renderMachineBar();
     }
@@ -62140,6 +62167,13 @@ function showFilePicker(options) {
     newFileRow.appendChild(filenameInput);
 
     content.appendChild(newFileRow);
+  }
+
+  function catalogDocAbsolutePath(projectName, docPath) {
+    const root = catalogRoot || '';
+    const normalizedRoot = root.replace(/\/$/, '');
+    if (normalizedRoot) return `${normalizedRoot}/${projectName}/${docPath}.md`;
+    return `/${projectName}/${docPath}.md`;
   }
 
   // ── Machine tab bar ──
@@ -62169,11 +62203,14 @@ function showFilePicker(options) {
     for (const machine of catalogData.machines) {
       const tab = document.createElement('button');
       const isActive = catalogView && activeMachineTab === machine.machineId;
-      tab.className = 'mrmd-filepicker__machine-tab' + (isActive ? ' mrmd-filepicker__machine-tab--active' : '');
+      const online = machine.connected !== false && machine.status !== 'offline';
+      tab.className = 'mrmd-filepicker__machine-tab'
+        + (isActive ? ' mrmd-filepicker__machine-tab--active' : '')
+        + (!online ? ' mrmd-filepicker__machine-tab--offline' : '');
 
-      const dot = machine.connected !== false ? '🟢' : '⚫';
+      const dot = online ? '🟢' : '⚫';
       tab.textContent = `${dot} ${machine.machineName || machine.machineId}`;
-      tab.title = `${machine.hostname || machine.machineId}\n${(machine.capabilities || []).join(', ')}`;
+      tab.title = `${machine.hostname || machine.machineId}\n${(machine.capabilities || []).join(', ')}\n${online ? 'online' : 'offline (opens cached snapshot)'}`;
 
       tab.addEventListener('click', () => {
         catalogView = true;
@@ -62206,7 +62243,8 @@ function showFilePicker(options) {
     pathBar.innerHTML = '';
     const label = document.createElement('span');
     label.className = 'mrmd-filepicker__path-segment';
-    label.textContent = `${machine.machineName || machine.machineId} — ${machine.projects?.length || 0} projects`;
+    const online = machine.connected !== false && machine.status !== 'offline';
+    label.textContent = `${machine.machineName || machine.machineId} — ${machine.projects?.length || 0} projects${online ? '' : ' (offline snapshots)'}`;
     pathBar.appendChild(label);
 
     fileList.innerHTML = '';
@@ -62259,12 +62297,13 @@ function showFilePicker(options) {
 
         // Click to select, double-click to open
         docItem.addEventListener('click', () => {
-          selectedEntry = { name: doc.docPath, path: `~/${project.name}/${doc.docPath}.md`, type: 'file' };
+          const fullPath = catalogDocAbsolutePath(project.name, doc.docPath);
+          selectedEntry = { name: doc.docPath, path: fullPath, type: 'file' };
           fileList.querySelectorAll('.mrmd-filepicker__item--selected').forEach(el => el.classList.remove('mrmd-filepicker__item--selected'));
           docItem.classList.add('mrmd-filepicker__item--selected');
         });
         docItem.addEventListener('dblclick', () => {
-          selectFile(`~/${project.name}/${doc.docPath}.md`);
+          selectFile(catalogDocAbsolutePath(project.name, doc.docPath));
         });
 
         fileList.appendChild(docItem);
@@ -62303,7 +62342,8 @@ function showFilePicker(options) {
       item.appendChild(name);
 
       item.addEventListener('dblclick', () => {
-        navigateTo(`~/${projectName}`);
+        const root = catalogRoot || '~';
+        navigateTo(`${root.replace(/\/$/, '')}/${projectName}`);
         catalogView = false;
         activeMachineTab = null;
         renderMachineBar();
@@ -63700,6 +63740,80 @@ function createRuntimeSegment({ shellState, orchestratorClient, handlers, onClea
       });
     }
 
+    // Runtime machine selection
+    if (machineState.supported) {
+      items.push({ type: 'divider' });
+      items.push({ type: 'header', label: 'Runtime Machine' });
+
+      items.push({
+        icon: activeMachineId ? '○' : '✓',
+        label: 'Auto-select',
+        active: !activeMachineId,
+        onClick: async () => {
+          try {
+            await orchestratorClient.setActiveMachine?.(null);
+            await refreshMachineState({ doRender: true });
+          } catch (err) {
+            console.error('Failed to set auto machine:', err);
+          }
+        },
+      });
+
+      for (const m of machineList) {
+        const online = m.status === 'online' || m.connected === true;
+        const isActiveMachine = activeMachineId === m.machineId;
+        items.push({
+          icon: isActiveMachine ? '✓' : (online ? '●' : '○'),
+          label: `${m.machineName || m.machineId}${online ? '' : ' (offline)'}`,
+          active: isActiveMachine,
+          onClick: async () => {
+            try {
+              await orchestratorClient.setActiveMachine?.(m.machineId);
+              await refreshMachineState({ doRender: true });
+            } catch (err) {
+              console.error('Failed to switch machine:', err);
+            }
+          },
+        });
+      }
+
+      if (projectRoot) {
+        const pref = getProjectMachinePreference(projectRoot);
+        items.push({ type: 'divider' });
+        items.push({ type: 'header', label: 'Project Machine Preference' });
+
+        items.push({
+          icon: pref === undefined ? '✓' : '○',
+          label: 'No preference (manual/global)',
+          active: pref === undefined,
+          onClick: () => {
+            setProjectMachinePreference(projectRoot, undefined);
+          },
+        });
+
+        items.push({
+          icon: pref === null ? '✓' : '○',
+          label: 'Prefer auto-select',
+          active: pref === null,
+          onClick: () => {
+            setProjectMachinePreference(projectRoot, null);
+          },
+        });
+
+        for (const m of machineList) {
+          const isPref = pref === m.machineId;
+          items.push({
+            icon: isPref ? '✓' : '📌',
+            label: `Prefer ${m.machineName || m.machineId}`,
+            active: isPref,
+            onClick: () => {
+              setProjectMachinePreference(projectRoot, m.machineId);
+            },
+          });
+        }
+      }
+    }
+
     // Refresh action
     items.push({ type: 'divider' });
     items.push({
@@ -63709,6 +63823,7 @@ function createRuntimeSegment({ shellState, orchestratorClient, handlers, onClea
         cachedRuntimes = null;
         cachedVenvs = null;
         await fetchRuntimes();
+        await refreshMachineState({ doRender: false });
         render();
       },
     });
@@ -63724,13 +63839,30 @@ function createRuntimeSegment({ shellState, orchestratorClient, handlers, onClea
   segment.addEventListener('click', openMenu);
 
   // Initial fetch
-  fetchRuntimes().then(render);
+  Promise.all([
+    fetchRuntimes(),
+    refreshMachineState({ doRender: false }),
+  ]).then(async () => {
+    render();
+    await applyProjectPreference();
+  });
 
   // Subscribe to state changes
   const unsubscribe1 = shellState.onPath('runtimes', render);
   const unsubscribe2 = shellState.onPath('file', render);
+  const unsubscribe3 = shellState.onPath('projectRoot', () => {
+    applyProjectPreference();
+    render();
+  });
+
+  const machinePoll = setInterval(() => {
+    refreshMachineState({ doRender: true });
+  }, 15000);
+
   onCleanup(unsubscribe1);
   onCleanup(unsubscribe2);
+  onCleanup(unsubscribe3);
+  onCleanup(() => clearInterval(machinePoll));
   onCleanup(() => currentMenu?.close());
 
   render();
@@ -64585,6 +64717,55 @@ function createSimpleSegment({ shellState, orchestratorClient, handlers, onClean
 
   let currentMenu = null;
   let runtimeState = 'disconnected'; // 'connected', 'disconnected', 'error'
+  let machineState = {
+    supported: false,
+    activeMachineId: null,
+    activeMachineName: null,
+    machines: [],
+  };
+
+  const PROJECT_MACHINE_PREF_KEY = 'mrmd:project-machine-pref:v1';
+  loadProjectMachinePrefs();
+
+  function loadProjectMachinePrefs() {
+    try {
+      const raw = window.localStorage?.getItem(PROJECT_MACHINE_PREF_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  async function refreshMachineState({ doRender = true } = {}) {
+    try {
+      const [machinesRes, activeRes] = await Promise.all([
+        orchestratorClient.getMachines?.(),
+        orchestratorClient.getActiveMachine?.(),
+      ]);
+
+      const machines = machinesRes?.machines || [];
+      const activeMachineId = activeRes?.activeMachineId || null;
+      const activeMachine = machines.find(m => m.machineId === activeMachineId) || null;
+
+      machineState = {
+        supported: true,
+        activeMachineId,
+        activeMachineName: activeMachine?.machineName || activeMachine?.machineId || null,
+        machines,
+      };
+    } catch {
+      machineState = {
+        supported: false,
+        activeMachineId: null,
+        activeMachineName: null,
+        machines: [],
+      };
+    }
+
+    if (doRender) render();
+    return machineState;
+  }
 
   function render() {
     const file = shellState.get('file');
@@ -64614,11 +64795,18 @@ function createSimpleSegment({ shellState, orchestratorClient, handlers, onClean
       error: 'No venv selected - click to pick one',
     }[runtimeState];
 
+    const machinePill = machineState.supported
+      ? `<span class="mrmd-statusbar__machine-pill" title="Active runtime machine — click to change">⚡ ${machineState.activeMachineName || 'Auto'}</span>`
+      : '';
+
     segment.innerHTML = `
       <span class="mrmd-statusbar__filename" style="font-weight: 500;">${filename}</span>
-      <span class="mrmd-statusbar__runtime-dot"
-            style="width: 10px; height: 10px; border-radius: 50%; background: ${dotColor}; cursor: pointer; ${runtimeState === 'error' ? 'animation: blink 1s infinite;' : ''}"
-            title="${dotTitle}"></span>
+      <span style="display:inline-flex; align-items:center; gap:8px;">
+        ${machinePill}
+        <span class="mrmd-statusbar__runtime-dot"
+              style="width: 10px; height: 10px; border-radius: 50%; background: ${dotColor}; cursor: pointer; ${runtimeState === 'error' ? 'animation: blink 1s infinite;' : ''}"
+              title="${dotTitle}"></span>
+      </span>
     `;
 
     // Add blink animation if needed
@@ -64631,8 +64819,10 @@ function createSimpleSegment({ shellState, orchestratorClient, handlers, onClean
   }
 
   async function openMenu(e) {
-    // Only open menu when clicking the dot
-    if (!e.target.classList.contains('mrmd-statusbar__runtime-dot')) {
+    // Only open menu when clicking the dot or machine pill
+    const isRuntimeDot = e.target.classList.contains('mrmd-statusbar__runtime-dot');
+    const isMachinePill = e.target.classList.contains('mrmd-statusbar__machine-pill');
+    if (!isRuntimeDot && !isMachinePill) {
       return;
     }
 
@@ -64668,6 +64858,12 @@ function createSimpleSegment({ shellState, orchestratorClient, handlers, onClean
     } catch (err) {
       console.error('Failed to fetch runtimes/venvs:', err);
     }
+
+    // Fetch machine state (if available in cloud mode)
+    await refreshMachineState({ doRender: false });
+    machineState.machines || [];
+    machineState.activeMachineId || null;
+    shellState.get('projectRoot');
 
     // Section 1: Running Runtimes
     items.push({
@@ -65053,6 +65249,24 @@ const statusBarStyles = `
   margin-left: 4px;
 }
 
+/* Active machine pill (simple status bar mode) */
+.mrmd-statusbar__machine-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--mrmd-border, #333);
+  background: var(--mrmd-hover-bg, rgba(255,255,255,0.06));
+  color: var(--mrmd-fg, #ccc);
+  font-size: 10px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.mrmd-statusbar__machine-pill:hover {
+  border-color: var(--mrmd-accent, #58a6ff);
+}
+
 /* Unified files segment - takes more space */
 .mrmd-statusbar__segment--files {
   min-width: 120px;
@@ -65435,6 +65649,11 @@ const filePickerStyles = `
   background: var(--mrmd-selection-bg, rgba(0, 122, 204, 0.2));
   color: var(--mrmd-fg, #ccc);
   border-color: var(--mrmd-accent, #58a6ff);
+}
+
+.mrmd-filepicker__machine-tab--offline {
+  opacity: 0.7;
+  border-style: dashed;
 }
 
 /* Path bar */
