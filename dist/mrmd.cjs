@@ -67958,6 +67958,18 @@ async function createStudio$1(target, options = {}) {
       editor = createEditorForDocument(handle, normalizedName);
       currentDocName = normalizedName;
 
+      // Place cursor on first empty line (after frontmatter) for a clean first impression.
+      // Without this, cursor lands at position 0, showing raw YAML frontmatter.
+      if (mrmd.findInitialCursorPosition) {
+        const pos = mrmd.findInitialCursorPosition(editor.view.state.doc.toString());
+        if (pos > 0) {
+          editor.view.dispatch({
+            selection: { anchor: pos },
+            scrollIntoView: true,
+          });
+        }
+      }
+
       // Ensure runtime attachment exists (starts monitor if needed)
       try {
         await orchestratorClient.createRuntimeAttachment(normalizedName, 'shared');
@@ -67996,6 +68008,17 @@ async function createStudio$1(target, options = {}) {
     const handle = await drive.open(docToOpen);
     editor = createEditorForDocument(handle, docToOpen);
     currentDocName = docToOpen;
+
+    // Place cursor on first empty line (after frontmatter) for a clean first impression
+    if (mrmd.findInitialCursorPosition) {
+      const pos = mrmd.findInitialCursorPosition(editor.view.state.doc.toString());
+      if (pos > 0) {
+        editor.view.dispatch({
+          selection: { anchor: pos },
+          scrollIntoView: true,
+        });
+      }
+    }
 
     // Ensure runtime attachment exists (starts monitor if needed)
     try {
@@ -92960,16 +92983,58 @@ class PtyClient {
   }
 
   /**
-   * Send data to the PTY (user input)
+   * Send data to the PTY (user input).
+   * Large payloads (pastes) are chunked to avoid overwhelming the terminal
+   * renderer and WebSocket tunnel on markco.dev.
+   *
    * @param {string} data - Input data
    */
   write(data) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({
-        type: 'input',
-        data: data,
-      }));
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    // Small inputs (normal typing, control sequences): send immediately
+    if (data.length <= 4096) {
+      this.ws.send(JSON.stringify({ type: 'input', data }));
+      return;
     }
+
+    // Large paste: chunk it to prevent UI freeze.
+    // xterm.js may wrap pastes in bracketed paste markers (\x1b[200~ ... \x1b[201~).
+    // We preserve those: send a leading marker once, chunk the body, send trailing marker.
+    const BPS = '\x1b[200~';
+    const BPE = '\x1b[201~';
+    let body = data;
+    let hasBracket = false;
+
+    if (body.startsWith(BPS) && body.endsWith(BPE)) {
+      hasBracket = true;
+      body = body.slice(BPS.length, -BPE.length);
+    }
+
+    const CHUNK_SIZE = 2048;
+    const CHUNK_DELAY_MS = 6;
+    let offset = 0;
+    const ws = this.ws;
+
+    if (hasBracket) {
+      ws.send(JSON.stringify({ type: 'input', data: BPS }));
+    }
+
+    const sendNext = () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (offset >= body.length) {
+        if (hasBracket) {
+          ws.send(JSON.stringify({ type: 'input', data: BPE }));
+        }
+        return;
+      }
+      const chunk = body.slice(offset, offset + CHUNK_SIZE);
+      offset += CHUNK_SIZE;
+      ws.send(JSON.stringify({ type: 'input', data: chunk }));
+      setTimeout(sendNext, CHUNK_DELAY_MS);
+    };
+
+    sendNext();
   }
 
   /**
@@ -124712,6 +124777,522 @@ const openresponsesTheme = {
   '--header-fg-hover': '#0f172a',          // slate-900
 };
 
+// ===========================================================================
+// WIZARD'S STUDY THEMES
+// ===========================================================================
+
+/**
+ * Wizard's Study Dark Theme
+ *
+ * Deep midnight background like aged oak walls, warm parchment text
+ * like candlelit scrolls. Muted jewel tones: amethyst, sage, gold, ember.
+ *
+ * Inspired by late-night reading in a wizard's tower — the warm glow
+ * of candles on old wood, ink on parchment, crystals catching starlight.
+ *
+ * ## Color Palette
+ *
+ * **Backgrounds** — midnight oak, shadow, twilight velvet
+ * - #1a1b2e (midnight oak — main background)
+ * - #2a2b3d (shadow — elevated surfaces)
+ * - #3d3552 (twilight velvet — selections, highlights)
+ *
+ * **Text** — warm parchment tones
+ * - #d4c4a8 (warm parchment — primary text)
+ * - #a49478 (worn scroll — muted text)
+ * - #c8a654 (candlelight gold — accent)
+ *
+ * **Syntax** — aged jewel tones
+ * - #a87cc4 (amethyst crystal — keywords)
+ * - #8aab7c (sage leaf — strings)
+ * - #c8a654 (candlelight gold — numbers, cursor)
+ * - #c47862 (fading ember — errors, tags)
+ * - #7c8ec4 (twilight sky — functions)
+ * - #7caab0 (moonlit water — types)
+ */
+const wizardStudyDarkTheme = {
+  name: 'wizard-study-dark',
+  description: "Deep midnight study with candlelit parchment tones. The Wizard's Study (dark).",
+  isDark: true,
+  fontFace: defaultFontFace,
+
+  // ===========================================================================
+  // SPACING
+  // ===========================================================================
+  '--widget-line-height': 'inherit',
+  '--widget-padding-x': '12px',
+  '--widget-padding-y': '8px',
+  '--widget-margin-y': '4px',
+  '--widget-border-radius': '6px',
+  '--widget-border-width': '1px',
+  '--widget-border-accent-width': '3px',
+
+  // Text layout
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
+
+  // ===========================================================================
+  // TYPOGRAPHY
+  // ===========================================================================
+  '--widget-font-mono': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+  '--widget-font-sans': "Literata, Charter, Georgia, serif",
+  '--editor-font-family': "Literata, Charter, Georgia, serif",
+  '--widget-font-size': '0.9em',
+  '--widget-font-size-small': '0.8em',
+  '--widget-font-size-label': '11px',
+
+  // ===========================================================================
+  // SURFACES (midnight oak tones)
+  // ===========================================================================
+  '--widget-surface': '#222336',           // slightly lighter than editor bg
+  '--widget-surface-hover': '#2a2b3d',     // shadow
+  '--widget-surface-elevated': '#2a2b3d',  // shadow — tooltips, dropdowns
+  '--widget-surface-inset': '#141524',     // deeper shadow
+
+  // ===========================================================================
+  // BORDERS
+  // ===========================================================================
+  '--widget-border': '#3d3552',            // twilight velvet
+  '--widget-border-accent': 'rgba(200, 166, 84, 0.6)',  // candlelight gold
+  '--widget-border-focus': '#c8a654',      // molten gold
+
+  // ===========================================================================
+  // TEXT COLORS (parchment tones)
+  // ===========================================================================
+  '--widget-text': '#d4c4a8',             // warm parchment
+  '--widget-text-muted': '#8a7a5e',       // worn scroll
+  '--widget-text-accent': '#c8a654',      // candlelight gold
+
+  // ===========================================================================
+  // SEMANTIC COLORS (jewel tones)
+  // ===========================================================================
+  '--widget-success': '#8aab7c',          // sage leaf
+  '--widget-warning': '#c8a654',          // candlelight gold
+  '--widget-error': '#c47862',            // fading ember
+  '--widget-info': '#7c8ec4',             // twilight sky
+
+  // ===========================================================================
+  // ANSI TERMINAL COLORS (from Alacritty theme)
+  // ===========================================================================
+  '--ansi-black': '#2a2b3d',              // shadow
+  '--ansi-red': '#c47862',                // fading ember
+  '--ansi-green': '#8aab7c',              // sage leaf
+  '--ansi-yellow': '#c8a654',             // candlelight gold
+  '--ansi-blue': '#7c8ec4',              // twilight sky
+  '--ansi-magenta': '#a87cc4',            // amethyst crystal
+  '--ansi-cyan': '#7caab0',              // moonlit water
+  '--ansi-white': '#d4c4a8',             // parchment
+  '--ansi-bright-black': '#4a4b5d',       // lighter shadow
+  '--ansi-bright-red': '#d49882',         // warm hearth
+  '--ansi-bright-green': '#a4c896',       // spring moss
+  '--ansi-bright-yellow': '#e8c874',      // sunbeam
+  '--ansi-bright-blue': '#9caed4',        // morning sky
+  '--ansi-bright-magenta': '#c49cd4',     // lavender mist
+  '--ansi-bright-cyan': '#9ccad0',        // clear brook
+  '--ansi-bright-white': '#ebe0cc',       // aged linen
+
+  // ===========================================================================
+  // TERMINAL COLORS
+  // ===========================================================================
+  '--term-background': '#1a1b2e',         // midnight oak
+  '--term-foreground': '#d4c4a8',         // warm parchment
+  '--term-cursor': '#c8a654',             // molten gold
+  '--term-cursor-accent': '#1a1b2e',      // midnight oak
+  '--term-selection': '#3d3552',          // twilight velvet
+  '--term-border': '#3d3552',             // twilight velvet
+  '--term-header-bg': '#2a2b3d',          // shadow
+  '--term-header-fg': '#8a7a5e',          // worn scroll
+
+  // ===========================================================================
+  // COLLABORATOR COLORS
+  // ===========================================================================
+  '--collab-human': '#7c8ec4',            // twilight sky
+  '--collab-ai': '#a87cc4',              // amethyst crystal
+  '--collab-runtime': '#8aab7c',          // sage leaf
+
+  // ===========================================================================
+  // EDITOR
+  // ===========================================================================
+  '--editor-background': '#1a1b2e',       // midnight oak
+  '--editor-foreground': '#d4c4a8',       // warm parchment
+  '--editor-line-number': '#4a4b5d',      // lighter shadow
+  '--editor-line-number-active': '#d4c4a8', // warm parchment
+  '--editor-selection': '#3d3552',        // twilight velvet
+  '--editor-selection-match': '#33304a',  // deeper velvet
+  '--editor-cursor': '#c8a654',           // molten gold
+  '--editor-active-line': 'rgba(61, 53, 82, 0.4)',  // twilight velvet hint
+  '--editor-gutter': '#1a1b2e',           // midnight oak
+  '--editor-matching-bracket': 'rgba(200, 166, 84, 0.3)',  // gold shimmer
+
+  // ===========================================================================
+  // SYNTAX HIGHLIGHTING (jewel tones — muted, aged, wise)
+  // ===========================================================================
+  '--syntax-keyword': '#a87cc4',          // amethyst crystal
+  '--syntax-control': '#a87cc4',          // amethyst crystal
+  '--syntax-string': '#8aab7c',           // sage leaf
+  '--syntax-number': '#c8a654',           // candlelight gold
+  '--syntax-comment': '#5a5b6d',          // dim stone
+  '--syntax-function': '#7c8ec4',         // twilight sky
+  '--syntax-variable': '#d4c4a8',         // warm parchment
+  '--syntax-variable-special': '#a87cc4', // amethyst crystal
+  '--syntax-property': '#9caed4',         // morning sky
+  '--syntax-operator': '#d4c4a8',         // parchment
+  '--syntax-punctuation': '#8a7a5e',      // worn scroll
+  '--syntax-type': '#7caab0',             // moonlit water
+  '--syntax-class': '#7caab0',            // moonlit water
+  '--syntax-constant': '#c8a654',         // candlelight gold
+  '--syntax-parameter': '#d4c4a8',        // warm parchment
+  '--syntax-regexp': '#c47862',           // fading ember
+  '--syntax-escape': '#e8c874',           // sunbeam
+  '--syntax-tag': '#c47862',              // fading ember
+  '--syntax-attribute': '#9caed4',        // morning sky
+  '--syntax-attribute-value': '#8aab7c',  // sage leaf
+  '--syntax-heading': '#c8a654',          // candlelight gold
+  '--syntax-link': '#7c8ec4',             // twilight sky
+  '--syntax-link-text': '#9caed4',        // morning sky
+  '--syntax-emphasis': '#c49cd4',         // lavender mist
+  '--syntax-strong': '#ebe0cc',           // aged linen
+  '--syntax-strikethrough': '#4a4b5d',    // lighter shadow
+  '--syntax-quote': '#5a5b6d',            // dim stone
+  '--syntax-code': '#c8a654',             // candlelight gold
+  '--syntax-code-background': 'rgba(42, 43, 61, 0.6)',  // shadow
+  '--syntax-meta': '#5a5b6d',             // dim stone
+  '--syntax-inserted': '#8aab7c',         // sage leaf
+  '--syntax-deleted': '#c47862',          // fading ember
+  '--syntax-changed': '#c8a654',          // candlelight gold
+
+  // ===========================================================================
+  // MARKDOWN RENDERING
+  // ===========================================================================
+  '--md-heading-1-size': '1.75em',
+  '--md-heading-2-size': '1.4em',
+  '--md-heading-3-size': '1.2em',
+  '--md-heading-4-size': '1.1em',
+  '--md-heading-5-size': '1.05em',
+  '--md-heading-6-size': '1em',
+  '--md-heading-weight': '600',
+  '--md-heading-line-height': '1.3',
+  '--md-heading-margin-top': '0.5em',
+  '--md-heading-color': '#e8c874',        // sunbeam for headings
+  '--md-marker-color': '#5a5b6d',         // dim stone
+  '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+  '--md-link-color': '#7c8ec4',           // twilight sky
+  '--md-link-decoration': 'underline',
+  '--md-code-background': 'rgba(42, 43, 61, 0.6)',  // shadow
+  '--md-code-color': '#c8a654',           // candlelight gold
+  '--md-code-padding': '0.15em 0.35em',
+  '--md-code-radius': '3px',
+  '--md-blockquote-border': 'rgba(200, 166, 84, 0.4)',  // candlelight gold
+  '--md-blockquote-border-width': '3px',
+  '--md-blockquote-color': '#8a7a5e',     // worn scroll
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#8a7a5e',    // worn scroll
+  '--md-hr-color': '#3d3552',             // twilight velvet
+  '--md-hr-height': '1px',
+  '--md-hr-margin': '1.5em 0',
+  '--md-table-border': '#3d3552',         // twilight velvet
+  '--md-table-header-bg': '#2a2b3d',      // shadow
+  '--md-table-header-weight': '600',
+  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-table-stripe-bg': 'transparent',
+  '--md-image-max-width': '100%',
+  '--md-image-border-radius': '6px',
+  '--md-checkbox-size': '1em',
+  '--md-checkbox-color': '#c8a654',       // candlelight gold
+  '--md-alert-note-color': '#7c8ec4',     // twilight sky
+  '--md-alert-tip-color': '#8aab7c',      // sage leaf
+  '--md-alert-important-color': '#a87cc4', // amethyst crystal
+  '--md-alert-warning-color': '#c8a654',  // candlelight gold
+  '--md-alert-caution-color': '#c47862',  // fading ember
+
+  // ===========================================================================
+  // SHELL (status bar, menus, dialogs)
+  // ===========================================================================
+  '--mrmd-ui-font': "Literata, Charter, Georgia, serif",
+  '--mrmd-ui-font-size': '13px',
+  '--mrmd-ui-font-size-sm': '11px',
+  '--mrmd-panel-bg': '#1a1b2e',           // midnight oak
+  '--mrmd-popup-bg': '#2a2b3d',           // shadow
+  '--mrmd-bg': '#1a1b2e',                 // midnight oak
+  '--mrmd-fg': '#d4c4a8',                 // warm parchment
+  '--mrmd-fg-muted': '#8a7a5e',           // worn scroll
+  '--mrmd-border': '#3d3552',             // twilight velvet
+  '--mrmd-hover-bg': 'rgba(200, 166, 84, 0.08)',  // gold hint
+  '--mrmd-active-bg': 'rgba(200, 166, 84, 0.12)', // gold hint
+  '--mrmd-selection-bg': 'rgba(200, 166, 84, 0.2)', // gold selection
+  '--mrmd-accent': '#c8a654',             // candlelight gold
+  '--mrmd-accent-hover': '#e8c874',       // sunbeam
+  '--mrmd-success': '#8aab7c',            // sage leaf
+  '--mrmd-warning': '#c8a654',            // candlelight gold
+  '--mrmd-error': '#c47862',              // fading ember
+  '--mrmd-shadow-md': '0 4px 12px rgba(0, 0, 0, 0.4)',
+  '--mrmd-shadow-lg': '0 8px 32px rgba(0, 0, 0, 0.5)',
+  '--mrmd-shadow-xl': '0 16px 48px rgba(0, 0, 0, 0.6)',
+  '--mrmd-menu-border': '#3d3552',        // twilight velvet
+  '--mrmd-dialog-border': '#3d3552',      // twilight velvet
+  '--mrmd-input-border': '#3d3552',       // twilight velvet
+  '--mrmd-button-bg': '#2a2b3d',          // shadow
+  '--mrmd-button-border': '#3d3552',      // twilight velvet
+  '--mrmd-button-hover': '#3d3552',       // twilight velvet
+  '--mrmd-button-active': '#4a4b5d',      // lighter shadow
+};
+
+/**
+ * Wizard's Study Light Theme
+ *
+ * Sunlit parchment background like an open grimoire, deep ink foreground
+ * like fresh calligraphy. Warm jewel tones: amber, forest, dusty rose, deep sea.
+ *
+ * The same wizard's study in daylight — morning sun streaming through
+ * leaded glass, illuminating pages of aged manuscripts.
+ *
+ * ## Color Palette
+ *
+ * **Backgrounds** — sunlit parchment, warm vellum
+ * - #f2e8d5 (sunlit parchment — main background)
+ * - #e8dcc6 (bleached linen — elevated surfaces)
+ * - #d4c4a8 (warm vellum — selections)
+ *
+ * **Text** — aged ink, deep calligraphy
+ * - #2a2540 (aged ink — primary text)
+ * - #5a5470 (faded ink — muted text)
+ * - #a07830 (deep amber quill — accent)
+ *
+ * **Syntax** — rich inks on parchment
+ * - #7a4a8a (dried lavender — keywords)
+ * - #4a7a42 (forest herb — strings)
+ * - #8a6a20 (aged amber — numbers)
+ * - #a04040 (sealing wax — errors, tags)
+ * - #3a5a9a (lapis lazuli — functions)
+ * - #3a7a7a (deep well water — types)
+ */
+const wizardStudyLightTheme = {
+  name: 'wizard-study-light',
+  description: "Sunlit parchment with rich ink tones. The Wizard's Study (light).",
+  isDark: false,
+  fontFace: defaultFontFace,
+
+  // ===========================================================================
+  // SPACING
+  // ===========================================================================
+  '--widget-line-height': 'inherit',
+  '--widget-padding-x': '12px',
+  '--widget-padding-y': '8px',
+  '--widget-margin-y': '4px',
+  '--widget-border-radius': '6px',
+  '--widget-border-width': '1px',
+  '--widget-border-accent-width': '3px',
+
+  // Text layout
+  '--widget-white-space': 'pre-wrap',
+  '--widget-word-break': 'break-word',
+
+  // ===========================================================================
+  // TYPOGRAPHY
+  // ===========================================================================
+  '--widget-font-mono': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+  '--widget-font-sans': "Literata, Charter, Georgia, serif",
+  '--editor-font-family': "Literata, Charter, Georgia, serif",
+  '--widget-font-size': '0.9em',
+  '--widget-font-size-small': '0.8em',
+  '--widget-font-size-label': '11px',
+
+  // ===========================================================================
+  // SURFACES (sunlit parchment tones)
+  // ===========================================================================
+  '--widget-surface': '#eaddc8',           // aged parchment
+  '--widget-surface-hover': '#e2d4bc',     // touched parchment
+  '--widget-surface-elevated': '#f2e8d5',  // sunlit parchment
+  '--widget-surface-inset': '#e0d2ba',     // deeper parchment
+
+  // ===========================================================================
+  // BORDERS
+  // ===========================================================================
+  '--widget-border': '#d4c4a8',            // warm vellum
+  '--widget-border-accent': 'rgba(160, 120, 48, 0.5)',  // deep amber quill
+  '--widget-border-focus': '#a07830',      // deep amber quill
+
+  // ===========================================================================
+  // TEXT COLORS (aged ink)
+  // ===========================================================================
+  '--widget-text': '#2a2540',             // aged ink
+  '--widget-text-muted': '#6a6480',       // ghosted ink
+  '--widget-text-accent': '#a07830',      // deep amber quill
+
+  // ===========================================================================
+  // SEMANTIC COLORS
+  // ===========================================================================
+  '--widget-success': '#4a7a42',          // forest herb
+  '--widget-warning': '#8a6a20',          // aged amber
+  '--widget-error': '#a04040',            // sealing wax
+  '--widget-info': '#3a5a9a',             // lapis lazuli
+
+  // ===========================================================================
+  // ANSI TERMINAL COLORS (from Alacritty light theme)
+  // ===========================================================================
+  '--ansi-black': '#2a2540',              // deep ink
+  '--ansi-red': '#a04040',                // sealing wax
+  '--ansi-green': '#4a7a42',              // forest herb
+  '--ansi-yellow': '#8a6a20',             // aged amber
+  '--ansi-blue': '#3a5a9a',              // lapis lazuli
+  '--ansi-magenta': '#7a4a8a',            // dried lavender
+  '--ansi-cyan': '#3a7a7a',              // deep well water
+  '--ansi-white': '#e8dcc6',             // bleached linen
+  '--ansi-bright-black': '#5a5470',       // faded ink
+  '--ansi-bright-red': '#c45a4a',         // phoenix feather
+  '--ansi-bright-green': '#5a9a52',       // spring canopy
+  '--ansi-bright-yellow': '#b08a30',      // gilded edge
+  '--ansi-bright-blue': '#4a72b8',        // sapphire shard
+  '--ansi-bright-magenta': '#9a62a8',     // amethyst glow
+  '--ansi-bright-cyan': '#4a9494',        // enchanted pool
+  '--ansi-bright-white': '#f2e8d5',       // sunlit parchment
+
+  // ===========================================================================
+  // TERMINAL COLORS
+  // ===========================================================================
+  '--term-background': '#f2e8d5',         // sunlit parchment
+  '--term-foreground': '#2a2540',         // aged ink
+  '--term-cursor': '#a07830',             // deep amber quill
+  '--term-cursor-accent': '#f2e8d5',      // sunlit parchment
+  '--term-selection': '#d4c4a8',          // warm vellum
+  '--term-border': '#d4c4a8',             // warm vellum
+  '--term-header-bg': '#e8dcc6',          // bleached linen
+  '--term-header-fg': '#6a6480',          // ghosted ink
+
+  // ===========================================================================
+  // COLLABORATOR COLORS
+  // ===========================================================================
+  '--collab-human': '#3a5a9a',            // lapis lazuli
+  '--collab-ai': '#7a4a8a',              // dried lavender
+  '--collab-runtime': '#4a7a42',          // forest herb
+
+  // ===========================================================================
+  // EDITOR
+  // ===========================================================================
+  '--editor-background': '#f2e8d5',       // sunlit parchment
+  '--editor-foreground': '#2a2540',       // aged ink
+  '--editor-line-number': '#a49478',      // worn scroll
+  '--editor-line-number-active': '#5a5470', // faded ink
+  '--editor-selection': '#d4c4a8',        // warm vellum
+  '--editor-selection-match': '#e0d2ba',  // deeper parchment
+  '--editor-cursor': '#a07830',           // deep amber quill
+  '--editor-active-line': 'rgba(212, 196, 168, 0.4)',  // warm vellum hint
+  '--editor-gutter': '#f2e8d5',           // sunlit parchment
+  '--editor-matching-bracket': 'rgba(160, 120, 48, 0.25)',  // amber shimmer
+
+  // ===========================================================================
+  // SYNTAX HIGHLIGHTING (rich inks on parchment)
+  // ===========================================================================
+  '--syntax-keyword': '#7a4a8a',          // dried lavender
+  '--syntax-control': '#7a4a8a',          // dried lavender
+  '--syntax-string': '#4a7a42',           // forest herb
+  '--syntax-number': '#8a6a20',           // aged amber
+  '--syntax-comment': '#a49478',          // worn scroll
+  '--syntax-function': '#3a5a9a',         // lapis lazuli
+  '--syntax-variable': '#2a2540',         // aged ink
+  '--syntax-variable-special': '#7a4a8a', // dried lavender
+  '--syntax-property': '#4a72b8',         // sapphire shard
+  '--syntax-operator': '#2a2540',         // aged ink
+  '--syntax-punctuation': '#6a6480',      // ghosted ink
+  '--syntax-type': '#3a7a7a',             // deep well water
+  '--syntax-class': '#3a7a7a',            // deep well water
+  '--syntax-constant': '#8a6a20',         // aged amber
+  '--syntax-parameter': '#2a2540',        // aged ink
+  '--syntax-regexp': '#a04040',           // sealing wax
+  '--syntax-escape': '#b08a30',           // gilded edge
+  '--syntax-tag': '#a04040',              // sealing wax
+  '--syntax-attribute': '#4a72b8',        // sapphire shard
+  '--syntax-attribute-value': '#4a7a42',  // forest herb
+  '--syntax-heading': '#2a2540',          // aged ink — bold on parchment
+  '--syntax-link': '#3a5a9a',             // lapis lazuli
+  '--syntax-link-text': '#4a72b8',        // sapphire shard
+  '--syntax-emphasis': '#7a4a8a',         // dried lavender
+  '--syntax-strong': '#2a2540',           // aged ink
+  '--syntax-strikethrough': '#a49478',    // worn scroll
+  '--syntax-quote': '#6a6480',            // ghosted ink
+  '--syntax-code': '#8a6a20',             // aged amber
+  '--syntax-code-background': 'rgba(212, 196, 168, 0.5)',  // warm vellum
+  '--syntax-meta': '#a49478',             // worn scroll
+  '--syntax-inserted': '#4a7a42',         // forest herb
+  '--syntax-deleted': '#a04040',          // sealing wax
+  '--syntax-changed': '#8a6a20',          // aged amber
+
+  // ===========================================================================
+  // MARKDOWN RENDERING
+  // ===========================================================================
+  '--md-heading-1-size': '1.75em',
+  '--md-heading-2-size': '1.4em',
+  '--md-heading-3-size': '1.2em',
+  '--md-heading-4-size': '1.1em',
+  '--md-heading-5-size': '1.05em',
+  '--md-heading-6-size': '1em',
+  '--md-heading-weight': '600',
+  '--md-heading-line-height': '1.3',
+  '--md-heading-margin-top': '0.5em',
+  '--md-heading-color': '#2a2540',        // aged ink
+  '--md-marker-color': '#a49478',         // worn scroll
+  '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+  '--md-link-color': '#3a5a9a',           // lapis lazuli
+  '--md-link-decoration': 'underline',
+  '--md-code-background': 'rgba(212, 196, 168, 0.5)',  // warm vellum
+  '--md-code-color': '#8a6a20',           // aged amber
+  '--md-code-padding': '0.15em 0.35em',
+  '--md-code-radius': '3px',
+  '--md-blockquote-border': 'rgba(160, 120, 48, 0.4)',  // amber quill
+  '--md-blockquote-border-width': '3px',
+  '--md-blockquote-color': '#6a6480',     // ghosted ink
+  '--md-blockquote-padding': '1em',
+  '--md-list-marker-color': '#a49478',    // worn scroll
+  '--md-hr-color': '#d4c4a8',             // warm vellum
+  '--md-hr-height': '1px',
+  '--md-hr-margin': '1.5em 0',
+  '--md-table-border': '#d4c4a8',         // warm vellum
+  '--md-table-header-bg': '#e8dcc6',      // bleached linen
+  '--md-table-header-weight': '600',
+  '--md-table-cell-padding': '0.5em 0.75em',
+  '--md-table-stripe-bg': 'transparent',
+  '--md-image-max-width': '100%',
+  '--md-image-border-radius': '6px',
+  '--md-checkbox-size': '1em',
+  '--md-checkbox-color': '#a07830',       // deep amber quill
+  '--md-alert-note-color': '#3a5a9a',     // lapis lazuli
+  '--md-alert-tip-color': '#4a7a42',      // forest herb
+  '--md-alert-important-color': '#7a4a8a', // dried lavender
+  '--md-alert-warning-color': '#8a6a20',  // aged amber
+  '--md-alert-caution-color': '#a04040',  // sealing wax
+
+  // ===========================================================================
+  // SHELL (status bar, menus, dialogs)
+  // ===========================================================================
+  '--mrmd-ui-font': "Literata, Charter, Georgia, serif",
+  '--mrmd-ui-font-size': '13px',
+  '--mrmd-ui-font-size-sm': '11px',
+  '--mrmd-panel-bg': '#f2e8d5',           // sunlit parchment
+  '--mrmd-popup-bg': '#f2e8d5',           // sunlit parchment
+  '--mrmd-bg': '#f2e8d5',                 // sunlit parchment
+  '--mrmd-fg': '#2a2540',                 // aged ink
+  '--mrmd-fg-muted': '#6a6480',           // ghosted ink
+  '--mrmd-border': '#d4c4a8',             // warm vellum
+  '--mrmd-hover-bg': 'rgba(160, 120, 48, 0.08)',  // amber hint
+  '--mrmd-active-bg': 'rgba(160, 120, 48, 0.12)', // amber hint
+  '--mrmd-selection-bg': 'rgba(160, 120, 48, 0.15)', // amber selection
+  '--mrmd-accent': '#a07830',             // deep amber quill
+  '--mrmd-accent-hover': '#8a6a20',       // aged amber
+  '--mrmd-success': '#4a7a42',            // forest herb
+  '--mrmd-warning': '#8a6a20',            // aged amber
+  '--mrmd-error': '#a04040',              // sealing wax
+  '--mrmd-shadow-md': '0 4px 12px rgba(0, 0, 0, 0.1)',
+  '--mrmd-shadow-lg': '0 8px 32px rgba(0, 0, 0, 0.12)',
+  '--mrmd-shadow-xl': '0 16px 48px rgba(0, 0, 0, 0.15)',
+  '--mrmd-menu-border': '#d4c4a8',        // warm vellum
+  '--mrmd-dialog-border': '#d4c4a8',      // warm vellum
+  '--mrmd-input-border': '#d4c4a8',       // warm vellum
+  '--mrmd-button-bg': '#e8dcc6',          // bleached linen
+  '--mrmd-button-border': '#d4c4a8',      // warm vellum
+  '--mrmd-button-hover': '#d4c4a8',       // warm vellum
+  '--mrmd-button-active': '#c8bca6',      // worn scroll
+};
+
 // #endregion BUILT_IN_THEMES
 
 // #region THEME_REGISTRY
@@ -124721,6 +125302,8 @@ const openresponsesTheme = {
  * @type {Map<string, object>}
  */
 const themeRegistry = new Map([
+  ['wizard-study-dark', wizardStudyDarkTheme],
+  ['wizard-study-light', wizardStudyLightTheme],
   ['midnight', midnightTheme],
   ['daylight', daylightTheme],
   ['moonlight', moonlightTheme],
@@ -124833,7 +125416,7 @@ function getDefaultTokens() {
  * 1. Explicit config (config.appearance.widgetTheme)
  * 2. CodeMirror theme class (.cm-theme-dark)
  * 3. System preference (prefers-color-scheme)
- * 4. Default: 'midnight' (dark)
+ * 4. Default: 'wizard-study-dark' (dark)
  *
  * ## Watching for Changes
  *
@@ -124854,12 +125437,12 @@ function getDefaultTokens() {
  * 1. Explicit theme name passed as parameter
  * 2. CodeMirror theme class on the editor element
  * 3. System color scheme preference
- * 4. Default: 'midnight'
+ * 4. Default: 'wizard-study-dark'
  *
  * @param {Object} [options]
  * @param {string} [options.themeName] - Explicit theme name (highest priority)
  * @param {HTMLElement} [options.editorElement] - Editor DOM element to check for .cm-theme-dark
- * @returns {string} Theme name ('midnight', 'daylight', etc.)
+ * @returns {string} Theme name ('wizard-study-dark', 'wizard-study-light', etc.)
  *
  * @example
  * // Detect based on CodeMirror and system preference
@@ -124880,25 +125463,25 @@ function detectTheme({ themeName, editorElement } = {}) {
     // CodeMirror adds this class when using oneDark or similar dark themes
     const hasDarkTheme = editorElement.closest('.cm-theme-dark') !== null;
     if (hasDarkTheme) {
-      return 'midnight';
+      return 'wizard-study-dark';
     }
 
     // If there's any cm-theme class but not dark, assume light
     const hasAnyTheme = editorElement.matches('[class*="cm-theme"]') ||
       editorElement.closest('[class*="cm-theme"]') !== null;
     if (hasAnyTheme) {
-      return 'daylight';
+      return 'wizard-study-light';
     }
   }
 
   // 3. System preference
   if (typeof window !== 'undefined' && window.matchMedia) {
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    return prefersDark ? 'midnight' : 'daylight';
+    return prefersDark ? 'wizard-study-dark' : 'wizard-study-light';
   }
 
   // 4. Default
-  return 'midnight';
+  return 'wizard-study-dark';
 }
 
 /**
@@ -125031,7 +125614,7 @@ const THEME_FONTS_ID = 'mrmd-widget-theme-fonts';
  *
  * @example
  * // Apply by name
- * applyTheme('midnight');
+ * applyTheme('wizard-study-dark');
  *
  * // Apply custom theme object
  * applyTheme({
@@ -125048,7 +125631,7 @@ function applyTheme(themeOrName, { target, useStyleTag = true } = {}) {
 
   if (!theme) {
     console.warn(`Theme "${themeOrName}" not found, using midnight`);
-    return applyTheme('midnight', { target, useStyleTag });
+    return applyTheme('wizard-study-dark', { target, useStyleTag });
   }
 
   // Get token values (exclude name, description, fontFace, isDark)
@@ -125153,7 +125736,7 @@ function removeThemeStyles() {
  * @returns {string} CSS string with :root variables and optional font-face
  *
  * @example
- * const css = generateThemeCSS('midnight');
+ * const css = generateThemeCSS('wizard-study-dark');
  * // :root {
  * //   --widget-surface: rgba(0, 0, 0, 0.35);
  * //   ...
@@ -125169,7 +125752,7 @@ function generateThemeCSS(themeOrName, { includeFontFace = true } = {}) {
     : themeOrName;
 
   if (!theme) {
-    return generateThemeCSS('midnight', { includeFontFace });
+    return generateThemeCSS('wizard-study-dark', { includeFontFace });
   }
 
   const vars = Object.entries(theme)
@@ -128448,6 +129031,50 @@ class Writer {
 }
 // #endregion WRITER
 
+// #region INITIAL_CURSOR
+/**
+ * Find the ideal initial cursor position for a markdown document.
+ *
+ * When opening a file, placing the cursor at position 0 shows raw frontmatter
+ * YAML which looks ugly. Instead, we find the first empty line after any
+ * frontmatter block — this causes the frontmatter to render as a nice widget
+ * and gives a clean first impression.
+ *
+ * @param {string} content - Document content
+ * @returns {number} Character position for the cursor
+ */
+function findInitialCursorPosition(content) {
+  if (!content) return 0;
+
+  const lines = content.split('\n');
+  let i = 0;
+
+  // Skip YAML frontmatter if present (--- ... ---)
+  if (lines[0]?.trim() === '---') {
+    i = 1;
+    while (i < lines.length && lines[i]?.trim() !== '---') {
+      i++;
+    }
+    if (i < lines.length) i++; // skip closing ---
+  }
+
+  // Find first empty line from current position
+  while (i < lines.length) {
+    if (lines[i]?.trim() === '') {
+      // Calculate character position (start of this empty line)
+      let pos = 0;
+      for (let j = 0; j < i; j++) {
+        pos += lines[j].length + 1; // +1 for \n
+      }
+      return pos;
+    }
+    i++;
+  }
+
+  return 0; // fallback to start
+}
+// #endregion INITIAL_CURSOR
+
 // #region CREATE
 /**
  * Create a standalone markdown editor
@@ -130729,6 +131356,7 @@ const mrmd = {
   create,
   drive,
   runtime,
+  findInitialCursorPosition,
   yjs,
   codemirror,
   terminal,
@@ -130853,6 +131481,7 @@ var index = /*#__PURE__*/Object.freeze({
   detectTheme: detectTheme,
   devPanelExtension: devPanelExtension,
   drive: drive,
+  findInitialCursorPosition: findInitialCursorPosition,
   findRuntimeBlocks: findRuntimeBlocks,
   findSessionFrontmatter: findSessionFrontmatter,
   findTerminalBlocks: findTerminalBlocks,
@@ -130991,6 +131620,7 @@ exports.defaultAwarenessConfig = defaultAwarenessConfig;
 exports.detectTheme = detectTheme;
 exports.devPanelExtension = devPanelExtension;
 exports.drive = drive;
+exports.findInitialCursorPosition = findInitialCursorPosition;
 exports.findRuntimeBlocks = findRuntimeBlocks;
 exports.findSessionFrontmatter = findSessionFrontmatter;
 exports.findTerminalBlocks = findTerminalBlocks;

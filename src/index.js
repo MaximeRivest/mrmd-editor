@@ -791,6 +791,50 @@ class Writer {
 }
 // #endregion WRITER
 
+// #region INITIAL_CURSOR
+/**
+ * Find the ideal initial cursor position for a markdown document.
+ *
+ * When opening a file, placing the cursor at position 0 shows raw frontmatter
+ * YAML which looks ugly. Instead, we find the first empty line after any
+ * frontmatter block — this causes the frontmatter to render as a nice widget
+ * and gives a clean first impression.
+ *
+ * @param {string} content - Document content
+ * @returns {number} Character position for the cursor
+ */
+function findInitialCursorPosition(content) {
+  if (!content) return 0;
+
+  const lines = content.split('\n');
+  let i = 0;
+
+  // Skip YAML frontmatter if present (--- ... ---)
+  if (lines[0]?.trim() === '---') {
+    i = 1;
+    while (i < lines.length && lines[i]?.trim() !== '---') {
+      i++;
+    }
+    if (i < lines.length) i++; // skip closing ---
+  }
+
+  // Find first empty line from current position
+  while (i < lines.length) {
+    if (lines[i]?.trim() === '') {
+      // Calculate character position (start of this empty line)
+      let pos = 0;
+      for (let j = 0; j < i; j++) {
+        pos += lines[j].length + 1; // +1 for \n
+      }
+      return pos;
+    }
+    i++;
+  }
+
+  return 0; // fallback to start
+}
+// #endregion INITIAL_CURSOR
+
 // #region CREATE
 /**
  * Create a standalone markdown editor
@@ -3076,6 +3120,7 @@ const mrmd = {
   create,
   drive,
   runtime,
+  findInitialCursorPosition,
   yjs,
   codemirror,
   terminal,
@@ -3134,6 +3179,7 @@ export {
   create,
   drive,
   runtime,
+  findInitialCursorPosition,
   yjs,
   codemirror,
   terminal,

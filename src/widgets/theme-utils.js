@@ -9,7 +9,7 @@
  * 1. Explicit config (config.appearance.widgetTheme)
  * 2. CodeMirror theme class (.cm-theme-dark)
  * 3. System preference (prefers-color-scheme)
- * 4. Default: 'midnight' (dark)
+ * 4. Default: 'wizard-study-dark' (dark)
  *
  * ## Watching for Changes
  *
@@ -20,7 +20,7 @@
  * @module widgets/theme-utils
  */
 
-import { getTheme, midnightTheme, daylightTheme } from './theme.js';
+import { getTheme } from './theme.js';
 
 // #region DETECTION
 
@@ -31,12 +31,12 @@ import { getTheme, midnightTheme, daylightTheme } from './theme.js';
  * 1. Explicit theme name passed as parameter
  * 2. CodeMirror theme class on the editor element
  * 3. System color scheme preference
- * 4. Default: 'midnight'
+ * 4. Default: 'wizard-study-dark'
  *
  * @param {Object} [options]
  * @param {string} [options.themeName] - Explicit theme name (highest priority)
  * @param {HTMLElement} [options.editorElement] - Editor DOM element to check for .cm-theme-dark
- * @returns {string} Theme name ('midnight', 'daylight', etc.)
+ * @returns {string} Theme name ('wizard-study-dark', 'wizard-study-light', etc.)
  *
  * @example
  * // Detect based on CodeMirror and system preference
@@ -57,25 +57,25 @@ export function detectTheme({ themeName, editorElement } = {}) {
     // CodeMirror adds this class when using oneDark or similar dark themes
     const hasDarkTheme = editorElement.closest('.cm-theme-dark') !== null;
     if (hasDarkTheme) {
-      return 'midnight';
+      return 'wizard-study-dark';
     }
 
     // If there's any cm-theme class but not dark, assume light
     const hasAnyTheme = editorElement.matches('[class*="cm-theme"]') ||
       editorElement.closest('[class*="cm-theme"]') !== null;
     if (hasAnyTheme) {
-      return 'daylight';
+      return 'wizard-study-light';
     }
   }
 
   // 3. System preference
   if (typeof window !== 'undefined' && window.matchMedia) {
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    return prefersDark ? 'midnight' : 'daylight';
+    return prefersDark ? 'wizard-study-dark' : 'wizard-study-light';
   }
 
   // 4. Default
-  return 'midnight';
+  return 'wizard-study-dark';
 }
 
 /**
@@ -208,7 +208,7 @@ const THEME_FONTS_ID = 'mrmd-widget-theme-fonts';
  *
  * @example
  * // Apply by name
- * applyTheme('midnight');
+ * applyTheme('wizard-study-dark');
  *
  * // Apply custom theme object
  * applyTheme({
@@ -225,7 +225,7 @@ export function applyTheme(themeOrName, { target, useStyleTag = true } = {}) {
 
   if (!theme) {
     console.warn(`Theme "${themeOrName}" not found, using midnight`);
-    return applyTheme('midnight', { target, useStyleTag });
+    return applyTheme('wizard-study-dark', { target, useStyleTag });
   }
 
   // Get token values (exclude name, description, fontFace, isDark)
@@ -330,7 +330,7 @@ export function removeThemeStyles() {
  * @returns {string} CSS string with :root variables and optional font-face
  *
  * @example
- * const css = generateThemeCSS('midnight');
+ * const css = generateThemeCSS('wizard-study-dark');
  * // :root {
  * //   --widget-surface: rgba(0, 0, 0, 0.35);
  * //   ...
@@ -346,7 +346,7 @@ export function generateThemeCSS(themeOrName, { includeFontFace = true } = {}) {
     : themeOrName;
 
   if (!theme) {
-    return generateThemeCSS('midnight', { includeFontFace });
+    return generateThemeCSS('wizard-study-dark', { includeFontFace });
   }
 
   const vars = Object.entries(theme)

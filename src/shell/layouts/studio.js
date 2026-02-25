@@ -518,6 +518,18 @@ export async function createStudio(target, options = {}) {
       editor = createEditorForDocument(handle, normalizedName);
       currentDocName = normalizedName;
 
+      // Place cursor on first empty line (after frontmatter) for a clean first impression.
+      // Without this, cursor lands at position 0, showing raw YAML frontmatter.
+      if (mrmd.findInitialCursorPosition) {
+        const pos = mrmd.findInitialCursorPosition(editor.view.state.doc.toString());
+        if (pos > 0) {
+          editor.view.dispatch({
+            selection: { anchor: pos },
+            scrollIntoView: true,
+          });
+        }
+      }
+
       // Ensure runtime attachment exists (starts monitor if needed)
       try {
         await orchestratorClient.createRuntimeAttachment(normalizedName, 'shared');
@@ -556,6 +568,17 @@ export async function createStudio(target, options = {}) {
     const handle = await drive.open(docToOpen);
     editor = createEditorForDocument(handle, docToOpen);
     currentDocName = docToOpen;
+
+    // Place cursor on first empty line (after frontmatter) for a clean first impression
+    if (mrmd.findInitialCursorPosition) {
+      const pos = mrmd.findInitialCursorPosition(editor.view.state.doc.toString());
+      if (pos > 0) {
+        editor.view.dispatch({
+          selection: { anchor: pos },
+          scrollIntoView: true,
+        });
+      }
+    }
 
     // Ensure runtime attachment exists (starts monitor if needed)
     try {

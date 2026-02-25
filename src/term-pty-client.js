@@ -185,16 +185,58 @@ export class PtyClient {
   }
 
   /**
-   * Send data to the PTY (user input)
+   * Send data to the PTY (user input).
+   * Large payloads (pastes) are chunked to avoid overwhelming the terminal
+   * renderer and WebSocket tunnel on markco.dev.
+   *
    * @param {string} data - Input data
    */
   write(data) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({
-        type: 'input',
-        data: data,
-      }));
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    // Small inputs (normal typing, control sequences): send immediately
+    if (data.length <= 4096) {
+      this.ws.send(JSON.stringify({ type: 'input', data }));
+      return;
     }
+
+    // Large paste: chunk it to prevent UI freeze.
+    // xterm.js may wrap pastes in bracketed paste markers (\x1b[200~ ... \x1b[201~).
+    // We preserve those: send a leading marker once, chunk the body, send trailing marker.
+    const BPS = '\x1b[200~';
+    const BPE = '\x1b[201~';
+    let body = data;
+    let hasBracket = false;
+
+    if (body.startsWith(BPS) && body.endsWith(BPE)) {
+      hasBracket = true;
+      body = body.slice(BPS.length, -BPE.length);
+    }
+
+    const CHUNK_SIZE = 2048;
+    const CHUNK_DELAY_MS = 6;
+    let offset = 0;
+    const ws = this.ws;
+
+    if (hasBracket) {
+      ws.send(JSON.stringify({ type: 'input', data: BPS }));
+    }
+
+    const sendNext = () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (offset >= body.length) {
+        if (hasBracket) {
+          ws.send(JSON.stringify({ type: 'input', data: BPE }));
+        }
+        return;
+      }
+      const chunk = body.slice(offset, offset + CHUNK_SIZE);
+      offset += CHUNK_SIZE;
+      ws.send(JSON.stringify({ type: 'input', data: chunk }));
+      setTimeout(sendNext, CHUNK_DELAY_MS);
+    };
+
+    sendNext();
   }
 
   /**
