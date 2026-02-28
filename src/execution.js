@@ -737,6 +737,9 @@ export class ExecutionManager {
     // Emit start event
     this._emit('cellRun', index, cell, execId);
 
+    // Direct execution output write throttling (reduces CRDT churn for progress bars)
+    let clearChunkFlushTimer = null;
+
     try {
       // Prepare output position
       // Re-read content as it may have changed
@@ -815,22 +818,11 @@ export class ExecutionManager {
 
       // Track current output length in document for replacement
       let currentDocOutputLen = 0;
+      const chunkFlushMs = 100;
+      let chunkFlushTimer = null;
+      let latestProcessedOutput = '';
 
-      const onChunk = (chunk, accumulatedRaw, done) => {
-        if (controller.signal.aborted) return;
-
-        // Process through terminal buffer (handles \r, cursor movement, ANSI)
-        buffer.write(chunk);
-
-        // Get processed output with ANSI codes preserved
-        let processedOutput = buffer.toAnsi();
-
-        // Ensure output ends with newline so closing ``` stays on its own line
-        // This is critical for maintaining valid markdown structure
-        if (processedOutput && !processedOutput.endsWith('\n')) {
-          processedOutput += '\n';
-        }
-
+      const applyProcessedOutput = (processedOutput) => {
         // Get current position - prefer finding by execId for robustness
         let currentOutputStart = outputContentStart;
 
@@ -865,6 +857,61 @@ export class ExecutionManager {
         });
 
         currentDocOutputLen = processedOutput.length;
+      };
+
+      const flushChunkOutputNow = () => {
+        if (chunkFlushTimer) {
+          clearTimeout(chunkFlushTimer);
+          chunkFlushTimer = null;
+        }
+        applyProcessedOutput(latestProcessedOutput);
+      };
+
+      clearChunkFlushTimer = () => {
+        if (chunkFlushTimer) {
+          clearTimeout(chunkFlushTimer);
+          chunkFlushTimer = null;
+        }
+      };
+
+      const scheduleChunkOutputFlush = () => {
+        if (chunkFlushMs === 0) {
+          flushChunkOutputNow();
+          return;
+        }
+        if (chunkFlushTimer) return;
+        chunkFlushTimer = setTimeout(() => {
+          chunkFlushTimer = null;
+          applyProcessedOutput(latestProcessedOutput);
+        }, chunkFlushMs);
+      };
+
+      controller.signal.addEventListener('abort', () => {
+        clearChunkFlushTimer?.();
+      }, { once: true });
+
+      const onChunk = (chunk, accumulatedRaw, done) => {
+        if (controller.signal.aborted) return;
+
+        // Process through terminal buffer (handles \r, cursor movement, ANSI)
+        buffer.write(chunk);
+
+        // Get processed output with ANSI codes preserved
+        let processedOutput = buffer.toAnsi();
+
+        // Ensure output ends with newline so closing ``` stays on its own line
+        // This is critical for maintaining valid markdown structure
+        if (processedOutput && !processedOutput.endsWith('\n')) {
+          processedOutput += '\n';
+        }
+
+        latestProcessedOutput = processedOutput;
+
+        if (done) {
+          flushChunkOutputNow();
+        } else {
+          scheduleChunkOutputFlush();
+        }
 
         this._emit('cellOutput', index, chunk, processedOutput, execId);
       };
@@ -882,6 +929,9 @@ export class ExecutionManager {
             reject(new Error('Execution aborted'));
             return;
           }
+
+          // Flush pending output so prompt context is visible immediately
+          flushChunkOutputNow();
 
           const stdinExecId = execId;
 
@@ -1009,6 +1059,9 @@ export class ExecutionManager {
         onAsset,
       });
 
+      // Flush any pending throttled output before final normalization
+      flushChunkOutputNow();
+
       // Final update - find output block by execId for robustness
       content = this.editor.getContent();
       const finalOutputBlock = findOutputBlockByExecId(content, execId);
@@ -1127,6 +1180,7 @@ export class ExecutionManager {
       }
       return execId;
     } finally {
+      clearChunkFlushTimer?.();
       this.running.delete(execId);
       this.buffers.delete(execId);
 
