@@ -3,18 +3,12 @@
  *
  * Renders YAML frontmatter as a styled document header.
  * Shows title, subtitle, author, date, and abstract.
- * Session/runtime config keys are skipped (handled by runtime-codelens).
  *
  * @module markdown/widgets/frontmatter
  */
 
 import { WidgetType } from '@codemirror/view';
 import yaml from 'yaml';
-
-// Keys that are handled by runtime-codelens (not rendered here)
-const RUNTIME_KEYS = new Set([
-  'session', 'python', 'bash', 'node', 'julia', 'r', 'shell', 'term',
-]);
 
 const TITLE_COMMIT_EVENT = 'mrmd:frontmatter-title-commit';
 
