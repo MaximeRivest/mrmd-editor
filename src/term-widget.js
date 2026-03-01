@@ -146,15 +146,23 @@ class TerminalWidget extends WidgetType {
 
     // Get theme from CSS variables
     const theme = this._getThemeFromCSS();
+    const isMobile = /iPhone|iPad|Android|Mobile/i.test(navigator.userAgent);
 
     // Create terminal
     const term = new Terminal({
       cursorBlink: true,
-      fontSize: 14,
-      fontFamily: '"SF Mono", "Fira Code", "Monaco", "Inconsolata", monospace',
-      scrollback: 10000,
+      cursorStyle: 'block',
+      cursorInactiveStyle: 'outline',
+      fontSize: isMobile ? 13 : 14,
+      fontFamily: '"Monaspace Neon Var", "SF Mono", "Fira Code", "Monaco", "Inconsolata", monospace',
+      scrollback: isMobile ? 5000 : 50000,
       convertEol: true,
       theme: theme,
+      drawBoldTextInBrightColors: !isMobile,
+      allowTransparency: false,
+      smoothScrollDuration: 0,
+      fastScrollModifier: 'alt',
+      fastScrollSensitivity: isMobile ? 3 : 5,
     });
 
     this.xtermInstance = term;
@@ -175,6 +183,37 @@ class TerminalWidget extends WidgetType {
 
     // Open terminal
     term.open(container);
+
+    // Renderer addons: prefer WebGL on desktop, fallback to Canvas, then DOM.
+    let rendererLoaded = false;
+    if (!isMobile && typeof WebglAddon !== 'undefined') {
+      try {
+        const webgl = new WebglAddon.WebglAddon();
+        webgl.onContextLoss(() => {
+          try { webgl.dispose(); } catch (e) {}
+          console.warn('[term] WebGL context lost, falling back to canvas/DOM');
+          if (typeof CanvasAddon !== 'undefined') {
+            try {
+              term.loadAddon(new CanvasAddon.CanvasAddon());
+            } catch (canvasErr) {
+              console.warn('[term] Canvas addon failed, using DOM fallback:', canvasErr);
+            }
+          }
+        });
+        term.loadAddon(webgl);
+        rendererLoaded = true;
+      } catch (e) {
+        console.warn('[term] WebGL failed:', e);
+      }
+    }
+
+    if (!rendererLoaded && typeof CanvasAddon !== 'undefined') {
+      try {
+        term.loadAddon(new CanvasAddon.CanvasAddon());
+      } catch (e) {
+        console.warn('[term] Canvas addon failed, using DOM fallback:', e);
+      }
+    }
 
     // Fit to container
     if (this.fitAddon) {

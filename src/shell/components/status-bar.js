@@ -1124,7 +1124,7 @@ function createAiSegment({ shellState, handlers, onCleanup }) {
 // Known dark themes for proper icon display
 const DARK_THEMES = new Set([
   'midnight', 'moonlight', 'github', 'nord', 'nord-outputs',
-  'grayscale-dark',
+  'grayscale-dark', 'newsprint-dark', 'plain-dark',
 ]);
 
 // Custom themes storage key
@@ -1277,7 +1277,7 @@ function createThemeSegment({ editorRef, shellState, handlers, onCleanup }) {
         }
 
         // Check for name conflicts with built-in themes
-        const builtInThemes = ['midnight', 'daylight', 'moonlight', 'github', 'nord', 'nord-outputs', 'grayscale-dark', 'grayscale-light', 'openresponses'];
+        const builtInThemes = ['midnight', 'daylight', 'moonlight', 'github', 'nord', 'nord-outputs', 'grayscale-dark', 'grayscale-light', 'openresponses', 'newsprint-dark', 'newsprint-light', 'plain-dark', 'plain-light'];
         if (builtInThemes.includes(theme.name)) {
           alert(`Cannot use reserved theme name "${theme.name}". Please rename your theme.`);
           return;

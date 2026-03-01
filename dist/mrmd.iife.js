@@ -56795,7 +56795,7 @@ var mrmd = (function (exports) {
 /* Widget is absolutely positioned - overlays on transparent text lines, doesn't add to flow */
 .cm-output-widget {
   position: absolute;
-  left: var(--widget-inset-left, 0);
+  left: var(--widget-inset-left, 24px);
   right: 0;
   top: var(--widget-offset-top, 0);  /* Can be negative to pull widget up closer to code block */
   z-index: 1;
@@ -56906,7 +56906,7 @@ var mrmd = (function (exports) {
  */
 .cm-output-content-line {
   background: color-mix(in srgb, var(--widget-surface, rgba(0, 0, 0, 0.35)) 85%, transparent);
-  margin-left: var(--widget-inset-left, 0);
+  margin-left: var(--widget-inset-left, 24px);
   padding-left: var(--widget-padding-x, 16px);
   padding-right: var(--widget-padding-x, 16px);
   font-family: var(--widget-font-mono, 'Roboto Mono', 'SF Mono', Monaco, Consolas, monospace);
@@ -56961,7 +56961,7 @@ var mrmd = (function (exports) {
   font-size: 0.65em;
   color: var(--widget-text-muted, rgba(255, 255, 255, 0.3));
   padding-left: var(--widget-padding-x, 16px);
-  margin-left: var(--widget-inset-left, 0);
+  margin-left: var(--widget-inset-left, 24px);
   opacity: 0.7;
 }
 
@@ -64053,7 +64053,7 @@ ${ansiStyles}
   // Known dark themes for proper icon display
   const DARK_THEMES = new Set([
     'midnight', 'moonlight', 'github', 'nord', 'nord-outputs',
-    'grayscale-dark',
+    'grayscale-dark', 'newsprint-dark', 'plain-dark',
   ]);
 
   // Custom themes storage key
@@ -64206,7 +64206,7 @@ ${ansiStyles}
           }
 
           // Check for name conflicts with built-in themes
-          const builtInThemes = ['midnight', 'daylight', 'moonlight', 'github', 'nord', 'nord-outputs', 'grayscale-dark', 'grayscale-light', 'openresponses'];
+          const builtInThemes = ['midnight', 'daylight', 'moonlight', 'github', 'nord', 'nord-outputs', 'grayscale-dark', 'grayscale-light', 'openresponses', 'newsprint-dark', 'newsprint-light', 'plain-dark', 'plain-light'];
           if (builtInThemes.includes(theme.name)) {
             alert(`Cannot use reserved theme name "${theme.name}". Please rename your theme.`);
             return;
@@ -84575,6 +84575,10 @@ $1 $2
       this.maxReconnectAttempts = 10;
       this.baseReconnectDelay = 1000;
       this.reconnectTimeout = null;
+
+      // Small-input batching (typing) to reduce WS frame overhead on tunneled/mobile connections.
+      this._writeBuffer = '';
+      this._writeTimer = null;
     }
 
     /**
@@ -84668,6 +84672,11 @@ $1 $2
           console.log('[PtyClient] Disconnected, code:', event.code);
           this.connected = false;
           this.ws = null;
+          if (this._writeTimer) {
+            clearTimeout(this._writeTimer);
+            this._writeTimer = null;
+          }
+          this._writeBuffer = '';
           this.config.onDisconnect(event.code, event.reason);
 
           // Attempt reconnection if not intentionally closed
@@ -84704,6 +84713,21 @@ $1 $2
     }
 
     /**
+     * Flush any buffered small-input writes.
+     */
+    _flushWriteBuffer() {
+      if (!this._writeBuffer) return;
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        this._writeBuffer = '';
+        return;
+      }
+
+      const buffered = this._writeBuffer;
+      this._writeBuffer = '';
+      this.ws.send(JSON.stringify({ type: 'input', data: buffered }));
+    }
+
+    /**
      * Send data to the PTY (user input).
      * Large payloads (pastes) are chunked to avoid overwhelming the terminal
      * renderer and WebSocket tunnel on markco.dev.
@@ -84713,11 +84737,25 @@ $1 $2
     write(data) {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
-      // Small inputs (normal typing, control sequences): send immediately
+      // Small inputs (normal typing/control sequences): buffer briefly so
+      // rapid keypresses are batched into fewer WS frames.
       if (data.length <= 4096) {
-        this.ws.send(JSON.stringify({ type: 'input', data }));
+        this._writeBuffer += data;
+        if (!this._writeTimer) {
+          this._writeTimer = setTimeout(() => {
+            this._writeTimer = null;
+            this._flushWriteBuffer();
+          }, 8);
+        }
         return;
       }
+
+      // Preserve input ordering: flush any pending small-input batch first.
+      if (this._writeTimer) {
+        clearTimeout(this._writeTimer);
+        this._writeTimer = null;
+      }
+      this._flushWriteBuffer();
 
       // Large paste: chunk it to prevent UI freeze.
       // xterm.js may wrap pastes in bracketed paste markers (\x1b[200~ ... \x1b[201~).
@@ -84784,6 +84822,12 @@ $1 $2
         clearTimeout(this.reconnectTimeout);
         this.reconnectTimeout = null;
       }
+
+      if (this._writeTimer) {
+        clearTimeout(this._writeTimer);
+        this._writeTimer = null;
+      }
+      this._writeBuffer = '';
 
       if (this.ws) {
         this.ws.close();
@@ -85018,15 +85062,23 @@ $1 $2
 
       // Get theme from CSS variables
       const theme = this._getThemeFromCSS();
+      const isMobile = /iPhone|iPad|Android|Mobile/i.test(navigator.userAgent);
 
       // Create terminal
       const term = new Terminal({
         cursorBlink: true,
-        fontSize: 14,
-        fontFamily: '"SF Mono", "Fira Code", "Monaco", "Inconsolata", monospace',
-        scrollback: 10000,
+        cursorStyle: 'block',
+        cursorInactiveStyle: 'outline',
+        fontSize: isMobile ? 13 : 14,
+        fontFamily: '"Monaspace Neon Var", "SF Mono", "Fira Code", "Monaco", "Inconsolata", monospace',
+        scrollback: isMobile ? 5000 : 50000,
         convertEol: true,
         theme: theme,
+        drawBoldTextInBrightColors: !isMobile,
+        allowTransparency: false,
+        smoothScrollDuration: 0,
+        fastScrollModifier: 'alt',
+        fastScrollSensitivity: isMobile ? 3 : 5,
       });
 
       this.xtermInstance = term;
@@ -85047,6 +85099,37 @@ $1 $2
 
       // Open terminal
       term.open(container);
+
+      // Renderer addons: prefer WebGL on desktop, fallback to Canvas, then DOM.
+      let rendererLoaded = false;
+      if (!isMobile && typeof WebglAddon !== 'undefined') {
+        try {
+          const webgl = new WebglAddon.WebglAddon();
+          webgl.onContextLoss(() => {
+            try { webgl.dispose(); } catch (e) {}
+            console.warn('[term] WebGL context lost, falling back to canvas/DOM');
+            if (typeof CanvasAddon !== 'undefined') {
+              try {
+                term.loadAddon(new CanvasAddon.CanvasAddon());
+              } catch (canvasErr) {
+                console.warn('[term] Canvas addon failed, using DOM fallback:', canvasErr);
+              }
+            }
+          });
+          term.loadAddon(webgl);
+          rendererLoaded = true;
+        } catch (e) {
+          console.warn('[term] WebGL failed:', e);
+        }
+      }
+
+      if (!rendererLoaded && typeof CanvasAddon !== 'undefined') {
+        try {
+          term.loadAddon(new CanvasAddon.CanvasAddon());
+        } catch (e) {
+          console.warn('[term] Canvas addon failed, using DOM fallback:', e);
+        }
+      }
 
       // Fit to container
       if (this.fitAddon) {
@@ -121601,7 +121684,7 @@ $1 $2
     '--widget-inset-left': {
       description: 'Left inset/indent for widgets (creates visual hierarchy)',
       category: 'spacing',
-      default: '0',
+      default: '24px',
     },
     '--widget-offset-top': {
       description: 'Vertical offset for widgets. Use negative values to pull widgets closer to code blocks.',
@@ -124454,6 +124537,999 @@ $1 $2
     '--mrmd-button-active': '#c8bca6',      // worn scroll
   };
 
+  // ===========================================================================
+  // NEWSPRINT THEMES (E-ink / Newspaper aesthetic)
+  // ===========================================================================
+
+  /**
+   * Newsprint Light Theme
+   *
+   * A warm newspaper-gray light theme evoking broadsheets and cheap pulp.
+   * The background is NOT white — it's the soft warm gray of unbleached
+   * newsprint held under a reading lamp.
+   *
+   * Colors exist but are deliberately washed-out, like spot-color printing
+   * on absorbent paper: the ink bleeds, the saturation drops, everything
+   * feels a day old and perfectly readable.
+   *
+   * ## Color Palette
+   *
+   * **Backgrounds** — newsprint grays, unbleached paper
+   * - #d8d3cb (newsprint — main background)
+   * - #cec9c0 (thumbed page — surfaces)
+   * - #e0dbd3 (fresh stock — elevated)
+   * - #c6c1b8 (shadow column — inset)
+   *
+   * **Text** — press ink, varying impression weight
+   * - #2c2a26 (fresh ink — primary text)
+   * - #6b6760 (faded column — muted text)
+   * - #4a5a6a (masthead blue — accent)
+   *
+   * **Syntax** — washed spot colors, one pass through the press
+   * - #5a4a70 (classified purple — keywords)
+   * - #4a6a42 (faded green ink — strings)
+   * - #7a6a30 (aged stock ticker — numbers)
+   * - #7a3a3a (correction red — errors)
+   * - #3a5a7a (column-rule blue — functions)
+   * - #3a6a6a (weather-map teal — types)
+   */
+  const newsprintLightTheme = {
+    name: 'newsprint-light',
+    description: 'Warm newspaper-gray theme with washed spot colors. E-ink / broadsheet feel.',
+    isDark: false,
+    fontFace: defaultFontFace,
+
+    // ===========================================================================
+    // SPACING
+    // ===========================================================================
+    '--widget-line-height': '1.65',
+    '--widget-padding-x': '14px',
+    '--widget-padding-y': '10px',
+    '--widget-margin-y': '4px',
+    '--widget-border-radius': '2px',
+    '--widget-border-width': '1px',
+    '--widget-border-accent-width': '2px',
+
+    // Text layout
+    '--widget-white-space': 'pre-wrap',
+    '--widget-word-break': 'break-word',
+
+    // ===========================================================================
+    // TYPOGRAPHY — Literata for the broadsheet serif feel
+    // ===========================================================================
+    '--widget-font-mono': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+    '--widget-font-sans': "Literata, Charter, Georgia, 'Times New Roman', serif",
+    '--editor-font-family': "Literata, Charter, Georgia, 'Times New Roman', serif",
+    '--widget-font-size': '0.9em',
+    '--widget-font-size-small': '0.8em',
+    '--widget-font-size-label': '11px',
+
+    // ===========================================================================
+    // SURFACES (newsprint grays — warm, not sterile)
+    // ===========================================================================
+    '--widget-surface': '#cec9c0',           // thumbed page
+    '--widget-surface-hover': '#c6c1b8',     // shadow column
+    '--widget-surface-elevated': '#e0dbd3',  // fresh stock
+    '--widget-surface-inset': '#c6c1b8',     // shadow column
+
+    // ===========================================================================
+    // BORDERS (thin column rules)
+    // ===========================================================================
+    '--widget-border': '#b8b3aa',            // column rule
+    '--widget-border-accent': '#8a8a82',     // heavy rule
+    '--widget-border-focus': '#4a5a6a',      // masthead blue
+
+    // ===========================================================================
+    // TEXT COLORS (press ink)
+    // ===========================================================================
+    '--widget-text': '#2c2a26',             // fresh ink
+    '--widget-text-muted': '#6b6760',       // faded column
+    '--widget-text-accent': '#4a5a6a',      // masthead blue
+
+    // ===========================================================================
+    // SEMANTIC COLORS (washed newspaper spot colors)
+    // ===========================================================================
+    '--widget-success': '#4a6a42',          // faded green ink
+    '--widget-warning': '#7a6a30',          // aged stock ticker
+    '--widget-error': '#7a3a3a',            // correction red
+    '--widget-info': '#4a5a6a',             // masthead blue
+
+    // ===========================================================================
+    // ANSI COLORS (desaturated for newsprint)
+    // ===========================================================================
+    '--ansi-black': '#2c2a26',              // fresh ink
+    '--ansi-red': '#7a3a3a',                // correction red
+    '--ansi-green': '#4a6a42',              // faded green
+    '--ansi-yellow': '#7a6a30',             // stock ticker
+    '--ansi-blue': '#4a5a6a',              // masthead blue
+    '--ansi-magenta': '#5a4a70',            // classified purple
+    '--ansi-cyan': '#3a6a6a',              // weather teal
+    '--ansi-white': '#d8d3cb',             // newsprint
+    '--ansi-bright-black': '#6b6760',       // faded column
+    '--ansi-bright-red': '#8a5050',         // lighter correction
+    '--ansi-bright-green': '#5a7a52',       // spring classified
+    '--ansi-bright-yellow': '#8a7a40',      // brighter ticker
+    '--ansi-bright-blue': '#5a6a7a',        // lighter masthead
+    '--ansi-bright-magenta': '#6a5a80',     // lighter classified
+    '--ansi-bright-cyan': '#4a7a7a',        // lighter weather
+    '--ansi-bright-white': '#e0dbd3',       // fresh stock
+
+    // ===========================================================================
+    // TERMINAL
+    // ===========================================================================
+    '--term-background': '#d8d3cb',         // newsprint
+    '--term-foreground': '#2c2a26',         // fresh ink
+    '--term-cursor': '#2c2a26',             // fresh ink
+    '--term-cursor-accent': '#d8d3cb',      // newsprint
+    '--term-selection': '#b8b3aa',          // column rule
+    '--term-border': '#b8b3aa',             // column rule
+    '--term-header-bg': '#cec9c0',          // thumbed page
+    '--term-header-fg': '#6b6760',          // faded column
+
+    // ===========================================================================
+    // COLLABORATOR COLORS (muted)
+    // ===========================================================================
+    '--collab-human': '#4a5a6a',            // masthead blue
+    '--collab-ai': '#5a4a70',              // classified purple
+    '--collab-runtime': '#4a6a42',          // faded green
+
+    // ===========================================================================
+    // EDITOR
+    // ===========================================================================
+    '--editor-background': '#d8d3cb',       // newsprint
+    '--editor-foreground': '#2c2a26',       // fresh ink
+    '--editor-line-number': '#9a958c',      // page number gray
+    '--editor-line-number-active': '#5a5650', // bolder page number
+    '--editor-selection': '#b8b3aa',        // column rule highlight
+    '--editor-selection-match': '#c6c1b8',  // shadow column
+    '--editor-cursor': '#2c2a26',           // fresh ink
+    '--editor-active-line': 'rgba(0, 0, 0, 0.04)', // faint line highlight
+    '--editor-gutter': '#d8d3cb',           // newsprint
+    '--editor-matching-bracket': 'rgba(74, 90, 106, 0.2)', // masthead blue hint
+
+    // ===========================================================================
+    // SYNTAX HIGHLIGHTING (washed inks — one press pass on cheap paper)
+    // ===========================================================================
+    '--syntax-keyword': '#5a4a70',          // classified purple
+    '--syntax-control': '#5a4a70',          // classified purple
+    '--syntax-string': '#4a6a42',           // faded green ink
+    '--syntax-number': '#7a6a30',           // stock ticker amber
+    '--syntax-comment': '#9a958c',          // marginal note gray
+    '--syntax-function': '#3a5a7a',         // column-rule blue
+    '--syntax-variable': '#2c2a26',         // fresh ink
+    '--syntax-variable-special': '#5a4a70', // classified purple
+    '--syntax-property': '#4a5a6a',         // masthead blue
+    '--syntax-operator': '#2c2a26',         // fresh ink
+    '--syntax-punctuation': '#6b6760',      // faded column
+    '--syntax-type': '#3a6a6a',             // weather-map teal
+    '--syntax-class': '#3a6a6a',            // weather-map teal
+    '--syntax-constant': '#7a6a30',         // stock ticker
+    '--syntax-parameter': '#2c2a26',        // fresh ink
+    '--syntax-regexp': '#7a3a3a',           // correction red
+    '--syntax-escape': '#8a7a40',           // brighter ticker
+    '--syntax-tag': '#7a3a3a',              // correction red
+    '--syntax-attribute': '#4a5a6a',        // masthead blue
+    '--syntax-attribute-value': '#4a6a42',  // faded green
+    '--syntax-heading': '#2c2a26',          // fresh ink — headlines are bold, not colorful
+    '--syntax-link': '#3a5a7a',             // column-rule blue
+    '--syntax-link-text': '#4a5a6a',        // masthead blue
+    '--syntax-emphasis': '#2c2a26',         // fresh ink
+    '--syntax-strong': '#2c2a26',           // fresh ink
+    '--syntax-strikethrough': '#9a958c',    // marginal note gray
+    '--syntax-quote': '#6b6760',            // faded column
+    '--syntax-code': '#5a4a70',             // classified purple
+    '--syntax-code-background': 'rgba(0, 0, 0, 0.05)', // faint shading
+    '--syntax-meta': '#9a958c',             // marginal note gray
+    '--syntax-inserted': '#4a6a42',         // faded green
+    '--syntax-deleted': '#7a3a3a',          // correction red
+    '--syntax-changed': '#7a6a30',          // stock ticker
+
+    // ===========================================================================
+    // MARKDOWN RENDERING
+    // ===========================================================================
+    '--md-heading-1-size': '1.8em',
+    '--md-heading-2-size': '1.4em',
+    '--md-heading-3-size': '1.2em',
+    '--md-heading-4-size': '1.1em',
+    '--md-heading-5-size': '1.05em',
+    '--md-heading-6-size': '1em',
+    '--md-heading-weight': '700',
+    '--md-heading-line-height': '1.25',
+    '--md-heading-margin-top': '0.6em',
+    '--md-heading-color': '#2c2a26',        // fresh ink — bold headlines
+    '--md-marker-color': '#9a958c',         // marginal note gray
+    '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+    '--md-link-color': '#3a5a7a',           // column-rule blue
+    '--md-link-decoration': 'underline',
+    '--md-code-background': 'rgba(0, 0, 0, 0.06)',
+    '--md-code-color': '#5a4a70',           // classified purple
+    '--md-code-padding': '0.15em 0.35em',
+    '--md-code-radius': '2px',
+    '--md-blockquote-border': '#8a8a82',    // heavy rule
+    '--md-blockquote-border-width': '2px',
+    '--md-blockquote-color': '#6b6760',     // faded column
+    '--md-blockquote-padding': '1em',
+    '--md-list-marker-color': '#6b6760',    // faded column
+    '--md-hr-color': '#a8a39a',             // thin rule
+    '--md-hr-height': '1px',
+    '--md-hr-margin': '1.5em 0',
+    '--md-table-border': '#b8b3aa',         // column rule
+    '--md-table-header-bg': '#cec9c0',      // thumbed page
+    '--md-table-header-weight': '700',
+    '--md-table-cell-padding': '0.5em 0.75em',
+    '--md-table-stripe-bg': 'transparent',
+    '--md-image-max-width': '100%',
+    '--md-image-border-radius': '2px',
+    '--md-checkbox-size': '1em',
+    '--md-checkbox-color': '#4a5a6a',       // masthead blue
+    '--md-alert-note-color': '#4a5a6a',     // masthead blue
+    '--md-alert-tip-color': '#4a6a42',      // faded green
+    '--md-alert-important-color': '#5a4a70', // classified purple
+    '--md-alert-warning-color': '#7a6a30',  // stock ticker
+    '--md-alert-caution-color': '#7a3a3a',  // correction red
+
+    // ===========================================================================
+    // SHELL (status bar, menus, dialogs)
+    // ===========================================================================
+    '--mrmd-ui-font': "Literata, Charter, Georgia, 'Times New Roman', serif",
+    '--mrmd-ui-font-size': '13px',
+    '--mrmd-ui-font-size-sm': '11px',
+    '--mrmd-panel-bg': '#d0cbc2',           // slightly darker than newsprint
+    '--mrmd-popup-bg': '#e0dbd3',           // fresh stock
+    '--mrmd-bg': '#d8d3cb',                 // newsprint
+    '--mrmd-fg': '#2c2a26',                 // fresh ink
+    '--mrmd-fg-muted': '#6b6760',           // faded column
+    '--mrmd-border': '#b8b3aa',             // column rule
+    '--mrmd-hover-bg': 'rgba(0, 0, 0, 0.05)',
+    '--mrmd-active-bg': 'rgba(0, 0, 0, 0.08)',
+    '--mrmd-selection-bg': 'rgba(74, 90, 106, 0.15)', // masthead blue
+    '--mrmd-accent': '#4a5a6a',             // masthead blue
+    '--mrmd-accent-hover': '#3a4a5a',       // darker masthead
+    '--mrmd-success': '#4a6a42',            // faded green
+    '--mrmd-warning': '#7a6a30',            // stock ticker
+    '--mrmd-error': '#7a3a3a',              // correction red
+    '--mrmd-shadow-md': '0 2px 6px rgba(0, 0, 0, 0.08)',
+    '--mrmd-shadow-lg': '0 4px 12px rgba(0, 0, 0, 0.1)',
+    '--mrmd-shadow-xl': '0 8px 24px rgba(0, 0, 0, 0.12)',
+    '--mrmd-menu-border': '#b8b3aa',        // column rule
+    '--mrmd-dialog-border': '#b8b3aa',      // column rule
+    '--mrmd-input-border': '#b8b3aa',       // column rule
+    '--mrmd-button-bg': '#cec9c0',          // thumbed page
+    '--mrmd-button-border': '#b8b3aa',      // column rule
+    '--mrmd-button-hover': '#c6c1b8',       // shadow column
+    '--mrmd-button-active': '#b8b3aa',      // pressed
+  };
+
+  /**
+   * Newsprint Dark Theme
+   *
+   * The evening edition — same newspaper aesthetic but inverted.
+   * The background is NOT black, it's the charcoal-warm gray of
+   * newsprint seen by lamplight, or a printing plate's carbon.
+   *
+   * Colors remain washed and desaturated. Think of a newspaper
+   * photograph: not vivid, not sharp, but entirely readable and
+   * strangely beautiful in its restraint.
+   *
+   * ## Color Palette
+   *
+   * **Backgrounds** — carbon, lampblack, printer's stone
+   * - #302e2a (lampblack — main background)
+   * - #3a3835 (typesetter's tray — surfaces)
+   * - #434140 (compositor's stone — elevated)
+   * - #282622 (deep plate — inset)
+   *
+   * **Text** — worn type on dark stock
+   * - #c8c4ba (worn type — primary text)
+   * - #7a776e (smudged column — muted text)
+   * - #8a9aaa (moonlit masthead — accent)
+   *
+   * **Syntax** — ghost inks, reversed halftone
+   * - #9a8ab0 (lavender ghost — keywords)
+   * - #8aaa7a (faded green under lamp — strings)
+   * - #b0a070 (ticker tape gold — numbers)
+   * - #b07060 (red-lead error — errors)
+   * - #7a9aba (lamplight blue — functions)
+   * - #7a9a9a (oxidized plate teal — types)
+   */
+  const newsprintDarkTheme = {
+    name: 'newsprint-dark',
+    description: 'Dark newspaper-gray theme with ghost inks. Evening edition e-ink feel.',
+    isDark: true,
+    fontFace: defaultFontFace,
+
+    // ===========================================================================
+    // SPACING
+    // ===========================================================================
+    '--widget-line-height': '1.65',
+    '--widget-padding-x': '14px',
+    '--widget-padding-y': '10px',
+    '--widget-margin-y': '4px',
+    '--widget-border-radius': '2px',
+    '--widget-border-width': '1px',
+    '--widget-border-accent-width': '2px',
+
+    // Text layout
+    '--widget-white-space': 'pre-wrap',
+    '--widget-word-break': 'break-word',
+
+    // ===========================================================================
+    // TYPOGRAPHY
+    // ===========================================================================
+    '--widget-font-mono': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+    '--widget-font-sans': "Literata, Charter, Georgia, 'Times New Roman', serif",
+    '--editor-font-family': "Literata, Charter, Georgia, 'Times New Roman', serif",
+    '--widget-font-size': '0.9em',
+    '--widget-font-size-small': '0.8em',
+    '--widget-font-size-label': '11px',
+
+    // ===========================================================================
+    // SURFACES (carbon, lampblack)
+    // ===========================================================================
+    '--widget-surface': '#3a3835',           // typesetter's tray
+    '--widget-surface-hover': '#434140',     // compositor's stone
+    '--widget-surface-elevated': '#434140',  // compositor's stone
+    '--widget-surface-inset': '#282622',     // deep plate
+
+    // ===========================================================================
+    // BORDERS (faint rules in the dark)
+    // ===========================================================================
+    '--widget-border': '#4a4845',            // faint rule
+    '--widget-border-accent': '#6a6860',     // heavier rule
+    '--widget-border-focus': '#8a9aaa',      // moonlit masthead
+
+    // ===========================================================================
+    // TEXT COLORS (worn type)
+    // ===========================================================================
+    '--widget-text': '#c8c4ba',             // worn type
+    '--widget-text-muted': '#7a776e',       // smudged column
+    '--widget-text-accent': '#8a9aaa',      // moonlit masthead
+
+    // ===========================================================================
+    // SEMANTIC COLORS (ghost inks)
+    // ===========================================================================
+    '--widget-success': '#8aaa7a',          // faded green under lamp
+    '--widget-warning': '#b0a070',          // ticker tape gold
+    '--widget-error': '#b07060',            // red-lead error
+    '--widget-info': '#7a8a9a',             // lamplight blue
+
+    // ===========================================================================
+    // ANSI COLORS (desaturated for dark newsprint)
+    // ===========================================================================
+    '--ansi-black': '#302e2a',              // lampblack
+    '--ansi-red': '#b07060',                // red-lead
+    '--ansi-green': '#8aaa7a',              // faded green
+    '--ansi-yellow': '#b0a070',             // ticker tape
+    '--ansi-blue': '#7a8a9a',              // lamplight blue
+    '--ansi-magenta': '#9a8ab0',            // lavender ghost
+    '--ansi-cyan': '#7a9a9a',              // oxidized teal
+    '--ansi-white': '#c8c4ba',             // worn type
+    '--ansi-bright-black': '#5a5855',       // lighter lampblack
+    '--ansi-bright-red': '#c08070',         // warmer red-lead
+    '--ansi-bright-green': '#9aba8a',       // brighter green
+    '--ansi-bright-yellow': '#c0b080',      // brighter ticker
+    '--ansi-bright-blue': '#8a9aaa',        // moonlit masthead
+    '--ansi-bright-magenta': '#aa9ac0',     // lighter lavender
+    '--ansi-bright-cyan': '#8aaaaa',        // lighter teal
+    '--ansi-bright-white': '#d8d4ca',       // bright type
+
+    // ===========================================================================
+    // TERMINAL
+    // ===========================================================================
+    '--term-background': '#302e2a',         // lampblack
+    '--term-foreground': '#c8c4ba',         // worn type
+    '--term-cursor': '#c8c4ba',             // worn type
+    '--term-cursor-accent': '#302e2a',      // lampblack
+    '--term-selection': '#4a4845',          // faint rule
+    '--term-border': '#4a4845',             // faint rule
+    '--term-header-bg': '#3a3835',          // typesetter's tray
+    '--term-header-fg': '#7a776e',          // smudged column
+
+    // ===========================================================================
+    // COLLABORATOR COLORS (muted)
+    // ===========================================================================
+    '--collab-human': '#7a8a9a',            // lamplight blue
+    '--collab-ai': '#9a8ab0',              // lavender ghost
+    '--collab-runtime': '#8aaa7a',          // faded green
+
+    // ===========================================================================
+    // EDITOR
+    // ===========================================================================
+    '--editor-background': '#302e2a',       // lampblack
+    '--editor-foreground': '#c8c4ba',       // worn type
+    '--editor-line-number': '#5a5855',      // lighter lampblack
+    '--editor-line-number-active': '#8a877e', // visible line number
+    '--editor-selection': '#4a4845',        // faint rule
+    '--editor-selection-match': '#3e3c38',  // dimmer match
+    '--editor-cursor': '#c8c4ba',           // worn type
+    '--editor-active-line': 'rgba(255, 255, 255, 0.03)', // faint line highlight
+    '--editor-gutter': '#302e2a',           // lampblack
+    '--editor-matching-bracket': 'rgba(138, 154, 170, 0.2)', // moonlit blue hint
+
+    // ===========================================================================
+    // SYNTAX HIGHLIGHTING (ghost inks — reversed halftone)
+    // ===========================================================================
+    '--syntax-keyword': '#9a8ab0',          // lavender ghost
+    '--syntax-control': '#9a8ab0',          // lavender ghost
+    '--syntax-string': '#8aaa7a',           // faded green under lamp
+    '--syntax-number': '#b0a070',           // ticker tape gold
+    '--syntax-comment': '#5a5855',          // lighter lampblack
+    '--syntax-function': '#7a9aba',         // lamplight blue
+    '--syntax-variable': '#c8c4ba',         // worn type
+    '--syntax-variable-special': '#9a8ab0', // lavender ghost
+    '--syntax-property': '#8a9aaa',         // moonlit masthead
+    '--syntax-operator': '#c8c4ba',         // worn type
+    '--syntax-punctuation': '#7a776e',      // smudged column
+    '--syntax-type': '#7a9a9a',             // oxidized plate teal
+    '--syntax-class': '#7a9a9a',            // oxidized plate teal
+    '--syntax-constant': '#b0a070',         // ticker tape gold
+    '--syntax-parameter': '#c8c4ba',        // worn type
+    '--syntax-regexp': '#b07060',           // red-lead
+    '--syntax-escape': '#c0b080',           // brighter ticker
+    '--syntax-tag': '#b07060',              // red-lead
+    '--syntax-attribute': '#8a9aaa',        // moonlit masthead
+    '--syntax-attribute-value': '#8aaa7a',  // faded green
+    '--syntax-heading': '#d8d4ca',          // bright type — headlines
+    '--syntax-link': '#7a9aba',             // lamplight blue
+    '--syntax-link-text': '#8a9aaa',        // moonlit masthead
+    '--syntax-emphasis': '#c8c4ba',         // worn type
+    '--syntax-strong': '#d8d4ca',           // bright type
+    '--syntax-strikethrough': '#5a5855',    // lighter lampblack
+    '--syntax-quote': '#7a776e',            // smudged column
+    '--syntax-code': '#b0a070',             // ticker tape gold
+    '--syntax-code-background': 'rgba(255, 255, 255, 0.04)', // faint shading
+    '--syntax-meta': '#5a5855',             // lighter lampblack
+    '--syntax-inserted': '#8aaa7a',         // faded green
+    '--syntax-deleted': '#b07060',          // red-lead
+    '--syntax-changed': '#b0a070',          // ticker tape gold
+
+    // ===========================================================================
+    // MARKDOWN RENDERING
+    // ===========================================================================
+    '--md-heading-1-size': '1.8em',
+    '--md-heading-2-size': '1.4em',
+    '--md-heading-3-size': '1.2em',
+    '--md-heading-4-size': '1.1em',
+    '--md-heading-5-size': '1.05em',
+    '--md-heading-6-size': '1em',
+    '--md-heading-weight': '700',
+    '--md-heading-line-height': '1.25',
+    '--md-heading-margin-top': '0.6em',
+    '--md-heading-color': '#d8d4ca',        // bright type — bold headlines
+    '--md-marker-color': '#5a5855',         // lighter lampblack
+    '--md-marker-font': "'Monaspace Neon Var', 'SF Mono', Monaco, Consolas, monospace",
+    '--md-link-color': '#7a9aba',           // lamplight blue
+    '--md-link-decoration': 'underline',
+    '--md-code-background': 'rgba(255, 255, 255, 0.05)',
+    '--md-code-color': '#b0a070',           // ticker tape gold
+    '--md-code-padding': '0.15em 0.35em',
+    '--md-code-radius': '2px',
+    '--md-blockquote-border': '#6a6860',    // heavier rule
+    '--md-blockquote-border-width': '2px',
+    '--md-blockquote-color': '#7a776e',     // smudged column
+    '--md-blockquote-padding': '1em',
+    '--md-list-marker-color': '#7a776e',    // smudged column
+    '--md-hr-color': '#4a4845',             // faint rule
+    '--md-hr-height': '1px',
+    '--md-hr-margin': '1.5em 0',
+    '--md-table-border': '#4a4845',         // faint rule
+    '--md-table-header-bg': '#3a3835',      // typesetter's tray
+    '--md-table-header-weight': '700',
+    '--md-table-cell-padding': '0.5em 0.75em',
+    '--md-table-stripe-bg': 'transparent',
+    '--md-image-max-width': '100%',
+    '--md-image-border-radius': '2px',
+    '--md-checkbox-size': '1em',
+    '--md-checkbox-color': '#8a9aaa',       // moonlit masthead
+    '--md-alert-note-color': '#7a8a9a',     // lamplight blue
+    '--md-alert-tip-color': '#8aaa7a',      // faded green
+    '--md-alert-important-color': '#9a8ab0', // lavender ghost
+    '--md-alert-warning-color': '#b0a070',  // ticker tape gold
+    '--md-alert-caution-color': '#b07060',  // red-lead
+
+    // ===========================================================================
+    // SHELL (status bar, menus, dialogs)
+    // ===========================================================================
+    '--mrmd-ui-font': "Literata, Charter, Georgia, 'Times New Roman', serif",
+    '--mrmd-ui-font-size': '13px',
+    '--mrmd-ui-font-size-sm': '11px',
+    '--mrmd-panel-bg': '#353330',           // slightly darker than main
+    '--mrmd-popup-bg': '#434140',           // compositor's stone
+    '--mrmd-bg': '#302e2a',                 // lampblack
+    '--mrmd-fg': '#c8c4ba',                 // worn type
+    '--mrmd-fg-muted': '#7a776e',           // smudged column
+    '--mrmd-border': '#4a4845',             // faint rule
+    '--mrmd-hover-bg': 'rgba(255, 255, 255, 0.04)',
+    '--mrmd-active-bg': 'rgba(255, 255, 255, 0.07)',
+    '--mrmd-selection-bg': 'rgba(138, 154, 170, 0.15)', // moonlit masthead
+    '--mrmd-accent': '#8a9aaa',             // moonlit masthead
+    '--mrmd-accent-hover': '#9aaaba',       // brighter masthead
+    '--mrmd-success': '#8aaa7a',            // faded green
+    '--mrmd-warning': '#b0a070',            // ticker tape
+    '--mrmd-error': '#b07060',              // red-lead
+    '--mrmd-shadow-md': '0 2px 8px rgba(0, 0, 0, 0.25)',
+    '--mrmd-shadow-lg': '0 4px 16px rgba(0, 0, 0, 0.3)',
+    '--mrmd-shadow-xl': '0 8px 32px rgba(0, 0, 0, 0.35)',
+    '--mrmd-menu-border': '#4a4845',        // faint rule
+    '--mrmd-dialog-border': '#4a4845',      // faint rule
+    '--mrmd-input-border': '#4a4845',       // faint rule
+    '--mrmd-button-bg': '#3a3835',          // typesetter's tray
+    '--mrmd-button-border': '#4a4845',      // faint rule
+    '--mrmd-button-hover': '#434140',       // compositor's stone
+    '--mrmd-button-active': '#4a4845',      // pressed
+  };
+
+  // ===========================================================================
+  // PLAIN THEMES (Standard / Word-like)
+  // ===========================================================================
+
+  /**
+   * Plain Light Theme
+   *
+   * The most deliberately boring theme possible.
+   * White background, black text, system fonts, standard blue links.
+   * Looks like Microsoft Word met a basic code editor and they had
+   * the most unremarkable child imaginable.
+   *
+   * Zero personality. Maximum familiarity. Your mother could use this.
+   */
+  const plainLightTheme = {
+    name: 'plain-light',
+    description: 'Standard light theme. White background, black text, system fonts. Looks like Word.',
+    isDark: false,
+
+    // ===========================================================================
+    // SPACING — standard, nothing fancy
+    // ===========================================================================
+    '--widget-line-height': '1.5',
+    '--widget-padding-x': '12px',
+    '--widget-padding-y': '8px',
+    '--widget-margin-y': '4px',
+    '--widget-border-radius': '3px',
+    '--widget-border-width': '1px',
+    '--widget-border-accent-width': '3px',
+
+    '--widget-white-space': 'pre-wrap',
+    '--widget-word-break': 'break-word',
+
+    // ===========================================================================
+    // TYPOGRAPHY — system defaults, Calibri/Segoe UI, Consolas for code
+    // ===========================================================================
+    '--widget-font-mono': "Consolas, 'Courier New', Courier, monospace",
+    '--widget-font-sans': "Calibri, 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, Helvetica, sans-serif",
+    '--editor-font-family': "Calibri, 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, Helvetica, sans-serif",
+    '--widget-font-size': '0.9em',
+    '--widget-font-size-small': '0.8em',
+    '--widget-font-size-label': '11px',
+
+    // ===========================================================================
+    // SURFACES — white, light gray
+    // ===========================================================================
+    '--widget-surface': '#f3f3f3',
+    '--widget-surface-hover': '#e8e8e8',
+    '--widget-surface-elevated': '#ffffff',
+    '--widget-surface-inset': '#f0f0f0',
+
+    // ===========================================================================
+    // BORDERS — plain gray
+    // ===========================================================================
+    '--widget-border': '#d0d0d0',
+    '--widget-border-accent': '#0078d4',
+    '--widget-border-focus': '#0078d4',
+
+    // ===========================================================================
+    // TEXT — black and gray
+    // ===========================================================================
+    '--widget-text': '#000000',
+    '--widget-text-muted': '#666666',
+    '--widget-text-accent': '#0563c1',
+
+    // ===========================================================================
+    // SEMANTIC — standard Windows/Office colors
+    // ===========================================================================
+    '--widget-success': '#107c10',
+    '--widget-warning': '#c47a00',
+    '--widget-error': '#d13438',
+    '--widget-info': '#0078d4',
+
+    // ===========================================================================
+    // ANSI COLORS
+    // ===========================================================================
+    '--ansi-black': '#000000',
+    '--ansi-red': '#c50f1f',
+    '--ansi-green': '#13a10e',
+    '--ansi-yellow': '#c19c00',
+    '--ansi-blue': '#0037da',
+    '--ansi-magenta': '#881798',
+    '--ansi-cyan': '#3a96dd',
+    '--ansi-white': '#cccccc',
+    '--ansi-bright-black': '#767676',
+    '--ansi-bright-red': '#e74856',
+    '--ansi-bright-green': '#16c60c',
+    '--ansi-bright-yellow': '#f9f1a5',
+    '--ansi-bright-blue': '#3b78ff',
+    '--ansi-bright-magenta': '#b4009e',
+    '--ansi-bright-cyan': '#61d6d6',
+    '--ansi-bright-white': '#f2f2f2',
+
+    // ===========================================================================
+    // TERMINAL
+    // ===========================================================================
+    '--term-background': '#ffffff',
+    '--term-foreground': '#000000',
+    '--term-cursor': '#000000',
+    '--term-cursor-accent': '#ffffff',
+    '--term-selection': '#add6ff',
+    '--term-border': '#d0d0d0',
+    '--term-header-bg': '#f3f3f3',
+    '--term-header-fg': '#666666',
+
+    // ===========================================================================
+    // COLLABORATOR
+    // ===========================================================================
+    '--collab-human': '#0078d4',
+    '--collab-ai': '#881798',
+    '--collab-runtime': '#107c10',
+
+    // ===========================================================================
+    // EDITOR — plain white, standard VS Code light style
+    // ===========================================================================
+    '--editor-background': '#ffffff',
+    '--editor-foreground': '#000000',
+    '--editor-line-number': '#999999',
+    '--editor-line-number-active': '#000000',
+    '--editor-selection': '#add6ff',
+    '--editor-selection-match': '#e8e8e8',
+    '--editor-cursor': '#000000',
+    '--editor-active-line': '#f5f5f5',
+    '--editor-gutter': '#ffffff',
+    '--editor-matching-bracket': '#bad0f8',
+
+    // ===========================================================================
+    // SYNTAX — VS Code Light (the most "normal" code colors on earth)
+    // ===========================================================================
+    '--syntax-keyword': '#0000ff',
+    '--syntax-control': '#af00db',
+    '--syntax-string': '#a31515',
+    '--syntax-number': '#098658',
+    '--syntax-comment': '#008000',
+    '--syntax-function': '#795e26',
+    '--syntax-variable': '#001080',
+    '--syntax-variable-special': '#0000ff',
+    '--syntax-property': '#001080',
+    '--syntax-operator': '#000000',
+    '--syntax-punctuation': '#000000',
+    '--syntax-type': '#267f99',
+    '--syntax-class': '#267f99',
+    '--syntax-constant': '#0000ff',
+    '--syntax-parameter': '#001080',
+    '--syntax-regexp': '#811f3f',
+    '--syntax-escape': '#ee0000',
+    '--syntax-tag': '#800000',
+    '--syntax-attribute': '#ff0000',
+    '--syntax-attribute-value': '#0000ff',
+    '--syntax-heading': '#000000',
+    '--syntax-link': '#0563c1',
+    '--syntax-link-text': '#0563c1',
+    '--syntax-emphasis': '#000000',
+    '--syntax-strong': '#000000',
+    '--syntax-strikethrough': '#999999',
+    '--syntax-quote': '#008000',
+    '--syntax-code': '#a31515',
+    '--syntax-code-background': '#f3f3f3',
+    '--syntax-meta': '#999999',
+    '--syntax-inserted': '#098658',
+    '--syntax-deleted': '#a31515',
+    '--syntax-changed': '#0451a5',
+
+    // ===========================================================================
+    // MARKDOWN
+    // ===========================================================================
+    '--md-heading-1-size': '2em',
+    '--md-heading-2-size': '1.5em',
+    '--md-heading-3-size': '1.17em',
+    '--md-heading-4-size': '1em',
+    '--md-heading-5-size': '0.83em',
+    '--md-heading-6-size': '0.67em',
+    '--md-heading-weight': '700',
+    '--md-heading-line-height': '1.3',
+    '--md-heading-margin-top': '0.6em',
+    '--md-heading-color': '#000000',
+    '--md-marker-color': '#999999',
+    '--md-marker-font': "Consolas, 'Courier New', Courier, monospace",
+    '--md-link-color': '#0563c1',
+    '--md-link-decoration': 'underline',
+    '--md-code-background': '#f3f3f3',
+    '--md-code-color': '#a31515',
+    '--md-code-padding': '0.15em 0.35em',
+    '--md-code-radius': '3px',
+    '--md-blockquote-border': '#d0d0d0',
+    '--md-blockquote-border-width': '3px',
+    '--md-blockquote-color': '#666666',
+    '--md-blockquote-padding': '1em',
+    '--md-list-marker-color': '#666666',
+    '--md-hr-color': '#d0d0d0',
+    '--md-hr-height': '1px',
+    '--md-hr-margin': '1.5em 0',
+    '--md-table-border': '#d0d0d0',
+    '--md-table-header-bg': '#f3f3f3',
+    '--md-table-header-weight': '700',
+    '--md-table-cell-padding': '0.5em 0.75em',
+    '--md-table-stripe-bg': 'transparent',
+    '--md-image-max-width': '100%',
+    '--md-image-border-radius': '0',
+    '--md-checkbox-size': '1em',
+    '--md-checkbox-color': '#0078d4',
+    '--md-alert-note-color': '#0078d4',
+    '--md-alert-tip-color': '#107c10',
+    '--md-alert-important-color': '#881798',
+    '--md-alert-warning-color': '#c47a00',
+    '--md-alert-caution-color': '#d13438',
+
+    // ===========================================================================
+    // SHELL — office gray
+    // ===========================================================================
+    '--mrmd-ui-font': "Calibri, 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, Helvetica, sans-serif",
+    '--mrmd-ui-font-size': '14px',
+    '--mrmd-ui-font-size-sm': '12px',
+    '--mrmd-panel-bg': '#f3f3f3',
+    '--mrmd-popup-bg': '#ffffff',
+    '--mrmd-bg': '#ffffff',
+    '--mrmd-fg': '#000000',
+    '--mrmd-fg-muted': '#666666',
+    '--mrmd-border': '#d0d0d0',
+    '--mrmd-hover-bg': '#e8e8e8',
+    '--mrmd-active-bg': '#d0d0d0',
+    '--mrmd-selection-bg': '#add6ff',
+    '--mrmd-accent': '#0078d4',
+    '--mrmd-accent-hover': '#106ebe',
+    '--mrmd-success': '#107c10',
+    '--mrmd-warning': '#c47a00',
+    '--mrmd-error': '#d13438',
+    '--mrmd-shadow-md': '0 2px 4px rgba(0, 0, 0, 0.14)',
+    '--mrmd-shadow-lg': '0 4px 8px rgba(0, 0, 0, 0.14)',
+    '--mrmd-shadow-xl': '0 8px 16px rgba(0, 0, 0, 0.14)',
+    '--mrmd-menu-border': '#d0d0d0',
+    '--mrmd-dialog-border': '#d0d0d0',
+    '--mrmd-input-border': '#d0d0d0',
+    '--mrmd-button-bg': '#f3f3f3',
+    '--mrmd-button-border': '#d0d0d0',
+    '--mrmd-button-hover': '#e8e8e8',
+    '--mrmd-button-active': '#d0d0d0',
+  };
+
+  /**
+   * Plain Dark Theme
+   *
+   * The dark version of "plain". Standard VS Code dark colors,
+   * system fonts, nothing surprising. If you've seen one dark editor,
+   * you've seen this theme.
+   */
+  const plainDarkTheme = {
+    name: 'plain-dark',
+    description: 'Standard dark theme. Default VS Code colors, system fonts. The baseline.',
+    isDark: true,
+
+    // ===========================================================================
+    // SPACING
+    // ===========================================================================
+    '--widget-line-height': '1.5',
+    '--widget-padding-x': '12px',
+    '--widget-padding-y': '8px',
+    '--widget-margin-y': '4px',
+    '--widget-border-radius': '3px',
+    '--widget-border-width': '1px',
+    '--widget-border-accent-width': '3px',
+
+    '--widget-white-space': 'pre-wrap',
+    '--widget-word-break': 'break-word',
+
+    // ===========================================================================
+    // TYPOGRAPHY — system defaults, Consolas for code
+    // ===========================================================================
+    '--widget-font-mono': "Consolas, 'Courier New', Courier, monospace",
+    '--widget-font-sans': "'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, Helvetica, sans-serif",
+    '--editor-font-family': "'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, Helvetica, sans-serif",
+    '--widget-font-size': '0.9em',
+    '--widget-font-size-small': '0.8em',
+    '--widget-font-size-label': '11px',
+
+    // ===========================================================================
+    // SURFACES — VS Code dark defaults
+    // ===========================================================================
+    '--widget-surface': '#252526',
+    '--widget-surface-hover': '#2a2d2e',
+    '--widget-surface-elevated': '#252526',
+    '--widget-surface-inset': '#1e1e1e',
+
+    // ===========================================================================
+    // BORDERS
+    // ===========================================================================
+    '--widget-border': '#3c3c3c',
+    '--widget-border-accent': '#007acc',
+    '--widget-border-focus': '#007acc',
+
+    // ===========================================================================
+    // TEXT
+    // ===========================================================================
+    '--widget-text': '#d4d4d4',
+    '--widget-text-muted': '#858585',
+    '--widget-text-accent': '#3794ff',
+
+    // ===========================================================================
+    // SEMANTIC
+    // ===========================================================================
+    '--widget-success': '#4ec9b0',
+    '--widget-warning': '#cca700',
+    '--widget-error': '#f14c4c',
+    '--widget-info': '#3794ff',
+
+    // ===========================================================================
+    // ANSI COLORS — Windows Terminal dark defaults
+    // ===========================================================================
+    '--ansi-black': '#1e1e1e',
+    '--ansi-red': '#cd3131',
+    '--ansi-green': '#0dbc79',
+    '--ansi-yellow': '#e5e510',
+    '--ansi-blue': '#2472c8',
+    '--ansi-magenta': '#bc3fbc',
+    '--ansi-cyan': '#11a8cd',
+    '--ansi-white': '#e5e5e5',
+    '--ansi-bright-black': '#666666',
+    '--ansi-bright-red': '#f14c4c',
+    '--ansi-bright-green': '#23d18b',
+    '--ansi-bright-yellow': '#f5f543',
+    '--ansi-bright-blue': '#3b8eea',
+    '--ansi-bright-magenta': '#d670d6',
+    '--ansi-bright-cyan': '#29b8db',
+    '--ansi-bright-white': '#e5e5e5',
+
+    // ===========================================================================
+    // TERMINAL
+    // ===========================================================================
+    '--term-background': '#1e1e1e',
+    '--term-foreground': '#d4d4d4',
+    '--term-cursor': '#d4d4d4',
+    '--term-cursor-accent': '#1e1e1e',
+    '--term-selection': '#264f78',
+    '--term-border': '#3c3c3c',
+    '--term-header-bg': '#252526',
+    '--term-header-fg': '#858585',
+
+    // ===========================================================================
+    // COLLABORATOR
+    // ===========================================================================
+    '--collab-human': '#3794ff',
+    '--collab-ai': '#bc3fbc',
+    '--collab-runtime': '#4ec9b0',
+
+    // ===========================================================================
+    // EDITOR — VS Code Dark default
+    // ===========================================================================
+    '--editor-background': '#1e1e1e',
+    '--editor-foreground': '#d4d4d4',
+    '--editor-line-number': '#858585',
+    '--editor-line-number-active': '#c6c6c6',
+    '--editor-selection': '#264f78',
+    '--editor-selection-match': '#515c6a',
+    '--editor-cursor': '#aeafad',
+    '--editor-active-line': 'rgba(255, 255, 255, 0.04)',
+    '--editor-gutter': '#1e1e1e',
+    '--editor-matching-bracket': 'rgba(255, 255, 255, 0.1)',
+
+    // ===========================================================================
+    // SYNTAX — VS Code Dark+ (the canonical default)
+    // ===========================================================================
+    '--syntax-keyword': '#569cd6',
+    '--syntax-control': '#c586c0',
+    '--syntax-string': '#ce9178',
+    '--syntax-number': '#b5cea8',
+    '--syntax-comment': '#6a9955',
+    '--syntax-function': '#dcdcaa',
+    '--syntax-variable': '#9cdcfe',
+    '--syntax-variable-special': '#569cd6',
+    '--syntax-property': '#9cdcfe',
+    '--syntax-operator': '#d4d4d4',
+    '--syntax-punctuation': '#d4d4d4',
+    '--syntax-type': '#4ec9b0',
+    '--syntax-class': '#4ec9b0',
+    '--syntax-constant': '#569cd6',
+    '--syntax-parameter': '#9cdcfe',
+    '--syntax-regexp': '#d16969',
+    '--syntax-escape': '#d7ba7d',
+    '--syntax-tag': '#569cd6',
+    '--syntax-attribute': '#9cdcfe',
+    '--syntax-attribute-value': '#ce9178',
+    '--syntax-heading': '#569cd6',
+    '--syntax-link': '#3794ff',
+    '--syntax-link-text': '#ce9178',
+    '--syntax-emphasis': '#569cd6',
+    '--syntax-strong': '#569cd6',
+    '--syntax-strikethrough': '#858585',
+    '--syntax-quote': '#6a9955',
+    '--syntax-code': '#ce9178',
+    '--syntax-code-background': '#252526',
+    '--syntax-meta': '#858585',
+    '--syntax-inserted': '#b5cea8',
+    '--syntax-deleted': '#ce9178',
+    '--syntax-changed': '#569cd6',
+
+    // ===========================================================================
+    // MARKDOWN
+    // ===========================================================================
+    '--md-heading-1-size': '2em',
+    '--md-heading-2-size': '1.5em',
+    '--md-heading-3-size': '1.17em',
+    '--md-heading-4-size': '1em',
+    '--md-heading-5-size': '0.83em',
+    '--md-heading-6-size': '0.67em',
+    '--md-heading-weight': '700',
+    '--md-heading-line-height': '1.3',
+    '--md-heading-margin-top': '0.6em',
+    '--md-heading-color': '#d4d4d4',
+    '--md-marker-color': '#858585',
+    '--md-marker-font': "Consolas, 'Courier New', Courier, monospace",
+    '--md-link-color': '#3794ff',
+    '--md-link-decoration': 'underline',
+    '--md-code-background': '#252526',
+    '--md-code-color': '#ce9178',
+    '--md-code-padding': '0.15em 0.35em',
+    '--md-code-radius': '3px',
+    '--md-blockquote-border': '#3c3c3c',
+    '--md-blockquote-border-width': '3px',
+    '--md-blockquote-color': '#858585',
+    '--md-blockquote-padding': '1em',
+    '--md-list-marker-color': '#858585',
+    '--md-hr-color': '#3c3c3c',
+    '--md-hr-height': '1px',
+    '--md-hr-margin': '1.5em 0',
+    '--md-table-border': '#3c3c3c',
+    '--md-table-header-bg': '#252526',
+    '--md-table-header-weight': '700',
+    '--md-table-cell-padding': '0.5em 0.75em',
+    '--md-table-stripe-bg': 'transparent',
+    '--md-image-max-width': '100%',
+    '--md-image-border-radius': '0',
+    '--md-checkbox-size': '1em',
+    '--md-checkbox-color': '#007acc',
+    '--md-alert-note-color': '#3794ff',
+    '--md-alert-tip-color': '#4ec9b0',
+    '--md-alert-important-color': '#bc3fbc',
+    '--md-alert-warning-color': '#cca700',
+    '--md-alert-caution-color': '#f14c4c',
+
+    // ===========================================================================
+    // SHELL — VS Code sidebar gray
+    // ===========================================================================
+    '--mrmd-ui-font': "'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, Helvetica, sans-serif",
+    '--mrmd-ui-font-size': '14px',
+    '--mrmd-ui-font-size-sm': '12px',
+    '--mrmd-panel-bg': '#252526',
+    '--mrmd-popup-bg': '#252526',
+    '--mrmd-bg': '#1e1e1e',
+    '--mrmd-fg': '#d4d4d4',
+    '--mrmd-fg-muted': '#858585',
+    '--mrmd-border': '#3c3c3c',
+    '--mrmd-hover-bg': '#2a2d2e',
+    '--mrmd-active-bg': '#37373d',
+    '--mrmd-selection-bg': '#264f78',
+    '--mrmd-accent': '#007acc',
+    '--mrmd-accent-hover': '#1c97ea',
+    '--mrmd-success': '#4ec9b0',
+    '--mrmd-warning': '#cca700',
+    '--mrmd-error': '#f14c4c',
+    '--mrmd-shadow-md': '0 2px 8px rgba(0, 0, 0, 0.36)',
+    '--mrmd-shadow-lg': '0 4px 16px rgba(0, 0, 0, 0.36)',
+    '--mrmd-shadow-xl': '0 8px 32px rgba(0, 0, 0, 0.36)',
+    '--mrmd-menu-border': '#454545',
+    '--mrmd-dialog-border': '#454545',
+    '--mrmd-input-border': '#3c3c3c',
+    '--mrmd-button-bg': '#3c3c3c',
+    '--mrmd-button-border': '#3c3c3c',
+    '--mrmd-button-hover': '#454545',
+    '--mrmd-button-active': '#505050',
+  };
+
   // #endregion BUILT_IN_THEMES
 
   // #region THEME_REGISTRY
@@ -124474,6 +125550,10 @@ $1 $2
     ['grayscale-dark', grayscaleDarkTheme],
     ['grayscale-light', grayscaleLightTheme],
     ['openresponses', openresponsesTheme],
+    ['newsprint-light', newsprintLightTheme],
+    ['newsprint-dark', newsprintDarkTheme],
+    ['plain-light', plainLightTheme],
+    ['plain-dark', plainDarkTheme],
   ]);
 
   /**

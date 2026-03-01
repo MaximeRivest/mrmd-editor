@@ -1433,7 +1433,7 @@ export const outputWidgetStyles = `
 /* Widget is absolutely positioned - overlays on transparent text lines, doesn't add to flow */
 .cm-output-widget {
   position: absolute;
-  left: var(--widget-inset-left, 0);
+  left: var(--widget-inset-left, 24px);
   right: 0;
   top: var(--widget-offset-top, 0);  /* Can be negative to pull widget up closer to code block */
   z-index: 1;
@@ -1544,7 +1544,7 @@ export const outputWidgetStyles = `
  */
 .cm-output-content-line {
   background: color-mix(in srgb, var(--widget-surface, rgba(0, 0, 0, 0.35)) 85%, transparent);
-  margin-left: var(--widget-inset-left, 0);
+  margin-left: var(--widget-inset-left, 24px);
   padding-left: var(--widget-padding-x, 16px);
   padding-right: var(--widget-padding-x, 16px);
   font-family: var(--widget-font-mono, 'Roboto Mono', 'SF Mono', Monaco, Consolas, monospace);
@@ -1599,7 +1599,7 @@ export const outputWidgetStyles = `
   font-size: 0.65em;
   color: var(--widget-text-muted, rgba(255, 255, 255, 0.3));
   padding-left: var(--widget-padding-x, 16px);
-  margin-left: var(--widget-inset-left, 0);
+  margin-left: var(--widget-inset-left, 24px);
   opacity: 0.7;
 }
 

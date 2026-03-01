@@ -56,6 +56,10 @@ export class PtyClient {
     this.maxReconnectAttempts = 10;
     this.baseReconnectDelay = 1000;
     this.reconnectTimeout = null;
+
+    // Small-input batching (typing) to reduce WS frame overhead on tunneled/mobile connections.
+    this._writeBuffer = '';
+    this._writeTimer = null;
   }
 
   /**
@@ -149,6 +153,11 @@ export class PtyClient {
         console.log('[PtyClient] Disconnected, code:', event.code);
         this.connected = false;
         this.ws = null;
+        if (this._writeTimer) {
+          clearTimeout(this._writeTimer);
+          this._writeTimer = null;
+        }
+        this._writeBuffer = '';
         this.config.onDisconnect(event.code, event.reason);
 
         // Attempt reconnection if not intentionally closed
@@ -185,6 +194,21 @@ export class PtyClient {
   }
 
   /**
+   * Flush any buffered small-input writes.
+   */
+  _flushWriteBuffer() {
+    if (!this._writeBuffer) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this._writeBuffer = '';
+      return;
+    }
+
+    const buffered = this._writeBuffer;
+    this._writeBuffer = '';
+    this.ws.send(JSON.stringify({ type: 'input', data: buffered }));
+  }
+
+  /**
    * Send data to the PTY (user input).
    * Large payloads (pastes) are chunked to avoid overwhelming the terminal
    * renderer and WebSocket tunnel on markco.dev.
@@ -194,11 +218,25 @@ export class PtyClient {
   write(data) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
-    // Small inputs (normal typing, control sequences): send immediately
+    // Small inputs (normal typing/control sequences): buffer briefly so
+    // rapid keypresses are batched into fewer WS frames.
     if (data.length <= 4096) {
-      this.ws.send(JSON.stringify({ type: 'input', data }));
+      this._writeBuffer += data;
+      if (!this._writeTimer) {
+        this._writeTimer = setTimeout(() => {
+          this._writeTimer = null;
+          this._flushWriteBuffer();
+        }, 8);
+      }
       return;
     }
+
+    // Preserve input ordering: flush any pending small-input batch first.
+    if (this._writeTimer) {
+      clearTimeout(this._writeTimer);
+      this._writeTimer = null;
+    }
+    this._flushWriteBuffer();
 
     // Large paste: chunk it to prevent UI freeze.
     // xterm.js may wrap pastes in bracketed paste markers (\x1b[200~ ... \x1b[201~).
@@ -265,6 +303,12 @@ export class PtyClient {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
+
+    if (this._writeTimer) {
+      clearTimeout(this._writeTimer);
+      this._writeTimer = null;
+    }
+    this._writeBuffer = '';
 
     if (this.ws) {
       this.ws.close();
