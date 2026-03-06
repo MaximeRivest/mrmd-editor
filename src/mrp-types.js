@@ -299,6 +299,8 @@
  * @property {string} [type] - Type string
  * @property {string} [value] - Short value repr
  * @property {string} [signature] - Function signature
+ * @property {string} [docstring] - Documentation string
+ * @property {string} [documentation] - Documentation (normalized alias)
  */
 
 // #endregion INTROSPECTION

@@ -14892,6 +14892,10 @@ var mrmd = (function (exports) {
       return found < 0 ? null : plugin.manager.tooltipViews[found];
   }
   const closeHoverTooltipEffect = /*@__PURE__*/StateEffect.define();
+  /**
+  Transaction effect that closes all hover tooltips.
+  */
+  const closeHoverTooltips = /*@__PURE__*/closeHoverTooltipEffect.of(null);
 
   const panelConfig$1 = /*@__PURE__*/Facet.define({
       combine(configs) {
@@ -31074,7 +31078,7 @@ var mrmd = (function (exports) {
   /**
   Elements are used to compose syntax nodes during parsing.
   */
-  let Element$3 = class Element {
+  let Element$4 = class Element {
       /**
       @internal
       */
@@ -31131,7 +31135,7 @@ var mrmd = (function (exports) {
       toTree() { return this.tree; }
   }
   function elt(type, from, to, children) {
-      return new Element$3(type, from, to, children);
+      return new Element$4(type, from, to, children);
   }
   const EmphasisUnderscore = { resolve: "Emphasis", mark: "EmphasisMark" };
   const EmphasisAsterisk = { resolve: "Emphasis", mark: "EmphasisMark" };
@@ -31502,7 +31506,7 @@ var mrmd = (function (exports) {
               if (open.type.mark)
                   content.push(this.elt(open.type.mark, start, open.to));
               for (let k = j + 1; k < i; k++) {
-                  if (this.parts[k] instanceof Element$3)
+                  if (this.parts[k] instanceof Element$4)
                       content.push(this.parts[k]);
                   this.parts[k] = null;
               }
@@ -31522,7 +31526,7 @@ var mrmd = (function (exports) {
           let result = [];
           for (let i = from; i < this.parts.length; i++) {
               let part = this.parts[i];
-              if (part instanceof Element$3)
+              if (part instanceof Element$4)
                   result.push(part);
           }
           return result;
@@ -31593,8 +31597,8 @@ var mrmd = (function (exports) {
               eI++;
           if (eI < elts.length && elts[eI].from < mark.from) {
               let e = elts[eI];
-              if (e instanceof Element$3)
-                  elts[eI] = new Element$3(e.type, e.from, e.to, injectMarks(e.children, [mark]));
+              if (e instanceof Element$4)
+                  elts[eI] = new Element$4(e.type, e.from, e.to, injectMarks(e.children, [mark]));
           }
           else {
               elts.splice(eI++, 0, mark);
@@ -32117,7 +32121,7 @@ var mrmd = (function (exports) {
     IncompleteTag = 14,
     IncompleteCloseTag = 15,
     commentContent$1$1 = 59,
-    Element$2 = 21,
+    Element$3 = 21,
     TagName = 23,
     Attribute = 24,
     AttributeName = 25,
@@ -32203,7 +32207,7 @@ var mrmd = (function (exports) {
       return startTagTerms.indexOf(term) > -1 ? new ElementContext$1(tagNameAfter$1(input, 1) || "", context) : context
     },
     reduce(context, term) {
-      return term == Element$2 && context ? context.parent : context
+      return term == Element$3 && context ? context.parent : context
     },
     reuse(context, node, stack, input) {
       let type = node.type.id;
@@ -32407,7 +32411,7 @@ var mrmd = (function (exports) {
       if (id == StyleText) return maybeNest(node, input, style)
       if (id == TextareaText) return maybeNest(node, input, textarea)
 
-      if (id == Element$2 && other.length) {
+      if (id == Element$3 && other.length) {
         let n = node.node, open = n.firstChild, tagName = open && findTagName(open, input), attrs;
         if (tagName) for (let tag of other) {
           if (tag.tag == tagName && (!tag.attrs || tag.attrs(attrs || (attrs = getAttrs(open, input))))) {
@@ -35559,7 +35563,7 @@ var mrmd = (function (exports) {
     commentContent$1 = 36,
     piContent$1 = 37,
     cdataContent$1 = 38,
-    Element$1 = 11,
+    Element$2 = 11,
     OpenTag = 13;
 
   /* Hand-written tokenizer for XML tag matching. */
@@ -35599,7 +35603,7 @@ var mrmd = (function (exports) {
       return term == StartTag ? new ElementContext(tagNameAfter(input, 1) || "", context) : context
     },
     reduce(context, term) {
-      return term == Element$1 && context ? context.parent : context
+      return term == Element$2 && context ? context.parent : context
     },
     reuse(context, node, _stack, input) {
       let type = node.type.id;
@@ -35736,7 +35740,7 @@ var mrmd = (function (exports) {
           return { type: "tag", from: pos, context: at.name == "Element" ? at : findParentElement(at) };
       return null;
   }
-  class Element {
+  let Element$1 = class Element {
       constructor(spec, attrs, attrValues) {
           this.attrs = attrs;
           this.attrValues = attrValues;
@@ -35748,7 +35752,7 @@ var mrmd = (function (exports) {
           this.closeNameCompletion = Object.assign(Object.assign({}, this.completion), { label: this.name + ">" });
           this.text = spec.textContent ? spec.textContent.map(s => ({ label: s, type: "text" })) : [];
       }
-  }
+  };
   const Identifier$2 = /^[:\-\.\w\u00b7-\uffff]*$/;
   function attrCompletion(spec) {
       return Object.assign(Object.assign({ type: "property" }, spec.completion || {}), { label: spec.name });
@@ -35787,7 +35791,7 @@ var mrmd = (function (exports) {
                   }
                   return attrCompletion(s);
               }));
-          let elt = new Element(s, attrs, attrVals);
+          let elt = new Element$1(s, attrs, attrVals);
           byName[elt.name] = elt;
           allElements.push(elt);
           if (s.top)
@@ -55497,6 +55501,28 @@ var mrmd = (function (exports) {
   // Regex to match ANSI escape sequences (same as in terminal.js)
   const ANSI_ESCAPE_REGEX = /\x1b\[[0-9;]*[a-zA-Z]/g;
 
+  const LONG_OUTPUT_WIDGET_LINE_THRESHOLD = 15;
+  const JSON_OUTPUT_WIDGET_SETTING_KEY = 'mrmd-json-output-widget-enabled';
+  const LONG_OUTPUT_WIDGET_SETTING_KEY = 'mrmd-long-output-widget-enabled';
+
+  function readBooleanSetting(key, defaultValue = true) {
+    try {
+      if (typeof window === 'undefined' || !window.localStorage) return defaultValue;
+      const raw = window.localStorage.getItem(key);
+      if (raw == null) return defaultValue;
+      return !['0', 'false', 'off', 'no'].includes(String(raw).trim().toLowerCase());
+    } catch {
+      return defaultValue;
+    }
+  }
+
+  function getOutputWidgetSettings() {
+    return {
+      jsonEnabled: readBooleanSetting(JSON_OUTPUT_WIDGET_SETTING_KEY, true),
+      longOutputEnabled: readBooleanSetting(LONG_OUTPUT_WIDGET_SETTING_KEY, true),
+    };
+  }
+
   /**
    * Zero-width widget used to completely hide ANSI escape sequences.
    * Using Decoration.replace with this widget removes the escape codes
@@ -55528,22 +55554,303 @@ var mrmd = (function (exports) {
       .replace(/'/g, '&#039;');
   }
 
+  function removeTrailingCommasOutsideStrings(input) {
+    let output = '';
+    let inDouble = false;
+
+    for (let i = 0; i < input.length; i++) {
+      const ch = input[i];
+
+      if (inDouble) {
+        output += ch;
+        if (ch === '\\' && i + 1 < input.length) {
+          output += input[i + 1];
+          i++;
+        } else if (ch === '"') {
+          inDouble = false;
+        }
+        continue;
+      }
+
+      if (ch === '"') {
+        inDouble = true;
+        output += ch;
+        continue;
+      }
+
+      if (ch === ',') {
+        let lookahead = i + 1;
+        while (lookahead < input.length && /\s/.test(input[lookahead])) lookahead++;
+        if (lookahead < input.length && (input[lookahead] === '}' || input[lookahead] === ']')) {
+          continue;
+        }
+      }
+
+      output += ch;
+    }
+
+    return output;
+  }
+
+  function replacePythonLiteralsOutsideStrings(input) {
+    const replacements = {
+      True: 'true',
+      False: 'false',
+      None: 'null',
+    };
+
+    let output = '';
+    let token = '';
+    let inDouble = false;
+
+    const flushToken = () => {
+      if (!token) return;
+      output += replacements[token] ?? token;
+      token = '';
+    };
+
+    for (let i = 0; i < input.length; i++) {
+      const ch = input[i];
+
+      if (inDouble) {
+        flushToken();
+        output += ch;
+        if (ch === '\\' && i + 1 < input.length) {
+          output += input[i + 1];
+          i++;
+        } else if (ch === '"') {
+          inDouble = false;
+        }
+        continue;
+      }
+
+      if (ch === '"') {
+        flushToken();
+        inDouble = true;
+        output += ch;
+        continue;
+      }
+
+      if (/[A-Za-z_]/.test(ch)) {
+        token += ch;
+        continue;
+      }
+
+      flushToken();
+      output += ch;
+    }
+
+    flushToken();
+    return output;
+  }
+
+  function normalizeJsonLikeOutput(input) {
+    let output = '';
+    let inSingle = false;
+    let inDouble = false;
+
+    for (let i = 0; i < input.length; i++) {
+      const ch = input[i];
+
+      if (inSingle) {
+        if (ch === '\\') {
+          const next = input[i + 1];
+          if (next === undefined) {
+            output += '\\\\';
+            continue;
+          }
+
+          if (next === "'") {
+            output += "'";
+            i++;
+            continue;
+          }
+          if (next === '"') {
+            output += '\\"';
+            i++;
+            continue;
+          }
+          if (next === '\\') {
+            output += '\\\\';
+            i++;
+            continue;
+          }
+          if (next === 'x' && /^[0-9A-Fa-f]{2}$/.test(input.slice(i + 2, i + 4))) {
+            output += `\\u00${input.slice(i + 2, i + 4)}`;
+            i += 3;
+            continue;
+          }
+          if (next === 'u' && /^[0-9A-Fa-f]{4}$/.test(input.slice(i + 2, i + 6))) {
+            output += `\\u${input.slice(i + 2, i + 6)}`;
+            i += 5;
+            continue;
+          }
+          if ('bfnrt/'.includes(next)) {
+            output += `\\${next}`;
+            i++;
+            continue;
+          }
+
+          output += `\\${next}`;
+          i++;
+          continue;
+        }
+
+        if (ch === "'") {
+          inSingle = false;
+          output += '"';
+          continue;
+        }
+
+        if (ch === '"') {
+          output += '\\"';
+        } else if (ch === '\n') {
+          output += '\\n';
+        } else if (ch === '\r') {
+          output += '\\r';
+        } else {
+          output += ch;
+        }
+        continue;
+      }
+
+      if (inDouble) {
+        output += ch;
+        if (ch === '\\' && i + 1 < input.length) {
+          output += input[i + 1];
+          i++;
+        } else if (ch === '"') {
+          inDouble = false;
+        }
+        continue;
+      }
+
+      if (ch === "'") {
+        inSingle = true;
+        output += '"';
+        continue;
+      }
+
+      if (ch === '"') {
+        inDouble = true;
+        output += ch;
+        continue;
+      }
+
+      output += ch;
+    }
+
+    if (inSingle || inDouble) return null;
+
+    const withoutTrailingCommas = removeTrailingCommasOutsideStrings(output);
+    return replacePythonLiteralsOutsideStrings(withoutTrailingCommas);
+  }
+
+  function isJsonContainerString(value) {
+    return (
+      (value.startsWith('{') && value.endsWith('}')) ||
+      (value.startsWith('[') && value.endsWith(']'))
+    );
+  }
+
+  function isJsonContainerValue(value) {
+    return value !== null && (Array.isArray(value) || typeof value === 'object');
+  }
+
+  function tryParseJsonLikeContainer(value) {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed || !isJsonContainerString(trimmed)) return null;
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      return isJsonContainerValue(parsed) ? parsed : null;
+    } catch {
+      const normalized = normalizeJsonLikeOutput(trimmed);
+      if (!normalized) return null;
+
+      try {
+        const parsed = JSON.parse(normalized);
+        return isJsonContainerValue(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  function parseOutLabelLine(line) {
+    const match = /^\s*out\[(\d+)\]:\s*(.*)$/i.exec(line);
+    if (!match) return null;
+    return {
+      label: `Out[${match[1]}]`,
+      remainder: match[2] ?? '',
+    };
+  }
+
+  function tryParseOutLabeledJsonOutput(input) {
+    const lines = String(input ?? '').split(/\r?\n/);
+    const labels = [];
+    const values = [];
+
+    let i = 0;
+    while (i < lines.length) {
+      while (i < lines.length && !lines[i].trim()) i++;
+      if (i >= lines.length) break;
+
+      const parsedLabel = parseOutLabelLine(lines[i]);
+      if (!parsedLabel) return null;
+
+      labels.push(parsedLabel.label);
+      i++;
+
+      const sectionLines = [];
+      if (parsedLabel.remainder.trim()) {
+        sectionLines.push(parsedLabel.remainder);
+      }
+
+      while (i < lines.length) {
+        if (parseOutLabelLine(lines[i])) break;
+        sectionLines.push(lines[i]);
+        i++;
+      }
+
+      const sectionText = sectionLines.join('\n').trim();
+      const parsedValue = tryParseJsonLikeContainer(sectionText);
+      if (parsedValue === null) return null;
+      values.push(parsedValue);
+    }
+
+    if (values.length === 0) return null;
+    return {
+      value: values.length === 1 ? values[0] : values,
+      labels,
+    };
+  }
+
   function tryParseJsonOutput(content) {
     if (!content || hasAnsi(content)) return null;
     if (content.length > 250_000) return null; // Guard large payloads
 
     const trimmed = content.trim();
     if (!trimmed) return null;
-    const looksLikeObjectOrArray =
-      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-      (trimmed.startsWith('[') && trimmed.endsWith(']'));
-    if (!looksLikeObjectOrArray) return null;
 
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return null;
+    const direct = tryParseJsonLikeContainer(trimmed);
+    if (direct !== null) {
+      return {
+        value: direct,
+        labels: [],
+      };
     }
+
+    return tryParseOutLabeledJsonOutput(trimmed);
+  }
+
+  function countOutputLines(content) {
+    const normalized = String(content ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const lines = normalized.split('\n');
+    while (lines.length > 0 && lines[lines.length - 1] === '') {
+      lines.pop();
+    }
+    return lines.length;
   }
 
   function jsonType(value) {
@@ -56101,6 +56408,97 @@ var mrmd = (function (exports) {
   }
 
   /**
+   * Widget for long plain output blocks (line-threshold based).
+   * Keeps output scrollable so very long results don't expand notebook height.
+   */
+  class ScrollableOutputWidget extends WidgetType {
+    /**
+     * @param {string} content - Output content
+     * @param {boolean} hidden - Whether widget should be hidden
+     * @param {number} blockStart - Document position where this output block starts
+     * @param {string|null} execId - Execution ID for this output block
+     * @param {number} lineCount - Number of output lines
+     */
+    constructor(content, hidden = false, blockStart = 0, execId = null, lineCount = 0) {
+      super();
+      this.content = content;
+      this.hidden = hidden;
+      this.blockStart = blockStart;
+      this.execId = execId;
+      this.lineCount = lineCount;
+    }
+
+    eq(other) {
+      return other.content === this.content &&
+        other.hidden === this.hidden &&
+        other.blockStart === this.blockStart &&
+        other.execId === this.execId &&
+        other.lineCount === this.lineCount;
+    }
+
+    toDOM() {
+      const container = document.createElement('div');
+      container.className = 'cm-scroll-output-widget' + (this.hidden ? ' cm-output-widget-hidden' : '');
+      container.dataset.outputBlockStart = String(this.blockStart);
+      if (this.execId) {
+        container.dataset.execId = this.execId;
+      }
+
+      const header = document.createElement('div');
+      header.className = 'cm-scroll-output-header';
+      header.innerHTML = `
+      <span class="cm-scroll-output-badge">Output</span>
+      <span class="cm-scroll-output-lines">${escapeHtml$1(String(this.lineCount))} lines</span>
+      <div class="cm-scroll-output-actions">
+        <button type="button" class="cm-scroll-output-action" data-action="expand">Expand</button>
+        <button type="button" class="cm-scroll-output-action" data-action="collapse">Collapse</button>
+        <button type="button" class="cm-scroll-output-action" data-action="copy">Copy</button>
+      </div>
+    `;
+      container.appendChild(header);
+
+      const contentWrap = document.createElement('div');
+      contentWrap.className = 'cm-scroll-output-body';
+
+      const pre = document.createElement('pre');
+      pre.className = 'cm-scroll-output-content';
+      pre.innerHTML = terminalToHtml(this.content);
+
+      contentWrap.appendChild(pre);
+      container.appendChild(contentWrap);
+
+      const actionButtons = header.querySelectorAll('.cm-scroll-output-action');
+      actionButtons.forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+
+          const action = btn.getAttribute('data-action');
+          if (action === 'expand') {
+            contentWrap.classList.add('cm-scroll-output-body-expanded');
+          } else if (action === 'collapse') {
+            contentWrap.classList.remove('cm-scroll-output-body-expanded');
+          } else if (action === 'copy') {
+            navigator.clipboard.writeText(stripAnsi(this.content)).then(() => {
+              const previous = btn.textContent;
+              btn.textContent = 'Copied';
+              setTimeout(() => {
+                btn.textContent = previous;
+              }, 1200);
+            });
+          }
+        });
+      });
+
+      return container;
+    }
+
+    ignoreEvent() {
+      return false;
+    }
+  }
+
+  /**
    * Widget for rendering JSON output with an expandable tree.
    */
   class JsonOutputWidget extends WidgetType {
@@ -56133,17 +56531,23 @@ var mrmd = (function (exports) {
         container.dataset.execId = this.execId;
       }
 
-      const parsed = tryParseJsonOutput(this.content);
-      if (parsed === null) {
+      const parsedResult = tryParseJsonOutput(this.content);
+      if (parsedResult === null) {
         container.innerHTML = `<pre class="cm-json-fallback">${escapeHtml$1(this.content)}</pre>`;
         return container;
       }
+
+      const parsedValue = parsedResult.value;
+      const originLabel = parsedResult.labels.length > 0
+        ? (parsedResult.labels.length === 1 ? parsedResult.labels[0] : parsedResult.labels.join(', '))
+        : null;
 
       const header = document.createElement('div');
       header.className = 'cm-json-header';
       header.innerHTML = `
       <span class="cm-json-badge">JSON</span>
-      <span class="cm-json-summary">${escapeHtml$1(summarizeJson(parsed))}</span>
+      ${originLabel ? `<span class="cm-json-origin">${escapeHtml$1(originLabel)}</span>` : ''}
+      <span class="cm-json-summary">${escapeHtml$1(summarizeJson(parsedValue))}</span>
       <div class="cm-json-actions">
         <button type="button" class="cm-json-action" data-action="expand">Expand</button>
         <button type="button" class="cm-json-action" data-action="collapse">Collapse</button>
@@ -56154,7 +56558,7 @@ var mrmd = (function (exports) {
 
       const tree = document.createElement('div');
       tree.className = 'cm-json-tree';
-      tree.appendChild(buildJsonTreeNode(null, parsed));
+      tree.appendChild(buildJsonTreeNode(null, parsedValue));
       container.appendChild(tree);
 
       const actionButtons = header.querySelectorAll('.cm-json-action');
@@ -56176,7 +56580,7 @@ var mrmd = (function (exports) {
               }
             });
           } else if (action === 'copy') {
-            navigator.clipboard.writeText(JSON.stringify(parsed, null, 2)).then(() => {
+            navigator.clipboard.writeText(JSON.stringify(parsedValue, null, 2)).then(() => {
               const previous = btn.textContent;
               btn.textContent = 'Copied';
               setTimeout(() => {
@@ -56340,6 +56744,7 @@ var mrmd = (function (exports) {
     const cursorPos = view.state.selection.main.head;
     const cursorLine = doc.lineAt(cursorPos).number;
     const text = doc.toString();
+    const outputWidgetSettings = getOutputWidgetSettings();
 
     // Find ```output or ```output:execId blocks (supports 3+ backticks for nesting)
     // Group 1: backticks, Group 2: optional execId, Group 3: content
@@ -56408,10 +56813,17 @@ var mrmd = (function (exports) {
       // Check if output is empty (just whitespace)
       const trimmedContent = content.trim();
       const isEmpty = trimmedContent.length === 0;
-      const parsedJson = !isEmpty && (outputType === null || outputType === 'json')
+      const parsedJson = !isEmpty && outputWidgetSettings.jsonEnabled && (outputType === null || outputType === 'json')
         ? tryParseJsonOutput(trimmedContent)
         : null;
       const shouldRenderJson = parsedJson !== null;
+      const outputLineCount = isEmpty ? 0 : countOutputLines(content);
+      const shouldRenderScrollableOutput =
+        outputWidgetSettings.longOutputEnabled &&
+        !isEmpty &&
+        outputType === null &&
+        !shouldRenderJson &&
+        outputLineCount > LONG_OUTPUT_WIDGET_LINE_THRESHOLD;
 
       if (anyCollaboratorFocused) {
         // EDITING MODE: Keep ANSI colors rendered, but make escape sequences
@@ -56478,7 +56890,7 @@ var mrmd = (function (exports) {
         // Style the fence lines (opening and closing fences).
         // Rich output widgets (HTML/CSS, including Mermaid rendered as HTML) are
         // attached to the opening fence line, so that line must remain unclipped.
-        const richOutput = outputType === 'html' || outputType === 'css' || shouldRenderJson;
+        const richOutput = outputType === 'html' || outputType === 'css' || shouldRenderJson || shouldRenderScrollableOutput;
         const startFenceClass = richOutput
           ? 'cm-output-fence-line cm-output-fence-start cm-output-fence-rich-start'
           : 'cm-output-fence-line cm-output-fence-start';
@@ -56548,6 +56960,23 @@ var mrmd = (function (exports) {
           decorations.push(
             Decoration.widget({
               widget: new CssOutputWidget(trimmedContent, false, blockStart, execId, cssTargetScope),
+              side: 1,
+            }).range(startLine.to)
+          );
+        } else if (shouldRenderScrollableOutput) {
+          // LONG OUTPUT: Hide raw lines and show a scrollable output widget
+          for (let i = startLine.number + 1; i < endLine.number; i++) {
+            const line = doc.line(i);
+            decorations.push(
+              Decoration.line({
+                class: 'cm-output-content-line cm-rich-output-hidden',
+              }).range(line.from)
+            );
+          }
+
+          decorations.push(
+            Decoration.widget({
+              widget: new ScrollableOutputWidget(content, false, blockStart, execId, outputLineCount),
               side: 1,
             }).range(startLine.to)
           );
@@ -57340,6 +57769,88 @@ var mrmd = (function (exports) {
   font-family: var(--widget-font-mono, monospace);
 }
 
+/* Scrollable plain output widget (for long outputs) */
+.cm-scroll-output-widget {
+  position: relative;
+  margin: 8px 0;
+  background: var(--widget-surface, rgba(0, 0, 0, 0.35));
+  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
+  border-left: 3px solid var(--widget-border-accent, rgba(100, 149, 237, 0.6));
+  border-radius: var(--widget-border-radius, 6px);
+  overflow: hidden;
+}
+
+.cm-scroll-output-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--widget-border, rgba(255, 255, 255, 0.08));
+  background: var(--widget-surface-elevated, rgba(255, 255, 255, 0.02));
+}
+
+.cm-scroll-output-badge {
+  font-size: 10px;
+  color: var(--widget-text-accent, #8cc0ff);
+  background: color-mix(in srgb, var(--widget-text-accent, #8cc0ff) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--widget-text-accent, #8cc0ff) 35%, transparent);
+  border-radius: 3px;
+  padding: 2px 6px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  font-family: var(--widget-font-mono, monospace);
+}
+
+.cm-scroll-output-lines {
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.65));
+  font-size: 11px;
+}
+
+.cm-scroll-output-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.cm-scroll-output-action {
+  background: var(--widget-surface-inset, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.14));
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.75));
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--widget-font-mono, monospace);
+}
+
+.cm-scroll-output-action:hover {
+  background: var(--widget-surface-hover, rgba(255, 255, 255, 0.08));
+  color: var(--widget-text, #e0e0e0);
+}
+
+.cm-scroll-output-body {
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px 10px 10px;
+  user-select: text;
+  cursor: text;
+}
+
+.cm-scroll-output-body.cm-scroll-output-body-expanded {
+  max-height: none;
+  overflow: visible;
+}
+
+.cm-scroll-output-content {
+  margin: 0;
+  white-space: var(--widget-white-space, pre-wrap);
+  word-break: var(--widget-word-break, break-word);
+  color: var(--widget-text, #e0e0e0);
+  font-size: 12px;
+  line-height: 1.45;
+  user-select: text;
+}
+
 /* JSON Output Widget - expandable tree view */
 .cm-json-output-widget {
   position: relative;
@@ -57375,6 +57886,13 @@ var mrmd = (function (exports) {
 .cm-json-summary {
   color: var(--widget-text-muted, rgba(255, 255, 255, 0.65));
   font-size: 11px;
+}
+
+.cm-json-origin {
+  color: var(--widget-text, #e0e0e0);
+  font-size: 11px;
+  font-family: var(--widget-font-mono, monospace);
+  opacity: 0.9;
 }
 
 .cm-json-actions {
@@ -66145,20 +66663,20 @@ ${mobileStyles}
   // STYLE INJECTION
   // =============================================================================
 
-  let stylesInjected$6 = false;
+  let stylesInjected$7 = false;
 
   /**
    * Inject shell styles into the document
    */
   function injectShellStyles$1() {
-    if (stylesInjected$6) return;
+    if (stylesInjected$7) return;
 
     const style = document.createElement('style');
     style.id = 'mrmd-shell-styles';
     style.textContent = shellStyles;
     document.head.appendChild(style);
 
-    stylesInjected$6 = true;
+    stylesInjected$7 = true;
   }
 
   /**
@@ -71437,11 +71955,11 @@ ${mobileStyles}
   // Inject Styles (into document head for proper CSS)
   // ===========================================================================
 
-  let stylesInjected$5 = false;
+  let stylesInjected$6 = false;
 
   function injectCtrlKStyles() {
-    if (stylesInjected$5) return;
-    stylesInjected$5 = true;
+    if (stylesInjected$6) return;
+    stylesInjected$6 = true;
 
     const css = `
 .cm-ctrl-k-modal {
@@ -74742,6 +75260,1223 @@ ${mobileStyles}
     return new CellControlsSystem(options);
   }
 
+  /**
+   * Section Controls Commands
+   *
+   * Formatting commands + AI shortcuts for the focused section.
+   */
+
+
+  // ===========================================================================
+  // Formatting Commands
+  // ===========================================================================
+
+  /**
+   * Toggle markdown formatting around selection.
+   *
+   * @param {import('@codemirror/view').EditorView} view
+   * @param {string} marker
+   * @param {string} [endMarker]
+   * @returns {boolean}
+   */
+  function toggleMarkdownFormat(view, marker, endMarker = marker) {
+    const sel = view.state.selection.main;
+    const { from, to } = sel;
+    const selected = view.state.doc.sliceString(from, to);
+
+    if (sel.empty) {
+      view.dispatch({
+        changes: { from, insert: marker + endMarker },
+        selection: { anchor: from + marker.length },
+        userEvent: 'input.format.add',
+      });
+      return true;
+    }
+
+    const hasWrapper = selected.startsWith(marker) && selected.endsWith(endMarker);
+
+    if (hasWrapper) {
+      const unwrapped = selected.slice(marker.length, selected.length - endMarker.length);
+      view.dispatch({
+        changes: { from, to, insert: unwrapped },
+        selection: { anchor: from, head: from + unwrapped.length },
+        userEvent: 'input.format.remove',
+      });
+      return true;
+    }
+
+    view.dispatch({
+      changes: { from, to, insert: marker + selected + endMarker },
+      selection: {
+        anchor: from + marker.length,
+        head: from + marker.length + selected.length,
+      },
+      userEvent: 'input.format.add',
+    });
+    return true;
+  }
+
+  const toggleBold = (view) => toggleMarkdownFormat(view, '**');
+  const toggleItalic = (view) => toggleMarkdownFormat(view, '*');
+  const toggleUnderline = (view) => toggleMarkdownFormat(view, '<u>', '</u>');
+
+  function getLineRangeForSelection(view) {
+    const sel = view.state.selection.main;
+    const fromLine = view.state.doc.lineAt(sel.from);
+    const toLine = view.state.doc.lineAt(sel.to);
+    return {
+      from: fromLine.from,
+      to: toLine.to,
+      text: view.state.doc.sliceString(fromLine.from, toLine.to),
+      selection: sel,
+    };
+  }
+
+  function prefixSelectedLines(view, prefix) {
+    const range = getLineRangeForSelection(view);
+    const lines = range.text.split('\n');
+    const prefixed = lines.map((line) => `${prefix}${line}`).join('\n');
+
+    const { selection } = range;
+    const anchor = selection.anchor + prefix.length;
+    const head = selection.head + prefix.length;
+
+    view.dispatch({
+      changes: { from: range.from, to: range.to, insert: prefixed },
+      selection: { anchor, head },
+      userEvent: 'input.format.add',
+    });
+    return true;
+  }
+
+  function insertTemplate(view, template) {
+    const sel = view.state.selection.main;
+    const marker = '{{cursor}}';
+    const selectionMarker = '{{selection}}';
+    const selectedText = view.state.doc.sliceString(sel.from, sel.to);
+
+    let text = template.includes(selectionMarker)
+      ? template.replace(selectionMarker, selectedText)
+      : template;
+
+    const markerPos = text.indexOf(marker);
+    if (markerPos >= 0) {
+      text = text.replace(marker, '');
+    }
+
+    const cursorPos = markerPos >= 0 ? sel.from + markerPos : sel.from + text.length;
+
+    view.dispatch({
+      changes: { from: sel.from, to: sel.to, insert: text },
+      selection: { anchor: cursorPos },
+      userEvent: 'input.format.add',
+    });
+
+    return true;
+  }
+
+  function insertBlockQuote(view) {
+    if (!view.state.selection.main.empty) {
+      return prefixSelectedLines(view, '> ');
+    }
+    return insertTemplate(view, '> {{cursor}}');
+  }
+
+  function insertTableTemplate(view) {
+    return insertTemplate(
+      view,
+      '| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n| {{cursor}} |  |  |\n|  |  |  |'
+    );
+  }
+
+  function insertCodeCellTemplate(view, language = 'python') {
+    const line = view.state.doc.lineAt(view.state.selection.main.from);
+    const prefixNewline = line.text.trim().length > 0 ? '\n' : '';
+    return insertTemplate(view, `${prefixNewline}\`\`\`${language}\n{{cursor}}\n\`\`\``);
+  }
+
+  function insertBulletList(view) {
+    if (!view.state.selection.main.empty) {
+      return prefixSelectedLines(view, '- ');
+    }
+    return insertTemplate(view, '- {{cursor}}');
+  }
+
+  function insertNumberedList(view) {
+    if (!view.state.selection.main.empty) {
+      return prefixSelectedLines(view, '1. ');
+    }
+    return insertTemplate(view, '1. {{cursor}}');
+  }
+
+  function insertTaskList(view) {
+    if (!view.state.selection.main.empty) {
+      return prefixSelectedLines(view, '- [ ] ');
+    }
+    return insertTemplate(view, '- [ ] {{cursor}}');
+  }
+
+  function insertHeading(view, level = 2) {
+    const prefix = '#'.repeat(Math.max(1, Math.min(level, 6))) + ' ';
+    return insertTemplate(view, `${prefix}{{cursor}}`);
+  }
+
+  function insertHorizontalRule(view) {
+    return insertTemplate(view, '---\n{{cursor}}');
+  }
+
+  const FORMATTING_COMMAND_DEFINITIONS = [
+    { id: 'bold', label: 'Bold', shortcut: 'Mod-B', icon: 'format' },
+    { id: 'italic', label: 'Italic', shortcut: 'Mod-I', icon: 'format' },
+    { id: 'underline', label: 'Underline', shortcut: 'Mod-U', icon: 'format' },
+    { id: 'blockquote', label: 'Block Quote', shortcut: '', icon: 'quote' },
+    { id: 'table', label: 'Insert Table Template', shortcut: '', icon: 'table' },
+    { id: 'code-cell', label: 'Insert Code Cell', shortcut: '', icon: 'code' },
+    { id: 'bullet-list', label: 'Bullet List', shortcut: '', icon: 'list' },
+    { id: 'numbered-list', label: 'Numbered List', shortcut: '', icon: 'list-number' },
+    { id: 'task-list', label: 'Task List', shortcut: '', icon: 'checklist' },
+    { id: 'heading-2', label: 'Heading (H2)', shortcut: '', icon: 'heading' },
+    { id: 'horizontal-rule', label: 'Horizontal Rule', shortcut: '', icon: 'minus' },
+  ];
+
+  function executeFormattingDefinition(view, def) {
+    switch (def.id) {
+      case 'bold':
+        return toggleBold(view);
+      case 'italic':
+        return toggleItalic(view);
+      case 'underline':
+        return toggleUnderline(view);
+      case 'blockquote':
+        return insertBlockQuote(view);
+      case 'table':
+        return insertTableTemplate(view);
+      case 'code-cell':
+        return insertCodeCellTemplate(view, 'python');
+      case 'bullet-list':
+        return insertBulletList(view);
+      case 'numbered-list':
+        return insertNumberedList(view);
+      case 'task-list':
+        return insertTaskList(view);
+      case 'heading-2':
+        return insertHeading(view, 2);
+      case 'horizontal-rule':
+        return insertHorizontalRule(view);
+      default:
+        return false;
+    }
+  }
+
+  // ===========================================================================
+  // AI Helpers
+  // ===========================================================================
+
+  function getAiClient(view) {
+    const cfg = view.state.facet(ctrlKConfigFacet);
+    return cfg?.aiClient || null;
+  }
+
+  function getFocusedSectionRange(view) {
+    const sel = view.state.selection.main;
+    if (!sel.empty) {
+      return {
+        from: sel.from,
+        to: sel.to,
+        text: view.state.doc.sliceString(sel.from, sel.to),
+      };
+    }
+
+    const tree = syntaxTree(view.state);
+    let node = tree.resolveInner(sel.head, 1);
+
+    while (node?.parent && node.parent.name !== 'Document') {
+      node = node.parent;
+    }
+
+    if (!node || node.name === 'Document') {
+      const line = view.state.doc.lineAt(sel.head);
+      return {
+        from: line.from,
+        to: line.to,
+        text: line.text,
+      };
+    }
+
+    return {
+      from: node.from,
+      to: node.to,
+      text: view.state.doc.sliceString(node.from, node.to),
+    };
+  }
+
+  function getCodeContextAtCursor(view) {
+    const cursor = view.state.selection.main.head;
+    const sel = view.state.selection.main;
+    const content = view.state.doc.toString();
+    const block = findCodeBlockAtPosition(content, cursor);
+    if (!block) return null;
+
+    const hasCodeSelection = !sel.empty && sel.from >= block.codeStart && sel.to <= block.codeEnd;
+
+    const selectedCode = hasCodeSelection
+      ? view.state.doc.sliceString(sel.from, sel.to)
+      : block.code;
+
+    return {
+      language: block.baseLanguage || block.language || 'text',
+      localContext: block.code,
+      codeBeforeCursor: view.state.doc.sliceString(block.codeStart, Math.min(cursor, block.codeEnd)),
+      replaceFrom: hasCodeSelection ? sel.from : block.codeStart,
+      replaceTo: hasCodeSelection ? sel.to : block.codeEnd,
+      selectedCode,
+    };
+  }
+
+  async function runAi(view, program, params, operation) {
+    const aiClient = getAiClient(view);
+    if (!aiClient) {
+      console.warn('[SectionControls] AI client not available. Ensure Ctrl-K AI extension is configured.');
+      return;
+    }
+
+    await executeAiOperation(view, aiClient, {
+      program,
+      params,
+      type: operation.type,
+      from: operation.from,
+      to: operation.to,
+      resultField: operation.resultField,
+      juiceLevel: aiClient.juiceLevel,
+    });
+  }
+
+  // ===========================================================================
+  // AI Command Definitions (for expanded menu)
+  // ===========================================================================
+
+  const AI_COMMAND_DEFINITIONS = [
+    { id: 'finish-sentence', label: 'Complete Sentence', shortcut: 'Mod-L', icon: 'line', program: 'FinishSentencePredict', type: 'insert', resultField: 'completion' },
+    { id: 'finish-paragraph', label: 'Complete Paragraph', shortcut: 'Mod-O', icon: 'section', program: 'FinishParagraphPredict', type: 'insert', resultField: 'completion' },
+    { id: 'fix-grammar', label: 'Fix Grammar', shortcut: 'Mod-G', icon: 'grammar', program: 'FixGrammarPredict', type: 'replace', resultField: 'fixed_text' },
+    { id: 'fix-transcription', label: 'Fix Transcription', shortcut: '', icon: 'wand', program: 'FixTranscriptionPredict', type: 'replace', resultField: 'fixed_text' },
+    { id: 'correct-finish-line', label: 'Correct + Finish Line', shortcut: '', icon: 'line', program: 'CorrectAndFinishLinePredict', type: 'replace', resultField: 'corrected_completion' },
+    { id: 'correct-finish-section', label: 'Correct + Finish Section', shortcut: '', icon: 'section', program: 'CorrectAndFinishSectionPredict', type: 'replace', resultField: 'corrected_completion' },
+    { id: 'reformat-markdown', label: 'Reformat Markdown', shortcut: '', icon: 'format', program: 'ReformatMarkdownPredict', type: 'replace', resultField: 'reformatted_text' },
+
+    // Code-focused
+    { id: 'document-code', label: 'Add Documentation to Code', shortcut: '', icon: 'doc', program: 'DocumentCodePredict', type: 'replace', resultField: 'documented_code', codeOnly: true },
+    { id: 'complete-code', label: 'Complete Code', shortcut: '', icon: 'code', program: 'CompleteCodePredict', type: 'replace', resultField: 'completion', codeOnly: true },
+    { id: 'add-type-hints', label: 'Add Type Hints', shortcut: '', icon: 'type', program: 'AddTypeHintsPredict', type: 'replace', resultField: 'typed_code', codeOnly: true },
+    { id: 'improve-names', label: 'Improve Names', shortcut: '', icon: 'rename', program: 'ImproveNamesPredict', type: 'replace', resultField: 'improved_code', codeOnly: true },
+    { id: 'explain-code', label: 'Explain Code', shortcut: '', icon: 'comment', program: 'ExplainCodePredict', type: 'replace', resultField: 'explained_code', codeOnly: true },
+    { id: 'refactor-code', label: 'Refactor Code', shortcut: '', icon: 'refactor', program: 'RefactorCodePredict', type: 'replace', resultField: 'refactored_code', codeOnly: true },
+    { id: 'format-code', label: 'Format Code', shortcut: '', icon: 'format', program: 'FormatCodePredict', type: 'replace', resultField: 'formatted_code', codeOnly: true },
+  ];
+
+  /**
+   * Execute one menu AI definition.
+   * @param {import('@codemirror/view').EditorView} view
+   * @param {Object} editor
+   * @param {Object} def
+   */
+  async function executeAiDefinition(view, editor, def) {
+    const ctx = getAiContext(view);
+    const section = getFocusedSectionRange(view);
+    const code = getCodeContextAtCursor(view);
+    const sel = view.state.selection.main;
+
+    if (def.codeOnly && !code) {
+      console.warn(`[SectionControls] ${def.label} requires cursor in a code block.`);
+      return;
+    }
+
+    const isCodeFinish = def.program === 'FinishCodeLinePredict' || def.program === 'FinishCodeSectionPredict';
+
+    // Operation target
+    let from;
+    let to;
+    if (def.type === 'insert') {
+      from = ctx.cursorPos;
+      to = ctx.cursorPos;
+    } else if (def.codeOnly && code) {
+      from = code.replaceFrom;
+      to = code.replaceTo;
+    } else {
+      from = sel.empty ? section.from : sel.from;
+      to = sel.empty ? section.to : sel.to;
+    }
+
+    // Build params by command family
+    let params = {};
+
+    if (def.program.startsWith('Finish')) {
+      if (isCodeFinish || (def.codeOnly && code)) {
+        params = {
+          code_before_cursor: code?.codeBeforeCursor || '',
+          language: code?.language || 'text',
+          local_context: code?.localContext || '',
+          document_context: ctx.documentContext,
+        };
+      } else {
+        params = {
+          text_before_cursor: ctx.textBeforeCursor,
+          local_context: ctx.localContext,
+          document_context: ctx.documentContext,
+        };
+      }
+    } else if (def.program.startsWith('Fix')) {
+      params = {
+        text_to_fix: view.state.doc.sliceString(from, to),
+        local_context: ctx.localContext,
+        document_context: ctx.documentContext,
+      };
+    } else if (def.program.startsWith('CorrectAndFinish')) {
+      params = {
+        text_to_fix: view.state.doc.sliceString(from, to),
+        content_type: code ? 'code' : 'text',
+        local_context: code ? code.localContext : ctx.localContext,
+        document_context: ctx.documentContext,
+      };
+    } else if (def.program === 'ReformatMarkdownPredict') {
+      params = {
+        text: view.state.doc.sliceString(from, to),
+        local_context: ctx.localContext,
+        document_context: ctx.documentContext,
+      };
+    } else if (def.program.endsWith('CodePredict')) {
+      params = {
+        code: code?.selectedCode || view.state.doc.sliceString(from, to),
+        language: code?.language || 'text',
+        local_context: code?.localContext || ctx.localContext,
+        document_context: ctx.documentContext,
+      };
+    } else {
+      params = {
+        text_to_fix: view.state.doc.sliceString(from, to),
+        local_context: ctx.localContext,
+        document_context: ctx.documentContext,
+      };
+    }
+
+    await runAi(view, def.program, params, {
+      type: def.type,
+      from,
+      to,
+      resultField: def.resultField,
+    });
+  }
+
+  // ===========================================================================
+  // AI Quick Commands
+  // ===========================================================================
+
+  const fixGrammar = (editor) => (view) => {
+    const def = AI_COMMAND_DEFINITIONS.find(d => d.id === 'fix-grammar');
+    if (def) void executeAiDefinition(view, editor, def);
+    return true;
+  };
+
+  const finishLine = (editor) => (view) => {
+    const code = getCodeContextAtCursor(view);
+    const def = code
+      ? { label: 'Complete Code Line', program: 'FinishCodeLinePredict', type: 'insert', resultField: 'completion', codeOnly: true }
+      : AI_COMMAND_DEFINITIONS.find(d => d.id === 'finish-sentence');
+
+    if (def) void executeAiDefinition(view, editor, def);
+    return true;
+  };
+
+  const finishSection = (editor) => (view) => {
+    const code = getCodeContextAtCursor(view);
+    const def = code
+      ? { label: 'Complete Code Section', program: 'FinishCodeSectionPredict', type: 'insert', resultField: 'completion', codeOnly: true }
+      : AI_COMMAND_DEFINITIONS.find(d => d.id === 'finish-paragraph');
+
+    if (def) void executeAiDefinition(view, editor, def);
+    return true;
+  };
+
+  /**
+   * Section Controls Floating DOM
+   */
+
+
+  let activeCommandMenu = null;
+
+  function isMacLikePlatform() {
+    const platform = navigator?.platform || '';
+    const ua = navigator?.userAgent || '';
+    return /Mac|iPhone|iPad|iPod/i.test(platform) || /Mac OS X/i.test(ua);
+  }
+
+  function formatShortcut(shortcut) {
+    if (!shortcut) return '';
+    const mod = isMacLikePlatform() ? 'Cmd' : 'Ctrl';
+    return shortcut.replace(/Mod-/g, `${mod}+`).replace(/-/g, '+');
+  }
+
+  /**
+   * Build floating section-controls DOM.
+   * @param {import('@codemirror/view').EditorView} view
+   * @param {{editor: any, showAi: boolean, showFormatting: boolean}} options
+   */
+  function createSectionControlsDom(view, options) {
+    const root = document.createElement('div');
+    root.className = 'cm-section-controls-floating-root';
+    root.__cmSectionControlsView = view;
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'cm-section-controls-toolbar';
+    root.appendChild(toolbar);
+
+    if (options.showFormatting) {
+      const group = document.createElement('div');
+      group.className = 'cm-section-controls-group formatting';
+      group.append(
+        createButton('B', `Bold (${formatShortcut('Mod-B')})`, () => toggleBold(view), 'bold'),
+        createButton('I', `Italic (${formatShortcut('Mod-I')})`, () => toggleItalic(view), 'italic'),
+        createButton('U', `Underline (${formatShortcut('Mod-U')})`, () => toggleUnderline(view), 'underline'),
+      );
+      toolbar.appendChild(group);
+    }
+
+    if (options.showAi) {
+      const group = document.createElement('div');
+      group.className = 'cm-section-controls-group ai';
+      group.append(
+        createIconButton('grammar', `Fix Grammar (${formatShortcut('Mod-G')})`, () => fixGrammar(options.editor)(view), 'ai-grammar'),
+        createIconButton('line', `Finish Line (${formatShortcut('Mod-L')})`, () => finishLine(options.editor)(view), 'ai-finish-line'),
+        createIconButton('section', `Finish Section (${formatShortcut('Mod-O')})`, () => finishSection(options.editor)(view), 'ai-finish-section'),
+        createButton('…', `All Commands (${formatShortcut("Mod-'")})`, () => {
+          openSectionControlsMenu(view, options.editor, { anchorEl: group, root });
+        }, 'more'),
+      );
+      toolbar.appendChild(group);
+    }
+
+    return root;
+  }
+
+  function createButton(text, title, onClick, className) {
+    const btn = document.createElement('button');
+    btn.className = `cm-section-controls-btn ${className || ''}`;
+    btn.type = 'button';
+    btn.textContent = text;
+    btn.title = title;
+
+    wireButtonEvents(btn, onClick);
+    return btn;
+  }
+
+  function createIconButton(iconName, title, onClick, className) {
+    const btn = document.createElement('button');
+    btn.className = `cm-section-controls-btn ${className || ''}`;
+    btn.type = 'button';
+    btn.title = title;
+    btn.appendChild(createIconSvg(iconName));
+
+    wireButtonEvents(btn, onClick);
+    return btn;
+  }
+
+  function wireButtonEvents(btn, onClick) {
+    // Keep cursor/selection stable on click.
+    btn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onClick(e);
+    });
+  }
+
+  function createIconSvg(name) {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.5');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+
+    const path = (d) => {
+      const p = document.createElementNS(ns, 'path');
+      p.setAttribute('d', d);
+      svg.appendChild(p);
+    };
+
+    if (name === 'grammar') {
+      const c = document.createElementNS(ns, 'circle');
+      c.setAttribute('cx', '8');
+      c.setAttribute('cy', '8');
+      c.setAttribute('r', '5');
+      svg.appendChild(c);
+      path('M5.8 8.1l1.5 1.5 3-3');
+    } else if (name === 'line') {
+      path('M3 8h8');
+      path('M9 5l3 3-3 3');
+    } else if (name === 'section') {
+      path('M8 3v8');
+      path('M5 9.5L8 12.5l3-3');
+    } else if (name === 'wand') {
+      path('M3.5 12.5l9-9');
+      path('M10.5 2.5v2');
+      path('M12.5 4.5h-2');
+    } else if (name === 'format') {
+      path('M3 4h10');
+      path('M5 8h6');
+      path('M7 12h2');
+    } else if (name === 'doc') {
+      path('M5 2.5h4l2 2v9H5z');
+      path('M9 2.5v2h2');
+    } else if (name === 'code') {
+      path('M6 5L3.5 8 6 11');
+      path('M10 5l2.5 3-2.5 3');
+    } else if (name === 'type') {
+      path('M4 4h8');
+      path('M8 4v8');
+    } else if (name === 'rename') {
+      path('M3 12h3l6-6-3-3-6 6z');
+    } else if (name === 'comment') {
+      path('M3 4h10v6H7l-3 2z');
+    } else if (name === 'refactor') {
+      path('M4.5 6.5A3.5 3.5 0 1 1 8 11.5');
+      path('M3.5 6.5h2v-2');
+    } else if (name === 'quote') {
+      path('M4.5 5.5h2v2h-2v3h3v-5h-3z');
+      path('M9.5 5.5h2v2h-2v3h3v-5h-3z');
+    } else if (name === 'table') {
+      path('M2.5 3.5h11v9h-11z');
+      path('M2.5 6.5h11');
+      path('M2.5 9.5h11');
+      path('M6.5 3.5v9');
+      path('M9.5 3.5v9');
+    } else if (name === 'list') {
+      path('M5.5 4h7');
+      path('M5.5 8h7');
+      path('M5.5 12h7');
+      path('M3.2 4h.2');
+      path('M3.2 8h.2');
+      path('M3.2 12h.2');
+    } else if (name === 'list-number') {
+      path('M6 4h6.5');
+      path('M6 8h6.5');
+      path('M6 12h6.5');
+      path('M2.8 4h1v2h-1');
+      path('M2.7 8.8c.2-.7 1.3-.7 1.5 0 .1.5-.2.9-.8 1.3-.5.3-.8.6-.8.9h1.7');
+      path('M2.7 11.7h1.5l-.7 1.2h.7');
+    } else if (name === 'checklist') {
+      path('M2.5 3.5h11v9h-11z');
+      path('M4.3 6.8l1 1 1.8-1.8');
+      path('M8.5 7h3');
+      path('M8.5 10h3');
+    } else if (name === 'heading') {
+      path('M3.5 4v8');
+      path('M7.5 4v8');
+      path('M3.5 8h4');
+      path('M10 12V4l2 2');
+    } else if (name === 'minus') {
+      path('M3 8h10');
+    }
+
+    return svg;
+  }
+
+  function getRootForView(view) {
+    const roots = document.querySelectorAll('.cm-section-controls-floating-root');
+    for (const root of roots) {
+      if (root.__cmSectionControlsView === view) return root;
+    }
+    return null;
+  }
+
+  function closeSectionControlsMenu() {
+    if (!activeCommandMenu) return;
+    const { menu, onDocPointerDown, onDocKeydown, root } = activeCommandMenu;
+    document.removeEventListener('pointerdown', onDocPointerDown, true);
+    document.removeEventListener('keydown', onDocKeydown, true);
+    root?.classList.remove('menu-open');
+    menu.remove();
+    activeCommandMenu = null;
+  }
+
+  function openSectionControlsMenu(view, editor, options = {}) {
+    // Toggle behavior: if already open for this view, close.
+    if (activeCommandMenu?.view === view) {
+      closeSectionControlsMenu();
+      return true;
+    }
+
+    if (activeCommandMenu) closeSectionControlsMenu();
+
+    const root = options.root || getRootForView(view);
+    const anchorEl = options.anchorEl
+      || root?.querySelector('.cm-section-controls-group.ai')
+      || root?.querySelector('.cm-section-controls-toolbar')
+      || root;
+
+    if (!root || !anchorEl) return false;
+
+    const menu = document.createElement('div');
+    menu.className = 'cm-section-controls-menu';
+
+    const header = document.createElement('div');
+    header.className = 'cm-section-controls-menu-header';
+    header.textContent = 'All Commands';
+    menu.appendChild(header);
+
+    const formattingSection = document.createElement('div');
+    formattingSection.className = 'cm-section-controls-menu-section';
+    formattingSection.appendChild(sectionTitle('Formatting'));
+    for (const def of FORMATTING_COMMAND_DEFINITIONS) {
+      formattingSection.appendChild(menuItem({
+        label: def.label,
+        shortcut: formatShortcut(def.shortcut || ''),
+        icon: def.icon || 'format',
+        onClick: () => executeFormattingDefinition(view, def),
+      }));
+    }
+    menu.appendChild(formattingSection);
+
+    const inCode = !!findCodeBlockAtPosition(view.state.doc.toString(), view.state.selection.main.head);
+
+    const aiSection = document.createElement('div');
+    aiSection.className = 'cm-section-controls-menu-section';
+    aiSection.appendChild(sectionTitle('AI'));
+
+    for (const def of AI_COMMAND_DEFINITIONS) {
+      aiSection.appendChild(menuItem({
+        label: def.label,
+        shortcut: formatShortcut(def.shortcut || ''),
+        icon: def.icon || 'wand',
+        disabled: !!def.codeOnly && !inCode,
+        onClick: () => { void executeAiDefinition(view, editor, def); },
+      }));
+    }
+
+    aiSection.appendChild(menuItem({
+      label: 'Custom Prompt…',
+      shortcut: formatShortcut('Mod-K'),
+      icon: 'wand',
+      onClick: () => showCtrlKModal(view),
+    }));
+
+    menu.appendChild(aiSection);
+
+    document.body.appendChild(menu);
+
+    // Position near the existing toolbar for a "grow" feel.
+    const anchorRect = anchorEl.getBoundingClientRect();
+    const rect = menu.getBoundingClientRect();
+
+    let left = anchorRect.right - rect.width;
+    let top = anchorRect.bottom + 6;
+
+    left = Math.max(8, Math.min(left, window.innerWidth - rect.width - 8));
+    top = Math.max(8, Math.min(top, window.innerHeight - rect.height - 8));
+
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+    menu.style.transformOrigin = `${Math.max(12, anchorRect.right - left)}px 0px`;
+
+    root.classList.add('menu-open');
+
+    const focusableItems = () => Array.from(menu.querySelectorAll('.cm-section-controls-menu-item:not(:disabled)'));
+    const setActive = (idx) => {
+      const items = focusableItems();
+      if (!items.length) return;
+      const clamped = Math.max(0, Math.min(idx, items.length - 1));
+      items.forEach((item) => item.classList.remove('is-active'));
+      items[clamped].classList.add('is-active');
+      items[clamped].focus({ preventScroll: true });
+      return clamped;
+    };
+
+    let activeIndex = setActive(0) ?? 0;
+
+    const onDocPointerDown = (e) => {
+      if (!menu.contains(e.target)) closeSectionControlsMenu();
+    };
+
+    const onDocKeydown = (e) => {
+      if (!activeCommandMenu || activeCommandMenu.menu !== menu) return;
+
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeSectionControlsMenu();
+        return;
+      }
+
+      const items = focusableItems();
+      if (!items.length) return;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        activeIndex = setActive((activeIndex + 1) % items.length);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        activeIndex = setActive((activeIndex - 1 + items.length) % items.length);
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        activeIndex = setActive(0);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        activeIndex = setActive(items.length - 1);
+      } else if ((e.key === 'Enter' || e.key === ' ') && document.activeElement?.classList.contains('cm-section-controls-menu-item')) {
+        e.preventDefault();
+        document.activeElement.click();
+      }
+    };
+
+    document.addEventListener('pointerdown', onDocPointerDown, true);
+    document.addEventListener('keydown', onDocKeydown, true);
+
+    activeCommandMenu = { menu, onDocPointerDown, onDocKeydown, root, view };
+    return true;
+  }
+
+  function sectionTitle(text) {
+    const el = document.createElement('div');
+    el.className = 'cm-section-controls-menu-title';
+    el.textContent = text;
+    return el;
+  }
+
+  function menuItem({ label, shortcut, icon, onClick, disabled = false }) {
+    const btn = document.createElement('button');
+    btn.className = 'cm-section-controls-menu-item';
+    btn.type = 'button';
+    btn.disabled = !!disabled;
+
+    const left = document.createElement('span');
+    left.className = 'cm-section-controls-menu-item-main';
+
+    const iconWrap = document.createElement('span');
+    iconWrap.className = 'cm-section-controls-menu-item-icon';
+    iconWrap.appendChild(createIconSvg(icon || 'wand'));
+    left.appendChild(iconWrap);
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'cm-section-controls-menu-item-label';
+    labelEl.textContent = label;
+    left.appendChild(labelEl);
+
+    btn.appendChild(left);
+
+    if (shortcut) {
+      const keyEl = document.createElement('span');
+      keyEl.className = 'cm-section-controls-menu-item-shortcut';
+      keyEl.textContent = shortcut;
+      btn.appendChild(keyEl);
+    }
+
+    btn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    btn.addEventListener('click', (e) => {
+      if (btn.disabled) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClick();
+      closeSectionControlsMenu();
+    });
+
+    return btn;
+  }
+
+  const sectionControlsStyles = `
+.cm-section-controls-floating-root {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: auto;
+}
+
+.cm-section-controls-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0.84;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  transform: translateY(0) scale(1);
+  background: color-mix(in srgb, var(--bg-secondary, #1f2328) 90%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border, #3d444d) 78%, transparent);
+  border-radius: 10px;
+  padding: 4px 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(3px);
+}
+
+.cm-section-controls-floating-root.menu-open .cm-section-controls-toolbar {
+  opacity: 0;
+  transform: translateY(-2px) scale(0.96);
+  pointer-events: none;
+}
+
+.cm-section-controls-toolbar:hover {
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+.cm-section-controls-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.cm-section-controls-btn {
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted, #8b949e);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, transform 0.12s ease;
+}
+
+.cm-section-controls-btn svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+.cm-section-controls-btn:hover {
+  background: color-mix(in srgb, var(--hover-bg, #30363d) 80%, transparent);
+  color: var(--text, #e6edf3);
+  transform: scale(1.05);
+}
+
+.cm-section-controls-btn.bold { font-weight: 700; }
+.cm-section-controls-btn.italic { font-style: italic; }
+.cm-section-controls-btn.underline { text-decoration: underline; }
+
+.cm-section-controls-menu {
+  position: fixed;
+  z-index: 1002;
+  min-width: 320px;
+  max-width: 420px;
+  max-height: min(72vh, 620px);
+  overflow: auto;
+  background: var(--bg-secondary, #1f2328);
+  border: 1px solid var(--border, #3d444d);
+  border-radius: 10px;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.35);
+  animation: cm-section-controls-menu-grow 120ms ease-out;
+}
+
+@keyframes cm-section-controls-menu-grow {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.cm-section-controls-menu-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border, #3d444d);
+  color: var(--text, #e6edf3);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.cm-section-controls-menu-section {
+  padding: 8px;
+}
+
+.cm-section-controls-menu-title {
+  padding: 4px 6px 8px;
+  font-size: 11px;
+  color: var(--text-muted, #8b949e);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.cm-section-controls-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text, #e6edf3);
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cm-section-controls-menu-item-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cm-section-controls-menu-item-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted, #8b949e);
+  display: inline-flex;
+}
+
+.cm-section-controls-menu-item-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.cm-section-controls-menu-item:hover,
+.cm-section-controls-menu-item.is-active {
+  background: var(--hover-bg, rgba(80, 90, 110, 0.35));
+}
+
+.cm-section-controls-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cm-section-controls-menu-item:disabled:hover {
+  background: transparent;
+}
+
+.cm-section-controls-menu-item-shortcut {
+  color: var(--text-muted, #8b949e);
+  font-size: 11px;
+}
+
+@media (max-width: 768px) {
+  .cm-section-controls-floating-root { display: none !important; }
+}
+`;
+
+  let stylesInjected$5 = false;
+  function injectSectionControlsStyles() {
+    if (stylesInjected$5 || document.querySelector('#cm-section-controls-styles')) return;
+    stylesInjected$5 = true;
+    const style = document.createElement('style');
+    style.id = 'cm-section-controls-styles';
+    style.textContent = sectionControlsStyles;
+    document.head.appendChild(style);
+  }
+
+  /**
+   * Section Controls Plugin (floating overlay)
+   */
+
+
+  const sectionControlsFacet = Facet.define({
+    combine: (values) => values[0] || { enabled: true, showAi: true, showFormatting: true },
+  });
+
+  function getSectionAnchorPos(state) {
+    const head = state.selection.main.head;
+    const tree = syntaxTree(state);
+    let node = tree.resolveInner(head, -1);
+
+    while (node?.parent && node.parent.name !== 'Document') {
+      node = node.parent;
+    }
+
+    // Fallback to current line end.
+    if (!node || node.name === 'Document') return state.doc.lineAt(head).to;
+
+    // End of top-level block (paragraph/list/table/code/etc.).
+    const safe = Math.max(node.from, Math.min(node.to - 1, state.doc.length));
+    return state.doc.lineAt(safe).to;
+  }
+
+  function createSectionControlsPlugin(editor) {
+    return ViewPlugin.fromClass(
+      class {
+        constructor(view) {
+          this.view = view;
+          this.config = view.state.facet(sectionControlsFacet);
+          this.dom = null;
+          this.measurePending = false;
+          this.lastWidth = 260;
+
+          injectSectionControlsStyles();
+
+          this.onWindowResize = () => this.scheduleReposition();
+          this.onScroll = () => this.scheduleReposition();
+          window.addEventListener('resize', this.onWindowResize);
+          this.view.scrollDOM.addEventListener('scroll', this.onScroll, { passive: true });
+
+          this.ensureDom();
+          this.scheduleReposition();
+        }
+
+        ensureDom() {
+          if (this.dom) {
+            this.dom.remove();
+            this.dom = null;
+          }
+
+          if (!this.config.enabled || (!this.config.showAi && !this.config.showFormatting)) {
+            return;
+          }
+
+          this.dom = createSectionControlsDom(this.view, {
+            editor,
+            showAi: this.config.showAi,
+            showFormatting: this.config.showFormatting,
+          });
+
+          document.body.appendChild(this.dom);
+        }
+
+        scheduleReposition() {
+          if (!this.dom || this.measurePending) return;
+
+          this.measurePending = true;
+
+          this.view.requestMeasure({
+            read: (view) => {
+              this.measurePending = false;
+              if (!this.dom) return null;
+
+              const anchor = getSectionAnchorPos(view.state);
+              const coords = view.coordsAtPos(anchor);
+              if (!coords) return null;
+
+              const contentRect = view.contentDOM.getBoundingClientRect();
+              const width = this.dom.offsetWidth || this.lastWidth;
+
+              return {
+                right: contentRect.right,
+                bottom: coords.bottom,
+                width,
+              };
+            },
+            write: (m) => {
+              if (!this.dom) return;
+
+              if (!m) {
+                this.dom.style.display = 'none';
+                return;
+              }
+
+              const left = Math.max(8, m.right - m.width - 10);
+              const top = Math.max(8, m.bottom + 6);
+
+              this.lastWidth = m.width;
+              this.dom.style.display = 'block';
+              this.dom.style.left = `${left}px`;
+              this.dom.style.top = `${top}px`;
+            },
+          });
+        }
+
+        update(update) {
+          const newConfig = update.state.facet(sectionControlsFacet);
+          const configChanged = (
+            this.config.enabled !== newConfig.enabled ||
+            this.config.showAi !== newConfig.showAi ||
+            this.config.showFormatting !== newConfig.showFormatting
+          );
+
+          if (configChanged) {
+            this.config = newConfig;
+            this.ensureDom();
+          }
+
+          if (
+            configChanged ||
+            update.selectionSet ||
+            update.docChanged ||
+            update.viewportChanged ||
+            update.focusChanged
+          ) {
+            this.scheduleReposition();
+          }
+        }
+
+        destroy() {
+          window.removeEventListener('resize', this.onWindowResize);
+          this.view.scrollDOM.removeEventListener('scroll', this.onScroll);
+          if (this.dom) {
+            this.dom.remove();
+            this.dom = null;
+          }
+        }
+      }
+    );
+  }
+
+  /**
+   * Section Controls Module
+   *
+   * Provides AI and formatting controls that appear next to the focused section.
+   */
+
+
+  /**
+   * Create section controls extensions
+   *
+   * @param {Object} editor - Editor API instance
+   * @param {Object} [options] - Configuration
+   * @returns {Array} CodeMirror extensions
+   */
+  function sectionControls(editor, options = {}) {
+    const config = {
+      enabled: options.enabled !== false,
+      showAi: options.showAi !== false,
+      showFormatting: options.showFormatting !== false,
+      ...options,
+    };
+
+    if (!config.enabled) return [];
+
+    const keybindings = [
+      { key: 'Mod-b', run: (view) => toggleBold(view) },
+      { key: 'Mod-i', run: (view) => toggleItalic(view) },
+      { key: 'Mod-u', run: (view) => toggleUnderline(view) },
+      { key: 'Mod-g', run: (view) => fixGrammar(editor)(view) },
+      { key: 'Mod-l', run: (view) => finishLine(editor)(view) },
+      { key: 'Mod-o', run: (view) => finishSection(editor)(view) },
+      { key: "Mod-'", run: (view) => openSectionControlsMenu(view, editor) },
+    ];
+
+    const shortcutFallback = EditorView.domEventHandlers({
+      keydown(event, view) {
+        // Robust fallback for international keyboard layouts:
+        // use physical Quote key (preferred) and keep Period as secondary.
+        const isPrimary = event.ctrlKey || event.metaKey;
+        if (isPrimary && !event.altKey && (event.code === 'Quote' || event.code === 'Period')) {
+          event.preventDefault();
+          event.stopPropagation();
+          return openSectionControlsMenu(view, editor);
+        }
+        return false;
+      },
+    });
+
+    return [
+      sectionControlsFacet.of(config),
+      createSectionControlsPlugin(editor),
+      keybindings.length > 0 ? Prec.high(keymap.of(keybindings)) : [],
+      Prec.high(shortcutFallback),
+    ];
+  }
+
   var Zn$6=Object.create;var Mt$7=Object.defineProperty;var eo$3=Object.getOwnPropertyDescriptor;var to$3=Object.getOwnPropertyNames;var uo$2=Object.getPrototypeOf,ro$3=Object.prototype.hasOwnProperty;var no$4=(e,t)=>()=>(t||e((t={exports:{}}).exports,t),t.exports),Yt$4=(e,t)=>{for(var u in t)Mt$7(e,u,{get:t[u],enumerable:true});},oo$4=(e,t,u,r)=>{if(t&&typeof t=="object"||typeof t=="function")for(let o of to$3(t))!ro$3.call(e,o)&&o!==u&&Mt$7(e,o,{get:()=>t[o],enumerable:!(r=eo$3(t,o))||r.enumerable});return e};var ao$3=(e,t,u)=>(u=e!=null?Zn$6(uo$2(e)):{},oo$4(Mt$7(u,"default",{value:e,enumerable:true}),e));var dn$5=no$4((of,ln)=>{var yt,bt,At,_t,xt,$e,bu,Ke,Bt,cn,Tt,Ve,Nt,St,wt,pe,fn,Ot,Pt;Nt=/\/(?![*\/])(?:\[(?:[^\]\\\n\r\u2028\u2029]+|\\.)*\]|[^\/\\\n\r\u2028\u2029]+|\\.)*(\/[$_\u200C\u200D\p{ID_Continue}]*|\\)?/yu;Ve=/--|\+\+|=>|\.{3}|\??\.(?!\d)|(?:&&|\|\||\?\?|[+\-%&|^]|\*{1,2}|<{1,2}|>{1,3}|!=?|={1,2}|\/(?![\/*]))=?|[?~,:;[\](){}]/y;yt=/(\x23?)(?=[$_\p{ID_Start}\\])(?:[$_\u200C\u200D\p{ID_Continue}]+|\\u[\da-fA-F]{4}|\\u\{[\da-fA-F]+\})+/yu;wt=/(['"])(?:[^'"\\\n\r]+|(?!\1)['"]|\\(?:\r\n|[^]))*(\1)?/y;Tt=/(?:0[xX][\da-fA-F](?:_?[\da-fA-F])*|0[oO][0-7](?:_?[0-7])*|0[bB][01](?:_?[01])*)n?|0n|[1-9](?:_?\d)*n|(?:(?:0(?!\d)|0\d*[89]\d*|[1-9](?:_?\d)*)(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?|0[0-7]+/y;pe=/[`}](?:[^`\\$]+|\\[^]|\$(?!\{))*(`|\$\{)?/y;Pt=/[\t\v\f\ufeff\p{Zs}]+/yu;Ke=/\r?\n|[\r\u2028\u2029]/y;Bt=/\/\*(?:[^*]+|\*(?!\/))*(\*\/)?/y;St=/\/\/.*/y;At=/[<>.:={}]|\/(?![\/*])/y;bt=/[$_\p{ID_Start}][$_\u200C\u200D\p{ID_Continue}-]*/yu;_t=/(['"])(?:[^'"]+|(?!\1)['"])*(\1)?/y;xt=/[^<>{}]+/y;Ot=/^(?:[\/+-]|\.{3}|\?(?:InterpolationIn(?:JSX|Template)|NoLineTerminatorHere|NonExpressionParenEnd|UnaryIncDec))?$|[{}([,;<>=*%&|^!~?:]$/;fn=/^(?:=>|[;\]){}]|else|\?(?:NoLineTerminatorHere|NonExpressionParenEnd))?$/;$e=/^(?:await|case|default|delete|do|else|instanceof|new|return|throw|typeof|void|yield)$/;bu=/^(?:return|throw|yield)$/;cn=RegExp(Ke.source);ln.exports=function*(e,{jsx:t=false}={}){var u,r,o,n,a,s,i,D,f,l,d,c,p,F;for({length:s}=e,n=0,a="",F=[{tag:"JS"}],u=[],d=0,c=false;n<s;){switch(D=F[F.length-1],D.tag){case "JS":case "JSNonExpressionParen":case "InterpolationInTemplate":case "InterpolationInJSX":if(e[n]==="/"&&(Ot.test(a)||$e.test(a))&&(Nt.lastIndex=n,i=Nt.exec(e))){n=Nt.lastIndex,a=i[0],c=true,yield {type:"RegularExpressionLiteral",value:i[0],closed:i[1]!==void 0&&i[1]!=="\\"};continue}if(Ve.lastIndex=n,i=Ve.exec(e)){switch(p=i[0],f=Ve.lastIndex,l=p,p){case "(":a==="?NonExpressionParenKeyword"&&F.push({tag:"JSNonExpressionParen",nesting:d}),d++,c=false;break;case ")":d--,c=true,D.tag==="JSNonExpressionParen"&&d===D.nesting&&(F.pop(),l="?NonExpressionParenEnd",c=false);break;case "{":Ve.lastIndex=0,o=!fn.test(a)&&(Ot.test(a)||$e.test(a)),u.push(o),c=false;break;case "}":switch(D.tag){case "InterpolationInTemplate":if(u.length===D.nesting){pe.lastIndex=n,i=pe.exec(e),n=pe.lastIndex,a=i[0],i[1]==="${"?(a="?InterpolationInTemplate",c=false,yield {type:"TemplateMiddle",value:i[0]}):(F.pop(),c=true,yield {type:"TemplateTail",value:i[0],closed:i[1]==="`"});continue}break;case "InterpolationInJSX":if(u.length===D.nesting){F.pop(),n+=1,a="}",yield {type:"JSXPunctuator",value:"}"};continue}}c=u.pop(),l=c?"?ExpressionBraceEnd":"}";break;case "]":c=true;break;case "++":case "--":l=c?"?PostfixIncDec":"?UnaryIncDec";break;case "<":if(t&&(Ot.test(a)||$e.test(a))){F.push({tag:"JSXTag"}),n+=1,a="<",yield {type:"JSXPunctuator",value:p};continue}c=false;break;default:c=false;}n=f,a=l,yield {type:"Punctuator",value:p};continue}if(yt.lastIndex=n,i=yt.exec(e)){switch(n=yt.lastIndex,l=i[0],i[0]){case "for":case "if":case "while":case "with":a!=="."&&a!=="?."&&(l="?NonExpressionParenKeyword");}a=l,c=!$e.test(i[0]),yield {type:i[1]==="#"?"PrivateIdentifier":"IdentifierName",value:i[0]};continue}if(wt.lastIndex=n,i=wt.exec(e)){n=wt.lastIndex,a=i[0],c=true,yield {type:"StringLiteral",value:i[0],closed:i[2]!==void 0};continue}if(Tt.lastIndex=n,i=Tt.exec(e)){n=Tt.lastIndex,a=i[0],c=true,yield {type:"NumericLiteral",value:i[0]};continue}if(pe.lastIndex=n,i=pe.exec(e)){n=pe.lastIndex,a=i[0],i[1]==="${"?(a="?InterpolationInTemplate",F.push({tag:"InterpolationInTemplate",nesting:u.length}),c=false,yield {type:"TemplateHead",value:i[0]}):(c=true,yield {type:"NoSubstitutionTemplate",value:i[0],closed:i[1]==="`"});continue}break;case "JSXTag":case "JSXTagEnd":if(At.lastIndex=n,i=At.exec(e)){switch(n=At.lastIndex,l=i[0],i[0]){case "<":F.push({tag:"JSXTag"});break;case ">":F.pop(),a==="/"||D.tag==="JSXTagEnd"?(l="?JSX",c=true):F.push({tag:"JSXChildren"});break;case "{":F.push({tag:"InterpolationInJSX",nesting:u.length}),l="?InterpolationInJSX",c=false;break;case "/":a==="<"&&(F.pop(),F[F.length-1].tag==="JSXChildren"&&F.pop(),F.push({tag:"JSXTagEnd"}));}a=l,yield {type:"JSXPunctuator",value:i[0]};continue}if(bt.lastIndex=n,i=bt.exec(e)){n=bt.lastIndex,a=i[0],yield {type:"JSXIdentifier",value:i[0]};continue}if(_t.lastIndex=n,i=_t.exec(e)){n=_t.lastIndex,a=i[0],yield {type:"JSXString",value:i[0],closed:i[2]!==void 0};continue}break;case "JSXChildren":if(xt.lastIndex=n,i=xt.exec(e)){n=xt.lastIndex,a=i[0],yield {type:"JSXText",value:i[0]};continue}switch(e[n]){case "<":F.push({tag:"JSXTag"}),n++,a="<",yield {type:"JSXPunctuator",value:"<"};continue;case "{":F.push({tag:"InterpolationInJSX",nesting:u.length}),n++,a="?InterpolationInJSX",c=false,yield {type:"JSXPunctuator",value:"{"};continue}}if(Pt.lastIndex=n,i=Pt.exec(e)){n=Pt.lastIndex,yield {type:"WhiteSpace",value:i[0]};continue}if(Ke.lastIndex=n,i=Ke.exec(e)){n=Ke.lastIndex,c=false,bu.test(a)&&(a="?NoLineTerminatorHere"),yield {type:"LineTerminatorSequence",value:i[0]};continue}if(Bt.lastIndex=n,i=Bt.exec(e)){n=Bt.lastIndex,cn.test(i[0])&&(c=false,bu.test(a)&&(a="?NoLineTerminatorHere")),yield {type:"MultiLineComment",value:i[0],closed:i[1]!==void 0};continue}if(St.lastIndex=n,i=St.exec(e)){n=St.lastIndex,c=false,yield {type:"SingleLineComment",value:i[0]};continue}r=String.fromCodePoint(e.codePointAt(n)),n+=r.length,a=r,c=false,yield {type:D.tag.startsWith("JSX")?"JSXInvalid":"Invalid",value:r};}};});var Hn$5={};Yt$4(Hn$5,{__debug:()=>li$6,check:()=>ci$6,doc:()=>wu$1,format:()=>Jn$4,formatWithCursor:()=>zn$5,getSupportInfo:()=>fi$7,util:()=>Pu$1,version:()=>Mn$2});var X$7=(e,t)=>(u,r,...o)=>u|1&&r==null?void 0:(t.call(r)??r[e]).apply(r,o);var io$3=String.prototype.replaceAll??function(e,t){return e.global?this.replace(e,t):this.split(e).join(t)},so$3=X$7("replaceAll",function(){if(typeof this=="string")return io$3}),oe$5=so$3;var Ne$6=class Ne{diff(t,u,r={}){let o;typeof r=="function"?(o=r,r={}):"callback"in r&&(o=r.callback);let n=this.castInput(t,r),a=this.castInput(u,r),s=this.removeEmpty(this.tokenize(n,r)),i=this.removeEmpty(this.tokenize(a,r));return this.diffWithOptionsObj(s,i,r,o)}diffWithOptionsObj(t,u,r,o){var n;let a=m=>{if(m=this.postProcess(m,r),o){setTimeout(function(){o(m);},0);return}else return m},s=u.length,i=t.length,D=1,f=s+i;r.maxEditLength!=null&&(f=Math.min(f,r.maxEditLength));let l=(n=r.timeout)!==null&&n!==void 0?n:1/0,d=Date.now()+l,c=[{oldPos:-1,lastComponent:void 0}],p=this.extractCommon(c[0],u,t,0,r);if(c[0].oldPos+1>=i&&p+1>=s)return a(this.buildValues(c[0].lastComponent,u,t));let F=-1/0,C=1/0,y=()=>{for(let m=Math.max(F,-D);m<=Math.min(C,D);m+=2){let h,E=c[m-1],g=c[m+1];E&&(c[m-1]=void 0);let A=false;if(g){let Q=g.oldPos-m;A=g&&0<=Q&&Q<s;}let J=E&&E.oldPos+1<i;if(!A&&!J){c[m]=void 0;continue}if(!J||A&&E.oldPos<g.oldPos?h=this.addToPath(g,true,false,0,r):h=this.addToPath(E,false,true,1,r),p=this.extractCommon(h,u,t,m,r),h.oldPos+1>=i&&p+1>=s)return a(this.buildValues(h.lastComponent,u,t))||true;c[m]=h,h.oldPos+1>=i&&(C=Math.min(C,m-1)),p+1>=s&&(F=Math.max(F,m+1));}D++;};if(o)(function m(){setTimeout(function(){if(D>f||Date.now()>d)return o(void 0);y()||m();},0);})();else for(;D<=f&&Date.now()<=d;){let m=y();if(m)return m}}addToPath(t,u,r,o,n){let a=t.lastComponent;return a&&!n.oneChangePerToken&&a.added===u&&a.removed===r?{oldPos:t.oldPos+o,lastComponent:{count:a.count+1,added:u,removed:r,previousComponent:a.previousComponent}}:{oldPos:t.oldPos+o,lastComponent:{count:1,added:u,removed:r,previousComponent:a}}}extractCommon(t,u,r,o,n){let a=u.length,s=r.length,i=t.oldPos,D=i-o,f=0;for(;D+1<a&&i+1<s&&this.equals(r[i+1],u[D+1],n);)D++,i++,f++,n.oneChangePerToken&&(t.lastComponent={count:1,previousComponent:t.lastComponent,added:false,removed:false});return f&&!n.oneChangePerToken&&(t.lastComponent={count:f,previousComponent:t.lastComponent,added:false,removed:false}),t.oldPos=i,D}equals(t,u,r){return r.comparator?r.comparator(t,u):t===u||!!r.ignoreCase&&t.toLowerCase()===u.toLowerCase()}removeEmpty(t){let u=[];for(let r=0;r<t.length;r++)t[r]&&u.push(t[r]);return u}castInput(t,u){return t}tokenize(t,u){return Array.from(t)}join(t){return t.join("")}postProcess(t,u){return t}get useLongestToken(){return  false}buildValues(t,u,r){let o=[],n;for(;t;)o.push(t),n=t.previousComponent,delete t.previousComponent,t=n;o.reverse();let a=o.length,s=0,i=0,D=0;for(;s<a;s++){let f=o[s];if(f.removed)f.value=this.join(r.slice(D,D+f.count)),D+=f.count;else {if(!f.added&&this.useLongestToken){let l=u.slice(i,i+f.count);l=l.map(function(d,c){let p=r[D+c];return p.length>d.length?p:d}),f.value=this.join(l);}else f.value=this.join(u.slice(i,i+f.count));i+=f.count,f.added||(D+=f.count);}}return o}};var jt$4=class jt extends Ne$6{tokenize(t){return t.slice()}join(t){return t}removeEmpty(t){return t}},ku$1=new jt$4;function Ut$6(e,t,u){return ku$1.diff(e,t,u)}var Do$2=()=>{},P$4=Do$2;var Ru$2="cr",Lu$2="crlf",co$3="lf",fo$2=co$3,Wt$5="\r",Mu$2=`\r
 `,Je$6=`
 `,lo$3=Je$6;function Yu$1(e){let t=e.indexOf(Wt$5);return t!==-1?e.charAt(t+1)===Je$6?Lu$2:Ru$2:fo$2}function Se$6(e){return e===Ru$2?Wt$5:e===Lu$2?Mu$2:lo$3}var po$3=new Map([[Je$6,/\n/gu],[Wt$5,/\r/gu],[Mu$2,/\r\n/gu]]);function $t$4(e,t){let u=po$3.get(t);return e.match(u)?.length??0}var Fo$2=/\r\n?/gu;function ju$2(e){return oe$5(0,e,Fo$2,Je$6)}function mo$1(e){return this[e<0?this.length+e:e]}var Eo$1=X$7("at",function(){if(Array.isArray(this)||typeof this=="string")return mo$1}),b$4=Eo$1;var G$5="string",j$5="array",U$5="cursor",I$4="indent",k$4="align",v$4="trim",x$5="group",w$6="fill",B$3="if-break",R$6="indent-if-break",L$5="line-suffix",M$5="line-suffix-boundary",_$5="line",O$2="label",T$5="break-parent",He$5=new Set([U$5,I$4,k$4,v$4,x$5,w$6,B$3,R$6,L$5,M$5,_$5,O$2,T$5]);function Uu$2(e){let t=e.length;for(;t>0&&(e[t-1]==="\r"||e[t-1]===`
@@ -76307,6 +78042,7 @@ $1 $2
    * @property {string} [value]
    * @property {string} [signature]
    * @property {string} [documentation]
+   * @property {string} [docstring]
    */
 
   /**
@@ -76397,6 +78133,8 @@ $1 $2
             type: result.type,
             value: result.value,
             signature: result.signature,
+            documentation: result.documentation || result.docstring,
+            docstring: result.docstring,
           };
         } catch (e) {
           console.warn('mrmd-js hover error:', e);
@@ -76494,7 +78232,10 @@ $1 $2
         try {
           const result = await client.hover({ code, cursor });
           if (!result || !result.found) return null;
-          return result;
+          return {
+            ...result,
+            documentation: result.documentation || result.docstring,
+          };
         } catch (e) {
           console.warn('MRP hover error:', e);
           return null;
@@ -76592,6 +78333,149 @@ $1 $2
 
   // #region HOVER_EXTENSION
 
+  const setPinnedHoverTooltip = StateEffect.define();
+  const clearPinnedHoverTooltip = StateEffect.define();
+
+  const pinnedHoverTooltipField = StateField.define({
+    create() {
+      return null;
+    },
+    update(value, tr) {
+      if (tr.docChanged) return null;
+
+      for (const effect of tr.effects) {
+        if (effect.is(setPinnedHoverTooltip)) return effect.value;
+        if (effect.is(clearPinnedHoverTooltip)) return null;
+      }
+
+      return value;
+    },
+    provide: (f) => showTooltip.from(f),
+  });
+
+  function looksLikeFunctionRepr(value) {
+    return typeof value === 'string' && /^<function\s+[^>]+\s+at\s+0x[0-9a-f]+>$/i.test(value.trim());
+  }
+
+  function cleanDocsText(text) {
+    if (!text) return '';
+    return String(text)
+      .replace(/(?:<function\s+[^>]+\s+at\s+0x[0-9a-f]+>)+\s*$/ig, '')
+      .trim();
+  }
+
+  function formatHoverText(result) {
+    if (!result) return '';
+    const parts = [];
+
+    const nameType = [result.name, result.type].filter(Boolean).join(' : ');
+    if (nameType) parts.push(nameType);
+    if (result.signature) parts.push(result.signature);
+
+    const suppressValue = !!result.signature && looksLikeFunctionRepr(result.value);
+    if (result.value && !suppressValue) parts.push(result.value);
+
+    const docsText = cleanDocsText(result.documentation || result.docstring);
+    if (docsText) parts.push(docsText);
+
+    if (result.file) {
+      parts.push(`Source: ${result.file}${result.line ? `:${result.line}` : ''}`);
+    }
+
+    return parts.join('\n\n');
+  }
+
+  function createHoverTooltipDescriptor(view, hoverResult, pos, end, { sticky = false } = {}) {
+    return {
+      pos,
+      end,
+      above: false,
+      arrow: true,
+      create() {
+        const dom = document.createElement('div');
+        dom.className = `mrmd-runtime-hover${sticky ? ' mrmd-runtime-hover-sticky' : ''}`;
+        dom.innerHTML = formatHoverContent(hoverResult);
+
+        const copyBtn = dom.querySelector('.mrmd-hover-copy');
+        if (copyBtn) {
+          copyBtn.addEventListener('mousedown', (event) => {
+            event.stopPropagation();
+          });
+
+          copyBtn.addEventListener('click', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const text = formatHoverText(hoverResult);
+            if (!text) return;
+
+            try {
+              await navigator.clipboard?.writeText(text);
+              const original = copyBtn.textContent;
+              copyBtn.textContent = 'Copied';
+              setTimeout(() => {
+                copyBtn.textContent = original || 'Copy';
+              }, 900);
+            } catch {
+              // ignore
+            }
+          });
+        }
+
+        const sourceLink = dom.querySelector('.mrmd-hover-source-link');
+        if (sourceLink) {
+          sourceLink.addEventListener('mousedown', (event) => {
+            event.stopPropagation();
+          });
+        }
+
+        if (!sticky) {
+          dom.addEventListener('mousedown', (event) => {
+            if (event.button !== 0) return;
+            if (event.target instanceof Element && event.target.closest('.mrmd-hover-copy')) return;
+
+            const stickyTooltip = createHoverTooltipDescriptor(view, hoverResult, pos, end, { sticky: true });
+            view.dispatch({
+              effects: [
+                setPinnedHoverTooltip.of(stickyTooltip),
+                closeHoverTooltips,
+              ],
+            });
+          });
+        }
+
+        return {
+          dom,
+          offset: { x: 0, y: -8 },
+          overlap: true,
+        };
+      },
+    };
+  }
+
+  const pinnedHoverClosePlugin = ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.view = view;
+        this.onMouseDownCapture = (event) => {
+          const pinned = view.state.field(pinnedHoverTooltipField, false);
+          if (!pinned) return;
+
+          const target = event.target;
+          if (target instanceof Element && target.closest('.mrmd-runtime-hover')) return;
+
+          view.dispatch({ effects: clearPinnedHoverTooltip.of(null) });
+        };
+
+        view.dom.ownerDocument.addEventListener('mousedown', this.onMouseDownCapture, true);
+      }
+
+      destroy() {
+        this.view.dom.ownerDocument.removeEventListener('mousedown', this.onMouseDownCapture, true);
+      }
+    }
+  );
+
   /**
    * Create a CodeMirror hover tooltip extension powered by runtime LSP.
    *
@@ -76605,7 +78489,7 @@ $1 $2
    * @returns {import('@codemirror/state').Extension}
    */
   function createRuntimeHoverExtension({ providers, getContent, stateManager, yText }) {
-    return hoverTooltip(
+    const hoverExtension = hoverTooltip(
       async (view, pos, side) => {
         const content = getContent();
         const codeInfo = getCodeAtPosition(content, pos);
@@ -76617,8 +78501,44 @@ $1 $2
         if (!provider) return null;
 
         // Get hover info from runtime
-        const hoverResult = await provider.hover(codeInfo.code, codeInfo.offset, codeInfo.language);
+        let hoverResult = await provider.hover(codeInfo.code, codeInfo.offset, codeInfo.language);
         if (!hoverResult || !hoverResult.found) return null;
+
+        // If hover payload is minimal, enrich with inspect docstring/signature/source metadata.
+        // This keeps hover snappy for runtimes that already return rich hover data,
+        // while still showing docs/location for runtimes that only return basic hover fields.
+        const needsInspectEnrichment =
+          (!hoverResult.documentation && !hoverResult.docstring) ||
+          (!hoverResult.file && !hoverResult.line);
+
+        if (needsInspectEnrichment && provider.inspect) {
+          try {
+            const inspectResult = await provider.inspect(
+              codeInfo.code,
+              codeInfo.offset,
+              codeInfo.language,
+              { detail: 1 }
+            );
+            if (inspectResult?.found) {
+              hoverResult = {
+                ...inspectResult,
+                ...hoverResult,
+                // Prefer explicit hover value/name if present, but fill missing docs/signature/location.
+                documentation:
+                  hoverResult.documentation ||
+                  hoverResult.docstring ||
+                  inspectResult.documentation ||
+                  inspectResult.docstring,
+                docstring: hoverResult.docstring || inspectResult.docstring,
+                signature: hoverResult.signature || inspectResult.signature,
+                file: hoverResult.file || inspectResult.file,
+                line: hoverResult.line || inspectResult.line,
+              };
+            }
+          } catch {
+            // Ignore enrichment errors; base hover still works.
+          }
+        }
 
         // Broadcast to awareness if available
         if (stateManager) {
@@ -76636,23 +78556,25 @@ $1 $2
         }
 
         // Create tooltip DOM
-        return {
+        return createHoverTooltipDescriptor(
+          view,
+          hoverResult,
           pos,
-          end: pos + (hoverResult.name?.length || 0),
-          above: true,
-          create() {
-            const dom = document.createElement('div');
-            dom.className = 'mrmd-runtime-hover';
-            dom.innerHTML = formatHoverContent(hoverResult);
-            return { dom };
-          },
-        };
+          pos + Math.max(1, hoverResult.name?.length || 0),
+          { sticky: false }
+        );
       },
       {
         hoverTime: 300,
-        hideOnChange: true,
+        hideOnChange: false,
       }
     );
+
+    return [
+      hoverExtension,
+      pinnedHoverTooltipField,
+      pinnedHoverClosePlugin,
+    ];
   }
 
   /**
@@ -76664,28 +78586,47 @@ $1 $2
   function formatHoverContent(result) {
     let html = '<div class="mrmd-hover-content">';
 
-    // Name and type header
+    // Header row
+    html += '<div class="mrmd-hover-header">';
+    html += '<div class="mrmd-hover-name">';
+
     if (result.name) {
-      html += `<div class="mrmd-hover-name"><code>${escapeHtml(result.name)}</code>`;
-      if (result.type) {
-        html += ` <span class="mrmd-hover-type">${escapeHtml(result.type)}</span>`;
-      }
-      html += '</div>';
+      html += `<code>${escapeHtml(result.name)}</code>`;
     }
+    if (result.type) {
+      html += ` <span class="mrmd-hover-type">${escapeHtml(result.type)}</span>`;
+    }
+
+    html += '</div>';
+    html += '<button class="mrmd-hover-copy" type="button" title="Copy hover details">Copy</button>';
+    html += '</div>';
 
     // Signature (for functions)
     if (result.signature) {
       html += `<div class="mrmd-hover-signature"><code>${escapeHtml(result.signature)}</code></div>`;
     }
 
-    // Value preview
-    if (result.value) {
+    // Value preview (skip noisy function repr when we already have signature)
+    const suppressValue = !!result.signature && looksLikeFunctionRepr(result.value);
+    if (result.value && !suppressValue) {
       html += `<div class="mrmd-hover-value">${escapeHtml(result.value)}</div>`;
     }
 
-    // Documentation
-    if (result.documentation) {
-      html += `<div class="mrmd-hover-docs">${escapeHtml(result.documentation)}</div>`;
+    // Documentation / docstring
+    const docsText = cleanDocsText(result.documentation || result.docstring);
+    if (docsText) {
+      html += `<div class="mrmd-hover-docs">${escapeHtml(docsText)}</div>`;
+    }
+
+    // Source location (when provided by runtime inspect)
+    if (result.file) {
+      const locationText = `${result.file}${result.line ? `:${result.line}` : ''}`;
+      if (result.file.startsWith('/')) {
+        const fileHref = `file://${encodeURI(result.file)}`;
+        html += `<div class="mrmd-hover-source">Source: <a class="mrmd-hover-source-link" href="${escapeAttr(fileHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(locationText)}</a></div>`;
+      } else {
+        html += `<div class="mrmd-hover-source">Source: ${escapeHtml(locationText)}</div>`;
+      }
     }
 
     html += '</div>';
@@ -76705,6 +78646,16 @@ $1 $2
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  function escapeAttr(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   // #endregion HOVER_EXTENSION
@@ -76971,14 +78922,22 @@ $1 $2
   const runtimeLspStyles = `
 /* Runtime Hover Tooltip */
 .mrmd-runtime-hover {
-  background: var(--mrmd-bg, #1e1e1e);
-  border: 1px solid var(--mrmd-border, #333);
-  border-radius: 6px;
+  background: var(--widget-surface-elevated, var(--editor-background, #1e1e1e));
+  border: 1px solid var(--widget-border, #333);
+  border-radius: var(--widget-border-radius, 6px);
   padding: 8px 12px;
-  max-width: 400px;
+  max-width: 460px;
+  max-height: min(52vh, 440px);
+  overflow: auto;
   font-size: 13px;
-  line-height: 1.4;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  line-height: 1.45;
+  color: var(--widget-text, var(--editor-foreground, #e1e1e1));
+  box-shadow: var(--mrmd-shadow-md, 0 6px 18px rgba(0, 0, 0, 0.3));
+  user-select: text;
+}
+
+.mrmd-runtime-hover-sticky {
+  border-color: var(--widget-border-focus, var(--mrmd-accent, #58a6ff));
 }
 
 .mrmd-hover-content {
@@ -76987,26 +78946,54 @@ $1 $2
   gap: 6px;
 }
 
+.mrmd-hover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .mrmd-hover-name {
   font-weight: 600;
 }
 
+.mrmd-hover-copy {
+  border: 1px solid var(--widget-border, #333);
+  background: var(--widget-surface, rgba(0, 0, 0, 0.2));
+  color: var(--widget-text-muted, #9ca3af);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.mrmd-hover-copy:hover {
+  color: var(--widget-text, #e5e7eb);
+  background: var(--widget-surface-hover, rgba(255, 255, 255, 0.08));
+}
+
+.mrmd-hover-copy:active {
+  transform: translateY(1px);
+}
+
 .mrmd-hover-name code {
-  color: var(--mrmd-text, #e1e1e1);
+  color: var(--syntax-variable, var(--widget-text, #e1e1e1));
   background: none;
   padding: 0;
+  font-family: var(--widget-font-mono, monospace);
 }
 
 .mrmd-hover-type {
-  color: var(--mrmd-type-color, #4ec9b0);
+  color: var(--syntax-type, #4ec9b0);
   font-size: 12px;
   font-weight: normal;
   margin-left: 8px;
 }
 
 .mrmd-hover-signature {
-  color: var(--mrmd-signature-color, #dcdcaa);
-  font-family: monospace;
+  color: var(--syntax-function, #dcdcaa);
+  font-family: var(--widget-font-mono, monospace);
   font-size: 12px;
 }
 
@@ -77016,52 +79003,44 @@ $1 $2
 }
 
 .mrmd-hover-value {
-  color: var(--mrmd-value-color, #ce9178);
-  font-family: monospace;
+  color: var(--syntax-string, var(--widget-text, #ce9178));
+  font-family: var(--widget-font-mono, monospace);
   font-size: 12px;
-  max-height: 100px;
+  max-height: 120px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .mrmd-hover-docs {
-  color: var(--mrmd-docs-color, #9cdcfe);
+  color: var(--widget-text-muted, #9cdcfe);
   font-size: 12px;
-  border-top: 1px solid var(--mrmd-border, #333);
+  border-top: 1px solid var(--widget-border, #333);
   padding-top: 6px;
   margin-top: 2px;
+  white-space: pre-wrap;
 }
 
-/* Light theme adjustments */
-.cm-theme-light .mrmd-runtime-hover,
-:root:not(.dark) .mrmd-runtime-hover {
-  background: #ffffff;
-  border-color: #e0e0e0;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+.mrmd-hover-source {
+  color: var(--widget-text-muted, #9ca3af);
+  font-size: 11px;
+  border-top: 1px dashed var(--widget-border, #333);
+  padding-top: 6px;
+  margin-top: 2px;
+  word-break: break-all;
 }
 
-.cm-theme-light .mrmd-hover-name code,
-:root:not(.dark) .mrmd-hover-name code {
-  color: #1e1e1e;
+.mrmd-hover-source-link {
+  color: var(--syntax-link, var(--widget-text-accent, #58a6ff));
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
 }
 
-.cm-theme-light .mrmd-hover-type,
-:root:not(.dark) .mrmd-hover-type {
-  color: #267f99;
-}
-
-.cm-theme-light .mrmd-hover-value,
-:root:not(.dark) .mrmd-hover-value {
-  color: #a31515;
-}
-
-.cm-theme-light .mrmd-hover-docs,
-:root:not(.dark) .mrmd-hover-docs {
-  color: #0070c1;
-  border-top-color: #e0e0e0;
+.mrmd-hover-source-link:hover {
+  text-decoration-style: solid;
 }
 `;
+
 
   let stylesInjected$4 = false;
 
@@ -86257,11 +88236,11 @@ $1 $2
    * Icons for each alert type (using Unicode symbols)
    */
   const ALERT_ICONS = {
-    note: 'ℹ️',
-    tip: '💡',
-    important: '❗',
-    warning: '⚠️',
-    caution: '🛑',
+    note: 'i',
+    tip: '✦',
+    important: '!',
+    warning: '▲',
+    caution: '×',
   };
 
   /**
@@ -86270,14 +88249,16 @@ $1 $2
   class AlertTitleWidget extends WidgetType {
     /**
      * @param {string} type - Alert type: 'note', 'tip', 'important', 'warning', 'caution'
+     * @param {string} [title] - Optional custom title text
      */
-    constructor(type) {
+    constructor(type, title = null) {
       super();
       this.type = type.toLowerCase();
+      this.title = title || (this.type.charAt(0).toUpperCase() + this.type.slice(1));
     }
 
     eq(other) {
-      return this.type === other.type;
+      return this.type === other.type && this.title === other.title;
     }
 
     toDOM() {
@@ -86293,9 +88274,38 @@ $1 $2
       // Text
       const text = document.createElement('span');
       text.className = 'cm-alert-text';
-      text.textContent = this.type.charAt(0).toUpperCase() + this.type.slice(1);
+      text.textContent = this.title;
       span.appendChild(text);
 
+      return span;
+    }
+
+    ignoreEvent() {
+      return true;
+    }
+  }
+
+  /**
+   * List Marker Widget
+   *
+   * Renders cleaner list bullets for unordered markdown lists.
+   *
+   * @module markdown/widgets/list-marker
+   */
+
+
+  /**
+   * Widget for rendering unordered list bullets.
+   */
+  class ListMarkerWidget extends WidgetType {
+    eq() {
+      return true;
+    }
+
+    toDOM() {
+      const span = document.createElement('span');
+      span.className = 'cm-md-list-bullet';
+      span.textContent = '•';
       return span;
     }
 
@@ -114936,6 +116946,93 @@ $1 $2
     }
   }
 
+  const ALERT_TYPE_MAP = {
+    note: 'note',
+    tip: 'tip',
+    important: 'important',
+    warning: 'warning',
+    caution: 'caution',
+    info: 'note',
+    abstract: 'note',
+    success: 'tip',
+    question: 'important',
+    failure: 'caution',
+    danger: 'caution',
+    bug: 'caution',
+  };
+
+  function toTitleCase(text) {
+    if (!text) return '';
+    return text
+      .replace(/[-_]+/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(' ');
+  }
+
+  function normalizeAlertType(type) {
+    const lower = (type || '').toLowerCase();
+    return ALERT_TYPE_MAP[lower] || 'note';
+  }
+
+  /**
+   * Find MkDocs-style admonitions:
+   *
+   * !!! tip
+   *     indented body
+   */
+  function findBangAdmonitions(doc) {
+    const ranges = [];
+
+    for (let i = 1; i <= doc.lines; i++) {
+      const startLine = doc.line(i);
+      const match = startLine.text.match(/^(\s*)!!!\s+([A-Za-z][\w-]*)(?:\s+"([^"]+)")?\s*$/);
+      if (!match) continue;
+
+      const baseIndent = match[1] || '';
+      const bodyIndentSpaces = `${baseIndent}    `;
+      const bodyIndentTab = `${baseIndent}\t`;
+
+      let endLine = i;
+      let hasBody = false;
+
+      for (let j = i + 1; j <= doc.lines; j++) {
+        const lineText = doc.line(j).text;
+
+        if (lineText.trim() === '') {
+          if (hasBody) {
+            endLine = j;
+            continue;
+          }
+          break;
+        }
+
+        if (lineText.startsWith(bodyIndentSpaces) || lineText.startsWith(bodyIndentTab)) {
+          hasBody = true;
+          endLine = j;
+          continue;
+        }
+
+        break;
+      }
+
+      ranges.push({
+        startLine: i,
+        endLine,
+        headerIndent: baseIndent.length,
+        bodyIndentSpaces,
+        bodyIndentTab,
+        alertType: normalizeAlertType(match[2]),
+        title: match[3] || toTitleCase(match[2]),
+      });
+
+      i = endLine;
+    }
+
+    return ranges;
+  }
+
   /**
    * Build decorations for all markdown elements in the viewport.
    *
@@ -115238,9 +117335,30 @@ $1 $2
         // LISTS
         // =======================================================================
         if (node.name === 'ListMark') {
-          decorations.push(
-            Decoration.mark({ class: 'cm-md-list-marker' }).range(node.from, node.to)
-          );
+          const line = doc.lineAt(node.from);
+          const listMarkText = doc.sliceString(node.from, node.to);
+          const isListActive = line.number === cursorLine;
+          const isUnordered = /^[-+*]$/.test(listMarkText);
+          const textAfterMarker = doc.sliceString(node.to, Math.min(node.to + 6, line.to));
+          const isTaskItem = /^\s+\[[ xX]\]/.test(textAfterMarker);
+
+          if (isListActive) {
+            decorations.push(
+              Decoration.mark({ class: 'cm-md-marker cm-md-list-marker' }).range(node.from, node.to)
+            );
+          } else if (isUnordered && !isTaskItem) {
+            decorations.push(
+              Decoration.replace({ widget: new ListMarkerWidget() }).range(node.from, node.to)
+            );
+          } else if (isTaskItem) {
+            decorations.push(
+              Decoration.mark({ class: 'cm-md-hidden' }).range(node.from, node.to)
+            );
+          } else {
+            decorations.push(
+              Decoration.mark({ class: 'cm-md-list-marker cm-md-list-number' }).range(node.from, node.to)
+            );
+          }
         }
 
         // Task list checkboxes: - [ ] or - [x]
@@ -115465,6 +117583,72 @@ $1 $2
         }
       }
     });
+
+    // ==========================================================================
+    // MKDOCS-STYLE ADMONITIONS: !!! tip / !!! warning / ...
+    // ==========================================================================
+    const bangAdmonitions = findBangAdmonitions(doc);
+    const viewportStartLine = doc.lineAt(view.viewport.from).number;
+    const viewportEndLine = doc.lineAt(view.viewport.to).number;
+
+    for (const admonition of bangAdmonitions) {
+      // Skip if out of viewport
+      if (admonition.endLine < viewportStartLine || admonition.startLine > viewportEndLine) {
+        continue;
+      }
+
+      // Skip if inside frontmatter or fenced code block
+      if (
+        (frontmatterRange &&
+          admonition.startLine >= frontmatterRange.startLine &&
+          admonition.startLine <= frontmatterRange.endLine) ||
+        codeBlockLines.has(admonition.startLine)
+      ) {
+        continue;
+      }
+
+      const cursorInAdmonition = cursorLine >= admonition.startLine && cursorLine <= admonition.endLine;
+      if (cursorInAdmonition) {
+        continue;
+      }
+
+      const visibleStart = Math.max(admonition.startLine, viewportStartLine);
+      const visibleEnd = Math.min(admonition.endLine, viewportEndLine);
+
+      for (let lineNum = visibleStart; lineNum <= visibleEnd; lineNum++) {
+        const line = doc.line(lineNum);
+        const classes = [
+          `cm-md-alert-${admonition.alertType}`,
+          'cm-md-admonition-line',
+        ];
+
+        if (lineNum === admonition.startLine) classes.push('cm-md-admonition-start', 'cm-md-admonition-title-line');
+        if (lineNum === admonition.endLine) classes.push('cm-md-admonition-end');
+
+        decorations.push(
+          Decoration.line({ class: classes.join(' ') }).range(line.from)
+        );
+
+        if (lineNum === admonition.startLine) {
+          const from = line.from + admonition.headerIndent;
+          if (from < line.to) {
+            decorations.push(
+              Decoration.replace({
+                widget: new AlertTitleWidget(admonition.alertType, admonition.title),
+              }).range(from, line.to)
+            );
+          }
+        } else if (line.text.startsWith(admonition.bodyIndentSpaces)) {
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-hidden' }).range(line.from, line.from + admonition.bodyIndentSpaces.length)
+          );
+        } else if (line.text.startsWith(admonition.bodyIndentTab)) {
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-hidden' }).range(line.from, line.from + admonition.bodyIndentTab.length)
+          );
+        }
+      }
+    }
 
     // ==========================================================================
     // INLINE MATH: $...$ (single line only)
@@ -115834,22 +118018,58 @@ $1 $2
 
 .cm-md-alert-note {
   border-left-color: var(--md-alert-note-color);
+  --md-alert-accent: var(--md-alert-note-color);
 }
 
 .cm-md-alert-tip {
   border-left-color: var(--md-alert-tip-color);
+  --md-alert-accent: var(--md-alert-tip-color);
 }
 
 .cm-md-alert-important {
   border-left-color: var(--md-alert-important-color);
+  --md-alert-accent: var(--md-alert-important-color);
 }
 
 .cm-md-alert-warning {
   border-left-color: var(--md-alert-warning-color);
+  --md-alert-accent: var(--md-alert-warning-color);
 }
 
 .cm-md-alert-caution {
   border-left-color: var(--md-alert-caution-color);
+  --md-alert-accent: var(--md-alert-caution-color);
+}
+
+/* MkDocs-style !!! admonitions (card style with title bar) */
+.cm-md-admonition-line {
+  border-left: var(--md-admonition-border-width, 1px) solid var(--md-admonition-border-color, color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 46%, var(--widget-border) 54%));
+  border-right: var(--md-admonition-border-width, 1px) solid var(--md-admonition-border-color, color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 46%, var(--widget-border) 54%));
+  background: var(--md-admonition-body-background, var(--md-admonition-background, color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 5%, var(--editor-background, transparent) 95%)));
+  color: var(--md-admonition-text-color, inherit);
+  padding-left: var(--md-admonition-padding-x, 0.9em);
+  padding-right: var(--md-admonition-padding-x, 0.9em);
+}
+
+.cm-md-admonition-start {
+  border-top: var(--md-admonition-border-width, 1px) solid var(--md-admonition-border-color, color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 46%, var(--widget-border) 54%));
+  border-top-left-radius: var(--md-admonition-radius, 6px);
+  border-top-right-radius: var(--md-admonition-radius, 6px);
+  background: var(--md-admonition-title-background, color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 14%, var(--editor-background, transparent) 86%));
+  padding-top: var(--md-admonition-padding-y, 0.35em);
+  padding-bottom: var(--md-admonition-padding-y, 0.35em);
+  border-bottom: 1px solid color-mix(in srgb, var(--md-admonition-border-color, var(--md-alert-accent, var(--widget-border-accent))) 55%, transparent);
+}
+
+.cm-md-admonition-end {
+  border-bottom: var(--md-admonition-border-width, 1px) solid var(--md-admonition-border-color, color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 46%, var(--widget-border) 54%));
+  border-bottom-left-radius: var(--md-admonition-radius, 6px);
+  border-bottom-right-radius: var(--md-admonition-radius, 6px);
+  padding-bottom: calc(var(--md-admonition-padding-y, 0.35em) + 0.05em);
+}
+
+.cm-md-admonition-title-line {
+  color: var(--md-admonition-title-color, var(--md-alert-accent, var(--widget-text-accent)));
 }
 
 /* ==========================================================================
@@ -115858,6 +118078,19 @@ $1 $2
 
 .cm-md-list-marker {
   color: var(--md-list-marker-color);
+  font-variant-numeric: tabular-nums;
+}
+
+.cm-md-list-number {
+  font-weight: var(--md-list-number-weight, 600);
+}
+
+.cm-md-list-bullet {
+  display: inline-block;
+  width: var(--md-list-bullet-width, 0.75em);
+  color: var(--md-list-marker-color);
+  font-weight: var(--md-list-bullet-weight, 700);
+  text-align: center;
 }
 
 /* ==========================================================================
@@ -116471,9 +118704,14 @@ $1 $2
 .cm-alert-title {
   display: inline-flex;
   align-items: center;
-  gap: 0.4em;
-  font-weight: 600;
+  gap: 0.45em;
+  font-weight: 650;
   margin-bottom: 0.25em;
+}
+
+.cm-md-admonition-title-line .cm-alert-title {
+  margin-bottom: 0;
+  color: var(--md-admonition-title-color, var(--md-alert-accent, var(--widget-text-accent)));
 }
 
 .cm-alert-title-note {
@@ -116498,7 +118736,18 @@ $1 $2
 
 /* Alert icons */
 .cm-alert-icon {
-  font-size: 1.1em;
+  width: 1.2em;
+  height: 1.2em;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75em;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--md-admonition-title-color, currentColor);
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }
 
 /* ==========================================================================
@@ -120902,6 +123151,7 @@ $1 $2
    * @property {ExecutionConfig} [execution] - Execution settings
    * @property {CellControlsConfig} [cellControls] - Cell controls (buttons, status, queue)
    * @property {AIConfig} [ai] - AI service endpoints
+   * @property {SectionControlsConfig} [sectionControls] - Section controls (AI/formatting)
    * @property {AwarenessConfig} [awareness] - Collaboration UI settings
    * @property {boolean | DevPanelConfig} [devPanel] - Developer panel
    */
@@ -121148,6 +123398,21 @@ $1 $2
     enabled: true,
     position: 'line-start'};
 
+  /**
+   * Section controls configuration - AI and formatting buttons next to sections
+   * @typedef {Object} SectionControlsConfig
+   * @property {boolean} [enabled] - Master switch for section controls
+   * @property {boolean} [showAi] - Show AI command buttons
+   * @property {boolean} [showFormatting] - Show markdown formatting buttons
+   */
+
+  /** @type {SectionControlsConfig} */
+  const DEFAULT_SECTION_CONTROLS = {
+    enabled: true,
+    showAi: true,
+    showFormatting: true
+  };
+
   // =============================================================================
   // DEV PANEL
   // =============================================================================
@@ -121199,6 +123464,7 @@ $1 $2
         endpoints: [],
         default: null
       },
+      sectionControls: { ...DEFAULT_SECTION_CONTROLS },
       awareness: { ...DEFAULT_AWARENESS },
       devPanel: { ...DEFAULT_DEV_PANEL }
     };
@@ -121297,6 +123563,20 @@ $1 $2
     // Execution options
     if (options.autoRefreshVariables !== undefined) {
       config.execution.autoRefreshVariables = options.autoRefreshVariables;
+    }
+
+    // Section controls
+    if (options.sectionControls !== undefined) {
+      if (options.sectionControls === true) {
+        config.sectionControls.enabled = true;
+      } else if (options.sectionControls === false) {
+        config.sectionControls.enabled = false;
+      } else if (typeof options.sectionControls === 'object') {
+        config.sectionControls = {
+          ...config.sectionControls,
+          ...options.sectionControls
+        };
+      }
     }
 
     // Cell controls
@@ -121953,6 +124233,9 @@ $1 $2
 
     // Lists
     '--md-list-marker-color': { description: 'List bullet/number color', category: 'markdown', default: 'var(--widget-text-muted)' },
+    '--md-list-number-weight': { description: 'Ordered list marker weight', category: 'markdown', default: '600' },
+    '--md-list-bullet-weight': { description: 'Unordered list bullet weight', category: 'markdown', default: '700' },
+    '--md-list-bullet-width': { description: 'Reserved width for rendered list bullets', category: 'markdown', default: '0.75em' },
 
     // Horizontal rules
     '--md-hr-color': { description: 'Horizontal rule color', category: 'markdown', default: 'var(--widget-border)' },
@@ -121988,6 +124271,16 @@ $1 $2
     '--md-alert-important-color': { description: 'Important alert accent color', category: 'markdown', default: 'var(--syntax-keyword)' },
     '--md-alert-warning-color': { description: 'Warning alert accent color', category: 'markdown', default: 'var(--widget-warning)' },
     '--md-alert-caution-color': { description: 'Caution alert accent color', category: 'markdown', default: 'var(--widget-error)' },
+    '--md-admonition-background': { description: 'Legacy admonition background tint (used as fallback)', category: 'markdown', default: 'color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 10%, transparent)' },
+    '--md-admonition-title-background': { description: 'Background for admonition title row', category: 'markdown', default: 'color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 14%, var(--editor-background, transparent) 86%)' },
+    '--md-admonition-body-background': { description: 'Background for admonition body rows', category: 'markdown', default: 'color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 5%, var(--editor-background, transparent) 95%)' },
+    '--md-admonition-border-color': { description: 'Border color for admonition cards', category: 'markdown', default: 'color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 46%, var(--widget-border) 54%)' },
+    '--md-admonition-title-color': { description: 'Title text/icon color for admonitions', category: 'markdown', default: 'color-mix(in srgb, var(--md-alert-accent, var(--widget-text-accent)) 88%, var(--widget-text, currentColor) 12%)' },
+    '--md-admonition-text-color': { description: 'Body text color for admonitions', category: 'markdown', default: 'inherit' },
+    '--md-admonition-radius': { description: 'Corner radius for admonition blocks', category: 'markdown', default: '6px' },
+    '--md-admonition-border-width': { description: 'Border width for admonition cards', category: 'markdown', default: '1px' },
+    '--md-admonition-padding-x': { description: 'Horizontal padding for admonition rows', category: 'markdown', default: '0.9em' },
+    '--md-admonition-padding-y': { description: 'Vertical padding for admonition rows', category: 'markdown', default: '0.35em' },
 
     // ===========================================================================
     // SHELL (Status bar, menus, dialogs)
@@ -125876,7 +128169,9 @@ $1 $2
     }
 
     // Get token values (exclude name, description, fontFace, isDark)
-    const tokens = {};
+    // Merge with token defaults so newly added tokens are always present,
+    // even for older themes that don't define them yet.
+    const tokens = getDefaultTokens();
     for (const [key, value] of Object.entries(theme)) {
       if (key.startsWith('--')) {
         tokens[key] = value;
@@ -125996,8 +128291,14 @@ $1 $2
       return generateThemeCSS('wizard-study-dark', { includeFontFace });
     }
 
-    const vars = Object.entries(theme)
-      .filter(([k]) => k.startsWith('--'))
+    const tokens = getDefaultTokens();
+    for (const [key, value] of Object.entries(theme)) {
+      if (key.startsWith('--')) {
+        tokens[key] = value;
+      }
+    }
+
+    const vars = Object.entries(tokens)
       .map(([k, v]) => `  ${k}: ${v};`)
       .join('\n');
 
@@ -129297,6 +131598,7 @@ $1 $2
     const readonlyCompartment = new Compartment();
     const keymapCompartment = new Compartment();
     const projectFilesCompartment = new Compartment();
+    const sectionControlsCompartment = new Compartment();
 
     // Create UndoManager for undo/redo tracking
     // We create it ourselves so we can listen to stack changes
@@ -129381,6 +131683,8 @@ $1 $2
       // The actual completion is provided by runtime-lsp (via additionalSources)
       // or by a standalone autocompletion added below if no runtime providers exist
       projectFilesCompartment.of(projectFilesFacet.of([])),
+      // Section controls are configured after API creation
+      sectionControlsCompartment.of([]),
     ];
 
     // Inject markdown styles
@@ -129733,6 +132037,25 @@ $1 $2
        */
       getThemeNames() {
         return getThemeNames();
+      },
+
+      /**
+       * Update section controls configuration.
+       * @param {{enabled?: boolean, showAi?: boolean, showFormatting?: boolean}} updates
+       */
+      setSectionControls(updates = {}) {
+        this.config.sectionControls = {
+          ...this.config.sectionControls,
+          ...updates,
+        };
+      },
+
+      /**
+       * Get current section controls configuration.
+       * @returns {{enabled: boolean, showAi: boolean, showFormatting: boolean}}
+       */
+      getSectionControls() {
+        return { ...(this.config.sectionControls || {}) };
       },
 
       // ===========================================================================
@@ -130379,14 +132702,13 @@ $1 $2
       },
 
       /**
-       * View source code for symbol at cursor position.
+       * Get source code for symbol at cursor position, without emitting UI callbacks.
        * Calls inspect with detail=2 to get full source code.
-       * Triggers registered onViewSource callbacks.
        *
        * @param {number} [pos] - Position (defaults to cursor)
        * @returns {Promise<{found: boolean, name?: string, sourceCode?: string, file?: string, ...}|null>}
        */
-      async viewSource(pos) {
+      async getSourceInfo(pos) {
         const position = pos ?? view.state.selection.main.head;
         const content = this.getContent();
         const cell = getCellAtCursor(content, position);
@@ -130401,7 +132723,19 @@ $1 $2
         if (!provider) return null;
 
         const offset = position - cell.codeStart;
-        const result = await provider.inspect(cell.code, offset, cell.language, { detail: 2 });
+        return provider.inspect(cell.code, offset, cell.language, { detail: 2 });
+      },
+
+      /**
+       * View source code for symbol at cursor position.
+       * Calls inspect with detail=2 to get full source code.
+       * Triggers registered onViewSource callbacks.
+       *
+       * @param {number} [pos] - Position (defaults to cursor)
+       * @returns {Promise<{found: boolean, name?: string, sourceCode?: string, file?: string, ...}|null>}
+       */
+      async viewSource(pos) {
+        const result = await this.getSourceInfo(pos);
 
         // Trigger callbacks if we got a result
         if (result && result.found) {
@@ -130701,6 +133035,16 @@ $1 $2
       return { ...currentKeybindings };
     };
 
+    // Initialize section controls now that API exists
+    const applySectionControlsConfig = () => {
+      const options = reactiveConfig.sectionControls || {};
+      const extension = options.enabled === false ? [] : sectionControls(api, options);
+      view.dispatch({
+        effects: sectionControlsCompartment.reconfigure(extension),
+      });
+    };
+    applySectionControlsConfig();
+
     // Wire execution events to awareness (so execution badges work automatically)
     // This makes the runtime appear as a collaborator executing code
     if (awarenessSystem) {
@@ -130856,6 +133200,11 @@ $1 $2
     });
 
     reactiveConfig._subscribe(configHandler);
+    reactiveConfig._subscribe((event) => {
+      if (event.path[0] === 'sectionControls') {
+        applySectionControlsConfig();
+      }
+    });
 
     // =========================================================================
     // UPDATE DOCUMENT STATE

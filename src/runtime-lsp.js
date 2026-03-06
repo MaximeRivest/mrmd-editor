@@ -16,7 +16,8 @@
  * @module runtime-lsp
  */
 
-import { hoverTooltip } from '@codemirror/view';
+import { hoverTooltip, closeHoverTooltips, showTooltip, ViewPlugin } from '@codemirror/view';
+import { StateField, StateEffect } from '@codemirror/state';
 import { autocompletion, CompletionContext, startCompletion } from '@codemirror/autocomplete';
 import { getCellAtCursor, findCells } from './cells.js';
 
@@ -42,6 +43,7 @@ import { getCellAtCursor, findCells } from './cells.js';
  * @property {string} [value]
  * @property {string} [signature]
  * @property {string} [documentation]
+ * @property {string} [docstring]
  */
 
 /**
@@ -132,6 +134,8 @@ export function adaptMrmdJsSession(session) {
           type: result.type,
           value: result.value,
           signature: result.signature,
+          documentation: result.documentation || result.docstring,
+          docstring: result.docstring,
         };
       } catch (e) {
         console.warn('mrmd-js hover error:', e);
@@ -229,7 +233,10 @@ export function adaptMRPClient(client, languages) {
       try {
         const result = await client.hover({ code, cursor });
         if (!result || !result.found) return null;
-        return result;
+        return {
+          ...result,
+          documentation: result.documentation || result.docstring,
+        };
       } catch (e) {
         console.warn('MRP hover error:', e);
         return null;
@@ -343,6 +350,149 @@ function getCodeAtPosition(content, pos) {
 
 // #region HOVER_EXTENSION
 
+const setPinnedHoverTooltip = StateEffect.define();
+const clearPinnedHoverTooltip = StateEffect.define();
+
+const pinnedHoverTooltipField = StateField.define({
+  create() {
+    return null;
+  },
+  update(value, tr) {
+    if (tr.docChanged) return null;
+
+    for (const effect of tr.effects) {
+      if (effect.is(setPinnedHoverTooltip)) return effect.value;
+      if (effect.is(clearPinnedHoverTooltip)) return null;
+    }
+
+    return value;
+  },
+  provide: (f) => showTooltip.from(f),
+});
+
+function looksLikeFunctionRepr(value) {
+  return typeof value === 'string' && /^<function\s+[^>]+\s+at\s+0x[0-9a-f]+>$/i.test(value.trim());
+}
+
+function cleanDocsText(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/(?:<function\s+[^>]+\s+at\s+0x[0-9a-f]+>)+\s*$/ig, '')
+    .trim();
+}
+
+function formatHoverText(result) {
+  if (!result) return '';
+  const parts = [];
+
+  const nameType = [result.name, result.type].filter(Boolean).join(' : ');
+  if (nameType) parts.push(nameType);
+  if (result.signature) parts.push(result.signature);
+
+  const suppressValue = !!result.signature && looksLikeFunctionRepr(result.value);
+  if (result.value && !suppressValue) parts.push(result.value);
+
+  const docsText = cleanDocsText(result.documentation || result.docstring);
+  if (docsText) parts.push(docsText);
+
+  if (result.file) {
+    parts.push(`Source: ${result.file}${result.line ? `:${result.line}` : ''}`);
+  }
+
+  return parts.join('\n\n');
+}
+
+function createHoverTooltipDescriptor(view, hoverResult, pos, end, { sticky = false } = {}) {
+  return {
+    pos,
+    end,
+    above: false,
+    arrow: true,
+    create() {
+      const dom = document.createElement('div');
+      dom.className = `mrmd-runtime-hover${sticky ? ' mrmd-runtime-hover-sticky' : ''}`;
+      dom.innerHTML = formatHoverContent(hoverResult);
+
+      const copyBtn = dom.querySelector('.mrmd-hover-copy');
+      if (copyBtn) {
+        copyBtn.addEventListener('mousedown', (event) => {
+          event.stopPropagation();
+        });
+
+        copyBtn.addEventListener('click', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          const text = formatHoverText(hoverResult);
+          if (!text) return;
+
+          try {
+            await navigator.clipboard?.writeText(text);
+            const original = copyBtn.textContent;
+            copyBtn.textContent = 'Copied';
+            setTimeout(() => {
+              copyBtn.textContent = original || 'Copy';
+            }, 900);
+          } catch {
+            // ignore
+          }
+        });
+      }
+
+      const sourceLink = dom.querySelector('.mrmd-hover-source-link');
+      if (sourceLink) {
+        sourceLink.addEventListener('mousedown', (event) => {
+          event.stopPropagation();
+        });
+      }
+
+      if (!sticky) {
+        dom.addEventListener('mousedown', (event) => {
+          if (event.button !== 0) return;
+          if (event.target instanceof Element && event.target.closest('.mrmd-hover-copy')) return;
+
+          const stickyTooltip = createHoverTooltipDescriptor(view, hoverResult, pos, end, { sticky: true });
+          view.dispatch({
+            effects: [
+              setPinnedHoverTooltip.of(stickyTooltip),
+              closeHoverTooltips,
+            ],
+          });
+        });
+      }
+
+      return {
+        dom,
+        offset: { x: 0, y: -8 },
+        overlap: true,
+      };
+    },
+  };
+}
+
+const pinnedHoverClosePlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.view = view;
+      this.onMouseDownCapture = (event) => {
+        const pinned = view.state.field(pinnedHoverTooltipField, false);
+        if (!pinned) return;
+
+        const target = event.target;
+        if (target instanceof Element && target.closest('.mrmd-runtime-hover')) return;
+
+        view.dispatch({ effects: clearPinnedHoverTooltip.of(null) });
+      };
+
+      view.dom.ownerDocument.addEventListener('mousedown', this.onMouseDownCapture, true);
+    }
+
+    destroy() {
+      this.view.dom.ownerDocument.removeEventListener('mousedown', this.onMouseDownCapture, true);
+    }
+  }
+);
+
 /**
  * Create a CodeMirror hover tooltip extension powered by runtime LSP.
  *
@@ -356,7 +506,7 @@ function getCodeAtPosition(content, pos) {
  * @returns {import('@codemirror/state').Extension}
  */
 export function createRuntimeHoverExtension({ providers, getContent, stateManager, yText }) {
-  return hoverTooltip(
+  const hoverExtension = hoverTooltip(
     async (view, pos, side) => {
       const content = getContent();
       const codeInfo = getCodeAtPosition(content, pos);
@@ -368,8 +518,44 @@ export function createRuntimeHoverExtension({ providers, getContent, stateManage
       if (!provider) return null;
 
       // Get hover info from runtime
-      const hoverResult = await provider.hover(codeInfo.code, codeInfo.offset, codeInfo.language);
+      let hoverResult = await provider.hover(codeInfo.code, codeInfo.offset, codeInfo.language);
       if (!hoverResult || !hoverResult.found) return null;
+
+      // If hover payload is minimal, enrich with inspect docstring/signature/source metadata.
+      // This keeps hover snappy for runtimes that already return rich hover data,
+      // while still showing docs/location for runtimes that only return basic hover fields.
+      const needsInspectEnrichment =
+        (!hoverResult.documentation && !hoverResult.docstring) ||
+        (!hoverResult.file && !hoverResult.line);
+
+      if (needsInspectEnrichment && provider.inspect) {
+        try {
+          const inspectResult = await provider.inspect(
+            codeInfo.code,
+            codeInfo.offset,
+            codeInfo.language,
+            { detail: 1 }
+          );
+          if (inspectResult?.found) {
+            hoverResult = {
+              ...inspectResult,
+              ...hoverResult,
+              // Prefer explicit hover value/name if present, but fill missing docs/signature/location.
+              documentation:
+                hoverResult.documentation ||
+                hoverResult.docstring ||
+                inspectResult.documentation ||
+                inspectResult.docstring,
+              docstring: hoverResult.docstring || inspectResult.docstring,
+              signature: hoverResult.signature || inspectResult.signature,
+              file: hoverResult.file || inspectResult.file,
+              line: hoverResult.line || inspectResult.line,
+            };
+          }
+        } catch {
+          // Ignore enrichment errors; base hover still works.
+        }
+      }
 
       // Broadcast to awareness if available
       if (stateManager) {
@@ -387,23 +573,25 @@ export function createRuntimeHoverExtension({ providers, getContent, stateManage
       }
 
       // Create tooltip DOM
-      return {
+      return createHoverTooltipDescriptor(
+        view,
+        hoverResult,
         pos,
-        end: pos + (hoverResult.name?.length || 0),
-        above: true,
-        create() {
-          const dom = document.createElement('div');
-          dom.className = 'mrmd-runtime-hover';
-          dom.innerHTML = formatHoverContent(hoverResult);
-          return { dom };
-        },
-      };
+        pos + Math.max(1, hoverResult.name?.length || 0),
+        { sticky: false }
+      );
     },
     {
       hoverTime: 300,
-      hideOnChange: true,
+      hideOnChange: false,
     }
   );
+
+  return [
+    hoverExtension,
+    pinnedHoverTooltipField,
+    pinnedHoverClosePlugin,
+  ];
 }
 
 /**
@@ -415,28 +603,47 @@ export function createRuntimeHoverExtension({ providers, getContent, stateManage
 function formatHoverContent(result) {
   let html = '<div class="mrmd-hover-content">';
 
-  // Name and type header
+  // Header row
+  html += '<div class="mrmd-hover-header">';
+  html += '<div class="mrmd-hover-name">';
+
   if (result.name) {
-    html += `<div class="mrmd-hover-name"><code>${escapeHtml(result.name)}</code>`;
-    if (result.type) {
-      html += ` <span class="mrmd-hover-type">${escapeHtml(result.type)}</span>`;
-    }
-    html += '</div>';
+    html += `<code>${escapeHtml(result.name)}</code>`;
   }
+  if (result.type) {
+    html += ` <span class="mrmd-hover-type">${escapeHtml(result.type)}</span>`;
+  }
+
+  html += '</div>';
+  html += '<button class="mrmd-hover-copy" type="button" title="Copy hover details">Copy</button>';
+  html += '</div>';
 
   // Signature (for functions)
   if (result.signature) {
     html += `<div class="mrmd-hover-signature"><code>${escapeHtml(result.signature)}</code></div>`;
   }
 
-  // Value preview
-  if (result.value) {
+  // Value preview (skip noisy function repr when we already have signature)
+  const suppressValue = !!result.signature && looksLikeFunctionRepr(result.value);
+  if (result.value && !suppressValue) {
     html += `<div class="mrmd-hover-value">${escapeHtml(result.value)}</div>`;
   }
 
-  // Documentation
-  if (result.documentation) {
-    html += `<div class="mrmd-hover-docs">${escapeHtml(result.documentation)}</div>`;
+  // Documentation / docstring
+  const docsText = cleanDocsText(result.documentation || result.docstring);
+  if (docsText) {
+    html += `<div class="mrmd-hover-docs">${escapeHtml(docsText)}</div>`;
+  }
+
+  // Source location (when provided by runtime inspect)
+  if (result.file) {
+    const locationText = `${result.file}${result.line ? `:${result.line}` : ''}`;
+    if (result.file.startsWith('/')) {
+      const fileHref = `file://${encodeURI(result.file)}`;
+      html += `<div class="mrmd-hover-source">Source: <a class="mrmd-hover-source-link" href="${escapeAttr(fileHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(locationText)}</a></div>`;
+    } else {
+      html += `<div class="mrmd-hover-source">Source: ${escapeHtml(locationText)}</div>`;
+    }
   }
 
   html += '</div>';
@@ -456,6 +663,16 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function escapeAttr(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 // #endregion HOVER_EXTENSION
@@ -722,14 +939,22 @@ function getCellIndex(content, cell) {
 export const runtimeLspStyles = `
 /* Runtime Hover Tooltip */
 .mrmd-runtime-hover {
-  background: var(--mrmd-bg, #1e1e1e);
-  border: 1px solid var(--mrmd-border, #333);
-  border-radius: 6px;
+  background: var(--widget-surface-elevated, var(--editor-background, #1e1e1e));
+  border: 1px solid var(--widget-border, #333);
+  border-radius: var(--widget-border-radius, 6px);
   padding: 8px 12px;
-  max-width: 400px;
+  max-width: 460px;
+  max-height: min(52vh, 440px);
+  overflow: auto;
   font-size: 13px;
-  line-height: 1.4;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  line-height: 1.45;
+  color: var(--widget-text, var(--editor-foreground, #e1e1e1));
+  box-shadow: var(--mrmd-shadow-md, 0 6px 18px rgba(0, 0, 0, 0.3));
+  user-select: text;
+}
+
+.mrmd-runtime-hover-sticky {
+  border-color: var(--widget-border-focus, var(--mrmd-accent, #58a6ff));
 }
 
 .mrmd-hover-content {
@@ -738,26 +963,54 @@ export const runtimeLspStyles = `
   gap: 6px;
 }
 
+.mrmd-hover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .mrmd-hover-name {
   font-weight: 600;
 }
 
+.mrmd-hover-copy {
+  border: 1px solid var(--widget-border, #333);
+  background: var(--widget-surface, rgba(0, 0, 0, 0.2));
+  color: var(--widget-text-muted, #9ca3af);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.mrmd-hover-copy:hover {
+  color: var(--widget-text, #e5e7eb);
+  background: var(--widget-surface-hover, rgba(255, 255, 255, 0.08));
+}
+
+.mrmd-hover-copy:active {
+  transform: translateY(1px);
+}
+
 .mrmd-hover-name code {
-  color: var(--mrmd-text, #e1e1e1);
+  color: var(--syntax-variable, var(--widget-text, #e1e1e1));
   background: none;
   padding: 0;
+  font-family: var(--widget-font-mono, monospace);
 }
 
 .mrmd-hover-type {
-  color: var(--mrmd-type-color, #4ec9b0);
+  color: var(--syntax-type, #4ec9b0);
   font-size: 12px;
   font-weight: normal;
   margin-left: 8px;
 }
 
 .mrmd-hover-signature {
-  color: var(--mrmd-signature-color, #dcdcaa);
-  font-family: monospace;
+  color: var(--syntax-function, #dcdcaa);
+  font-family: var(--widget-font-mono, monospace);
   font-size: 12px;
 }
 
@@ -767,52 +1020,44 @@ export const runtimeLspStyles = `
 }
 
 .mrmd-hover-value {
-  color: var(--mrmd-value-color, #ce9178);
-  font-family: monospace;
+  color: var(--syntax-string, var(--widget-text, #ce9178));
+  font-family: var(--widget-font-mono, monospace);
   font-size: 12px;
-  max-height: 100px;
+  max-height: 120px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .mrmd-hover-docs {
-  color: var(--mrmd-docs-color, #9cdcfe);
+  color: var(--widget-text-muted, #9cdcfe);
   font-size: 12px;
-  border-top: 1px solid var(--mrmd-border, #333);
+  border-top: 1px solid var(--widget-border, #333);
   padding-top: 6px;
   margin-top: 2px;
+  white-space: pre-wrap;
 }
 
-/* Light theme adjustments */
-.cm-theme-light .mrmd-runtime-hover,
-:root:not(.dark) .mrmd-runtime-hover {
-  background: #ffffff;
-  border-color: #e0e0e0;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+.mrmd-hover-source {
+  color: var(--widget-text-muted, #9ca3af);
+  font-size: 11px;
+  border-top: 1px dashed var(--widget-border, #333);
+  padding-top: 6px;
+  margin-top: 2px;
+  word-break: break-all;
 }
 
-.cm-theme-light .mrmd-hover-name code,
-:root:not(.dark) .mrmd-hover-name code {
-  color: #1e1e1e;
+.mrmd-hover-source-link {
+  color: var(--syntax-link, var(--widget-text-accent, #58a6ff));
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
 }
 
-.cm-theme-light .mrmd-hover-type,
-:root:not(.dark) .mrmd-hover-type {
-  color: #267f99;
-}
-
-.cm-theme-light .mrmd-hover-value,
-:root:not(.dark) .mrmd-hover-value {
-  color: #a31515;
-}
-
-.cm-theme-light .mrmd-hover-docs,
-:root:not(.dark) .mrmd-hover-docs {
-  color: #0070c1;
-  border-top-color: #e0e0e0;
+.mrmd-hover-source-link:hover {
+  text-decoration-style: solid;
 }
 `;
+
 
 let stylesInjected = false;
 

@@ -351,6 +351,9 @@ export const tokenDefinitions = {
 
   // Lists
   '--md-list-marker-color': { description: 'List bullet/number color', category: 'markdown', default: 'var(--widget-text-muted)' },
+  '--md-list-number-weight': { description: 'Ordered list marker weight', category: 'markdown', default: '600' },
+  '--md-list-bullet-weight': { description: 'Unordered list bullet weight', category: 'markdown', default: '700' },
+  '--md-list-bullet-width': { description: 'Reserved width for rendered list bullets', category: 'markdown', default: '0.75em' },
 
   // Horizontal rules
   '--md-hr-color': { description: 'Horizontal rule color', category: 'markdown', default: 'var(--widget-border)' },
@@ -386,6 +389,16 @@ export const tokenDefinitions = {
   '--md-alert-important-color': { description: 'Important alert accent color', category: 'markdown', default: 'var(--syntax-keyword)' },
   '--md-alert-warning-color': { description: 'Warning alert accent color', category: 'markdown', default: 'var(--widget-warning)' },
   '--md-alert-caution-color': { description: 'Caution alert accent color', category: 'markdown', default: 'var(--widget-error)' },
+  '--md-admonition-background': { description: 'Legacy admonition background tint (used as fallback)', category: 'markdown', default: 'color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 10%, transparent)' },
+  '--md-admonition-title-background': { description: 'Background for admonition title row', category: 'markdown', default: 'color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 14%, var(--editor-background, transparent) 86%)' },
+  '--md-admonition-body-background': { description: 'Background for admonition body rows', category: 'markdown', default: 'color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 5%, var(--editor-background, transparent) 95%)' },
+  '--md-admonition-border-color': { description: 'Border color for admonition cards', category: 'markdown', default: 'color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 46%, var(--widget-border) 54%)' },
+  '--md-admonition-title-color': { description: 'Title text/icon color for admonitions', category: 'markdown', default: 'color-mix(in srgb, var(--md-alert-accent, var(--widget-text-accent)) 88%, var(--widget-text, currentColor) 12%)' },
+  '--md-admonition-text-color': { description: 'Body text color for admonitions', category: 'markdown', default: 'inherit' },
+  '--md-admonition-radius': { description: 'Corner radius for admonition blocks', category: 'markdown', default: '6px' },
+  '--md-admonition-border-width': { description: 'Border width for admonition cards', category: 'markdown', default: '1px' },
+  '--md-admonition-padding-x': { description: 'Horizontal padding for admonition rows', category: 'markdown', default: '0.9em' },
+  '--md-admonition-padding-y': { description: 'Vertical padding for admonition rows', category: 'markdown', default: '0.35em' },
 
   // ===========================================================================
   // SHELL (Status bar, menus, dialogs)

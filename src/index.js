@@ -82,6 +82,10 @@ import * as commentSyntaxModule from './comment-syntax.js';
 
 // Cell controls (run buttons, queue, status)
 import { createCellControls, CellControlsSystem } from './cell-controls/index.js';
+
+// Section controls (AI/formatting next to focused line)
+import { sectionControls } from './section-controls/index.js';
+
 // Commands and keymap
 import { commandRegistry } from './commands.js';
 import { createKeymap, mergeKeybindings, defaultKeybindings } from './keymap.js';
@@ -923,6 +927,7 @@ function create(target, options = {}) {
   const readonlyCompartment = new Compartment();
   const keymapCompartment = new Compartment();
   const projectFilesCompartment = new Compartment();
+  const sectionControlsCompartment = new Compartment();
 
   // Create UndoManager for undo/redo tracking
   // We create it ourselves so we can listen to stack changes
@@ -1007,6 +1012,8 @@ function create(target, options = {}) {
     // The actual completion is provided by runtime-lsp (via additionalSources)
     // or by a standalone autocompletion added below if no runtime providers exist
     projectFilesCompartment.of(projectFilesFacet.of([])),
+    // Section controls are configured after API creation
+    sectionControlsCompartment.of([]),
   ];
 
   // Inject markdown styles
@@ -1363,6 +1370,25 @@ function create(target, options = {}) {
      */
     getThemeNames() {
       return getThemeNames();
+    },
+
+    /**
+     * Update section controls configuration.
+     * @param {{enabled?: boolean, showAi?: boolean, showFormatting?: boolean}} updates
+     */
+    setSectionControls(updates = {}) {
+      this.config.sectionControls = {
+        ...this.config.sectionControls,
+        ...updates,
+      };
+    },
+
+    /**
+     * Get current section controls configuration.
+     * @returns {{enabled: boolean, showAi: boolean, showFormatting: boolean}}
+     */
+    getSectionControls() {
+      return { ...(this.config.sectionControls || {}) };
     },
 
     // ===========================================================================
@@ -2009,14 +2035,13 @@ function create(target, options = {}) {
     },
 
     /**
-     * View source code for symbol at cursor position.
+     * Get source code for symbol at cursor position, without emitting UI callbacks.
      * Calls inspect with detail=2 to get full source code.
-     * Triggers registered onViewSource callbacks.
      *
      * @param {number} [pos] - Position (defaults to cursor)
      * @returns {Promise<{found: boolean, name?: string, sourceCode?: string, file?: string, ...}|null>}
      */
-    async viewSource(pos) {
+    async getSourceInfo(pos) {
       const position = pos ?? view.state.selection.main.head;
       const content = this.getContent();
       const cell = getCellAtCursor(content, position);
@@ -2031,7 +2056,19 @@ function create(target, options = {}) {
       if (!provider) return null;
 
       const offset = position - cell.codeStart;
-      const result = await provider.inspect(cell.code, offset, cell.language, { detail: 2 });
+      return provider.inspect(cell.code, offset, cell.language, { detail: 2 });
+    },
+
+    /**
+     * View source code for symbol at cursor position.
+     * Calls inspect with detail=2 to get full source code.
+     * Triggers registered onViewSource callbacks.
+     *
+     * @param {number} [pos] - Position (defaults to cursor)
+     * @returns {Promise<{found: boolean, name?: string, sourceCode?: string, file?: string, ...}|null>}
+     */
+    async viewSource(pos) {
+      const result = await this.getSourceInfo(pos);
 
       // Trigger callbacks if we got a result
       if (result && result.found) {
@@ -2331,6 +2368,16 @@ function create(target, options = {}) {
     return { ...currentKeybindings };
   };
 
+  // Initialize section controls now that API exists
+  const applySectionControlsConfig = () => {
+    const options = reactiveConfig.sectionControls || {};
+    const extension = options.enabled === false ? [] : sectionControls(api, options);
+    view.dispatch({
+      effects: sectionControlsCompartment.reconfigure(extension),
+    });
+  };
+  applySectionControlsConfig();
+
   // Wire execution events to awareness (so execution badges work automatically)
   // This makes the runtime appear as a collaborator executing code
   if (awarenessSystem) {
@@ -2486,6 +2533,11 @@ function create(target, options = {}) {
   });
 
   reactiveConfig._subscribe(configHandler);
+  reactiveConfig._subscribe((event) => {
+    if (event.path[0] === 'sectionControls') {
+      applySectionControlsConfig();
+    }
+  });
 
   // =========================================================================
   // UPDATE DOCUMENT STATE

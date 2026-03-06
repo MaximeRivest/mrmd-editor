@@ -217,22 +217,58 @@ export const markdownStyles = `
 
 .cm-md-alert-note {
   border-left-color: var(--md-alert-note-color);
+  --md-alert-accent: var(--md-alert-note-color);
 }
 
 .cm-md-alert-tip {
   border-left-color: var(--md-alert-tip-color);
+  --md-alert-accent: var(--md-alert-tip-color);
 }
 
 .cm-md-alert-important {
   border-left-color: var(--md-alert-important-color);
+  --md-alert-accent: var(--md-alert-important-color);
 }
 
 .cm-md-alert-warning {
   border-left-color: var(--md-alert-warning-color);
+  --md-alert-accent: var(--md-alert-warning-color);
 }
 
 .cm-md-alert-caution {
   border-left-color: var(--md-alert-caution-color);
+  --md-alert-accent: var(--md-alert-caution-color);
+}
+
+/* MkDocs-style !!! admonitions (card style with title bar) */
+.cm-md-admonition-line {
+  border-left: var(--md-admonition-border-width, 1px) solid var(--md-admonition-border-color, color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 46%, var(--widget-border) 54%));
+  border-right: var(--md-admonition-border-width, 1px) solid var(--md-admonition-border-color, color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 46%, var(--widget-border) 54%));
+  background: var(--md-admonition-body-background, var(--md-admonition-background, color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 5%, var(--editor-background, transparent) 95%)));
+  color: var(--md-admonition-text-color, inherit);
+  padding-left: var(--md-admonition-padding-x, 0.9em);
+  padding-right: var(--md-admonition-padding-x, 0.9em);
+}
+
+.cm-md-admonition-start {
+  border-top: var(--md-admonition-border-width, 1px) solid var(--md-admonition-border-color, color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 46%, var(--widget-border) 54%));
+  border-top-left-radius: var(--md-admonition-radius, 6px);
+  border-top-right-radius: var(--md-admonition-radius, 6px);
+  background: var(--md-admonition-title-background, color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 14%, var(--editor-background, transparent) 86%));
+  padding-top: var(--md-admonition-padding-y, 0.35em);
+  padding-bottom: var(--md-admonition-padding-y, 0.35em);
+  border-bottom: 1px solid color-mix(in srgb, var(--md-admonition-border-color, var(--md-alert-accent, var(--widget-border-accent))) 55%, transparent);
+}
+
+.cm-md-admonition-end {
+  border-bottom: var(--md-admonition-border-width, 1px) solid var(--md-admonition-border-color, color-mix(in srgb, var(--md-alert-accent, var(--widget-border-accent)) 46%, var(--widget-border) 54%));
+  border-bottom-left-radius: var(--md-admonition-radius, 6px);
+  border-bottom-right-radius: var(--md-admonition-radius, 6px);
+  padding-bottom: calc(var(--md-admonition-padding-y, 0.35em) + 0.05em);
+}
+
+.cm-md-admonition-title-line {
+  color: var(--md-admonition-title-color, var(--md-alert-accent, var(--widget-text-accent)));
 }
 
 /* ==========================================================================
@@ -241,6 +277,19 @@ export const markdownStyles = `
 
 .cm-md-list-marker {
   color: var(--md-list-marker-color);
+  font-variant-numeric: tabular-nums;
+}
+
+.cm-md-list-number {
+  font-weight: var(--md-list-number-weight, 600);
+}
+
+.cm-md-list-bullet {
+  display: inline-block;
+  width: var(--md-list-bullet-width, 0.75em);
+  color: var(--md-list-marker-color);
+  font-weight: var(--md-list-bullet-weight, 700);
+  text-align: center;
 }
 
 /* ==========================================================================
@@ -854,9 +903,14 @@ export const markdownStyles = `
 .cm-alert-title {
   display: inline-flex;
   align-items: center;
-  gap: 0.4em;
-  font-weight: 600;
+  gap: 0.45em;
+  font-weight: 650;
   margin-bottom: 0.25em;
+}
+
+.cm-md-admonition-title-line .cm-alert-title {
+  margin-bottom: 0;
+  color: var(--md-admonition-title-color, var(--md-alert-accent, var(--widget-text-accent)));
 }
 
 .cm-alert-title-note {
@@ -881,7 +935,18 @@ export const markdownStyles = `
 
 /* Alert icons */
 .cm-alert-icon {
-  font-size: 1.1em;
+  width: 1.2em;
+  height: 1.2em;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75em;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--md-admonition-title-color, currentColor);
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }
 
 /* ==========================================================================

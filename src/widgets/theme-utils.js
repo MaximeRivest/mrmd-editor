@@ -20,7 +20,7 @@
  * @module widgets/theme-utils
  */
 
-import { getTheme } from './theme.js';
+import { getTheme, getDefaultTokens } from './theme.js';
 
 // #region DETECTION
 
@@ -229,7 +229,9 @@ export function applyTheme(themeOrName, { target, useStyleTag = true } = {}) {
   }
 
   // Get token values (exclude name, description, fontFace, isDark)
-  const tokens = {};
+  // Merge with token defaults so newly added tokens are always present,
+  // even for older themes that don't define them yet.
+  const tokens = getDefaultTokens();
   for (const [key, value] of Object.entries(theme)) {
     if (key.startsWith('--')) {
       tokens[key] = value;
@@ -349,8 +351,14 @@ export function generateThemeCSS(themeOrName, { includeFontFace = true } = {}) {
     return generateThemeCSS('wizard-study-dark', { includeFontFace });
   }
 
-  const vars = Object.entries(theme)
-    .filter(([k]) => k.startsWith('--'))
+  const tokens = getDefaultTokens();
+  for (const [key, value] of Object.entries(theme)) {
+    if (key.startsWith('--')) {
+      tokens[key] = value;
+    }
+  }
+
+  const vars = Object.entries(tokens)
     .map(([k, v]) => `  ${k}: ${v};`)
     .join('\n');
 

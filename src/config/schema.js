@@ -20,6 +20,7 @@
  * @property {ExecutionConfig} [execution] - Execution settings
  * @property {CellControlsConfig} [cellControls] - Cell controls (buttons, status, queue)
  * @property {AIConfig} [ai] - AI service endpoints
+ * @property {SectionControlsConfig} [sectionControls] - Section controls (AI/formatting)
  * @property {AwarenessConfig} [awareness] - Collaboration UI settings
  * @property {boolean | DevPanelConfig} [devPanel] - Developer panel
  */
@@ -270,6 +271,21 @@ export const DEFAULT_CELL_CONTROLS = {
   queue: { ...DEFAULT_CELL_QUEUE }
 };
 
+/**
+ * Section controls configuration - AI and formatting buttons next to sections
+ * @typedef {Object} SectionControlsConfig
+ * @property {boolean} [enabled] - Master switch for section controls
+ * @property {boolean} [showAi] - Show AI command buttons
+ * @property {boolean} [showFormatting] - Show markdown formatting buttons
+ */
+
+/** @type {SectionControlsConfig} */
+export const DEFAULT_SECTION_CONTROLS = {
+  enabled: true,
+  showAi: true,
+  showFormatting: true
+};
+
 // =============================================================================
 // DEV PANEL
 // =============================================================================
@@ -321,6 +337,7 @@ export function getDefaultConfig() {
       endpoints: [],
       default: null
     },
+    sectionControls: { ...DEFAULT_SECTION_CONTROLS },
     awareness: { ...DEFAULT_AWARENESS },
     devPanel: { ...DEFAULT_DEV_PANEL }
   };
@@ -419,6 +436,20 @@ export function normalizeOptions(options = {}) {
   // Execution options
   if (options.autoRefreshVariables !== undefined) {
     config.execution.autoRefreshVariables = options.autoRefreshVariables;
+  }
+
+  // Section controls
+  if (options.sectionControls !== undefined) {
+    if (options.sectionControls === true) {
+      config.sectionControls.enabled = true;
+    } else if (options.sectionControls === false) {
+      config.sectionControls.enabled = false;
+    } else if (typeof options.sectionControls === 'object') {
+      config.sectionControls = {
+        ...config.sectionControls,
+        ...options.sectionControls
+      };
+    }
   }
 
   // Cell controls

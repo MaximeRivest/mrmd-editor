@@ -63,6 +63,7 @@ export { markdownStyles, injectMarkdownStyles } from './styles.js';
 // Widget exports
 export {
   TaskCheckboxWidget,
+  ListMarkerWidget,
   ImageWidget,
   ImagePlaceholder,
   parseImageMarkdown,

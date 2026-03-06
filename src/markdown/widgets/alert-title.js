@@ -13,11 +13,11 @@ import { WidgetType } from '@codemirror/view';
  * Icons for each alert type (using Unicode symbols)
  */
 const ALERT_ICONS = {
-  note: 'ℹ️',
-  tip: '💡',
-  important: '❗',
-  warning: '⚠️',
-  caution: '🛑',
+  note: 'i',
+  tip: '✦',
+  important: '!',
+  warning: '▲',
+  caution: '×',
 };
 
 /**
@@ -26,14 +26,16 @@ const ALERT_ICONS = {
 export class AlertTitleWidget extends WidgetType {
   /**
    * @param {string} type - Alert type: 'note', 'tip', 'important', 'warning', 'caution'
+   * @param {string} [title] - Optional custom title text
    */
-  constructor(type) {
+  constructor(type, title = null) {
     super();
     this.type = type.toLowerCase();
+    this.title = title || (this.type.charAt(0).toUpperCase() + this.type.slice(1));
   }
 
   eq(other) {
-    return this.type === other.type;
+    return this.type === other.type && this.title === other.title;
   }
 
   toDOM() {
@@ -49,7 +51,7 @@ export class AlertTitleWidget extends WidgetType {
     // Text
     const text = document.createElement('span');
     text.className = 'cm-alert-text';
-    text.textContent = this.type.charAt(0).toUpperCase() + this.type.slice(1);
+    text.textContent = this.title;
     span.appendChild(text);
 
     return span;

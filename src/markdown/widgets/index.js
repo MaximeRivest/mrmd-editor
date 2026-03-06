@@ -7,6 +7,7 @@
  */
 
 export { TaskCheckboxWidget } from './checkbox.js';
+export { ListMarkerWidget } from './list-marker.js';
 export {
   ImageWidget,
   ImagePlaceholder,

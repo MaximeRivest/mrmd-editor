@@ -33,6 +33,28 @@ import { terminalToHtml, hasAnsi, stripAnsi, ansiStyles, parseAnsiDecorations } 
 // Regex to match ANSI escape sequences (same as in terminal.js)
 const ANSI_ESCAPE_REGEX = /\x1b\[[0-9;]*[a-zA-Z]/g;
 
+const LONG_OUTPUT_WIDGET_LINE_THRESHOLD = 15;
+const JSON_OUTPUT_WIDGET_SETTING_KEY = 'mrmd-json-output-widget-enabled';
+const LONG_OUTPUT_WIDGET_SETTING_KEY = 'mrmd-long-output-widget-enabled';
+
+function readBooleanSetting(key, defaultValue = true) {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return defaultValue;
+    const raw = window.localStorage.getItem(key);
+    if (raw == null) return defaultValue;
+    return !['0', 'false', 'off', 'no'].includes(String(raw).trim().toLowerCase());
+  } catch {
+    return defaultValue;
+  }
+}
+
+function getOutputWidgetSettings() {
+  return {
+    jsonEnabled: readBooleanSetting(JSON_OUTPUT_WIDGET_SETTING_KEY, true),
+    longOutputEnabled: readBooleanSetting(LONG_OUTPUT_WIDGET_SETTING_KEY, true),
+  };
+}
+
 /**
  * Zero-width widget used to completely hide ANSI escape sequences.
  * Using Decoration.replace with this widget removes the escape codes
@@ -64,22 +86,303 @@ function escapeHtml(text) {
     .replace(/'/g, '&#039;');
 }
 
+function removeTrailingCommasOutsideStrings(input) {
+  let output = '';
+  let inDouble = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+
+    if (inDouble) {
+      output += ch;
+      if (ch === '\\' && i + 1 < input.length) {
+        output += input[i + 1];
+        i++;
+      } else if (ch === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inDouble = true;
+      output += ch;
+      continue;
+    }
+
+    if (ch === ',') {
+      let lookahead = i + 1;
+      while (lookahead < input.length && /\s/.test(input[lookahead])) lookahead++;
+      if (lookahead < input.length && (input[lookahead] === '}' || input[lookahead] === ']')) {
+        continue;
+      }
+    }
+
+    output += ch;
+  }
+
+  return output;
+}
+
+function replacePythonLiteralsOutsideStrings(input) {
+  const replacements = {
+    True: 'true',
+    False: 'false',
+    None: 'null',
+  };
+
+  let output = '';
+  let token = '';
+  let inDouble = false;
+
+  const flushToken = () => {
+    if (!token) return;
+    output += replacements[token] ?? token;
+    token = '';
+  };
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+
+    if (inDouble) {
+      flushToken();
+      output += ch;
+      if (ch === '\\' && i + 1 < input.length) {
+        output += input[i + 1];
+        i++;
+      } else if (ch === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      flushToken();
+      inDouble = true;
+      output += ch;
+      continue;
+    }
+
+    if (/[A-Za-z_]/.test(ch)) {
+      token += ch;
+      continue;
+    }
+
+    flushToken();
+    output += ch;
+  }
+
+  flushToken();
+  return output;
+}
+
+function normalizeJsonLikeOutput(input) {
+  let output = '';
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+
+    if (inSingle) {
+      if (ch === '\\') {
+        const next = input[i + 1];
+        if (next === undefined) {
+          output += '\\\\';
+          continue;
+        }
+
+        if (next === "'") {
+          output += "'";
+          i++;
+          continue;
+        }
+        if (next === '"') {
+          output += '\\"';
+          i++;
+          continue;
+        }
+        if (next === '\\') {
+          output += '\\\\';
+          i++;
+          continue;
+        }
+        if (next === 'x' && /^[0-9A-Fa-f]{2}$/.test(input.slice(i + 2, i + 4))) {
+          output += `\\u00${input.slice(i + 2, i + 4)}`;
+          i += 3;
+          continue;
+        }
+        if (next === 'u' && /^[0-9A-Fa-f]{4}$/.test(input.slice(i + 2, i + 6))) {
+          output += `\\u${input.slice(i + 2, i + 6)}`;
+          i += 5;
+          continue;
+        }
+        if ('bfnrt/'.includes(next)) {
+          output += `\\${next}`;
+          i++;
+          continue;
+        }
+
+        output += `\\${next}`;
+        i++;
+        continue;
+      }
+
+      if (ch === "'") {
+        inSingle = false;
+        output += '"';
+        continue;
+      }
+
+      if (ch === '"') {
+        output += '\\"';
+      } else if (ch === '\n') {
+        output += '\\n';
+      } else if (ch === '\r') {
+        output += '\\r';
+      } else {
+        output += ch;
+      }
+      continue;
+    }
+
+    if (inDouble) {
+      output += ch;
+      if (ch === '\\' && i + 1 < input.length) {
+        output += input[i + 1];
+        i++;
+      } else if (ch === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingle = true;
+      output += '"';
+      continue;
+    }
+
+    if (ch === '"') {
+      inDouble = true;
+      output += ch;
+      continue;
+    }
+
+    output += ch;
+  }
+
+  if (inSingle || inDouble) return null;
+
+  const withoutTrailingCommas = removeTrailingCommasOutsideStrings(output);
+  return replacePythonLiteralsOutsideStrings(withoutTrailingCommas);
+}
+
+function isJsonContainerString(value) {
+  return (
+    (value.startsWith('{') && value.endsWith('}')) ||
+    (value.startsWith('[') && value.endsWith(']'))
+  );
+}
+
+function isJsonContainerValue(value) {
+  return value !== null && (Array.isArray(value) || typeof value === 'object');
+}
+
+function tryParseJsonLikeContainer(value) {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed || !isJsonContainerString(trimmed)) return null;
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    return isJsonContainerValue(parsed) ? parsed : null;
+  } catch {
+    const normalized = normalizeJsonLikeOutput(trimmed);
+    if (!normalized) return null;
+
+    try {
+      const parsed = JSON.parse(normalized);
+      return isJsonContainerValue(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function parseOutLabelLine(line) {
+  const match = /^\s*out\[(\d+)\]:\s*(.*)$/i.exec(line);
+  if (!match) return null;
+  return {
+    label: `Out[${match[1]}]`,
+    remainder: match[2] ?? '',
+  };
+}
+
+function tryParseOutLabeledJsonOutput(input) {
+  const lines = String(input ?? '').split(/\r?\n/);
+  const labels = [];
+  const values = [];
+
+  let i = 0;
+  while (i < lines.length) {
+    while (i < lines.length && !lines[i].trim()) i++;
+    if (i >= lines.length) break;
+
+    const parsedLabel = parseOutLabelLine(lines[i]);
+    if (!parsedLabel) return null;
+
+    labels.push(parsedLabel.label);
+    i++;
+
+    const sectionLines = [];
+    if (parsedLabel.remainder.trim()) {
+      sectionLines.push(parsedLabel.remainder);
+    }
+
+    while (i < lines.length) {
+      if (parseOutLabelLine(lines[i])) break;
+      sectionLines.push(lines[i]);
+      i++;
+    }
+
+    const sectionText = sectionLines.join('\n').trim();
+    const parsedValue = tryParseJsonLikeContainer(sectionText);
+    if (parsedValue === null) return null;
+    values.push(parsedValue);
+  }
+
+  if (values.length === 0) return null;
+  return {
+    value: values.length === 1 ? values[0] : values,
+    labels,
+  };
+}
+
 function tryParseJsonOutput(content) {
   if (!content || hasAnsi(content)) return null;
   if (content.length > 250_000) return null; // Guard large payloads
 
   const trimmed = content.trim();
   if (!trimmed) return null;
-  const looksLikeObjectOrArray =
-    (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-    (trimmed.startsWith('[') && trimmed.endsWith(']'));
-  if (!looksLikeObjectOrArray) return null;
 
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return null;
+  const direct = tryParseJsonLikeContainer(trimmed);
+  if (direct !== null) {
+    return {
+      value: direct,
+      labels: [],
+    };
   }
+
+  return tryParseOutLabeledJsonOutput(trimmed);
+}
+
+function countOutputLines(content) {
+  const normalized = String(content ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const lines = normalized.split('\n');
+  while (lines.length > 0 && lines[lines.length - 1] === '') {
+    lines.pop();
+  }
+  return lines.length;
 }
 
 function jsonType(value) {
@@ -739,6 +1042,97 @@ class CssOutputWidget extends WidgetType {
 }
 
 /**
+ * Widget for long plain output blocks (line-threshold based).
+ * Keeps output scrollable so very long results don't expand notebook height.
+ */
+class ScrollableOutputWidget extends WidgetType {
+  /**
+   * @param {string} content - Output content
+   * @param {boolean} hidden - Whether widget should be hidden
+   * @param {number} blockStart - Document position where this output block starts
+   * @param {string|null} execId - Execution ID for this output block
+   * @param {number} lineCount - Number of output lines
+   */
+  constructor(content, hidden = false, blockStart = 0, execId = null, lineCount = 0) {
+    super();
+    this.content = content;
+    this.hidden = hidden;
+    this.blockStart = blockStart;
+    this.execId = execId;
+    this.lineCount = lineCount;
+  }
+
+  eq(other) {
+    return other.content === this.content &&
+      other.hidden === this.hidden &&
+      other.blockStart === this.blockStart &&
+      other.execId === this.execId &&
+      other.lineCount === this.lineCount;
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = 'cm-scroll-output-widget' + (this.hidden ? ' cm-output-widget-hidden' : '');
+    container.dataset.outputBlockStart = String(this.blockStart);
+    if (this.execId) {
+      container.dataset.execId = this.execId;
+    }
+
+    const header = document.createElement('div');
+    header.className = 'cm-scroll-output-header';
+    header.innerHTML = `
+      <span class="cm-scroll-output-badge">Output</span>
+      <span class="cm-scroll-output-lines">${escapeHtml(String(this.lineCount))} lines</span>
+      <div class="cm-scroll-output-actions">
+        <button type="button" class="cm-scroll-output-action" data-action="expand">Expand</button>
+        <button type="button" class="cm-scroll-output-action" data-action="collapse">Collapse</button>
+        <button type="button" class="cm-scroll-output-action" data-action="copy">Copy</button>
+      </div>
+    `;
+    container.appendChild(header);
+
+    const contentWrap = document.createElement('div');
+    contentWrap.className = 'cm-scroll-output-body';
+
+    const pre = document.createElement('pre');
+    pre.className = 'cm-scroll-output-content';
+    pre.innerHTML = terminalToHtml(this.content);
+
+    contentWrap.appendChild(pre);
+    container.appendChild(contentWrap);
+
+    const actionButtons = header.querySelectorAll('.cm-scroll-output-action');
+    actionButtons.forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const action = btn.getAttribute('data-action');
+        if (action === 'expand') {
+          contentWrap.classList.add('cm-scroll-output-body-expanded');
+        } else if (action === 'collapse') {
+          contentWrap.classList.remove('cm-scroll-output-body-expanded');
+        } else if (action === 'copy') {
+          navigator.clipboard.writeText(stripAnsi(this.content)).then(() => {
+            const previous = btn.textContent;
+            btn.textContent = 'Copied';
+            setTimeout(() => {
+              btn.textContent = previous;
+            }, 1200);
+          });
+        }
+      });
+    });
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+/**
  * Widget for rendering JSON output with an expandable tree.
  */
 class JsonOutputWidget extends WidgetType {
@@ -771,17 +1165,23 @@ class JsonOutputWidget extends WidgetType {
       container.dataset.execId = this.execId;
     }
 
-    const parsed = tryParseJsonOutput(this.content);
-    if (parsed === null) {
+    const parsedResult = tryParseJsonOutput(this.content);
+    if (parsedResult === null) {
       container.innerHTML = `<pre class="cm-json-fallback">${escapeHtml(this.content)}</pre>`;
       return container;
     }
+
+    const parsedValue = parsedResult.value;
+    const originLabel = parsedResult.labels.length > 0
+      ? (parsedResult.labels.length === 1 ? parsedResult.labels[0] : parsedResult.labels.join(', '))
+      : null;
 
     const header = document.createElement('div');
     header.className = 'cm-json-header';
     header.innerHTML = `
       <span class="cm-json-badge">JSON</span>
-      <span class="cm-json-summary">${escapeHtml(summarizeJson(parsed))}</span>
+      ${originLabel ? `<span class="cm-json-origin">${escapeHtml(originLabel)}</span>` : ''}
+      <span class="cm-json-summary">${escapeHtml(summarizeJson(parsedValue))}</span>
       <div class="cm-json-actions">
         <button type="button" class="cm-json-action" data-action="expand">Expand</button>
         <button type="button" class="cm-json-action" data-action="collapse">Collapse</button>
@@ -792,7 +1192,7 @@ class JsonOutputWidget extends WidgetType {
 
     const tree = document.createElement('div');
     tree.className = 'cm-json-tree';
-    tree.appendChild(buildJsonTreeNode(null, parsed));
+    tree.appendChild(buildJsonTreeNode(null, parsedValue));
     container.appendChild(tree);
 
     const actionButtons = header.querySelectorAll('.cm-json-action');
@@ -814,7 +1214,7 @@ class JsonOutputWidget extends WidgetType {
             }
           });
         } else if (action === 'copy') {
-          navigator.clipboard.writeText(JSON.stringify(parsed, null, 2)).then(() => {
+          navigator.clipboard.writeText(JSON.stringify(parsedValue, null, 2)).then(() => {
             const previous = btn.textContent;
             btn.textContent = 'Copied';
             setTimeout(() => {
@@ -978,6 +1378,7 @@ function buildDecorations(view, awarenessSystem) {
   const cursorPos = view.state.selection.main.head;
   const cursorLine = doc.lineAt(cursorPos).number;
   const text = doc.toString();
+  const outputWidgetSettings = getOutputWidgetSettings();
 
   // Find ```output or ```output:execId blocks (supports 3+ backticks for nesting)
   // Group 1: backticks, Group 2: optional execId, Group 3: content
@@ -1046,10 +1447,17 @@ function buildDecorations(view, awarenessSystem) {
     // Check if output is empty (just whitespace)
     const trimmedContent = content.trim();
     const isEmpty = trimmedContent.length === 0;
-    const parsedJson = !isEmpty && (outputType === null || outputType === 'json')
+    const parsedJson = !isEmpty && outputWidgetSettings.jsonEnabled && (outputType === null || outputType === 'json')
       ? tryParseJsonOutput(trimmedContent)
       : null;
     const shouldRenderJson = parsedJson !== null;
+    const outputLineCount = isEmpty ? 0 : countOutputLines(content);
+    const shouldRenderScrollableOutput =
+      outputWidgetSettings.longOutputEnabled &&
+      !isEmpty &&
+      outputType === null &&
+      !shouldRenderJson &&
+      outputLineCount > LONG_OUTPUT_WIDGET_LINE_THRESHOLD;
 
     if (anyCollaboratorFocused) {
       // EDITING MODE: Keep ANSI colors rendered, but make escape sequences
@@ -1116,7 +1524,7 @@ function buildDecorations(view, awarenessSystem) {
       // Style the fence lines (opening and closing fences).
       // Rich output widgets (HTML/CSS, including Mermaid rendered as HTML) are
       // attached to the opening fence line, so that line must remain unclipped.
-      const richOutput = outputType === 'html' || outputType === 'css' || shouldRenderJson;
+      const richOutput = outputType === 'html' || outputType === 'css' || shouldRenderJson || shouldRenderScrollableOutput;
       const startFenceClass = richOutput
         ? 'cm-output-fence-line cm-output-fence-start cm-output-fence-rich-start'
         : 'cm-output-fence-line cm-output-fence-start';
@@ -1186,6 +1594,23 @@ function buildDecorations(view, awarenessSystem) {
         decorations.push(
           Decoration.widget({
             widget: new CssOutputWidget(trimmedContent, false, blockStart, execId, cssTargetScope),
+            side: 1,
+          }).range(startLine.to)
+        );
+      } else if (shouldRenderScrollableOutput) {
+        // LONG OUTPUT: Hide raw lines and show a scrollable output widget
+        for (let i = startLine.number + 1; i < endLine.number; i++) {
+          const line = doc.line(i);
+          decorations.push(
+            Decoration.line({
+              class: 'cm-output-content-line cm-rich-output-hidden',
+            }).range(line.from)
+          );
+        }
+
+        decorations.push(
+          Decoration.widget({
+            widget: new ScrollableOutputWidget(content, false, blockStart, execId, outputLineCount),
             side: 1,
           }).range(startLine.to)
         );
@@ -1978,6 +2403,88 @@ export const outputWidgetStyles = `
   font-family: var(--widget-font-mono, monospace);
 }
 
+/* Scrollable plain output widget (for long outputs) */
+.cm-scroll-output-widget {
+  position: relative;
+  margin: 8px 0;
+  background: var(--widget-surface, rgba(0, 0, 0, 0.35));
+  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
+  border-left: 3px solid var(--widget-border-accent, rgba(100, 149, 237, 0.6));
+  border-radius: var(--widget-border-radius, 6px);
+  overflow: hidden;
+}
+
+.cm-scroll-output-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--widget-border, rgba(255, 255, 255, 0.08));
+  background: var(--widget-surface-elevated, rgba(255, 255, 255, 0.02));
+}
+
+.cm-scroll-output-badge {
+  font-size: 10px;
+  color: var(--widget-text-accent, #8cc0ff);
+  background: color-mix(in srgb, var(--widget-text-accent, #8cc0ff) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--widget-text-accent, #8cc0ff) 35%, transparent);
+  border-radius: 3px;
+  padding: 2px 6px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  font-family: var(--widget-font-mono, monospace);
+}
+
+.cm-scroll-output-lines {
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.65));
+  font-size: 11px;
+}
+
+.cm-scroll-output-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.cm-scroll-output-action {
+  background: var(--widget-surface-inset, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.14));
+  color: var(--widget-text-muted, rgba(255, 255, 255, 0.75));
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--widget-font-mono, monospace);
+}
+
+.cm-scroll-output-action:hover {
+  background: var(--widget-surface-hover, rgba(255, 255, 255, 0.08));
+  color: var(--widget-text, #e0e0e0);
+}
+
+.cm-scroll-output-body {
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px 10px 10px;
+  user-select: text;
+  cursor: text;
+}
+
+.cm-scroll-output-body.cm-scroll-output-body-expanded {
+  max-height: none;
+  overflow: visible;
+}
+
+.cm-scroll-output-content {
+  margin: 0;
+  white-space: var(--widget-white-space, pre-wrap);
+  word-break: var(--widget-word-break, break-word);
+  color: var(--widget-text, #e0e0e0);
+  font-size: 12px;
+  line-height: 1.45;
+  user-select: text;
+}
+
 /* JSON Output Widget - expandable tree view */
 .cm-json-output-widget {
   position: relative;
@@ -2013,6 +2520,13 @@ export const outputWidgetStyles = `
 .cm-json-summary {
   color: var(--widget-text-muted, rgba(255, 255, 255, 0.65));
   font-size: 11px;
+}
+
+.cm-json-origin {
+  color: var(--widget-text, #e0e0e0);
+  font-size: 11px;
+  font-family: var(--widget-font-mono, monospace);
+  opacity: 0.9;
 }
 
 .cm-json-actions {

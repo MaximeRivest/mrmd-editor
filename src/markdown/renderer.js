@@ -49,6 +49,7 @@ import {
 // Tables handled by StateField (block-decorations.js) - multi-line replace not allowed in ViewPlugin
 import { TaskCheckboxWidget } from './widgets/checkbox.js';
 import { AlertTitleWidget } from './widgets/alert-title.js';
+import { ListMarkerWidget } from './widgets/list-marker.js';
 import {
   InlineMathWidget,
   extractInlineMath,
@@ -237,6 +238,93 @@ class ImageSpacerWidget extends WidgetType {
   get estimatedHeight() {
     return this.height;
   }
+}
+
+const ALERT_TYPE_MAP = {
+  note: 'note',
+  tip: 'tip',
+  important: 'important',
+  warning: 'warning',
+  caution: 'caution',
+  info: 'note',
+  abstract: 'note',
+  success: 'tip',
+  question: 'important',
+  failure: 'caution',
+  danger: 'caution',
+  bug: 'caution',
+};
+
+function toTitleCase(text) {
+  if (!text) return '';
+  return text
+    .replace(/[-_]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function normalizeAlertType(type) {
+  const lower = (type || '').toLowerCase();
+  return ALERT_TYPE_MAP[lower] || 'note';
+}
+
+/**
+ * Find MkDocs-style admonitions:
+ *
+ * !!! tip
+ *     indented body
+ */
+function findBangAdmonitions(doc) {
+  const ranges = [];
+
+  for (let i = 1; i <= doc.lines; i++) {
+    const startLine = doc.line(i);
+    const match = startLine.text.match(/^(\s*)!!!\s+([A-Za-z][\w-]*)(?:\s+"([^"]+)")?\s*$/);
+    if (!match) continue;
+
+    const baseIndent = match[1] || '';
+    const bodyIndentSpaces = `${baseIndent}    `;
+    const bodyIndentTab = `${baseIndent}\t`;
+
+    let endLine = i;
+    let hasBody = false;
+
+    for (let j = i + 1; j <= doc.lines; j++) {
+      const lineText = doc.line(j).text;
+
+      if (lineText.trim() === '') {
+        if (hasBody) {
+          endLine = j;
+          continue;
+        }
+        break;
+      }
+
+      if (lineText.startsWith(bodyIndentSpaces) || lineText.startsWith(bodyIndentTab)) {
+        hasBody = true;
+        endLine = j;
+        continue;
+      }
+
+      break;
+    }
+
+    ranges.push({
+      startLine: i,
+      endLine,
+      headerIndent: baseIndent.length,
+      bodyIndentSpaces,
+      bodyIndentTab,
+      alertType: normalizeAlertType(match[2]),
+      title: match[3] || toTitleCase(match[2]),
+    });
+
+    i = endLine;
+  }
+
+  return ranges;
 }
 
 /**
@@ -541,9 +629,30 @@ function buildDecorations(view) {
       // LISTS
       // =======================================================================
       if (node.name === 'ListMark') {
-        decorations.push(
-          Decoration.mark({ class: 'cm-md-list-marker' }).range(node.from, node.to)
-        );
+        const line = doc.lineAt(node.from);
+        const listMarkText = doc.sliceString(node.from, node.to);
+        const isListActive = line.number === cursorLine;
+        const isUnordered = /^[-+*]$/.test(listMarkText);
+        const textAfterMarker = doc.sliceString(node.to, Math.min(node.to + 6, line.to));
+        const isTaskItem = /^\s+\[[ xX]\]/.test(textAfterMarker);
+
+        if (isListActive) {
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-marker cm-md-list-marker' }).range(node.from, node.to)
+          );
+        } else if (isUnordered && !isTaskItem) {
+          decorations.push(
+            Decoration.replace({ widget: new ListMarkerWidget() }).range(node.from, node.to)
+          );
+        } else if (isTaskItem) {
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-hidden' }).range(node.from, node.to)
+          );
+        } else {
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-list-marker cm-md-list-number' }).range(node.from, node.to)
+          );
+        }
       }
 
       // Task list checkboxes: - [ ] or - [x]
@@ -768,6 +877,72 @@ function buildDecorations(view) {
       }
     }
   });
+
+  // ==========================================================================
+  // MKDOCS-STYLE ADMONITIONS: !!! tip / !!! warning / ...
+  // ==========================================================================
+  const bangAdmonitions = findBangAdmonitions(doc);
+  const viewportStartLine = doc.lineAt(view.viewport.from).number;
+  const viewportEndLine = doc.lineAt(view.viewport.to).number;
+
+  for (const admonition of bangAdmonitions) {
+    // Skip if out of viewport
+    if (admonition.endLine < viewportStartLine || admonition.startLine > viewportEndLine) {
+      continue;
+    }
+
+    // Skip if inside frontmatter or fenced code block
+    if (
+      (frontmatterRange &&
+        admonition.startLine >= frontmatterRange.startLine &&
+        admonition.startLine <= frontmatterRange.endLine) ||
+      codeBlockLines.has(admonition.startLine)
+    ) {
+      continue;
+    }
+
+    const cursorInAdmonition = cursorLine >= admonition.startLine && cursorLine <= admonition.endLine;
+    if (cursorInAdmonition) {
+      continue;
+    }
+
+    const visibleStart = Math.max(admonition.startLine, viewportStartLine);
+    const visibleEnd = Math.min(admonition.endLine, viewportEndLine);
+
+    for (let lineNum = visibleStart; lineNum <= visibleEnd; lineNum++) {
+      const line = doc.line(lineNum);
+      const classes = [
+        `cm-md-alert-${admonition.alertType}`,
+        'cm-md-admonition-line',
+      ];
+
+      if (lineNum === admonition.startLine) classes.push('cm-md-admonition-start', 'cm-md-admonition-title-line');
+      if (lineNum === admonition.endLine) classes.push('cm-md-admonition-end');
+
+      decorations.push(
+        Decoration.line({ class: classes.join(' ') }).range(line.from)
+      );
+
+      if (lineNum === admonition.startLine) {
+        const from = line.from + admonition.headerIndent;
+        if (from < line.to) {
+          decorations.push(
+            Decoration.replace({
+              widget: new AlertTitleWidget(admonition.alertType, admonition.title),
+            }).range(from, line.to)
+          );
+        }
+      } else if (line.text.startsWith(admonition.bodyIndentSpaces)) {
+        decorations.push(
+          Decoration.mark({ class: 'cm-md-hidden' }).range(line.from, line.from + admonition.bodyIndentSpaces.length)
+        );
+      } else if (line.text.startsWith(admonition.bodyIndentTab)) {
+        decorations.push(
+          Decoration.mark({ class: 'cm-md-hidden' }).range(line.from, line.from + admonition.bodyIndentTab.length)
+        );
+      }
+    }
+  }
 
   // ==========================================================================
   // INLINE MATH: $...$ (single line only)
