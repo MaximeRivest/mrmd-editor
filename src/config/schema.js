@@ -51,18 +51,22 @@
  * Visual appearance configuration
  * @typedef {Object} AppearanceConfig
  * @property {boolean | null} [dark] - Dark mode: true=dark, false=light, null=system
- * @property {string | null} [theme] - Theme name: 'midnight', 'daylight', 'github', or custom.
- *   If null, auto-selects based on dark mode (midnight for dark, daylight for light).
+ * @property {string | null} [theme] - Theme name: 'midnight', 'daylight', 'plain-light', or custom.
+ *   If null, defaults to 'plain-light'.
  * @property {boolean} [readonly] - View-only mode
  * @property {string} [placeholder] - Placeholder text when empty
+ * @property {boolean} [spellcheck] - Enable browser-native spellcheck on prose
+ *   (automatically disabled inside fenced code blocks).
+ *   Works in browsers and Electron (Chromium's OS-level spellchecker).
  */
 
 /** @type {AppearanceConfig} */
 export const DEFAULT_APPEARANCE = {
   dark: null,
-  theme: null,  // Auto-select based on dark mode
+  theme: null,  // Defaults to plain-light
   readonly: false,
-  placeholder: 'Start typing...'
+  placeholder: 'Start typing...',
+  spellcheck: true,
 };
 
 // =============================================================================
@@ -277,13 +281,17 @@ export const DEFAULT_CELL_CONTROLS = {
  * @property {boolean} [enabled] - Master switch for section controls
  * @property {boolean} [showAi] - Show AI command buttons
  * @property {boolean} [showFormatting] - Show markdown formatting buttons
+ * @property {'full' | 'dots-hover' | 'dots-click'} [mode] - Display mode:
+ *   'full' = always show toolbar, 'dots-hover' = dots that expand on hover,
+ *   'dots-click' = dots that open command palette on click
  */
 
 /** @type {SectionControlsConfig} */
 export const DEFAULT_SECTION_CONTROLS = {
   enabled: true,
   showAi: true,
-  showFormatting: true
+  showFormatting: true,
+  mode: 'dots-click'
 };
 
 // =============================================================================
@@ -374,6 +382,9 @@ export function normalizeOptions(options = {}) {
   }
   if (options.placeholder !== undefined) {
     config.appearance.placeholder = options.placeholder;
+  }
+  if (options.spellcheck !== undefined) {
+    config.appearance.spellcheck = options.spellcheck;
   }
 
   // User

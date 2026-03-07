@@ -42,6 +42,9 @@ export const defaultKeybindings = {
   // Code intelligence
   'F12': 'viewSource',
 
+  // Grammar
+  'Alt-Enter': 'applyFirstGrammarSuggestion',
+
   // Enter accepts completion if active, otherwise inserts newline
   'Enter': 'acceptCompletionOrNewline',
 };
@@ -177,5 +180,7 @@ export function listCommands() {
     { name: 'indent', description: 'Indent current line or selection' },
     { name: 'dedent', description: 'Dedent current line or selection' },
     { name: 'viewSource', description: 'View source code for symbol under cursor' },
+    { name: 'applyFirstGrammarSuggestion', description: 'Apply the first grammar suggestion near the cursor' },
+    { name: 'insertFrontmatterTemplate', description: 'Insert or augment document frontmatter with a scholarly template' },
   ];
 }

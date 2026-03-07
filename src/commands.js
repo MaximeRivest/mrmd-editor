@@ -10,7 +10,9 @@
 
 import { findCells, findCodeBlocks, getCellAtCursor, findCodeBlockAtPosition, findOutputBlock } from './cells.js';
 import { indentRange } from '@codemirror/language';
+import { applyFrontmatterTemplate } from './frontmatter-updater.js';
 import { prettierFormat, prettierSupports } from './prettier.js';
+import { applyFirstLanguageToolSuggestion } from './grammar.js';
 
 /**
  * Run the current cell and stay in place.
@@ -792,6 +794,49 @@ export function viewSource(editor) {
 }
 
 /**
+ * Insert or augment scholarly frontmatter at the top of the document.
+ * Preserves existing frontmatter values and adds missing template fields.
+ *
+ * @param {Object} editor - Editor API instance
+ * @returns {(view: EditorView) => boolean}
+ */
+export function insertFrontmatterTemplate(editor) {
+  return (view) => {
+    const result = applyFrontmatterTemplate(view.state.doc.toString());
+
+    if (!result) {
+      console.warn('[frontmatter] Cannot apply template to invalid frontmatter. Fix YAML first.');
+      return false;
+    }
+
+    const spec = {
+      changes: result.changes,
+      scrollIntoView: true,
+    };
+
+    if (result.selection) {
+      spec.selection = {
+        anchor: result.selection.from,
+        head: result.selection.to,
+      };
+    }
+
+    view.dispatch(spec);
+    return true;
+  };
+}
+
+/**
+ * Apply the first available grammar suggestion near the cursor.
+ *
+ * @param {Object} editor - Editor API instance
+ * @returns {(view: EditorView) => boolean}
+ */
+export function applyFirstGrammarSuggestion(editor) {
+  return (view) => applyFirstLanguageToolSuggestion(view);
+}
+
+/**
  * All available commands.
  * Maps command names to factory functions.
  */
@@ -811,4 +856,6 @@ export const commandRegistry = {
   indent,
   dedent,
   viewSource,
+  insertFrontmatterTemplate,
+  applyFirstGrammarSuggestion,
 };

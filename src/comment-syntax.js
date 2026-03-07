@@ -82,8 +82,224 @@ export const commentBubbleState = StateField.define({
 });
 
 // ===========================================================================
-// Comment Extraction
+// Comment Extraction / Thread Grouping
 // ===========================================================================
+
+/**
+ * Parse a comment body into a simple multi-turn thread.
+ *
+ * Thread format:
+ *
+ * @comment
+ * First message
+ *
+ * @reply
+ * Follow-up message
+ *
+ * If no @role headers are present, the whole body is treated as a single
+ * `comment` message for backward compatibility.
+ *
+ * @param {string} content
+ * @returns {Array<{role: string, text: string}>}
+ */
+export function parseCommentThread(content) {
+  const text = String(content || '').trim();
+  if (!text) return [];
+
+  const lines = text.split('\n');
+  const messages = [];
+  let current = null;
+
+  const pushCurrent = () => {
+    if (!current) return;
+    const body = current.lines.join('\n').trim();
+    if (!body) return;
+    messages.push({
+      role: sanitizeCommentRole(current.role),
+      text: body,
+    });
+  };
+
+  for (const line of lines) {
+    const header = line.trim().match(/^@([a-zA-Z][\w-]*)\s*$/);
+    if (header) {
+      pushCurrent();
+      current = { role: header[1].toLowerCase(), lines: [] };
+      continue;
+    }
+
+    if (!current) {
+      current = { role: 'comment', lines: [] };
+    }
+    current.lines.push(line);
+  }
+
+  pushCurrent();
+
+  if (messages.length === 0 && text) {
+    return [{ role: 'comment', text }];
+  }
+
+  return messages;
+}
+
+function sanitizeCommentRole(role) {
+  const normalized = String(role || 'comment').toLowerCase().trim();
+  return normalized.match(/^[a-z][\w-]*$/) ? normalized : 'comment';
+}
+
+function normalizeCommentContent(content) {
+  return String(content || '').replace(/[\r\n]+/g, ' ').replace(/[ \t]+/g, ' ').trim();
+}
+
+/**
+ * Serialize a comment thread back to comment body text.
+ *
+ * Keeps legacy single-message comments as plain text. Multi-turn threads use
+ * the @role stanza format described above.
+ *
+ * @param {Array<{role: string, text: string}>} messages
+ * @returns {string}
+ */
+export function serializeCommentThread(messages) {
+  const cleaned = (messages || [])
+    .map((message) => ({
+      role: sanitizeCommentRole(message?.role),
+      text: String(message?.text || '').trim(),
+    }))
+    .filter((message) => message.text.length > 0);
+
+  if (cleaned.length === 0) return '';
+  if (cleaned.length === 1 && cleaned[0].role === 'comment') {
+    return cleaned[0].text;
+  }
+
+  return cleaned
+    .map((message) => `@${message.role}\n${message.text}`)
+    .join('\n\n');
+}
+
+/**
+ * Build raw <!--! !--> syntax for a comment body.
+ *
+ * @param {string} content
+ * @returns {string}
+ */
+export function buildCommentRaw(content) {
+  const text = normalizeCommentContent(content);
+  return `<!--! ${text} !-->`;
+}
+
+/**
+ * Append a reply to an existing comment body.
+ *
+ * @param {string} content
+ * @param {string} replyText
+ * @param {string} [role='reply']
+ * @returns {string}
+ */
+export function appendCommentReply(content, replyText, role = 'reply') {
+  const reply = String(replyText || '').trim();
+  if (!reply) return String(content || '').trim();
+
+  const thread = parseCommentThread(content);
+  thread.push({ role: sanitizeCommentRole(role), text: reply });
+  return serializeCommentThread(thread);
+}
+
+/**
+ * Get a human-friendly one-line preview for a comment/thread.
+ *
+ * @param {string} content
+ * @returns {string}
+ */
+export function getCommentPreview(content) {
+  const messages = parseCommentThread(content);
+  const text = messages[0]?.text || String(content || '').trim();
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Group adjacent one-line comment markers into visual threads.
+ *
+ * A thread is a run of comment markers separated only by spaces/tabs on the
+ * same physical line. This keeps the document representation single-line and
+ * lets the UI treat immediately-adjacent markers as replies.
+ *
+ * @param {string} text
+ * @param {Array<{start:number,end:number,content:string,raw:string,thread?:Array<{role:string,text:string}>}>} [comments]
+ * @returns {Array<{start:number,end:number,raw:string,preview:string,count:number,comments:Array, messages:Array<{role:string,text:string}>}>}
+ */
+export function groupAdjacentComments(text, comments = null) {
+  const sourceText = String(text || '');
+  const items = Array.isArray(comments) ? comments : extractComments(sourceText);
+  if (items.length === 0) return [];
+
+  const threads = [];
+  let current = null;
+
+  const startThread = (comment) => {
+    current = {
+      start: comment.start,
+      end: comment.end,
+      raw: '',
+      preview: '',
+      count: 0,
+      comments: [comment],
+      messages: [],
+    };
+    appendCommentMessages(comment);
+  };
+
+  const appendCommentMessages = (comment) => {
+    const parsed = Array.isArray(comment.thread) && comment.thread.length > 0
+      ? comment.thread
+      : [{ role: 'comment', text: comment.content }];
+    const preserveRoles = parsed.length > 1;
+
+    for (const message of parsed) {
+      const text = normalizeCommentContent(message?.text || '');
+      if (!text) continue;
+      current.messages.push({
+        role: preserveRoles
+          ? sanitizeCommentRole(message?.role)
+          : (current.messages.length === 0 ? 'comment' : 'reply'),
+        text,
+      });
+    }
+  };
+
+  const finishThread = () => {
+    if (!current) return;
+    current.raw = sourceText.slice(current.start, current.end);
+    current.count = current.messages.length;
+    current.preview = current.messages[0]?.text || current.comments[0]?.preview || '';
+    threads.push(current);
+    current = null;
+  };
+
+  for (const comment of items) {
+    if (!current) {
+      startThread(comment);
+      continue;
+    }
+
+    const separator = sourceText.slice(current.end, comment.start);
+    const isAdjacent = /^[ \t]*$/.test(separator);
+
+    if (isAdjacent) {
+      current.end = comment.end;
+      current.comments.push(comment);
+      appendCommentMessages(comment);
+    } else {
+      finishThread();
+      startThread(comment);
+    }
+  }
+
+  finishThread();
+  return threads;
+}
 
 /**
  * Extract all comments from a document
@@ -97,11 +313,14 @@ export function extractComments(text) {
   const regex = new RegExp(COMMENT_REGEX.source, 'g');
 
   while ((match = regex.exec(text)) !== null) {
+    const content = match[1].trim();
     comments.push({
       start: match.index,
       end: match.index + match[0].length,
-      content: match[1].trim(),
+      content,
       raw: match[0],
+      preview: getCommentPreview(content),
+      thread: parseCommentThread(content),
     });
   }
 
@@ -146,48 +365,80 @@ class CommentMarkerWidget extends WidgetType {
    * @param {number} from - Start position
    * @param {number} to - End position
    * @param {string} raw - Raw comment text
+   * @param {{count?: number, preview?: string, threadStart?: number, threadEnd?: number, threadRaw?: string}} [options]
    */
-  constructor(content, from, to, raw) {
+  constructor(content, from, to, raw, options = {}) {
     super();
     this.content = content;
     this.from = from;
     this.to = to;
     this.raw = raw;
+    this.count = Math.max(1, options.count || 1);
+    this.preview = options.preview || getCommentPreview(content);
+    this.threadStart = Number.isFinite(options.threadStart) ? options.threadStart : from;
+    this.threadEnd = Number.isFinite(options.threadEnd) ? options.threadEnd : to;
+    this.threadRaw = options.threadRaw || raw;
   }
 
   eq(other) {
     return (
       other instanceof CommentMarkerWidget &&
       other.content === this.content &&
-      other.from === this.from
+      other.from === this.from &&
+      other.to === this.to &&
+      other.count === this.count &&
+      other.preview === this.preview &&
+      other.threadStart === this.threadStart &&
+      other.threadEnd === this.threadEnd
     );
   }
 
   toDOM(view) {
     const marker = document.createElement('span');
+    const previewText = this.preview;
+    const label = this.count > 1
+      ? `Comment thread with ${this.count} messages: ${previewText.slice(0, 50)}`
+      : `Comment: ${previewText.slice(0, 50)}`;
+
     marker.className = 'cm-comment-marker';
-    marker.setAttribute('aria-label', `Comment: ${this.content.slice(0, 50)}`);
+    marker.setAttribute('aria-label', label);
+    marker.setAttribute('title', label);
     marker.setAttribute('role', 'button');
     marker.setAttribute('tabindex', '0');
 
-    // Icon
     const icon = document.createElement('span');
     icon.className = 'cm-comment-marker-icon';
-    icon.textContent = '💭';
+    icon.textContent = '💬';
     marker.appendChild(icon);
 
-    // Preview (truncated)
-    if (this.content.length > 0) {
-      const preview = document.createElement('span');
-      preview.className = 'cm-comment-marker-preview';
-      preview.textContent = this.content.slice(0, 20) + (this.content.length > 20 ? '…' : '');
-      marker.appendChild(preview);
+    if (this.count > 1) {
+      const count = document.createElement('span');
+      count.className = 'cm-comment-marker-count';
+      count.textContent = String(this.count);
+      marker.appendChild(count);
     }
 
-    // Click handler
     marker.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
+
+      let handledBySidebar = false;
+      if (typeof window !== 'undefined') {
+        const event = new CustomEvent('mrmd-comment-thread-open', {
+          cancelable: true,
+          detail: {
+            from: this.threadStart,
+            to: this.threadEnd,
+            raw: this.threadRaw,
+            preview: this.preview,
+            count: this.count,
+          },
+        });
+        handledBySidebar = window.dispatchEvent(event) === false || event.defaultPrevented;
+      }
+
+      if (handledBySidebar) return;
+
       view.dispatch({
         effects: showCommentBubble.of({
           from: this.from,
@@ -198,7 +449,6 @@ class CommentMarkerWidget extends WidgetType {
       });
     });
 
-    // Keyboard handler
     marker.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
@@ -211,6 +461,32 @@ class CommentMarkerWidget extends WidgetType {
 
   ignoreEvent() {
     return false;
+  }
+}
+
+/**
+ * Zero-width anchor used in sidebar mode so comment syntax disappears from the
+ * document flow while the discussion lives in the side panel.
+ */
+class CommentAnchorWidget extends WidgetType {
+  constructor(from) {
+    super();
+    this.from = from;
+  }
+
+  eq(other) {
+    return other instanceof CommentAnchorWidget && other.from === this.from;
+  }
+
+  toDOM() {
+    const anchor = document.createElement('span');
+    anchor.className = 'cm-comment-anchor';
+    anchor.setAttribute('aria-hidden', 'true');
+    return anchor;
+  }
+
+  ignoreEvent() {
+    return true;
   }
 }
 
@@ -234,33 +510,48 @@ function buildDecorations(view) {
   // Get the line the cursor is on
   const cursorLine = doc.lineAt(cursorPos);
 
-  // Extract all comments
+  // Extract and group comments into same-line threads
   const comments = extractComments(text);
+  const threads = groupAdjacentComments(text, comments);
 
-  for (const comment of comments) {
-    const commentLine = doc.lineAt(comment.start);
+  for (const thread of threads) {
+    const startLine = doc.lineAt(thread.start);
+    const endLine = doc.lineAt(Math.max(thread.start, thread.end - 1));
+    const isMultiline = thread.raw.includes('\n');
 
-    // Check if cursor is on the same line as the comment
-    const isActiveLine = cursorLine.number === commentLine.number;
+    // Show raw syntax whenever the cursor is on a line touched by the thread.
+    const isActiveLine = cursorLine.number >= startLine.number && cursorLine.number <= endLine.number;
+    const primaryComment = thread.comments[0];
 
     if (isActiveLine) {
-      // Show raw syntax with styling
       decorations.push(
         Decoration.mark({
           class: 'cm-comment-syntax-active',
-        }).range(comment.start, comment.end)
+        }).range(thread.start, thread.end)
+      );
+    } else if (isMultiline) {
+      decorations.push(
+        Decoration.mark({
+          class: 'cm-comment-syntax-thread',
+        }).range(thread.start, thread.end)
       );
     } else {
-      // Replace with marker widget
       decorations.push(
         Decoration.replace({
           widget: new CommentMarkerWidget(
-            comment.content,
-            comment.start,
-            comment.end,
-            comment.raw
+            primaryComment.content,
+            primaryComment.start,
+            primaryComment.end,
+            primaryComment.raw,
+            {
+              count: thread.count,
+              preview: thread.preview,
+              threadStart: thread.start,
+              threadEnd: thread.end,
+              threadRaw: thread.raw,
+            }
           ),
-        }).range(comment.start, comment.end)
+        }).range(thread.start, thread.end)
       );
     }
   }
@@ -414,7 +705,7 @@ function showBubble(view, comment) {
     const newContent = textarea.value.trim();
     if (newContent !== comment.content) {
       // Update the comment in the document
-      const newRaw = `<!--! ${newContent} !-->`;
+      const newRaw = buildCommentRaw(newContent);
       view.dispatch({
         changes: { from: comment.from, to: comment.to, insert: newRaw },
         effects: hideCommentBubble.of(null),
@@ -457,7 +748,7 @@ function showBubble(view, comment) {
       // Save changes before closing
       const newContent = textarea.value.trim();
       if (newContent !== comment.content) {
-        const newRaw = `<!--! ${newContent} !-->`;
+        const newRaw = buildCommentRaw(newContent);
         view.dispatch({
           changes: { from: comment.from, to: comment.to, insert: newRaw },
           effects: hideCommentBubble.of(null),
@@ -670,21 +961,36 @@ const commentStyles = EditorView.baseTheme({
     alignItems: 'center',
     gap: '4px',
     padding: '1px 6px',
-    background: 'var(--bg-comment, rgba(255, 203, 107, 0.15))',
-    border: '1px solid var(--border-comment, rgba(255, 203, 107, 0.3))',
-    borderRadius: '4px',
+    background: 'var(--bg-comment, rgba(255, 203, 107, 0.12))',
+    border: '1px solid var(--border-comment, rgba(255, 203, 107, 0.24))',
+    borderRadius: '999px',
     cursor: 'pointer',
-    fontSize: '12px',
+    fontSize: '11px',
+    lineHeight: '1.2',
     verticalAlign: 'baseline',
     transition: 'background 0.15s, border-color 0.15s',
     '&:hover': {
-      background: 'var(--bg-comment-hover, rgba(255, 203, 107, 0.25))',
-      borderColor: 'var(--border-comment-hover, rgba(255, 203, 107, 0.5))',
+      background: 'var(--bg-comment-hover, rgba(255, 203, 107, 0.2))',
+      borderColor: 'var(--border-comment-hover, rgba(255, 203, 107, 0.4))',
     },
   },
 
   '.cm-comment-marker-icon': {
     fontSize: '11px',
+  },
+
+  '.cm-comment-marker-count': {
+    minWidth: '14px',
+    height: '14px',
+    padding: '0 4px',
+    borderRadius: '999px',
+    background: 'color-mix(in srgb, var(--accent, #58a6ff) 14%, transparent)',
+    color: 'var(--text, inherit)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '10px',
+    fontWeight: '600',
   },
 
   '.cm-comment-marker-preview': {
@@ -698,6 +1004,25 @@ const commentStyles = EditorView.baseTheme({
   '.cm-comment-syntax-active': {
     background: 'var(--bg-comment-active, rgba(255, 203, 107, 0.1))',
     borderRadius: '2px',
+  },
+
+  '.cm-comment-syntax-thread': {
+    background: 'var(--bg-comment-thread, rgba(255, 203, 107, 0.08))',
+    borderRadius: '4px',
+    boxDecorationBreak: 'clone',
+    WebkitBoxDecorationBreak: 'clone',
+  },
+
+  '.cm-comment-anchor': {
+    display: 'inline-block',
+    width: '0',
+    height: '0',
+    overflow: 'hidden',
+    verticalAlign: 'baseline',
+  },
+
+  '.cm-comment-sidebar-hidden': {
+    display: 'none',
   },
 
   '.cm-comment-bubble': {
@@ -819,13 +1144,13 @@ function insertComment(view) {
   let cursorPos;
 
   if (hasSelection) {
-    // Wrap selection in comment
+    // Wrap selection in a single-line comment token
     const selectedText = state.sliceDoc(from, to);
-    insert = `<!--! ${selectedText} !-->`;
+    insert = buildCommentRaw(selectedText);
     cursorPos = from + 6; // After "<!--! "
   } else {
     // Insert empty comment and place cursor inside
-    insert = `<!--!  !-->`;
+    insert = buildCommentRaw('');
     cursorPos = from + 6; // After "<!--! "
   }
 

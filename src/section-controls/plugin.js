@@ -8,7 +8,7 @@ import { syntaxTree } from '@codemirror/language';
 import { createSectionControlsDom, injectSectionControlsStyles } from './widgets.js';
 
 export const sectionControlsFacet = Facet.define({
-  combine: (values) => values[0] || { enabled: true, showAi: true, showFormatting: true },
+  combine: (values) => values[0] || { enabled: true, showAi: true, showFormatting: true, mode: 'dots-click' },
 });
 
 function getSectionAnchorPos(state) {
@@ -36,7 +36,6 @@ export function createSectionControlsPlugin(editor) {
         this.config = view.state.facet(sectionControlsFacet);
         this.dom = null;
         this.measurePending = false;
-        this.lastWidth = 260;
 
         injectSectionControlsStyles();
 
@@ -63,6 +62,7 @@ export function createSectionControlsPlugin(editor) {
           editor,
           showAi: this.config.showAi,
           showFormatting: this.config.showFormatting,
+          mode: this.config.mode,
         });
 
         document.body.appendChild(this.dom);
@@ -83,12 +83,11 @@ export function createSectionControlsPlugin(editor) {
             if (!coords) return null;
 
             const contentRect = view.contentDOM.getBoundingClientRect();
-            const width = this.dom.offsetWidth || this.lastWidth;
 
             return {
-              right: contentRect.right,
+              // Distance from right edge of viewport to right edge of content
+              rightOffset: window.innerWidth - contentRect.right,
               bottom: coords.bottom,
-              width,
             };
           },
           write: (m) => {
@@ -99,12 +98,11 @@ export function createSectionControlsPlugin(editor) {
               return;
             }
 
-            const left = Math.max(8, m.right - m.width - 10);
             const top = Math.max(8, m.bottom + 6);
 
-            this.lastWidth = m.width;
             this.dom.style.display = 'block';
-            this.dom.style.left = `${left}px`;
+            this.dom.style.left = 'auto';
+            this.dom.style.right = `${Math.max(8, m.rightOffset + 10)}px`;
             this.dom.style.top = `${top}px`;
           },
         });
@@ -115,7 +113,8 @@ export function createSectionControlsPlugin(editor) {
         const configChanged = (
           this.config.enabled !== newConfig.enabled ||
           this.config.showAi !== newConfig.showAi ||
-          this.config.showFormatting !== newConfig.showFormatting
+          this.config.showFormatting !== newConfig.showFormatting ||
+          this.config.mode !== newConfig.mode
         );
 
         if (configChanged) {

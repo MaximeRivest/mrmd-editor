@@ -9,7 +9,7 @@
  * 1. Explicit config (config.appearance.widgetTheme)
  * 2. CodeMirror theme class (.cm-theme-dark)
  * 3. System preference (prefers-color-scheme)
- * 4. Default: 'wizard-study-dark' (dark)
+ * 4. Default: 'plain-light'
  *
  * ## Watching for Changes
  *
@@ -31,12 +31,12 @@ import { getTheme, getDefaultTokens } from './theme.js';
  * 1. Explicit theme name passed as parameter
  * 2. CodeMirror theme class on the editor element
  * 3. System color scheme preference
- * 4. Default: 'wizard-study-dark'
+ * 4. Default: 'plain-light'
  *
  * @param {Object} [options]
  * @param {string} [options.themeName] - Explicit theme name (highest priority)
  * @param {HTMLElement} [options.editorElement] - Editor DOM element to check for .cm-theme-dark
- * @returns {string} Theme name ('wizard-study-dark', 'wizard-study-light', etc.)
+ * @returns {string} Theme name ('plain-light', 'plain-dark', etc.)
  *
  * @example
  * // Detect based on CodeMirror and system preference
@@ -57,25 +57,25 @@ export function detectTheme({ themeName, editorElement } = {}) {
     // CodeMirror adds this class when using oneDark or similar dark themes
     const hasDarkTheme = editorElement.closest('.cm-theme-dark') !== null;
     if (hasDarkTheme) {
-      return 'wizard-study-dark';
+      return 'plain-dark';
     }
 
     // If there's any cm-theme class but not dark, assume light
     const hasAnyTheme = editorElement.matches('[class*="cm-theme"]') ||
       editorElement.closest('[class*="cm-theme"]') !== null;
     if (hasAnyTheme) {
-      return 'wizard-study-light';
+      return 'plain-light';
     }
   }
 
   // 3. System preference
   if (typeof window !== 'undefined' && window.matchMedia) {
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    return prefersDark ? 'wizard-study-dark' : 'wizard-study-light';
+    return prefersDark ? 'plain-dark' : 'plain-light';
   }
 
   // 4. Default
-  return 'wizard-study-dark';
+  return 'plain-light';
 }
 
 /**
@@ -208,7 +208,7 @@ const THEME_FONTS_ID = 'mrmd-widget-theme-fonts';
  *
  * @example
  * // Apply by name
- * applyTheme('wizard-study-dark');
+ * applyTheme('plain-light');
  *
  * // Apply custom theme object
  * applyTheme({
@@ -224,8 +224,8 @@ export function applyTheme(themeOrName, { target, useStyleTag = true } = {}) {
     : themeOrName;
 
   if (!theme) {
-    console.warn(`Theme "${themeOrName}" not found, using midnight`);
-    return applyTheme('wizard-study-dark', { target, useStyleTag });
+    console.warn(`Theme "${themeOrName}" not found, using plain-light`);
+    return applyTheme('plain-light', { target, useStyleTag });
   }
 
   // Get token values (exclude name, description, fontFace, isDark)
@@ -332,7 +332,7 @@ export function removeThemeStyles() {
  * @returns {string} CSS string with :root variables and optional font-face
  *
  * @example
- * const css = generateThemeCSS('wizard-study-dark');
+ * const css = generateThemeCSS('plain-light');
  * // :root {
  * //   --widget-surface: rgba(0, 0, 0, 0.35);
  * //   ...
@@ -348,7 +348,7 @@ export function generateThemeCSS(themeOrName, { includeFontFace = true } = {}) {
     : themeOrName;
 
   if (!theme) {
-    return generateThemeCSS('wizard-study-dark', { includeFontFace });
+    return generateThemeCSS('plain-light', { includeFontFace });
   }
 
   const tokens = getDefaultTokens();

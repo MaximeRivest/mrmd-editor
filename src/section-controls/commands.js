@@ -8,6 +8,12 @@ import { syntaxTree } from '@codemirror/language';
 import { findCodeBlockAtPosition } from '../cells.js';
 import { executeAiOperation, getAiContext } from '../ai-integration.js';
 import { ctrlKConfigFacet } from '../ctrl-k-modal.js';
+import { applyFrontmatterTemplate } from '../frontmatter-updater.js';
+import {
+  insertComment,
+  addressAllComments,
+  addressNearbyComment,
+} from '../comment-syntax.js';
 
 // ===========================================================================
 // Formatting Commands
@@ -167,10 +173,41 @@ export function insertHorizontalRule(view) {
   return insertTemplate(view, '---\n{{cursor}}');
 }
 
+export function insertFrontmatterTemplate(view) {
+  const result = applyFrontmatterTemplate(view.state.doc.toString());
+
+  if (!result) {
+    console.warn('[frontmatter] Cannot apply template to invalid frontmatter. Fix YAML first.');
+    return false;
+  }
+
+  const spec = {
+    changes: result.changes,
+    userEvent: 'input.format.add',
+    scrollIntoView: true,
+  };
+
+  if (result.selection) {
+    spec.selection = {
+      anchor: result.selection.from,
+      head: result.selection.to,
+    };
+  }
+
+  view.dispatch(spec);
+  return true;
+}
+
+export function insertCommentCommand(view) {
+  return insertComment(view);
+}
+
 export const FORMATTING_COMMAND_DEFINITIONS = [
   { id: 'bold', label: 'Bold', shortcut: 'Mod-B', icon: 'format' },
   { id: 'italic', label: 'Italic', shortcut: 'Mod-I', icon: 'format' },
   { id: 'underline', label: 'Underline', shortcut: 'Mod-U', icon: 'format' },
+  { id: 'comment', label: 'Insert Comment', shortcut: 'Mod-Shift-M', icon: 'comment' },
+  { id: 'frontmatter-template', label: 'Insert Frontmatter Template', shortcut: '', icon: 'doc' },
   { id: 'blockquote', label: 'Block Quote', shortcut: '', icon: 'quote' },
   { id: 'table', label: 'Insert Table Template', shortcut: '', icon: 'table' },
   { id: 'code-cell', label: 'Insert Code Cell', shortcut: '', icon: 'code' },
@@ -189,6 +226,10 @@ export function executeFormattingDefinition(view, def) {
       return toggleItalic(view);
     case 'underline':
       return toggleUnderline(view);
+    case 'comment':
+      return insertCommentCommand(view);
+    case 'frontmatter-template':
+      return insertFrontmatterTemplate(view);
     case 'blockquote':
       return insertBlockQuote(view);
     case 'table':
@@ -300,11 +341,14 @@ async function runAi(view, program, params, operation) {
 export const AI_COMMAND_DEFINITIONS = [
   { id: 'finish-sentence', label: 'Complete Sentence', shortcut: 'Mod-L', icon: 'line', program: 'FinishSentencePredict', type: 'insert', resultField: 'completion' },
   { id: 'finish-paragraph', label: 'Complete Paragraph', shortcut: 'Mod-O', icon: 'section', program: 'FinishParagraphPredict', type: 'insert', resultField: 'completion' },
+  { id: 'continue-document', label: 'Continue Document', shortcut: '', icon: 'doc', action: 'continue-document' },
   { id: 'fix-grammar', label: 'Fix Grammar', shortcut: 'Mod-G', icon: 'grammar', program: 'FixGrammarPredict', type: 'replace', resultField: 'fixed_text' },
   { id: 'fix-transcription', label: 'Fix Transcription', shortcut: '', icon: 'wand', program: 'FixTranscriptionPredict', type: 'replace', resultField: 'fixed_text' },
   { id: 'correct-finish-line', label: 'Correct + Finish Line', shortcut: '', icon: 'line', program: 'CorrectAndFinishLinePredict', type: 'replace', resultField: 'corrected_completion' },
   { id: 'correct-finish-section', label: 'Correct + Finish Section', shortcut: '', icon: 'section', program: 'CorrectAndFinishSectionPredict', type: 'replace', resultField: 'corrected_completion' },
   { id: 'reformat-markdown', label: 'Reformat Markdown', shortcut: '', icon: 'format', program: 'ReformatMarkdownPredict', type: 'replace', resultField: 'reformatted_text' },
+  { id: 'address-nearby-comment', label: 'Address Nearby Comment', shortcut: '', icon: 'comment', action: 'address-nearby-comment', requiresNearbyComment: true },
+  { id: 'address-all-comments', label: 'Address All Comments', shortcut: '', icon: 'comment', action: 'address-all-comments', requiresComments: true },
 
   // Code-focused
   { id: 'document-code', label: 'Add Documentation to Code', shortcut: '', icon: 'doc', program: 'DocumentCodePredict', type: 'replace', resultField: 'documented_code', codeOnly: true },
@@ -323,6 +367,38 @@ export const AI_COMMAND_DEFINITIONS = [
  * @param {Object} def
  */
 export async function executeAiDefinition(view, editor, def) {
+  if (def.action === 'continue-document') {
+    const aiClient = getAiClient(view);
+    if (!aiClient) {
+      console.warn('[SectionControls] AI client not available. Ensure Ctrl-K AI extension is configured.');
+      return;
+    }
+
+    const content = view.state.doc.toString();
+    const docEnd = view.state.doc.length;
+
+    await executeAiOperation(view, aiClient, {
+      program: 'DocumentResponsePredict',
+      params: { document: content },
+      type: 'insert',
+      from: docEnd,
+      to: docEnd,
+      resultField: 'response',
+      juiceLevel: aiClient.juiceLevel,
+    });
+    return;
+  }
+
+  if (def.action === 'address-nearby-comment') {
+    await addressNearbyComment(view);
+    return;
+  }
+
+  if (def.action === 'address-all-comments') {
+    await addressAllComments(view);
+    return;
+  }
+
   const ctx = getAiContext(view);
   const section = getFocusedSectionRange(view);
   const code = getCodeContextAtCursor(view);

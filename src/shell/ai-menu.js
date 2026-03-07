@@ -132,6 +132,17 @@ export const AI_COMMANDS = {
     requiresSelection: true,
     description: 'Clean up markdown formatting',
   },
+
+  // Editor actions
+  FRONTMATTER_TEMPLATE: {
+    id: 'frontmatter-template',
+    label: 'Insert Frontmatter Template',
+    icon: '¶',
+    action: 'insert-frontmatter-template',
+    type: 'action',
+    requiresSelection: false,
+    description: 'Insert scholarly YAML frontmatter at the top of the document',
+  },
 };
 
 /**

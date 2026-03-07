@@ -376,14 +376,17 @@ export async function createStudio(target, options = {}) {
         });
       }
 
-      // Add Comment Syntax extension
-      if (mrmd.default.commentSyntax?.createCommentSyntaxExtension) {
-        const commentExtensions = mrmd.default.commentSyntax.createCommentSyntaxExtension({
-          aiClient,
-          juiceLevel: shellState.get('ai')?.juiceLevel || 0,
-        });
+      // Configure built-in comment syntax with the AI client.
+      // The base editor already installs the extension, so only append
+      // updated facet config here.
+      if (mrmd.default.commentSyntax?.commentConfigFacet) {
         newEditor.view.dispatch({
-          effects: mrmd.codemirror.StateEffect.appendConfig.of(commentExtensions),
+          effects: mrmd.codemirror.StateEffect.appendConfig.of(
+            mrmd.default.commentSyntax.commentConfigFacet.of({
+              aiClient,
+              juiceLevel: shellState.get('ai')?.juiceLevel || 0,
+            })
+          ),
         });
       }
     }
@@ -398,9 +401,22 @@ export async function createStudio(target, options = {}) {
    * @param {Object|null} codeBlock - Code block info if cursor is in a code block
    */
   async function executeAiCommand(cmd, targetEditor, codeBlock = null) {
-    if (!aiClient || !mrmd.default.ai) return;
+    if (!mrmd.default.ai) return;
 
     const view = targetEditor.view;
+
+    if (cmd.action === 'insert-frontmatter-template') {
+      const handled = targetEditor.commands?.insertFrontmatterTemplate?.() || false;
+      if (handled) {
+        emit('aiCommandExecuted', { command: cmd.id, action: cmd.action });
+      } else {
+        emit('aiCommandError', { command: cmd.id, error: 'Could not insert frontmatter template' });
+      }
+      return;
+    }
+
+    if (!aiClient) return;
+
     const context = mrmd.default.ai.getAiContext(view);
     const juiceLevel = shellState.get('ai')?.juiceLevel || 0;
 

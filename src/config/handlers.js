@@ -112,8 +112,7 @@ function resolveThemeName(theme, isDark) {
   if (theme && getTheme(theme)) {
     return theme;
   }
-  // Auto-select based on dark mode
-  return isDark ? 'midnight' : 'daylight';
+  return 'plain-light';
 }
 
 /**

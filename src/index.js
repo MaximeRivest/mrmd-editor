@@ -100,6 +100,17 @@ import {
   injectRuntimeLspStyles,
 } from './runtime-lsp.js';
 
+// Spellcheck (prose-only, disabled in code blocks)
+import { createSpellcheckExtensions } from './spellcheck.js';
+// Grammar diagnostics (LanguageTool host integration)
+import {
+  createLanguageToolDiagnosticsExtension,
+  collectVisibleProseFragments,
+  forceLanguageToolRefresh,
+  refreshLanguageToolDiagnostics,
+  applyFirstLanguageToolSuggestion,
+} from './grammar.js';
+
 // Wiki-link completion ([[internal-links]])
 import {
   projectFilesFacet,
@@ -857,6 +868,7 @@ function create(target, options = {}) {
   const dark = config.appearance.dark;
   const placeholderText = config.appearance.placeholder;
   const readonly = config.appearance.readonly;
+  const spellcheck = config.appearance.spellcheck;
   const userName = config.user.name;
   const userColor = config.user.color;
   const userType = config.user.type;
@@ -966,7 +978,7 @@ function create(target, options = {}) {
   // Use explicit theme if set, otherwise auto-select based on dark mode
   const resolveThemeName = (theme, isDarkMode) => {
     if (theme) return theme;
-    return isDarkMode ? 'midnight' : 'daylight';
+    return 'plain-light';
   };
   const initialThemeName = resolveThemeName(config.appearance?.theme, isDark);
 
@@ -992,6 +1004,8 @@ function create(target, options = {}) {
     documentTheme,
     codeBlockBackground,  // Add gray background to code blocks
     codeBlockStyles,
+    // Spellcheck: enable browser-native spellcheck on prose, disable in code
+    ...(spellcheck !== false ? createSpellcheckExtensions() : []),
     EditorView.lineWrapping, // Always wrap markdown text
     themeCompartment.of(initialCMTheme),
     readonlyCompartment.of(readonly ? EditorState.readOnly.of(true) : []),
@@ -1008,6 +1022,7 @@ function create(target, options = {}) {
     lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
     blockDecorations,   // StateField for tables, display math (multi-line)
     markdownRenderer,   // ViewPlugin for everything else (inline)
+    ...commentSyntaxModule.createCommentSyntaxExtension(),
     // Wiki-link completion - just the facet for project files
     // The actual completion is provided by runtime-lsp (via additionalSources)
     // or by a standalone autocompletion added below if no runtime providers exist
@@ -1374,7 +1389,7 @@ function create(target, options = {}) {
 
     /**
      * Update section controls configuration.
-     * @param {{enabled?: boolean, showAi?: boolean, showFormatting?: boolean}} updates
+     * @param {{enabled?: boolean, showAi?: boolean, showFormatting?: boolean, mode?: 'full' | 'dots-hover' | 'dots-click'}} updates
      */
     setSectionControls(updates = {}) {
       this.config.sectionControls = {
@@ -1385,7 +1400,7 @@ function create(target, options = {}) {
 
     /**
      * Get current section controls configuration.
-     * @returns {{enabled: boolean, showAi: boolean, showFormatting: boolean}}
+     * @returns {{enabled: boolean, showAi: boolean, showFormatting: boolean, mode: string}}
      */
     getSectionControls() {
       return { ...(this.config.sectionControls || {}) };
@@ -3306,6 +3321,14 @@ export {
   isTableDelimiter,
   generateTableId,
   AlertTitleWidget,
+  // Spellcheck exports
+  createSpellcheckExtensions,
+  // Grammar exports
+  createLanguageToolDiagnosticsExtension,
+  collectVisibleProseFragments,
+  forceLanguageToolRefresh,
+  refreshLanguageToolDiagnostics,
+  applyFirstLanguageToolSuggestion,
   // Wiki-link completion exports
   wikiLinkExports,
   projectFilesFacet,

@@ -4,6 +4,7 @@
 
 import { showCtrlKModal } from '../ctrl-k-modal.js';
 import { findCodeBlockAtPosition } from '../cells.js';
+import { extractComments, findNearestComment } from '../comment-syntax.js';
 import {
   toggleBold,
   toggleItalic,
@@ -18,6 +19,7 @@ import {
 } from './commands.js';
 
 let activeCommandMenu = null;
+let commandMenuItemOrder = 0;
 
 function isMacLikePlatform() {
   const platform = navigator?.platform || '';
@@ -31,43 +33,123 @@ function formatShortcut(shortcut) {
   return shortcut.replace(/Mod-/g, `${mod}+`).replace(/-/g, '+');
 }
 
+function normalizeSearchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+function findLiteralMatchIndex(query, target) {
+  if (!query || !target) return -1;
+  return target.indexOf(query);
+}
+
+function compactFuzzyScore(query, target) {
+  let qi = 0;
+  let score = 0;
+  let consecutive = 0;
+  let prevMatch = -1;
+  const matches = [];
+
+  for (let i = 0; i < target.length && qi < query.length; i++) {
+    if (target[i] !== query[qi]) continue;
+
+    matches.push(i);
+    score += 8;
+    if (prevMatch === i - 1) {
+      consecutive += 1;
+      score += 10 + consecutive * 2;
+    } else {
+      consecutive = 0;
+    }
+    if (i === 0 || /[\s(/:+-]/.test(target[i - 1])) {
+      score += 12;
+    }
+
+    prevMatch = i;
+    qi += 1;
+  }
+
+  if (qi !== query.length || !matches.length) return 0;
+
+  const spread = matches[matches.length - 1] - matches[0] + 1;
+  const maxSpread = Math.max(query.length + 2, Math.ceil(query.length * 1.6));
+  if (spread > maxSpread) return 0;
+
+  return score - spread;
+}
+
+function scoreCommandSearch(query, target) {
+  const q = normalizeSearchText(query);
+  const text = normalizeSearchText(target);
+  if (!q) return 1;
+  if (!text) return 0;
+
+  const exactIdx = findLiteralMatchIndex(q, text);
+  if (exactIdx >= 0) {
+    return 1000 - exactIdx * 8 - Math.max(0, text.length - q.length);
+  }
+
+  if (q.length < 3) return 0;
+  return compactFuzzyScore(q, text);
+}
+
 /**
  * Build floating section-controls DOM.
  * @param {import('@codemirror/view').EditorView} view
  * @param {{editor: any, showAi: boolean, showFormatting: boolean}} options
  */
 export function createSectionControlsDom(view, options) {
+  const mode = options.mode || 'dots-click';
   const root = document.createElement('div');
-  root.className = 'cm-section-controls-floating-root';
+  root.className = `cm-section-controls-floating-root mode-${mode}`;
   root.__cmSectionControlsView = view;
 
-  const toolbar = document.createElement('div');
-  toolbar.className = 'cm-section-controls-toolbar';
-  root.appendChild(toolbar);
-
-  if (options.showFormatting) {
-    const group = document.createElement('div');
-    group.className = 'cm-section-controls-group formatting';
-    group.append(
-      createButton('B', `Bold (${formatShortcut('Mod-B')})`, () => toggleBold(view), 'bold'),
-      createButton('I', `Italic (${formatShortcut('Mod-I')})`, () => toggleItalic(view), 'italic'),
-      createButton('U', `Underline (${formatShortcut('Mod-U')})`, () => toggleUnderline(view), 'underline'),
-    );
-    toolbar.appendChild(group);
+  // Dots indicator (used by dots-hover and dots-click modes)
+  if (mode !== 'full') {
+    const dots = document.createElement('button');
+    dots.className = 'cm-section-controls-dots';
+    dots.type = 'button';
+    dots.textContent = '⋯';
+    dots.title = `Commands (${formatShortcut("Mod-'")})`;
+    wireButtonEvents(dots, () => {
+      openSectionControlsMenu(view, options.editor, { anchorEl: dots, root });
+    });
+    root.appendChild(dots);
   }
 
-  if (options.showAi) {
-    const group = document.createElement('div');
-    group.className = 'cm-section-controls-group ai';
-    group.append(
-      createIconButton('grammar', `Fix Grammar (${formatShortcut('Mod-G')})`, () => fixGrammar(options.editor)(view), 'ai-grammar'),
-      createIconButton('line', `Finish Line (${formatShortcut('Mod-L')})`, () => finishLine(options.editor)(view), 'ai-finish-line'),
-      createIconButton('section', `Finish Section (${formatShortcut('Mod-O')})`, () => finishSection(options.editor)(view), 'ai-finish-section'),
-      createButton('…', `All Commands (${formatShortcut("Mod-'")})`, () => {
-        openSectionControlsMenu(view, options.editor, { anchorEl: group, root });
-      }, 'more'),
-    );
-    toolbar.appendChild(group);
+  // Toolbar (used by full and dots-hover modes)
+  if (mode !== 'dots-click') {
+    const toolbar = document.createElement('div');
+    toolbar.className = 'cm-section-controls-toolbar';
+    root.appendChild(toolbar);
+
+    if (options.showFormatting) {
+      const group = document.createElement('div');
+      group.className = 'cm-section-controls-group formatting';
+      group.append(
+        createButton('B', `Bold (${formatShortcut('Mod-B')})`, () => toggleBold(view), 'bold'),
+        createButton('I', `Italic (${formatShortcut('Mod-I')})`, () => toggleItalic(view), 'italic'),
+        createButton('U', `Underline (${formatShortcut('Mod-U')})`, () => toggleUnderline(view), 'underline'),
+      );
+      toolbar.appendChild(group);
+    }
+
+    if (options.showAi) {
+      const group = document.createElement('div');
+      group.className = 'cm-section-controls-group ai';
+      group.append(
+        createIconButton('grammar', `Fix Grammar (${formatShortcut('Mod-G')})`, () => fixGrammar(options.editor)(view), 'ai-grammar'),
+        createIconButton('line', `Finish Line (${formatShortcut('Mod-L')})`, () => finishLine(options.editor)(view), 'ai-finish-line'),
+        createIconButton('section', `Finish Section (${formatShortcut('Mod-O')})`, () => finishSection(options.editor)(view), 'ai-finish-section'),
+        createButton('…', `All Commands (${formatShortcut("Mod-'")})`, () => {
+          openSectionControlsMenu(view, options.editor, { anchorEl: group, root });
+        }, 'more'),
+      );
+      toolbar.appendChild(group);
+    }
   }
 
   return root;
@@ -133,6 +215,13 @@ function createIconSvg(name) {
     c.setAttribute('r', '5');
     svg.appendChild(c);
     path('M5.8 8.1l1.5 1.5 3-3');
+  } else if (name === 'search') {
+    const c = document.createElementNS(ns, 'circle');
+    c.setAttribute('cx', '7');
+    c.setAttribute('cy', '7');
+    c.setAttribute('r', '3.75');
+    svg.appendChild(c);
+    path('M10 10l2.5 2.5');
   } else if (name === 'line') {
     path('M3 8h8');
     path('M9 5l3 3-3 3');
@@ -246,6 +335,23 @@ export function openSectionControlsMenu(view, editor, options = {}) {
   header.textContent = 'All Commands';
   menu.appendChild(header);
 
+  const search = document.createElement('div');
+  search.className = 'cm-section-controls-menu-search';
+  const searchIcon = document.createElement('span');
+  searchIcon.className = 'cm-section-controls-menu-search-icon';
+  searchIcon.appendChild(createIconSvg('search'));
+  search.appendChild(searchIcon);
+
+  const searchInput = document.createElement('input');
+  searchInput.className = 'cm-section-controls-menu-search-input';
+  searchInput.type = 'text';
+  searchInput.placeholder = 'Search commands…';
+  searchInput.autocomplete = 'off';
+  searchInput.spellcheck = false;
+  searchInput.setAttribute('aria-label', 'Search commands');
+  search.appendChild(searchInput);
+  menu.appendChild(search);
+
   const formattingSection = document.createElement('div');
   formattingSection.className = 'cm-section-controls-menu-section';
   formattingSection.appendChild(sectionTitle('Formatting'));
@@ -259,7 +365,11 @@ export function openSectionControlsMenu(view, editor, options = {}) {
   }
   menu.appendChild(formattingSection);
 
-  const inCode = !!findCodeBlockAtPosition(view.state.doc.toString(), view.state.selection.main.head);
+  const docText = view.state.doc.toString();
+  const cursorPos = view.state.selection.main.head;
+  const inCode = !!findCodeBlockAtPosition(docText, cursorPos);
+  const hasComments = extractComments(docText).length > 0;
+  const hasNearbyComment = !!findNearestComment(docText, cursorPos);
 
   const aiSection = document.createElement('div');
   aiSection.className = 'cm-section-controls-menu-section';
@@ -270,7 +380,7 @@ export function openSectionControlsMenu(view, editor, options = {}) {
       label: def.label,
       shortcut: formatShortcut(def.shortcut || ''),
       icon: def.icon || 'wand',
-      disabled: !!def.codeOnly && !inCode,
+      disabled: (!!def.codeOnly && !inCode) || (!!def.requiresComments && !hasComments) || (!!def.requiresNearbyComment && !hasNearbyComment),
       onClick: () => { void executeAiDefinition(view, editor, def); },
     }));
   }
@@ -283,6 +393,12 @@ export function openSectionControlsMenu(view, editor, options = {}) {
   }));
 
   menu.appendChild(aiSection);
+
+  const emptyState = document.createElement('div');
+  emptyState.className = 'cm-section-controls-menu-empty';
+  emptyState.textContent = 'No matching commands';
+  emptyState.hidden = true;
+  menu.appendChild(emptyState);
 
   document.body.appendChild(menu);
 
@@ -302,18 +418,63 @@ export function openSectionControlsMenu(view, editor, options = {}) {
 
   root.classList.add('menu-open');
 
-  const focusableItems = () => Array.from(menu.querySelectorAll('.cm-section-controls-menu-item:not(:disabled)'));
-  const setActive = (idx) => {
+  const focusableItems = () => Array.from(menu.querySelectorAll('.cm-section-controls-menu-item:not(:disabled):not([hidden])'));
+  const setActive = (idx, { focus = true } = {}) => {
     const items = focusableItems();
     if (!items.length) return;
     const clamped = Math.max(0, Math.min(idx, items.length - 1));
     items.forEach((item) => item.classList.remove('is-active'));
     items[clamped].classList.add('is-active');
-    items[clamped].focus({ preventScroll: true });
+    if (focus) items[clamped].focus({ preventScroll: true });
     return clamped;
   };
 
-  let activeIndex = setActive(0) ?? 0;
+  const applyFilter = (query) => {
+    const normalizedQuery = normalizeSearchText(query);
+    let visibleCount = 0;
+    let shownCount = 0;
+    const hasQuery = !!normalizedQuery;
+    const maxVisible = hasQuery ? 8 : Number.POSITIVE_INFINITY;
+
+    for (const section of menu.querySelectorAll('.cm-section-controls-menu-section')) {
+      const title = section.querySelector('.cm-section-controls-menu-title');
+      const scoredItems = Array.from(section.querySelectorAll('.cm-section-controls-menu-item')).map((item, index) => ({
+        item,
+        index,
+        order: Number(item.dataset.searchOrder || index),
+        score: scoreCommandSearch(normalizedQuery, item.dataset.searchText || ''),
+      }));
+
+      const visibleItems = hasQuery
+        ? scoredItems.filter((entry) => entry.score > 0).sort((a, b) => b.score - a.score || a.order - b.order)
+        : scoredItems.sort((a, b) => a.order - b.order);
+
+      scoredItems.forEach(({ item }) => { item.hidden = true; });
+
+      const itemsToShow = visibleItems.slice(0, Math.max(0, maxVisible - shownCount));
+      for (const { item } of itemsToShow) {
+        item.hidden = false;
+        section.appendChild(item);
+      }
+
+      const sectionVisible = itemsToShow.length;
+      section.hidden = sectionVisible === 0;
+      if (title) title.hidden = sectionVisible === 0;
+      visibleCount += sectionVisible;
+      shownCount += sectionVisible;
+    }
+
+    emptyState.hidden = visibleCount !== 0;
+    activeIndex = setActive(0, { focus: false }) ?? 0;
+  };
+
+  let activeIndex = 0;
+  searchInput.addEventListener('input', () => applyFilter(searchInput.value));
+  applyFilter('');
+  queueMicrotask(() => {
+    searchInput.focus({ preventScroll: true });
+    searchInput.select();
+  });
 
   const onDocPointerDown = (e) => {
     if (!menu.contains(e.target)) closeSectionControlsMenu();
@@ -322,8 +483,15 @@ export function openSectionControlsMenu(view, editor, options = {}) {
   const onDocKeydown = (e) => {
     if (!activeCommandMenu || activeCommandMenu.menu !== menu) return;
 
+    const focusIsSearch = document.activeElement === searchInput;
+
     if (e.key === 'Escape') {
       e.preventDefault();
+      if (focusIsSearch && searchInput.value) {
+        searchInput.value = '';
+        applyFilter('');
+        return;
+      }
       closeSectionControlsMenu();
       return;
     }
@@ -333,19 +501,22 @@ export function openSectionControlsMenu(view, editor, options = {}) {
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      activeIndex = setActive((activeIndex + 1) % items.length);
+      activeIndex = setActive((activeIndex + 1) % items.length, { focus: !focusIsSearch });
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      activeIndex = setActive((activeIndex - 1 + items.length) % items.length);
+      activeIndex = setActive((activeIndex - 1 + items.length) % items.length, { focus: !focusIsSearch });
     } else if (e.key === 'Home') {
       e.preventDefault();
-      activeIndex = setActive(0);
+      activeIndex = setActive(0, { focus: !focusIsSearch });
     } else if (e.key === 'End') {
       e.preventDefault();
-      activeIndex = setActive(items.length - 1);
+      activeIndex = setActive(items.length - 1, { focus: !focusIsSearch });
     } else if ((e.key === 'Enter' || e.key === ' ') && document.activeElement?.classList.contains('cm-section-controls-menu-item')) {
       e.preventDefault();
       document.activeElement.click();
+    } else if (e.key === 'Enter' && focusIsSearch) {
+      e.preventDefault();
+      items[activeIndex]?.click();
     }
   };
 
@@ -391,6 +562,9 @@ function menuItem({ label, shortcut, icon, onClick, disabled = false }) {
     btn.appendChild(keyEl);
   }
 
+  btn.dataset.searchText = `${label} ${shortcut || ''}`;
+  btn.dataset.searchOrder = String(commandMenuItemOrder++);
+
   btn.addEventListener('mousedown', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -410,10 +584,37 @@ function menuItem({ label, shortcut, icon, onClick, disabled = false }) {
 export const sectionControlsStyles = `
 .cm-section-controls-floating-root {
   position: fixed;
-  z-index: 1000;
+  z-index: 50;
   pointer-events: auto;
 }
 
+/* ---- Dots indicator ---- */
+.cm-section-controls-dots {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-dim, #6e7681);
+  font-size: 18px;
+  line-height: 1;
+  letter-spacing: 1px;
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 0.18s ease, background 0.15s ease, color 0.15s ease;
+  pointer-events: auto;
+}
+
+.cm-section-controls-dots:hover {
+  opacity: 0.75;
+  background: color-mix(in srgb, var(--hover-bg, #30363d) 50%, transparent);
+  color: var(--text-muted, #8b949e);
+}
+
+/* ---- Toolbar ---- */
 .cm-section-controls-toolbar {
   display: inline-flex;
   align-items: center;
@@ -429,15 +630,59 @@ export const sectionControlsStyles = `
   backdrop-filter: blur(3px);
 }
 
+.cm-section-controls-toolbar:hover {
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+/* ===========================================================================
+   MODE: full — always show toolbar, no dots
+   =========================================================================== */
+.cm-section-controls-floating-root.mode-full .cm-section-controls-dots {
+  display: none;
+}
+
+.cm-section-controls-floating-root.mode-full .cm-section-controls-toolbar {
+  display: inline-flex;
+}
+
+/* ===========================================================================
+   MODE: dots-hover — dots by default, toolbar on hover
+   =========================================================================== */
+.cm-section-controls-floating-root.mode-dots-hover .cm-section-controls-toolbar {
+  display: none;
+  opacity: 0;
+  transform: translateY(2px) scale(0.96);
+  pointer-events: none;
+}
+
+.cm-section-controls-floating-root.mode-dots-hover:hover .cm-section-controls-dots {
+  display: none;
+}
+
+.cm-section-controls-floating-root.mode-dots-hover:hover .cm-section-controls-toolbar {
+  display: inline-flex;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+/* ===========================================================================
+   MODE: dots-click — dots only, click opens palette (no toolbar)
+   =========================================================================== */
+/* (dots-click has no toolbar in DOM, so no extra rules needed) */
+
+/* ===========================================================================
+   SHARED: menu-open state hides both dots and toolbar
+   =========================================================================== */
+.cm-section-controls-floating-root.menu-open .cm-section-controls-dots {
+  display: none;
+}
+
 .cm-section-controls-floating-root.menu-open .cm-section-controls-toolbar {
   opacity: 0;
   transform: translateY(-2px) scale(0.96);
   pointer-events: none;
-}
-
-.cm-section-controls-toolbar:hover {
-  opacity: 1;
-  transform: translateY(-1px);
 }
 
 .cm-section-controls-group {
@@ -513,8 +758,51 @@ export const sectionControlsStyles = `
   letter-spacing: 0.4px;
 }
 
+.cm-section-controls-menu-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin: 8px 8px 0;
+  border: 1px solid color-mix(in srgb, var(--border, #3d444d) 82%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg, #161b22) 72%, transparent);
+}
+
+.cm-section-controls-menu-search-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted, #8b949e);
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.cm-section-controls-menu-search-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.cm-section-controls-menu-search-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text, #e6edf3);
+  font-size: 12px;
+  outline: none;
+}
+
+.cm-section-controls-menu-search-input::placeholder {
+  color: var(--text-muted, #8b949e);
+}
+
 .cm-section-controls-menu-section {
   padding: 8px;
+}
+
+.cm-section-controls-menu-empty {
+  padding: 12px 14px 14px;
+  color: var(--text-muted, #8b949e);
+  font-size: 12px;
 }
 
 .cm-section-controls-menu-title {
@@ -538,6 +826,10 @@ export const sectionControlsStyles = `
   padding: 8px 10px;
   text-align: left;
   cursor: pointer;
+}
+
+.cm-section-controls-menu-item[hidden] {
+  display: none !important;
 }
 
 .cm-section-controls-menu-item-main {

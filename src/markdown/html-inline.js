@@ -16,8 +16,12 @@ import { WidgetType } from '@codemirror/view';
 /**
  * Regex to match HTML tags (opening, closing, self-closing, and comments)
  * Matches: <tag>, </tag>, <tag />, <tag attr="value">, <!-- comment -->
+ *
+ * MRMD special comments use <!--! ... !--> and are intentionally excluded
+ * here so they can be handled by the comment-syntax extension instead of
+ * being rendered away as invisible HTML comments.
  */
-const HTML_TAG_REGEX = /<\/?[a-zA-Z][a-zA-Z0-9]*(?:\s+[^>]*)?\/?>|<!--[\s\S]*?-->/g;
+const HTML_TAG_REGEX = /<\/?[a-zA-Z][a-zA-Z0-9]*(?:\s+[^>]*)?\/?>|<!--(?!\!)[\s\S]*?-->/g;
 
 /**
  * Regex to match complete HTML elements (opening + content + closing)
@@ -26,8 +30,8 @@ const HTML_TAG_REGEX = /<\/?[a-zA-Z][a-zA-Z0-9]*(?:\s+[^>]*)?\/?>|<!--[\s\S]*?--
 const HTML_ELEMENT_PATTERNS = [
   // Self-closing tags
   /<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)(?:\s+[^>]*)?\/?\s*>/gi,
-  // HTML comments
-  /<!--[\s\S]*?-->/g,
+  // HTML comments (excluding MRMD special comments: <!--! ... !-->)
+  /<!--(?!\!)[\s\S]*?-->/g,
   // Inline elements with content (non-greedy, handles simple nesting)
   /<(span|strong|em|b|i|u|s|mark|small|sub|sup|kbd|code|abbr|cite|dfn|q|time|var|samp|data|ruby|rt|rp|bdi|bdo|ins|del)(?:\s+[^>]*)?>[\s\S]*?<\/\1>/gi,
 ];
@@ -87,8 +91,8 @@ export function extractHtmlElements(text) {
     }
   }
 
-  // Match HTML comments
-  const comments = /<!--[\s\S]*?-->/g;
+  // Match HTML comments, but leave MRMD special comments to comment-syntax
+  const comments = /<!--(?!\!)[\s\S]*?-->/g;
   while ((match = comments.exec(text)) !== null) {
     const key = `${match.index}-${match.index + match[0].length}`;
     if (!seen.has(key)) {
