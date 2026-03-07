@@ -15,6 +15,7 @@
  * @property {string} [cwd] - Working directory
  * @property {string} [venv] - Virtual environment path
  * @property {string} [filePath] - Associated file path
+ * @property {string} [shell] - Preferred shell (e.g. powershell, wsl, cmd)
  * @property {Function} [onData] - Callback for data from PTY
  * @property {Function} [onConnect] - Callback when connected
  * @property {Function} [onDisconnect] - Callback when disconnected
@@ -36,6 +37,7 @@ export class PtyClient {
       cwd: config.cwd || null,
       venv: config.venv || null,
       filePath: config.filePath || null,
+      shell: config.shell || null,
       onData: config.onData || (() => {}),
       onConnect: config.onConnect || (() => {}),
       onDisconnect: config.onDisconnect || (() => {}),
@@ -91,6 +93,9 @@ export class PtyClient {
     }
     if (this.config.filePath) {
       params.set('file_path', this.config.filePath);
+    }
+    if (this.config.shell) {
+      params.set('shell', this.config.shell);
     }
 
     return `${protocol}//${host}/api/pty?${params.toString()}`;
