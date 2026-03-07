@@ -305,6 +305,7 @@ class TerminalWidget extends WidgetType {
       cwd: this.config.cwd,
       venv: this.config.venv,
       filePath: this.block.filePath,
+      shell: this.config.shell,
       onData: (data) => {
         term.write(data);
       },

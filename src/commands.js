@@ -286,7 +286,7 @@ export function insertCellBelow(editor) {
     const currentCell = getCellAtCursor(content, pos);
 
     // Determine language and insert position
-    const lang = currentCell?.language || 'javascript';
+    const lang = currentCell?.language || editor?.defaultCellLanguage || 'python';
     const outputBlock = currentCell ? findOutputBlock(content, currentCell.end) : null;
     const insertPos = outputBlock ? outputBlock.end : (currentCell ? currentCell.end : content.length);
 
@@ -314,7 +314,7 @@ export function insertCellAbove(editor) {
     const pos = view.state.selection.main.head;
     const currentCell = getCellAtCursor(content, pos);
 
-    const lang = currentCell?.language || 'javascript';
+    const lang = currentCell?.language || editor?.defaultCellLanguage || 'python';
     const insertPos = currentCell ? currentCell.start : 0;
 
     const newCell = `\`\`\`${lang}\n\n\`\`\`\n\n`;
@@ -348,7 +348,7 @@ function getMostCommonLanguage(content) {
 
   // Find most common
   let maxCount = 0;
-  let mostCommon = 'javascript'; // default
+  let mostCommon = 'python'; // default (primary notebook runtime)
 
   for (const [lang, count] of Object.entries(langCounts)) {
     if (count > maxCount) {

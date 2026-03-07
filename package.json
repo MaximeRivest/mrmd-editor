@@ -61,6 +61,7 @@
     "codemirror-lang-r": "^0.1.1",
     "katex": "^0.16.27",
     "mrmd-js": "^2.2.0",
+    "prettier": "^3.8.1",
     "y-codemirror.next": "^0.3.5",
     "y-websocket": "^2.0.0",
     "yaml": "^2.8.2",

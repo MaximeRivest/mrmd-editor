@@ -77322,7 +77322,7 @@ function insertCellBelow(editor) {
     const currentCell = getCellAtCursor(content, pos);
 
     // Determine language and insert position
-    const lang = currentCell?.language || 'javascript';
+    const lang = currentCell?.language || editor?.defaultCellLanguage || 'python';
     const outputBlock = currentCell ? findOutputBlock(content, currentCell.end) : null;
     const insertPos = outputBlock ? outputBlock.end : (currentCell ? currentCell.end : content.length);
 
@@ -77350,7 +77350,7 @@ function insertCellAbove(editor) {
     const pos = view.state.selection.main.head;
     const currentCell = getCellAtCursor(content, pos);
 
-    const lang = currentCell?.language || 'javascript';
+    const lang = currentCell?.language || editor?.defaultCellLanguage || 'python';
     const insertPos = currentCell ? currentCell.start : 0;
 
     const newCell = `\`\`\`${lang}\n\n\`\`\`\n\n`;
@@ -77384,7 +77384,7 @@ function getMostCommonLanguage(content) {
 
   // Find most common
   let maxCount = 0;
-  let mostCommon = 'javascript'; // default
+  let mostCommon = 'python'; // default (primary notebook runtime)
 
   for (const [lang, count] of Object.entries(langCounts)) {
     if (count > maxCount) {
@@ -86514,6 +86514,7 @@ const termBlockRegistry = new TermBlockRegistry();
  * @property {string} [cwd] - Working directory
  * @property {string} [venv] - Virtual environment path
  * @property {string} [filePath] - Associated file path
+ * @property {string} [shell] - Preferred shell (e.g. powershell, wsl, cmd)
  * @property {Function} [onData] - Callback for data from PTY
  * @property {Function} [onConnect] - Callback when connected
  * @property {Function} [onDisconnect] - Callback when disconnected
@@ -86535,6 +86536,7 @@ class PtyClient {
       cwd: config.cwd || null,
       venv: config.venv || null,
       filePath: config.filePath || null,
+      shell: config.shell || null,
       onData: config.onData || (() => {}),
       onConnect: config.onConnect || (() => {}),
       onDisconnect: config.onDisconnect || (() => {}),
@@ -86590,6 +86592,9 @@ class PtyClient {
     }
     if (this.config.filePath) {
       params.set('file_path', this.config.filePath);
+    }
+    if (this.config.shell) {
+      params.set('shell', this.config.shell);
     }
 
     return `${protocol}//${host}/api/pty?${params.toString()}`;
@@ -87201,6 +87206,7 @@ class TerminalWidget extends WidgetType {
       cwd: this.config.cwd,
       venv: this.config.venv,
       filePath: this.block.filePath,
+      shell: this.config.shell,
       onData: (data) => {
         term.write(data);
       },
