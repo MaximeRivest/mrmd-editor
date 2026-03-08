@@ -13,10 +13,11 @@ import { indentRange } from '@codemirror/language';
 import { applyFrontmatterTemplate } from './frontmatter-updater.js';
 import { prettierFormat, prettierSupports } from './prettier.js';
 import { applyFirstLanguageToolSuggestion } from './grammar.js';
+import { insertPageBreak } from './section-controls/commands.js';
 
 /**
  * Run the current cell and stay in place.
- * Bound to Mod-Enter by default.
+ * Used by the default Mod-Enter shortcut when the cursor is in a code cell.
  *
  * @param {Object} editor - Editor API instance
  * @returns {(view: EditorView) => boolean}
@@ -41,6 +42,23 @@ export function runCell(editor) {
       editor.runCurrentCell();
     }
     return true;
+  };
+}
+
+/**
+ * Run the current cell when the cursor is inside executable code.
+ * Otherwise insert a markdown page break token at the cursor.
+ * Bound to Mod-Enter by default.
+ *
+ * @param {Object} editor - Editor API instance
+ * @returns {(view: EditorView) => boolean}
+ */
+export function runCellOrInsertPageBreak(editor) {
+  const runCellCommand = runCell(editor);
+
+  return (view) => {
+    if (runCellCommand(view)) return true;
+    return insertPageBreak(view);
   };
 }
 
@@ -837,11 +855,51 @@ export function applyFirstGrammarSuggestion(editor) {
 }
 
 /**
+ * Toggle source mode (show all raw markdown syntax).
+ *
+ * @param {Object} editor - Editor API instance
+ * @returns {(view: EditorView) => boolean}
+ */
+export function toggleSourceMode(editor) {
+  return (view) => {
+    editor.setSourceMode();
+    return true;
+  };
+}
+
+/**
+ * Toggle WYSIWYG mode.
+ *
+ * @param {Object} editor - Editor API instance
+ * @returns {(view: EditorView) => boolean}
+ */
+export function toggleWysiwygMode(editor) {
+  return (view) => {
+    editor.setWysiwygMode();
+    return true;
+  };
+}
+
+/**
+ * Toggle invisible characters (spaces, tabs, newlines).
+ *
+ * @param {Object} editor - Editor API instance
+ * @returns {(view: EditorView) => boolean}
+ */
+export function toggleInvisibles(editor) {
+  return (view) => {
+    editor.setShowInvisibles();
+    return true;
+  };
+}
+
+/**
  * All available commands.
  * Maps command names to factory functions.
  */
 export const commandRegistry = {
   runCell,
+  runCellOrInsertPageBreak,
   runCellAndAdvance,
   runAllCells,
   runAllAbove,
@@ -858,4 +916,7 @@ export const commandRegistry = {
   viewSource,
   insertFrontmatterTemplate,
   applyFirstGrammarSuggestion,
+  toggleSourceMode,
+  toggleWysiwygMode,
+  toggleInvisibles,
 };

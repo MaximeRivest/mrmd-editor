@@ -18,7 +18,7 @@ import { commandRegistry } from './commands.js';
  */
 export const defaultKeybindings = {
   // Execution
-  'Mod-Enter': 'runCell',
+  'Mod-Enter': 'runCellOrInsertPageBreak',
   'Shift-Enter': 'runCellAndAdvance',
   'Mod-Shift-Enter': 'runAllCells',
 
@@ -44,6 +44,9 @@ export const defaultKeybindings = {
 
   // Grammar
   'Alt-Enter': 'applyFirstGrammarSuggestion',
+
+  // View modes
+  'Mod-Alt-Shift-w': 'toggleWysiwygMode',
 
   // Enter accepts completion if active, otherwise inserts newline
   'Enter': 'acceptCompletionOrNewline',
@@ -87,7 +90,7 @@ function acceptCompletionOrNewline(editor) {
  *
  * // Custom bindings
  * createKeymap(editor, {
- *   'Mod-Enter': 'runCell',
+ *   'Mod-Enter': 'runCellOrInsertPageBreak',
  *   'Shift-Enter': 'runCellAndAdvance',
  *   'F5': 'runAllCells',
  * })
@@ -166,6 +169,7 @@ export function mergeKeybindings(userBindings, defaults = defaultKeybindings) {
 export function listCommands() {
   return [
     { name: 'runCell', description: 'Run current cell and stay in place' },
+    { name: 'runCellOrInsertPageBreak', description: 'Run current cell, or insert a page break when editing prose' },
     { name: 'runCellAndAdvance', description: 'Run current cell and move to next (create if needed)' },
     { name: 'runAllCells', description: 'Run all cells in document' },
     { name: 'runAllAbove', description: 'Run all cells above and including current' },

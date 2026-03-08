@@ -290,3 +290,65 @@ export function getEffectiveSessionConfig(content, language, projectDefaults = {
     auto_start: docConfig.auto_start ?? projectDefaults.auto_start ?? true,
   };
 }
+
+function setPathValue(target, path, value) {
+  const parts = Array.isArray(path) ? path : String(path).split('.').filter(Boolean);
+  if (!parts.length) return target;
+
+  let obj = target;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const key = parts[i];
+    if (!obj[key] || typeof obj[key] !== 'object' || Array.isArray(obj[key])) {
+      obj[key] = {};
+    }
+    obj = obj[key];
+  }
+
+  const leaf = parts[parts.length - 1];
+  if (value === undefined || value === null || value === '') {
+    delete obj[leaf];
+  } else {
+    obj[leaf] = value;
+  }
+  return target;
+}
+
+export function readFrontmatterValue(content, path, fallback = undefined) {
+  const fm = parseFrontmatter(content);
+  const parts = Array.isArray(path) ? path : String(path).split('.').filter(Boolean);
+  let value = fm.yaml || {};
+  for (const part of parts) {
+    if (value == null || typeof value !== 'object') return fallback;
+    value = value[part];
+  }
+  return value === undefined ? fallback : value;
+}
+
+export function updateFrontmatterField(content, path, value) {
+  const fm = parseFrontmatter(content);
+  if (fm.exists && !fm.yaml) return null;
+
+  const data = fm.exists ? cloneValue(fm.yaml || {}) : {};
+  setPathValue(data, path, value);
+  const frontmatterBlock = buildFrontmatter(data);
+
+  if (!fm.exists) {
+    return {
+      changes: {
+        from: 0,
+        to: 0,
+        insert: `${frontmatterBlock}${content.length > 0 ? '\n\n' : '\n'}`,
+      },
+      data,
+    };
+  }
+
+  return {
+    changes: {
+      from: fm.range?.start ?? 0,
+      to: fm.range?.end ?? 0,
+      insert: frontmatterBlock,
+    },
+    data,
+  };
+}

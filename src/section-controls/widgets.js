@@ -9,6 +9,8 @@ import {
   toggleBold,
   toggleItalic,
   toggleUnderline,
+  toggleStrikethrough,
+  toggleInlineCode,
   fixGrammar,
   finishLine,
   finishSection,
@@ -133,6 +135,8 @@ export function createSectionControlsDom(view, options) {
         createButton('B', `Bold (${formatShortcut('Mod-B')})`, () => toggleBold(view), 'bold'),
         createButton('I', `Italic (${formatShortcut('Mod-I')})`, () => toggleItalic(view), 'italic'),
         createButton('U', `Underline (${formatShortcut('Mod-U')})`, () => toggleUnderline(view), 'underline'),
+        createButton('S', 'Strikethrough', () => toggleStrikethrough(view), 'strikethrough'),
+        createButton('</>', 'Inline Code (' + formatShortcut('Mod-`') + ')', () => toggleInlineCode(view), 'code'),
       );
       toolbar.appendChild(group);
     }
@@ -355,11 +359,14 @@ export function openSectionControlsMenu(view, editor, options = {}) {
   const formattingSection = document.createElement('div');
   formattingSection.className = 'cm-section-controls-menu-section';
   formattingSection.appendChild(sectionTitle('Formatting'));
+  const hasSelection = !view.state.selection.main.empty;
   for (const def of FORMATTING_COMMAND_DEFINITIONS) {
+    const requiresSelection = def.id === 'uppercase' || def.id === 'lowercase' || def.id === 'titlecase';
     formattingSection.appendChild(menuItem({
       label: def.label,
       shortcut: formatShortcut(def.shortcut || ''),
       icon: def.icon || 'format',
+      disabled: requiresSelection && !hasSelection,
       onClick: () => executeFormattingDefinition(view, def),
     }));
   }
@@ -719,9 +726,25 @@ export const sectionControlsStyles = `
   transform: scale(1.05);
 }
 
+.cm-section-controls-btn.is-active {
+  background: color-mix(in srgb, var(--accent, #58a6ff) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #58a6ff) 45%, transparent);
+  color: var(--accent, #58a6ff);
+}
+
+.cm-section-controls-btn.is-mixed {
+  background: color-mix(in srgb, var(--accent, #58a6ff) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #58a6ff) 28%, transparent);
+}
+
 .cm-section-controls-btn.bold { font-weight: 700; }
 .cm-section-controls-btn.italic { font-style: italic; }
 .cm-section-controls-btn.underline { text-decoration: underline; }
+.cm-section-controls-btn.strikethrough { text-decoration: line-through; }
+.cm-section-controls-btn.code {
+  font-family: var(--widget-font-mono, monospace);
+  font-size: 0.82em;
+}
 
 .cm-section-controls-menu {
   position: fixed;

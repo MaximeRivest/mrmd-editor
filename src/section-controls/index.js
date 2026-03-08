@@ -31,6 +31,7 @@ export function sectionControls(editor, options = {}) {
     { key: 'Mod-b', run: (view) => commands.toggleBold(view) },
     { key: 'Mod-i', run: (view) => commands.toggleItalic(view) },
     { key: 'Mod-u', run: (view) => commands.toggleUnderline(view) },
+    { key: 'Mod-`', run: (view) => commands.toggleInlineCode(view) },
     { key: 'Mod-g', run: (view) => commands.fixGrammar(editor)(view) },
     { key: 'Mod-l', run: (view) => commands.finishLine(editor)(view) },
     { key: 'Mod-o', run: (view) => commands.finishSection(editor)(view) },

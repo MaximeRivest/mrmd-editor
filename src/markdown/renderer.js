@@ -15,6 +15,7 @@
 import { ViewPlugin, Decoration, WidgetType } from '@codemirror/view';
 import { Facet } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
+import { sourceModeFacet, wysiwygModeFacet } from './facets.js';
 
 // =============================================================================
 // Asset Resolver Facet
@@ -340,6 +341,10 @@ function buildDecorations(view) {
   const cursorLine = doc.lineAt(cursorPos).number;
   const frontmatterRange = findFrontmatterRange(doc);
 
+  // Mode flags
+  const isSourceMode = view.state.facet(sourceModeFacet);
+  const isWysiwygMode = view.state.facet(wysiwygModeFacet);
+
   // Get asset resolver from facet (may be null)
   const assetResolver = view.state.facet(assetResolverFacet);
 
@@ -380,7 +385,7 @@ function buildDecorations(view) {
         }
       }
 
-      const isActiveLine = lineNum === cursorLine;
+      const isActiveLine = isSourceMode || (!isWysiwygMode && lineNum === cursorLine);
 
       // Marker class: hidden on blur, muted on focus
       const markerClass = isActiveLine ? 'cm-md-marker' : 'cm-md-hidden';
@@ -474,8 +479,9 @@ function buildDecorations(view) {
       // Code backticks (inline only, not fenced code)
       if (node.name === 'CodeMark') {
         const text = doc.sliceString(node.from, node.to);
-        // Only hide single/double backticks, not fenced code markers (```)
-        if (text.length < 3) {
+        // In normal rendered mode, only hide inline backticks.
+        // In WYSIWYG mode, also hide fenced code markers.
+        if (text.length < 3 || isWysiwygMode) {
           decorations.push(
             Decoration.mark({ class: markerClass }).range(node.from, node.to)
           );
@@ -517,7 +523,7 @@ function buildDecorations(view) {
         const linkUrl = linkMatch[2];
 
         const linkLine = doc.lineAt(node.from).number;
-        const isLinkActive = linkLine === cursorLine;
+        const isLinkActive = isSourceMode || (!isWysiwygMode && linkLine === cursorLine);
 
         if (isLinkActive) {
           // Show raw markdown with styling on active line
@@ -605,7 +611,7 @@ function buildDecorations(view) {
         }
 
         // Replace the alert marker [!TYPE] with widget when not on that line
-        if (alertType && startLine.number !== cursorLine) {
+        if (alertType && !isSourceMode && (isWysiwygMode || startLine.number !== cursorLine)) {
           const markerStart = startLine.from + firstLineText.indexOf('[!');
           const markerEnd = startLine.from + firstLineText.indexOf(']') + 1;
           if (markerStart >= startLine.from && markerEnd > markerStart) {
@@ -631,7 +637,7 @@ function buildDecorations(view) {
       if (node.name === 'ListMark') {
         const line = doc.lineAt(node.from);
         const listMarkText = doc.sliceString(node.from, node.to);
-        const isListActive = line.number === cursorLine;
+        const isListActive = isSourceMode || (!isWysiwygMode && line.number === cursorLine);
         const isUnordered = /^[-+*]$/.test(listMarkText);
         const textAfterMarker = doc.sliceString(node.to, Math.min(node.to + 6, line.to));
         const isTaskItem = /^\s+\[[ xX]\]/.test(textAfterMarker);
@@ -668,7 +674,7 @@ function buildDecorations(view) {
 
           // Don't render widget if cursor is on this line
           const itemLine = doc.lineAt(node.from);
-          if (itemLine.number !== cursorLine) {
+          if (!isSourceMode && (isWysiwygMode || itemLine.number !== cursorLine)) {
             // Replace [ ], [x], or [X] with checkbox widget
             decorations.push(
               Decoration.replace({
@@ -690,6 +696,27 @@ function buildDecorations(view) {
         decorations.push(
           Decoration.line({ class: 'cm-md-hr-line' }).range(line.from)
         );
+      }
+
+      // =======================================================================
+      // PAGE BREAKS (\pagebreak, \newpage)
+      // Detected as single-line paragraphs containing only the command.
+      // In WYSIWYG mode, rendered as a visual break indicator.
+      // =======================================================================
+      if (node.name === 'Paragraph' || node.name === 'HTMLBlock') {
+        const nodeText = doc.sliceString(node.from, node.to).trim();
+        if (/^\\(pagebreak|newpage)$/.test(nodeText) ||
+            /^<div\s+style\s*=\s*["']page-break-after:\s*always;?["']\s*>\s*<\/div>$/i.test(nodeText)) {
+          const line = doc.lineAt(node.from);
+          decorations.push(
+            Decoration.line({ class: 'cm-pagebreak-line' }).range(line.from)
+          );
+          if (!isActiveLine) {
+            decorations.push(
+              Decoration.mark({ class: 'cm-md-hidden' }).range(node.from, node.to)
+            );
+          }
+        }
       }
 
       // =======================================================================
@@ -901,7 +928,7 @@ function buildDecorations(view) {
       continue;
     }
 
-    const cursorInAdmonition = cursorLine >= admonition.startLine && cursorLine <= admonition.endLine;
+    const cursorInAdmonition = isSourceMode || (!isWysiwygMode && cursorLine >= admonition.startLine && cursorLine <= admonition.endLine);
     if (cursorInAdmonition) {
       continue;
     }
@@ -951,7 +978,7 @@ function buildDecorations(view) {
   // Process line by line in viewport
   for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
     const line = doc.line(i);
-    const isActiveLine = i === cursorLine;
+    const isActiveLine = isSourceMode || (!isWysiwygMode && i === cursorLine);
 
     // Skip frontmatter lines
     if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
@@ -989,7 +1016,7 @@ function buildDecorations(view) {
   // ==========================================================================
   for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
     const line = doc.line(i);
-    const isActiveLine = i === cursorLine;
+    const isActiveLine = isSourceMode || (!isWysiwygMode && i === cursorLine);
 
     // Skip frontmatter lines
     if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
@@ -1032,7 +1059,7 @@ function buildDecorations(view) {
 
   for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
     const line = doc.line(i);
-    const isActiveLine = i === cursorLine;
+    const isActiveLine = isSourceMode || (!isWysiwygMode && i === cursorLine);
 
     // Skip frontmatter lines
     if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
@@ -1043,6 +1070,11 @@ function buildDecorations(view) {
     const htmlElements = extractHtmlElements(line.text);
 
     for (const el of htmlElements) {
+      // Underline is handled by the shared inline formatting model so it can
+      // participate in semantic toggling like bold/italic instead of being
+      // rendered as an opaque HTML widget.
+      if (el.tag === 'u') continue;
+
       const from = line.from + el.start;
       const to = line.from + el.end;
 

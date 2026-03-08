@@ -11,7 +11,8 @@
  * the actual `check()` implementation.
  */
 
-import { Annotation } from '@codemirror/state';
+import { Annotation, StateEffect, StateField } from '@codemirror/state';
+import { EditorView, hoverTooltip, showTooltip, ViewPlugin, closeHoverTooltips } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { linter, forEachDiagnostic } from '@codemirror/lint';
 
@@ -210,13 +211,131 @@ function shouldIgnoreMatch(fragment, match, dictionaryWordsLower) {
   return false;
 }
 
+const languageToolTheme = EditorView.baseTheme({
+  // Underline styles for grammar ranges
+  '.cm-lintRange-warning': {
+    backgroundImage: 'linear-gradient(to right, color-mix(in srgb, var(--widget-warning, #f59e0b) 88%, transparent) 45%, transparent 0%)',
+    backgroundPosition: 'left bottom',
+    backgroundSize: '6px 2px',
+    backgroundRepeat: 'repeat-x',
+  },
+  '.cm-lintRange-error': {
+    backgroundImage: 'linear-gradient(to right, color-mix(in srgb, var(--widget-danger, #ef4444) 88%, transparent) 45%, transparent 0%)',
+    backgroundPosition: 'left bottom',
+    backgroundSize: '6px 2px',
+    backgroundRepeat: 'repeat-x',
+  },
+  // Custom grammar hover tooltip (matches runtime hover popover style)
+  '.mrmd-grammar-hover': {
+    background: 'var(--widget-surface-elevated, var(--editor-background, #1e1e1e))',
+    border: '1px solid var(--widget-border, rgba(255, 255, 255, 0.12))',
+    borderRadius: 'var(--widget-border-radius, 6px)',
+    padding: '8px 12px',
+    maxWidth: '460px',
+    maxHeight: 'min(52vh, 440px)',
+    overflow: 'auto',
+    fontSize: '13px',
+    lineHeight: '1.45',
+    color: 'var(--widget-text, var(--editor-foreground, #e1e1e1))',
+    boxShadow: 'var(--mrmd-shadow-md, 0 6px 18px rgba(0, 0, 0, 0.3))',
+    userSelect: 'text',
+    pointerEvents: 'auto',
+  },
+  '.mrmd-grammar-hover-sticky': {
+    borderColor: 'var(--widget-border-focus, var(--mrmd-accent, #58a6ff))',
+  },
+  '.mrmd-grammar-hover-content': {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+  },
+  '.mrmd-grammar-hover-header': {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '10px',
+  },
+  '.mrmd-grammar-hover-source': {
+    fontWeight: '600',
+    fontSize: '11px',
+    color: 'var(--widget-text-muted, #9ca3af)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+  '.mrmd-grammar-hover-rule': {
+    fontSize: '10px',
+    color: 'var(--widget-text-muted, #64748b)',
+    fontFamily: 'var(--widget-font-mono, monospace)',
+  },
+  '.mrmd-grammar-hover-message': {
+    color: 'var(--widget-text, var(--editor-foreground, #e1e1e1))',
+    whiteSpace: 'pre-wrap',
+  },
+  '.mrmd-grammar-hover-matched': {
+    display: 'inline-block',
+    background: 'rgba(245, 158, 11, 0.15)',
+    color: 'var(--widget-warning, #f59e0b)',
+    borderRadius: '3px',
+    padding: '1px 5px',
+    fontFamily: 'var(--widget-font-mono, monospace)',
+    fontSize: '12px',
+  },
+  '.mrmd-grammar-hover-suggestions': {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '5px',
+    paddingTop: '4px',
+  },
+  '.mrmd-grammar-hover-suggestion-btn': {
+    appearance: 'none',
+    border: '1px solid var(--widget-border, rgba(255,255,255,0.12))',
+    background: 'var(--widget-surface, rgba(255,255,255,0.04))',
+    color: 'var(--widget-text, var(--editor-foreground, #e5e7eb))',
+    borderRadius: '6px',
+    padding: '4px 10px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    lineHeight: '1.2',
+    fontFamily: 'inherit',
+    transition: 'background 0.1s, border-color 0.1s',
+  },
+  '.mrmd-grammar-hover-suggestion-btn:hover': {
+    background: 'var(--widget-surface-hover, rgba(255,255,255,0.08))',
+    borderColor: 'var(--widget-border-focus, var(--mrmd-accent, #58a6ff))',
+  },
+  '.mrmd-grammar-hover-suggestion-btn:active': {
+    transform: 'translateY(1px)',
+  },
+  '.mrmd-grammar-hover-actions': {
+    display: 'flex',
+    gap: '8px',
+    borderTop: '1px solid var(--widget-border, rgba(255,255,255,0.08))',
+    paddingTop: '6px',
+    marginTop: '2px',
+  },
+  '.mrmd-grammar-hover-action-btn': {
+    appearance: 'none',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--widget-text-muted, #9ca3af)',
+    cursor: 'pointer',
+    fontSize: '11px',
+    padding: '2px 0',
+    fontFamily: 'inherit',
+    transition: 'color 0.1s',
+  },
+  '.mrmd-grammar-hover-action-btn:hover': {
+    color: 'var(--widget-text, #e5e7eb)',
+  },
+});
+
 function matchToDiagnostic(fragment, match) {
   const offset = Number(match?.offset || 0);
   const length = Number(match?.length || 0);
   const from = fragment.from + offset;
   const to = from + Math.max(length, 1);
   const replacements = Array.isArray(match?.replacements) ? match.replacements : [];
-  const actions = replacements.slice(0, 3).map((replacement) => ({
+  const actions = replacements.slice(0, 5).map((replacement) => ({
     name: replacement.value,
     apply(view, actionFrom, actionTo) {
       view.dispatch({
@@ -225,8 +344,10 @@ function matchToDiagnostic(fragment, match) {
     },
   }));
 
-  const ruleId = match?.rule?.id ? ` [${match.rule.id}]` : '';
-  const message = `${match.message || 'Grammar suggestion'}${ruleId}`;
+  const ruleId = String(match?.rule?.id || '');
+  const ruleIdLabel = ruleId ? ` [${ruleId}]` : '';
+  const message = `${match.message || 'Grammar suggestion'}${ruleIdLabel}`;
+  const matchedText = fragment.text.slice(offset, offset + length);
 
   return {
     from,
@@ -235,11 +356,186 @@ function matchToDiagnostic(fragment, match) {
     source: 'languagetool',
     message,
     actions,
+    // Custom fields for the grammar hover / context menu
+    ruleId,
+    matchedText,
   };
 }
 
 /**
+ * Collect LanguageTool diagnostics near a document position, sorted by
+ * proximity (intersects position > same line > visible range > document order).
+ *
+ * @param {import('@codemirror/view').EditorView} view
+ * @param {number} pos - document offset
+ * @returns {Array<{diagnostic: Object, from: number, to: number, intersectsSelection: boolean, onCurrentLine: boolean, inVisibleRange: boolean}>}
+ */
+function collectLanguageToolCandidates(view, pos) {
+  if (!view?.state || pos == null) return [];
+
+  const cursorLine = view.state.doc.lineAt(pos);
+  const candidates = [];
+  forEachDiagnostic(view.state, (diagnostic, from, to) => {
+    if (diagnostic?.source !== 'languagetool') return;
+    if (!Array.isArray(diagnostic.actions) || diagnostic.actions.length === 0) return;
+    const intersectsSelection = from <= pos && to >= pos;
+    const onCurrentLine = from < cursorLine.to && to > cursorLine.from;
+    const inVisibleRange = view.visibleRanges?.some?.((range) => from < range.to && to > range.from) ?? true;
+    candidates.push({ diagnostic, from, to, intersectsSelection, onCurrentLine, inVisibleRange });
+  });
+
+  candidates.sort((a, b) => {
+    if (a.intersectsSelection !== b.intersectsSelection) return a.intersectsSelection ? -1 : 1;
+    if (a.onCurrentLine !== b.onCurrentLine) return a.onCurrentLine ? -1 : 1;
+    if (a.inVisibleRange !== b.inVisibleRange) return a.inVisibleRange ? -1 : 1;
+    return a.from - b.from;
+  });
+
+  return candidates;
+}
+
+/**
+ * Find all LanguageTool diagnostics that overlap a document position.
+ * @param {import('@codemirror/view').EditorView} view
+ * @param {number} pos
+ * @returns {Array<{diagnostic: Object, from: number, to: number}>}
+ */
+function findLanguageToolDiagnosticsAt(view, pos) {
+  const results = [];
+  forEachDiagnostic(view.state, (diagnostic, from, to) => {
+    if (diagnostic?.source !== 'languagetool') return;
+    if (pos >= from && pos <= to) {
+      results.push({ diagnostic, from, to });
+    }
+  });
+  return results;
+}
+
+/**
+ * Build the branded grammar hover tooltip DOM.
+ * Matches the runtime hover popover style with grammar-specific content.
+ *
+ * @param {import('@codemirror/view').EditorView} view
+ * @param {Array<{diagnostic: Object, from: number, to: number}>} hits
+ * @param {Object} callbacks - { onIgnoreRule, onAddToDictionary }
+ * @param {Object} [opts] - { sticky }
+ * @returns {HTMLElement}
+ */
+function buildGrammarHoverDOM(view, hits, callbacks, opts = {}) {
+  const { sticky = false } = opts;
+
+  const dom = document.createElement('div');
+  dom.className = `mrmd-grammar-hover${sticky ? ' mrmd-grammar-hover-sticky' : ''}`;
+
+  for (const hit of hits) {
+    const d = hit.diagnostic;
+    const section = document.createElement('div');
+    section.className = 'mrmd-grammar-hover-content';
+
+    // Header: source + rule ID
+    const header = document.createElement('div');
+    header.className = 'mrmd-grammar-hover-header';
+    const sourceEl = document.createElement('span');
+    sourceEl.className = 'mrmd-grammar-hover-source';
+    sourceEl.textContent = 'Grammar';
+    header.appendChild(sourceEl);
+    if (d.ruleId) {
+      const ruleEl = document.createElement('span');
+      ruleEl.className = 'mrmd-grammar-hover-rule';
+      ruleEl.textContent = d.ruleId;
+      header.appendChild(ruleEl);
+    }
+    section.appendChild(header);
+
+    // Message
+    const msgEl = document.createElement('div');
+    msgEl.className = 'mrmd-grammar-hover-message';
+    // Strip the [RULE_ID] suffix from the displayed message (it's in the header)
+    const cleanMsg = d.ruleId
+      ? d.message.replace(` [${d.ruleId}]`, '')
+      : d.message;
+    msgEl.textContent = cleanMsg;
+    section.appendChild(msgEl);
+
+    // Matched text
+    if (d.matchedText) {
+      const matchEl = document.createElement('span');
+      matchEl.className = 'mrmd-grammar-hover-matched';
+      matchEl.textContent = d.matchedText;
+      section.appendChild(matchEl);
+    }
+
+    // Suggestion buttons
+    if (Array.isArray(d.actions) && d.actions.length > 0) {
+      const suggestionsEl = document.createElement('div');
+      suggestionsEl.className = 'mrmd-grammar-hover-suggestions';
+      for (const action of d.actions) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'mrmd-grammar-hover-suggestion-btn';
+        btn.textContent = action.name;
+        btn.addEventListener('mousedown', (e) => e.stopPropagation());
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          action.apply(view, hit.from, hit.to);
+        });
+        suggestionsEl.appendChild(btn);
+      }
+      section.appendChild(suggestionsEl);
+    }
+
+    // Action row: Ignore rule | Add to dictionary
+    const hasIgnore = d.ruleId && typeof callbacks.onIgnoreRule === 'function';
+    const hasDict = d.matchedText && typeof callbacks.onAddToDictionary === 'function';
+    if (hasIgnore || hasDict) {
+      const actionsEl = document.createElement('div');
+      actionsEl.className = 'mrmd-grammar-hover-actions';
+
+      if (hasIgnore) {
+        const ignoreBtn = document.createElement('button');
+        ignoreBtn.type = 'button';
+        ignoreBtn.className = 'mrmd-grammar-hover-action-btn';
+        ignoreBtn.textContent = 'Ignore rule';
+        ignoreBtn.title = `Disable rule ${d.ruleId}`;
+        ignoreBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+        ignoreBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          callbacks.onIgnoreRule(d.ruleId, view);
+        });
+        actionsEl.appendChild(ignoreBtn);
+      }
+
+      if (hasDict) {
+        const dictBtn = document.createElement('button');
+        dictBtn.type = 'button';
+        dictBtn.className = 'mrmd-grammar-hover-action-btn';
+        dictBtn.textContent = `Add "${d.matchedText}" to dictionary`;
+        dictBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+        dictBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          callbacks.onAddToDictionary(d.matchedText, view);
+        });
+        actionsEl.appendChild(dictBtn);
+      }
+
+      section.appendChild(actionsEl);
+    }
+
+    dom.appendChild(section);
+  }
+
+  return dom;
+}
+
+/**
  * Create a reusable LanguageTool-backed CM6 diagnostics extension.
+ *
+ * Returns an array of extensions: themed underlines, a custom branded hover
+ * tooltip (with click-to-pin, suggestions, ignore-rule, add-to-dictionary),
+ * and the CM6 linter that produces diagnostics.
  *
  * @param {Object} options
  * @param {(payload: Object) => Promise<Object>} options.check - async LT check function
@@ -249,6 +545,8 @@ function matchToDiagnostic(fragment, match) {
  * @param {number} [options.maxDiagnostics=50] - cap rendered diagnostics
  * @param {number} [options.maxFragments=12] - cap visible prose fragments checked
  * @param {number} [options.maxFragmentLength=4000] - skip giant fragments
+ * @param {(ruleId: string, view: EditorView) => void} [options.onIgnoreRule] - callback when user ignores a rule
+ * @param {(word: string, view: EditorView) => void} [options.onAddToDictionary] - callback when user adds a word
  * @returns {import('@codemirror/state').Extension}
  */
 export function createLanguageToolDiagnosticsExtension(options = {}) {
@@ -260,13 +558,102 @@ export function createLanguageToolDiagnosticsExtension(options = {}) {
     maxDiagnostics = 50,
     maxFragments = 12,
     maxFragmentLength = 4000,
+    onIgnoreRule,
+    onAddToDictionary,
   } = options;
 
   if (typeof check !== 'function') {
     throw new Error('createLanguageToolDiagnosticsExtension requires a check(payload) function');
   }
 
-  return linter(async (view) => {
+  const callbacks = { onIgnoreRule, onAddToDictionary };
+
+  // -- Pinned (sticky) grammar tooltip state --
+  const setPinnedTooltip = StateEffect.define();
+  const clearPinnedTooltip = StateEffect.define();
+
+  const pinnedTooltipField = StateField.define({
+    create() { return null; },
+    update(value, tr) {
+      if (tr.docChanged) return null;
+      for (const effect of tr.effects) {
+        if (effect.is(setPinnedTooltip)) return effect.value;
+        if (effect.is(clearPinnedTooltip)) return null;
+      }
+      return value;
+    },
+    provide: (f) => showTooltip.from(f),
+  });
+
+  // Close pinned tooltip on click outside
+  const pinnedClosePlugin = ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.view = view;
+        this.onMouseDownCapture = (event) => {
+          const pinned = view.state.field(pinnedTooltipField, false);
+          if (!pinned) return;
+          if (event.target instanceof Element && event.target.closest('.mrmd-grammar-hover')) return;
+          view.dispatch({ effects: clearPinnedTooltip.of(null) });
+        };
+        view.dom.ownerDocument.addEventListener('mousedown', this.onMouseDownCapture, true);
+      }
+      destroy() {
+        this.view.dom.ownerDocument.removeEventListener('mousedown', this.onMouseDownCapture, true);
+      }
+    },
+  );
+
+  // -- Custom grammar hover tooltip --
+  function createTooltipDescriptor(view, hits, pos, end, sticky = false) {
+    return {
+      pos,
+      end,
+      above: false,
+      arrow: true,
+      create() {
+        const dom = buildGrammarHoverDOM(view, hits, callbacks, { sticky });
+
+        if (!sticky) {
+          // Click to pin
+          dom.addEventListener('mousedown', (event) => {
+            if (event.button !== 0) return;
+            if (event.target instanceof Element &&
+              (event.target.closest('.mrmd-grammar-hover-suggestion-btn') ||
+               event.target.closest('.mrmd-grammar-hover-action-btn'))) return;
+
+            const stickyTooltip = createTooltipDescriptor(view, hits, pos, end, true);
+            view.dispatch({
+              effects: [
+                setPinnedTooltip.of(stickyTooltip),
+                closeHoverTooltips,
+              ],
+            });
+          });
+        }
+
+        return {
+          dom,
+          offset: { x: 0, y: -8 },
+          overlap: true,
+        };
+      },
+    };
+  }
+
+  const grammarHover = hoverTooltip((view, pos, side) => {
+    const hits = findLanguageToolDiagnosticsAt(view, pos);
+    if (hits.length === 0) return null;
+
+    const minFrom = Math.min(...hits.map(h => h.from));
+    const maxTo = Math.max(...hits.map(h => h.to));
+    return createTooltipDescriptor(view, hits, minFrom, maxTo, false);
+  }, {
+    hoverTime: 350,
+  });
+
+  // -- Linter (produces diagnostics / underlines) --
+  const grammarLinter = linter(async (view) => {
     const prefs = await Promise.resolve(getPreferences(view));
     if (prefs?.enabled === false) return [];
 
@@ -298,12 +685,22 @@ export function createLanguageToolDiagnosticsExtension(options = {}) {
     }
   }, {
     delay: debounceMs,
+    // Suppress built-in lint tooltip for LanguageTool diagnostics (we use our own)
+    tooltipFilter: (diagnostics) => diagnostics.filter((d) => d.source !== 'languagetool'),
     needsRefresh(update) {
       return update.docChanged
         || update.viewportChanged
         || update.transactions.some((tr) => tr.annotation(forceLanguageToolRefresh));
     },
   });
+
+  return [
+    languageToolTheme,
+    pinnedTooltipField,
+    pinnedClosePlugin,
+    grammarHover,
+    grammarLinter,
+  ];
 }
 
 /**
@@ -318,55 +715,44 @@ export function refreshLanguageToolDiagnostics(view) {
 }
 
 /**
- * Apply the first available LanguageTool quick-fix under the cursor.
- *
- * Selection strategy:
- * 1. diagnostics intersecting the current selection/cursor
- * 2. diagnostics on the current line
- * 3. first visible LanguageTool diagnostic with an action
+ * Get the best LanguageTool diagnostic near the given position and return
+ * a serialisable menu descriptor with the diagnostic message and suggested
+ * replacements.  Used by the Electron context-menu handler.
  *
  * @param {import('@codemirror/view').EditorView} view
- * @returns {boolean} true if a suggestion was applied
+ * @param {number} pos - document offset (e.g. from posAtCoords)
+ * @returns {{ from: number, to: number, message: string, source: string, suggestions: Array<{index: number, label: string}> } | null}
  */
-export function applyFirstLanguageToolSuggestion(view) {
-  if (!view?.state) return false;
-
-  const selection = view.state.selection.main;
-  const cursorFrom = Math.min(selection.from, selection.to);
-  const cursorTo = Math.max(selection.from, selection.to);
-  const cursorLine = view.state.doc.lineAt(selection.head);
-  const candidates = [];
-
-  forEachDiagnostic(view.state, (diagnostic, from, to) => {
-    if (diagnostic?.source !== 'languagetool') return;
-    if (!Array.isArray(diagnostic.actions) || diagnostic.actions.length === 0) return;
-
-    const intersectsSelection = from <= cursorTo && to >= cursorFrom;
-    const onCurrentLine = from < cursorLine.to && to > cursorLine.from;
-    const inVisibleRange = view.visibleRanges?.some?.((range) => from < range.to && to > range.from) ?? true;
-
-    candidates.push({
-      diagnostic,
-      from,
-      to,
-      intersectsSelection,
-      onCurrentLine,
-      inVisibleRange,
-    });
-  });
-
-  if (candidates.length === 0) return false;
-
-  candidates.sort((a, b) => {
-    if (a.intersectsSelection !== b.intersectsSelection) return a.intersectsSelection ? -1 : 1;
-    if (a.onCurrentLine !== b.onCurrentLine) return a.onCurrentLine ? -1 : 1;
-    if (a.inVisibleRange !== b.inVisibleRange) return a.inVisibleRange ? -1 : 1;
-    return a.from - b.from;
-  });
+export function getLanguageToolSuggestionMenu(view, pos) {
+  const candidates = collectLanguageToolCandidates(view, pos);
+  if (candidates.length === 0) return null;
 
   const best = candidates[0];
-  const action = best.diagnostic.actions[0];
+  return {
+    from: best.from,
+    to: best.to,
+    message: best.diagnostic.message,
+    source: best.diagnostic.source || 'languagetool',
+    ruleId: best.diagnostic.ruleId || '',
+    matchedText: best.diagnostic.matchedText || '',
+    suggestions: best.diagnostic.actions.map((action, index) => ({
+      index,
+      label: action.name,
+    })),
+  };
+}
+
+export function applyLanguageToolSuggestionAt(view, pos, actionIndex = 0) {
+  const candidates = collectLanguageToolCandidates(view, pos);
+  if (candidates.length === 0) return false;
+  const best = candidates[0];
+  const action = best.diagnostic.actions[actionIndex] || best.diagnostic.actions[0];
   if (!action?.apply) return false;
   action.apply(view, best.from, best.to);
   return true;
+}
+
+export function applyFirstLanguageToolSuggestion(view) {
+  if (!view?.state) return false;
+  return applyLanguageToolSuggestionAt(view, view.state.selection.main.head, 0);
 }

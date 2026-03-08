@@ -28,6 +28,8 @@
 
 import { markdownRenderer } from './renderer.js';
 import { blockDecorations, lineHeightTracker } from './block-decorations.js';
+import { createWysiwygExtensions } from './wysiwyg.js';
+import { createInlineEditingExtensions } from './inline-state.js';
 import { markdownStyles, injectMarkdownStyles } from './styles.js';
 
 /**
@@ -49,14 +51,21 @@ export function markdown() {
   console.log('[Markdown] Creating extensions, blockDecorations:', blockDecorations, 'markdownRenderer:', markdownRenderer);
 
   return [
-    lineHeightTracker,   // ViewPlugin: updates line height cache (must come first!)
-    blockDecorations,    // StateField: tables, display math
-    markdownRenderer,    // ViewPlugin: everything else
+    lineHeightTracker,          // ViewPlugin: updates line height cache (must come first!)
+    ...createInlineEditingExtensions(),
+    blockDecorations,           // StateField: tables, display math
+    markdownRenderer,           // ViewPlugin: everything else
+    ...createWysiwygExtensions(),
   ];
 }
 
 // Export individual pieces for advanced use
 export { markdownRenderer, assetResolverFacet } from './renderer.js';
+export { sourceModeFacet, wysiwygModeFacet } from './facets.js';
+export { createWysiwygExtensions, toggleInlineFormat, findDelimitedRange, findFencedCodeAt } from './wysiwyg.js';
+export { createInlineEditingExtensions, getPendingInlineSplit } from './inline-state.js';
+export { toggleInlineMark, toggleInlineMarkFromSyntax, getActiveInlineMarks, getSelectionFormattingState } from './inline-commands.js';
+export { getLineInlineModel, getCaretInlineContext, getSelectionInlineContext, inlineClassForMark, syntaxToMark, markToSyntax } from './inline-model.js';
 export { blockDecorations, lineHeightTracker, cacheWidgetHeight, getCachedHeight, clearHeightCache } from './block-decorations.js';
 export { markdownStyles, injectMarkdownStyles } from './styles.js';
 

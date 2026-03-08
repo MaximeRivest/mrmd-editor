@@ -102,6 +102,12 @@ export const markdownStyles = `
   font-style: italic;
 }
 
+.cm-md-underline {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
 .cm-md-strikethrough {
   text-decoration: line-through;
   opacity: 0.7;

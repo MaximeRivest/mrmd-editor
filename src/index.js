@@ -31,7 +31,7 @@
 // #region IMPORTS
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState, StateEffect, Compartment, Text, Transaction } from '@codemirror/state';
-import { keymap, Decoration, ViewPlugin, WidgetType, placeholder } from '@codemirror/view';
+import { keymap, Decoration, ViewPlugin, WidgetType, placeholder, highlightWhitespace } from '@codemirror/view';
 import { StreamLanguage, syntaxTree, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language';
 import { createCodemirrorTheme } from './widgets/codemirror-theme.js';
 
@@ -64,6 +64,24 @@ import { WebsocketProvider } from 'y-websocket';
 // Internal modules
 import { findCells, getCellAtCursor, countCells, findTerminalBlocks, isTerminalLanguage } from './cells.js';
 import { RuntimeRegistry, createRuntimeRegistry } from './runtime.js';
+import {
+  defaultDocumentTemplate,
+  documentTemplatePresets,
+  normalizeDocumentTemplate,
+  cloneDocumentTemplate,
+  createDocumentTemplateExtension,
+  compileDocumentTemplateCSS,
+  serializeDocumentTemplateToCss,
+  findDocumentTemplatePreset,
+  resolveFontForExport,
+  serializeDocumentTemplateToPandocMeta,
+  serializeDocumentTemplateToPandocYaml,
+  serializeDocumentTemplateToLatexPreamble,
+  serializeDocumentTemplateToHtml,
+  serializeDocumentTemplateToWordStyleMap,
+  buildPandocCommand,
+} from './document-template.js';
+import { parseFrontmatter, readFrontmatterValue, updateFrontmatterField } from './frontmatter-updater.js';
 import { ExecutionManager, createExecutionManager } from './execution.js';
 import { MonitorCoordination, EXECUTION_STATUS, createMonitorCoordination } from './monitor-coordination.js';
 import { MRPClient } from './mrp-client.js';
@@ -109,6 +127,8 @@ import {
   forceLanguageToolRefresh,
   refreshLanguageToolDiagnostics,
   applyFirstLanguageToolSuggestion,
+  getLanguageToolSuggestionMenu,
+  applyLanguageToolSuggestionAt,
 } from './grammar.js';
 
 // Wiki-link completion ([[internal-links]])
@@ -156,6 +176,14 @@ import {
   markdown as markdownRendering,
   markdownRenderer,
   assetResolverFacet,  // Facet for resolving asset URLs in Electron/desktop apps
+  sourceModeFacet,     // Facet to toggle source/raw markdown view
+  wysiwygModeFacet,    // Facet to toggle protected WYSIWYG rendering
+  createWysiwygExtensions,
+  createInlineEditingExtensions,
+  toggleInlineFormat,
+  toggleInlineMark,
+  getSelectionFormattingState,
+  findFencedCodeAt,
   blockDecorations,  // StateField for tables, display math (multi-line replace)
   lineHeightTracker, // ViewPlugin for accurate line height tracking
   markdownStyles,
@@ -172,6 +200,9 @@ import {
   generateTableId,
   AlertTitleWidget,
 } from './markdown/index.js';
+
+// Page view pagination (spacer-based page breaks)
+import { pageViewPagination } from './page-view-pagination.js';
 
 // Awareness system
 import {
@@ -680,6 +711,12 @@ const codeBlockBackground = ViewPlugin.fromClass(class {
           const firstLine = view.state.doc.lineAt(from);
           const lastLine = view.state.doc.lineAt(to);
 
+          // Extract language from the opening fence line
+          const fenceText = firstLine.text;
+          const langMatch = fenceText.match(/^(\s*`{3,}|~{3,})\s*(\S*)/);
+          const rawLang = langMatch?.[2] || '';
+          const language = normalizeCodeLanguage(rawLang);
+
           // Iterate through each line in the code block
           for (let pos = from; pos < to;) {
             const line = view.state.doc.lineAt(pos);
@@ -689,12 +726,18 @@ const codeBlockBackground = ViewPlugin.fromClass(class {
             if (isFirstLine || isLastLine) {
               // Fence lines - subtle styling
               decorations.push(
-                Decoration.line({ class: 'cm-codeblock-fence' }).range(line.from)
+                Decoration.line({
+                  class: 'cm-codeblock-fence',
+                  attributes: language ? { 'data-lang': language } : undefined,
+                }).range(line.from)
               );
             } else {
               // Content lines - normal code block styling
               decorations.push(
-                Decoration.line({ class: 'cm-codeblock-line' }).range(line.from)
+                Decoration.line({
+                  class: 'cm-codeblock-line',
+                  attributes: language ? { 'data-lang': language } : undefined,
+                }).range(line.from)
               );
             }
             pos = line.to + 1;
@@ -752,6 +795,99 @@ const codeBlockStyles = EditorView.theme({
   },
 });
 // #endregion CODE_BLOCK_BACKGROUND
+
+// #region INVISIBLE_CHARACTERS
+/**
+ * Extension that shows newline markers (¶) at the end of each line.
+ * Used in combination with CM6's built-in highlightWhitespace() for
+ * spaces and tabs. Together they provide full invisible character rendering.
+ */
+class NewlineMarkerWidget extends WidgetType {
+  eq() { return true; }
+  toDOM() {
+    const span = document.createElement('span');
+    span.className = 'cm-newline-marker';
+    span.textContent = '¶';
+    span.setAttribute('aria-hidden', 'true');
+    return span;
+  }
+  ignoreEvent() { return true; }
+}
+
+const newlineMarkerPlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = this.buildDecorations(view);
+    }
+
+    update(update) {
+      if (update.docChanged || update.viewportChanged) {
+        this.decorations = this.buildDecorations(update.view);
+      }
+    }
+
+    buildDecorations(view) {
+      const decorations = [];
+      const doc = view.state.doc;
+
+      for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
+        const line = doc.line(i);
+        // Add newline marker at the end of each line (except the last line if it has no trailing newline)
+        if (i < doc.lines) {
+          decorations.push(
+            Decoration.widget({
+              widget: new NewlineMarkerWidget(),
+              side: 1, // After the line content
+            }).range(line.to)
+          );
+        }
+      }
+
+      return Decoration.set(decorations, true);
+    }
+  },
+  { decorations: (v) => v.decorations }
+);
+
+/**
+ * Styles for invisible character markers.
+ * Overrides CM6's default whitespace styling with more visible symbols.
+ */
+const invisibleCharStyles = EditorView.theme({
+  // Newline markers (¶)
+  '.cm-newline-marker': {
+    color: 'var(--md-marker-color, #aaa)',
+    opacity: '0.5',
+    fontSize: '0.8em',
+    userSelect: 'none',
+    pointerEvents: 'none',
+  },
+  // Override CM6's default space dots - make them subtler
+  '.cm-highlightSpace': {
+    backgroundImage: 'radial-gradient(circle at 50% 55%, var(--md-marker-color, #aaa) 20%, transparent 5%)',
+    opacity: '0.4',
+  },
+  // Override CM6's tab arrows
+  '.cm-highlightTab': {
+    backgroundImage: `url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="20"><path stroke="%23aaa" stroke-width="1" fill="none" d="M1 10H196L190 5M190 15L196 10M197 4L197 16"/></svg>')`,
+    opacity: '0.5',
+  },
+});
+
+/**
+ * Create the invisibles extension bundle.
+ * Includes whitespace highlighting + newline markers + styles.
+ *
+ * @returns {import('@codemirror/state').Extension}
+ */
+function createInvisiblesExtension() {
+  return [
+    highlightWhitespace(),
+    newlineMarkerPlugin,
+    invisibleCharStyles,
+  ];
+}
+// #endregion INVISIBLE_CHARACTERS
 
 // #region WRITER
 /**
@@ -831,6 +967,413 @@ function findInitialCursorPosition(content) {
   }
 
   return 0; // fallback to start
+}
+
+function wrapSelectionsWith(view, open, close = open, userEvent = 'input.wysiwyg.format') {
+  const state = view.state;
+  const changes = [];
+  const ranges = [];
+  let delta = 0;
+
+  for (const range of state.selection.ranges) {
+    if (range.empty) {
+      changes.push({ from: range.from, insert: open + close });
+      const pos = range.from + open.length + delta;
+      ranges.push({ anchor: pos, head: pos });
+      delta += open.length + close.length;
+    } else {
+      changes.push({ from: range.from, insert: open });
+      changes.push({ from: range.to, insert: close });
+      ranges.push({ anchor: range.from + open.length + delta, head: range.to + open.length + delta });
+      delta += open.length + close.length;
+    }
+  }
+
+  view.dispatch({
+    changes,
+    selection: { ranges, mainIndex: state.selection.mainIndex },
+    userEvent,
+  });
+}
+
+function currentLineStructuralPrefix(lineText) {
+  const heading = lineText.match(/^\s{0,3}(#{1,6})\s+/);
+  if (heading) return heading[0];
+  const quote = lineText.match(/^(\s*>\s?)+/);
+  if (quote) return quote[0];
+  const list = lineText.match(/^(\s*)(?:[-+*]|\d+\.)\s+/);
+  if (list) return list[0];
+  return '';
+}
+
+function getCurrentBlockTypeInfo(view) {
+  const pos = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(pos);
+  const text = line.text;
+
+  // ── Check if inside a fenced code block ──
+  const tree = syntaxTree(view.state);
+  let fencedCode = null;
+  tree.iterate({
+    from: Math.max(0, pos - 1),
+    to: pos + 1,
+    enter: (node) => {
+      if (node.name === 'FencedCode' && node.from <= pos && node.to >= pos) {
+        fencedCode = node;
+      }
+    },
+  });
+
+  if (fencedCode) {
+    // Extract language from the opening fence line (```python, ```r, etc.)
+    const fenceLine = view.state.doc.lineAt(fencedCode.from);
+    const fenceText = fenceLine.text;
+    const langMatch = fenceText.match(/^(\s*`{3,}|~{3,})\s*(\S*)/);
+    const rawLang = langMatch?.[2] || '';
+    const language = normalizeCodeLanguage(rawLang);
+
+    // Determine if cursor is on the fence line itself or inside code content
+    const isOnFence = line.number === fenceLine.number ||
+      line.number === view.state.doc.lineAt(fencedCode.to).number;
+
+    // Detect the syntax token under the cursor
+    const syntaxToken = isOnFence ? null : getSyntaxTokenAtPos(view, pos);
+
+    return {
+      type: 'codeblock',
+      level: 0,
+      label: language ? `codeblock-${language}` : 'codeblock',
+      language,
+      isOnFence,
+      syntaxToken,
+      fenceFrom: fencedCode.from,
+      fenceTo: fencedCode.to,
+    };
+  }
+
+  const heading = text.match(/^\s{0,3}(#{1,6})\s+/);
+  if (heading) {
+    return { type: 'heading', level: heading[1].length, label: `h${heading[1].length}` };
+  }
+
+  if (/^(\s*>\s?)+/.test(text)) {
+    return { type: 'blockquote', level: 1, label: 'blockquote' };
+  }
+
+  if (/^(\s*)(?:[-+*])\s+/.test(text)) {
+    return { type: 'unordered-list', level: 1, label: 'unordered-list' };
+  }
+
+  if (/^(\s*)(?:\d+\.)\s+/.test(text)) {
+    return { type: 'ordered-list', level: 1, label: 'ordered-list' };
+  }
+
+  return { type: 'paragraph', level: 0, label: 'paragraph' };
+}
+
+/**
+ * Normalize code language aliases to canonical names matching template keys.
+ */
+function normalizeCodeLanguage(raw) {
+  if (!raw) return '';
+  const lang = raw.toLowerCase().trim();
+  const map = {
+    'js': 'javascript', 'node': 'javascript', 'ecmascript': 'javascript',
+    'ts': 'typescript',
+    'py': 'python', 'python3': 'python',
+    'rb': 'ruby',
+    'rs': 'rust',
+    'sh': 'shell', 'bash': 'shell', 'zsh': 'shell', 'fish': 'shell',
+    'ps1': 'powershell', 'pwsh': 'powershell',
+    'yml': 'yaml',
+    'htm': 'html',
+    'c': 'cpp', 'c++': 'cpp', 'cxx': 'cpp', 'h': 'cpp', 'hpp': 'cpp',
+    'golang': 'go',
+    'jl': 'julia',
+    'rlang': 'r',
+    'mysql': 'sql', 'postgresql': 'sql', 'postgres': 'sql', 'sqlite': 'sql',
+    'jsonc': 'json',
+    'jsx': 'javascript', 'tsx': 'typescript',
+    'xml': 'html', 'svg': 'html',
+  };
+  return map[lang] || lang;
+}
+
+/**
+ * Get the semantic syntax token type at a position within a code block.
+ * Maps CodeMirror/Lezer highlight tags to our template token names.
+ *
+ * @param {EditorView} view
+ * @param {number} pos
+ * @returns {string|null} Token name like 'keyword', 'string', 'comment', etc.
+ */
+function getSyntaxTokenAtPos(view, pos) {
+  const tree = syntaxTree(view.state);
+  let bestNode = null;
+  let bestSize = Infinity;
+
+  // Find the most specific (smallest) node at pos
+  tree.iterate({
+    from: pos,
+    to: pos + 1,
+    enter: (node) => {
+      const size = node.to - node.from;
+      if (size < bestSize && node.from <= pos && node.to > pos) {
+        bestNode = node;
+        bestSize = size;
+      }
+    },
+  });
+
+  if (!bestNode) return null;
+  const name = bestNode.name;
+
+  // Map Lezer tree node names to our semantic token names.
+  // These are the node names from @lezer/highlight and language parsers.
+  const tokenMap = {
+    // Keywords
+    'Keyword': 'keyword',
+    'keyword': 'keyword',
+    'ControlKeyword': 'controlKeyword',
+    'controlKeyword': 'controlKeyword',
+    'for': 'controlKeyword',
+    'if': 'controlKeyword',
+    'else': 'controlKeyword',
+    'while': 'controlKeyword',
+    'return': 'keyword',
+    'def': 'keyword',
+    'class': 'keyword',
+    'import': 'keyword',
+    'from': 'keyword',
+    'as': 'keyword',
+    'in': 'keyword',
+    'not': 'keyword',
+    'and': 'keyword',
+    'or': 'keyword',
+    'is': 'keyword',
+    'with': 'keyword',
+    'try': 'controlKeyword',
+    'except': 'controlKeyword',
+    'finally': 'controlKeyword',
+    'raise': 'keyword',
+    'yield': 'keyword',
+    'lambda': 'keyword',
+    'pass': 'keyword',
+    'break': 'controlKeyword',
+    'continue': 'controlKeyword',
+    'del': 'keyword',
+    'global': 'keyword',
+    'nonlocal': 'keyword',
+    'assert': 'keyword',
+    'async': 'keyword',
+    'await': 'keyword',
+    'let': 'keyword',
+    'const': 'keyword',
+    'var': 'keyword',
+    'function': 'keyword',
+    'switch': 'controlKeyword',
+    'case': 'controlKeyword',
+    'default': 'controlKeyword',
+    'do': 'controlKeyword',
+    'throw': 'keyword',
+    'catch': 'controlKeyword',
+    'new': 'keyword',
+    'this': 'keyword',
+    'super': 'keyword',
+    'extends': 'keyword',
+    'implements': 'keyword',
+    'interface': 'keyword',
+    'enum': 'keyword',
+    'export': 'keyword',
+    'typeof': 'keyword',
+    'instanceof': 'keyword',
+    'void': 'keyword',
+    'delete': 'keyword',
+
+    // Strings
+    'String': 'string',
+    'string': 'string',
+    'TemplateString': 'string',
+    'FormatString': 'string',
+    'Character': 'string',
+
+    // Numbers
+    'Number': 'number',
+    'number': 'number',
+    'Integer': 'number',
+    'Float': 'number',
+
+    // Comments
+    'Comment': 'comment',
+    'comment': 'comment',
+    'LineComment': 'comment',
+    'BlockComment': 'comment',
+
+    // Functions
+    'FunctionDefinition': 'function',
+    'FunctionDeclaration': 'function',
+    'CallExpression': 'function',
+
+    // Variables
+    'VariableName': 'variable',
+    'VariableDefinition': 'variable',
+
+    // Types
+    'TypeName': 'type',
+    'TypeDefinition': 'type',
+    'ClassName': 'type',
+    'ClassDefinition': 'type',
+
+    // Operators
+    'ArithOp': 'operator',
+    'LogicOp': 'operator',
+    'BitOp': 'operator',
+    'CompareOp': 'operator',
+    'AssignOp': 'operator',
+    'Equals': 'operator',
+
+    // Punctuation
+    'Punctuation': 'punctuation',
+    '(': 'punctuation',
+    ')': 'punctuation',
+    '[': 'punctuation',
+    ']': 'punctuation',
+    '{': 'punctuation',
+    '}': 'punctuation',
+    '.': 'punctuation',
+    ',': 'punctuation',
+    ';': 'punctuation',
+    ':': 'punctuation',
+
+    // Properties
+    'PropertyName': 'property',
+    'PropertyDefinition': 'property',
+
+    // Constants
+    'BooleanLiteral': 'constant',
+    'Boolean': 'constant',
+    'True': 'constant',
+    'False': 'constant',
+    'None': 'constant',
+    'Null': 'constant',
+    'null': 'constant',
+    'undefined': 'constant',
+
+    // Regex
+    'RegExp': 'regexp',
+
+    // Escape
+    'Escape': 'escape',
+    'EscapeSequence': 'escape',
+
+    // Tags (HTML/XML)
+    'TagName': 'tag',
+    'StartTag': 'tag',
+    'EndTag': 'tag',
+    'SelfClosingTag': 'tag',
+
+    // Attributes
+    'AttributeName': 'attribute',
+    'AttributeValue': 'attributeValue',
+
+    // Meta / decorators
+    'Decorator': 'meta',
+    'Annotation': 'meta',
+    'Meta': 'meta',
+    'ProcessingInstruction': 'meta',
+  };
+
+  // Direct match
+  if (tokenMap[name]) return tokenMap[name];
+
+  // Try resolving from the tree directly and walking up parent nodes
+  try {
+    let node = tree.resolveInner(pos, 1);
+    let depth = 0;
+    while (node && depth < 8) {
+      if (tokenMap[node.name]) return tokenMap[node.name];
+      node = node.parent;
+      depth++;
+    }
+  } catch (e) { /* ignore tree resolution errors */ }
+
+  return null;
+}
+
+function getSelectionFormattingInfo(view) {
+  return getSelectionFormattingState(view);
+}
+
+function setCurrentBlockType(view, type, options = {}) {
+  const state = view.state;
+  const pos = state.selection.main.head;
+  const line = state.doc.lineAt(pos);
+  const prefix = currentLineStructuralPrefix(line.text);
+  const contentStart = line.from + prefix.length;
+  let newPrefix = '';
+
+  if (type === 'paragraph') {
+    newPrefix = '';
+  } else if (type === 'heading') {
+    const level = Math.max(1, Math.min(6, Number(options.level) || 1));
+    newPrefix = '#'.repeat(level) + ' ';
+  } else if (type === 'blockquote') {
+    newPrefix = '> ';
+  } else if (type === 'unordered-list') {
+    newPrefix = '- ';
+  } else if (type === 'ordered-list') {
+    newPrefix = '1. ';
+  } else {
+    return false;
+  }
+
+  view.dispatch({
+    changes: { from: line.from, to: contentStart, insert: newPrefix },
+    selection: { anchor: line.from + newPrefix.length + Math.max(0, pos - contentStart) },
+    userEvent: 'input.wysiwyg.blocktype',
+  });
+  return true;
+}
+
+function insertLinkAtSelection(view, url, text = null) {
+  const state = view.state;
+  const range = state.selection.main;
+  const selected = state.sliceDoc(range.from, range.to);
+  const label = text ?? selected ?? 'link';
+  const link = `[${label}](${url})`;
+  const insertFrom = range.from;
+  const insertTo = range.to;
+  view.dispatch({
+    changes: { from: insertFrom, to: insertTo, insert: link },
+    selection: { anchor: insertFrom + 1, head: insertFrom + 1 + label.length },
+    userEvent: 'input.wysiwyg.link',
+  });
+  return true;
+}
+
+function insertImageAtSelection(view, url, alt = 'image') {
+  const pos = view.state.selection.main.head;
+  const image = `![${alt}](${url})`;
+  view.dispatch({
+    changes: { from: pos, insert: image },
+    selection: { anchor: pos + 2, head: pos + 2 + alt.length },
+    userEvent: 'input.wysiwyg.image',
+  });
+  return true;
+}
+
+function insertCodeBlockAtCursor(view, language = '') {
+  const pos = view.state.selection.main.head;
+  const lang = language ? String(language).trim() : '';
+  const prefix = pos > 0 && view.state.sliceDoc(pos - 1, pos) !== '\n' ? '\n' : '';
+  const block = `${prefix}\`\`\`${lang}\n\n\`\`\``;
+  const cursor = pos + prefix.length + 3 + lang.length + 1;
+  view.dispatch({
+    changes: { from: pos, insert: block },
+    selection: { anchor: cursor },
+    userEvent: 'input.wysiwyg.codeblock',
+  });
+  return true;
 }
 // #endregion INITIAL_CURSOR
 
@@ -935,11 +1478,16 @@ function create(target, options = {}) {
 
   // Always read initial content from Yjs (source of truth)
   const initialContent = yText.toString();
+  const initialDocumentTemplate = normalizeDocumentTemplate(options.documentTemplate || defaultDocumentTemplate);
   const themeCompartment = new Compartment();
+  const documentTemplateCompartment = new Compartment();
   const readonlyCompartment = new Compartment();
   const keymapCompartment = new Compartment();
   const projectFilesCompartment = new Compartment();
   const sectionControlsCompartment = new Compartment();
+  const sourceModeCompartment = new Compartment();
+  const wysiwygModeCompartment = new Compartment();
+  const invisiblesCompartment = new Compartment();
 
   // Create UndoManager for undo/redo tracking
   // We create it ourselves so we can listen to stack changes
@@ -1008,6 +1556,7 @@ function create(target, options = {}) {
     ...(spellcheck !== false ? createSpellcheckExtensions() : []),
     EditorView.lineWrapping, // Always wrap markdown text
     themeCompartment.of(initialCMTheme),
+    documentTemplateCompartment.of(createDocumentTemplateExtension(initialDocumentTemplate)),
     readonlyCompartment.of(readonly ? EditorState.readOnly.of(true) : []),
     placeholderText ? placeholder(placeholderText) : [],
     // Yjs collaboration - y-codemirror.next handles sync and undo
@@ -1019,9 +1568,12 @@ function create(target, options = {}) {
     // Initially empty, configured after api is created
     keymapCompartment.of([]),
     outputWidgetPlugin, // ANSI output rendering
+    ...createInlineEditingExtensions(),
     lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
     blockDecorations,   // StateField for tables, display math (multi-line)
     markdownRenderer,   // ViewPlugin for everything else (inline)
+    pageViewPagination, // ViewPlugin: page-view spacers at page boundaries
+    ...createWysiwygExtensions(),
     ...commentSyntaxModule.createCommentSyntaxExtension(),
     // Wiki-link completion - just the facet for project files
     // The actual completion is provided by runtime-lsp (via additionalSources)
@@ -1029,6 +1581,12 @@ function create(target, options = {}) {
     projectFilesCompartment.of(projectFilesFacet.of([])),
     // Section controls are configured after API creation
     sectionControlsCompartment.of([]),
+    // Source mode (show all raw markdown syntax)
+    sourceModeCompartment.of(sourceModeFacet.of(false)),
+    // WYSIWYG mode (fully rendered, syntax-protected editing)
+    wysiwygModeCompartment.of(wysiwygModeFacet.of(false)),
+    // Invisible characters (whitespace visualization)
+    invisiblesCompartment.of([]),
   ];
 
   // Inject markdown styles
@@ -1098,6 +1656,7 @@ function create(target, options = {}) {
 
   // Event handlers
   const changeHandlers = [];
+  const selectionHandlers = [];
   const saveHandlers = [];
   const frontmatterTitleCommitHandlers = [];
   const viewSourceHandlers = [];
@@ -1342,6 +1901,82 @@ function create(target, options = {}) {
     },
 
     // ===========================================================================
+    // WYSIWYG Editing Helpers
+    // ===========================================================================
+
+    toggleBold() {
+      return toggleInlineMark(view, 'bold');
+    },
+
+    toggleItalic() {
+      return toggleInlineMark(view, 'italic');
+    },
+
+    toggleUnderline() {
+      return toggleInlineMark(view, 'underline');
+    },
+
+    toggleStrikethrough() {
+      return toggleInlineMark(view, 'strike');
+    },
+
+    toggleInlineCode() {
+      return toggleInlineMark(view, 'code');
+    },
+
+    setBlockType(type, options = {}) {
+      return setCurrentBlockType(view, type, options);
+    },
+
+    insertLink(url, text = null) {
+      return insertLinkAtSelection(view, url, text);
+    },
+
+    insertCodeBlock(language = '') {
+      return insertCodeBlockAtCursor(view, language);
+    },
+
+    /**
+     * Delete the fenced code block surrounding the cursor.
+     * @returns {boolean} true if a code block was found and deleted
+     */
+    deleteCodeBlock() {
+      const pos = view.state.selection.main.head;
+      const fence = findFencedCodeAt(view.state, pos);
+      if (!fence) return false;
+      const doc = view.state.doc;
+      let delFrom = fence.from;
+      let delTo = Math.min(fence.to, doc.length);
+      if (delFrom > 0 && doc.sliceString(delFrom - 1, delFrom) === '\n') delFrom--;
+      if (delTo < doc.length && doc.sliceString(delTo, delTo + 1) === '\n') delTo++;
+      view.dispatch({
+        changes: { from: delFrom, to: delTo, insert: '' },
+        userEvent: 'delete.wysiwyg.delete-codeblock',
+      });
+      return true;
+    },
+
+    insertImage(url, alt = 'image') {
+      return insertImageAtSelection(view, url, alt);
+    },
+
+    getCurrentBlockType() {
+      return getCurrentBlockTypeInfo(view);
+    },
+
+    getSelectionFormatting() {
+      return getSelectionFormattingInfo(view);
+    },
+
+    onSelectionChange(callback) {
+      selectionHandlers.push(callback);
+      return () => {
+        const idx = selectionHandlers.indexOf(callback);
+        if (idx >= 0) selectionHandlers.splice(idx, 1);
+      };
+    },
+
+    // ===========================================================================
     // Streaming Writer
     // ===========================================================================
 
@@ -1388,6 +2023,101 @@ function create(target, options = {}) {
     },
 
     /**
+     * Apply a semantic document template to the editor content surface.
+     * This is separate from the app/editor chrome theme.
+     *
+     * @param {object} template
+     * @returns {object} normalized template
+     */
+    setDocumentTemplate(template) {
+      const next = normalizeDocumentTemplate(template || defaultDocumentTemplate);
+      this._documentTemplate = cloneDocumentTemplate(next);
+      this._documentTemplateName = next.name || 'Untitled Template';
+      view.dispatch({
+        effects: documentTemplateCompartment.reconfigure(
+          createDocumentTemplateExtension(next)
+        ),
+      });
+      return this.getDocumentTemplate();
+    },
+
+    getDocumentTemplate() {
+      return cloneDocumentTemplate(this._documentTemplate || initialDocumentTemplate);
+    },
+
+    getDocumentTemplateName() {
+      return this._documentTemplateName || this._documentTemplate?.name || initialDocumentTemplate.name;
+    },
+
+    getDocumentTemplatePresets() {
+      return documentTemplatePresets.map(cloneDocumentTemplate);
+    },
+
+    compileDocumentTemplate(template = null) {
+      return compileDocumentTemplateCSS(template || this.getDocumentTemplate());
+    },
+
+    serializeDocumentTemplate(template = null, scope = '.markdown-body') {
+      return serializeDocumentTemplateToCss(template || this.getDocumentTemplate(), scope);
+    },
+
+    /**
+     * Serialize the current document template to Pandoc YAML metadata.
+     * @param {object} [template]
+     * @returns {string} YAML string
+     */
+    serializeDocumentTemplatePandoc(template = null) {
+      return serializeDocumentTemplateToPandocYaml(template || this.getDocumentTemplate());
+    },
+
+    /**
+     * Serialize the current document template to a LaTeX preamble.
+     * @param {object} [template]
+     * @returns {string} LaTeX commands
+     */
+    serializeDocumentTemplateLatex(template = null) {
+      return serializeDocumentTemplateToLatexPreamble(template || this.getDocumentTemplate());
+    },
+
+    /**
+     * Serialize the current document template to a standalone HTML wrapper.
+     * @param {object} [template]
+     * @param {object} [options]
+     * @returns {string} HTML document string
+     */
+    serializeDocumentTemplateHtml(template = null, options = {}) {
+      return serializeDocumentTemplateToHtml(template || this.getDocumentTemplate(), options);
+    },
+
+    /**
+     * Get a Word style mapping for the current document template.
+     * @param {object} [template]
+     * @returns {object}
+     */
+    getDocumentTemplateWordStyleMap(template = null) {
+      return serializeDocumentTemplateToWordStyleMap(template || this.getDocumentTemplate());
+    },
+
+    /**
+     * Generate a recommended Pandoc command for the current document template.
+     * @param {object} options - { format, input, output, referenceDoc, preambleFile }
+     * @returns {string}
+     */
+    buildPandocCommand(options = {}) {
+      return buildPandocCommand(this.getDocumentTemplate(), options);
+    },
+
+    bindDocumentTemplate(name) {
+      const result = updateFrontmatterField(this.getContent(), 'template', name);
+      if (!result) return false;
+      view.dispatch({
+        changes: result.changes,
+        userEvent: 'input.document-template-binding',
+      });
+      return true;
+    },
+
+    /**
      * Update section controls configuration.
      * @param {{enabled?: boolean, showAi?: boolean, showFormatting?: boolean, mode?: 'full' | 'dots-hover' | 'dots-click'}} updates
      */
@@ -1404,6 +2134,104 @@ function create(target, options = {}) {
      */
     getSectionControls() {
       return { ...(this.config.sectionControls || {}) };
+    },
+
+    // ===========================================================================
+    // Source Mode, WYSIWYG Mode & Invisible Characters
+    // ===========================================================================
+
+    /** @private */
+    _sourceMode: false,
+    /** @private */
+    _wysiwygMode: false,
+    /** @private */
+    _showInvisibles: false,
+    /** @private */
+    _documentTemplate: cloneDocumentTemplate(initialDocumentTemplate),
+    /** @private */
+    _documentTemplateName: initialDocumentTemplate.name || 'Default',
+
+    /**
+     * Toggle source mode (show all raw markdown syntax).
+     * Mutually exclusive with WYSIWYG mode.
+     *
+     * @param {boolean} [value] - true=on, false=off. Omit to toggle.
+     * @returns {boolean} The new state
+     */
+    setSourceMode(value) {
+      const newValue = value !== undefined ? !!value : !this._sourceMode;
+      this._sourceMode = newValue;
+      if (newValue) this._wysiwygMode = false;
+      view.dispatch({
+        effects: [
+          sourceModeCompartment.reconfigure(sourceModeFacet.of(newValue)),
+          wysiwygModeCompartment.reconfigure(wysiwygModeFacet.of(false)),
+        ],
+      });
+      return newValue;
+    },
+
+    /**
+     * Get current source mode state.
+     * @returns {boolean}
+     */
+    getSourceMode() {
+      return this._sourceMode;
+    },
+
+    /**
+     * Toggle WYSIWYG mode (fully rendered, syntax-protected editing).
+     * Mutually exclusive with source mode.
+     *
+     * @param {boolean} [value] - true=on, false=off. Omit to toggle.
+     * @returns {boolean} The new state
+     */
+    setWysiwygMode(value) {
+      const newValue = value !== undefined ? !!value : !this._wysiwygMode;
+      this._wysiwygMode = newValue;
+      if (newValue) this._sourceMode = false;
+      view.dispatch({
+        effects: [
+          wysiwygModeCompartment.reconfigure(wysiwygModeFacet.of(newValue)),
+          sourceModeCompartment.reconfigure(sourceModeFacet.of(false)),
+        ],
+      });
+      return newValue;
+    },
+
+    /**
+     * Get current WYSIWYG mode state.
+     * @returns {boolean}
+     */
+    getWysiwygMode() {
+      return this._wysiwygMode;
+    },
+
+    /**
+     * Toggle invisible characters (spaces, tabs, newlines).
+     * When enabled, spaces are shown as dots, tabs as arrows, and
+     * newlines as ¶ symbols.
+     *
+     * @param {boolean} [value] - true=on, false=off. Omit to toggle.
+     * @returns {boolean} The new state
+     */
+    setShowInvisibles(value) {
+      const newValue = value !== undefined ? !!value : !this._showInvisibles;
+      this._showInvisibles = newValue;
+      view.dispatch({
+        effects: invisiblesCompartment.reconfigure(
+          newValue ? createInvisiblesExtension() : []
+        ),
+      });
+      return newValue;
+    },
+
+    /**
+     * Get current invisible characters state.
+     * @returns {boolean}
+     */
+    getShowInvisibles() {
+      return this._showInvisibles;
     },
 
     // ===========================================================================
@@ -2585,6 +3413,21 @@ function create(target, options = {}) {
       stateManager.setDirty(true);
       updateDocumentState();
     }
+
+    if (update.docChanged || update.selectionSet) {
+      const payload = {
+        selection: update.state.selection.main,
+        block: getCurrentBlockTypeInfo(update.view),
+        formatting: getSelectionFormattingInfo(update.view),
+      };
+      selectionHandlers.forEach(fn => {
+        try {
+          fn(payload);
+        } catch (err) {
+          console.warn('[mrmd] selection change handler failed:', err);
+        }
+      });
+    }
   });
 
   // Add update listener extension
@@ -3118,6 +3961,16 @@ const markdownExports = {
   // Asset resolver facet (for Electron/desktop apps)
   assetResolverFacet,
 
+  // Mode facets
+  sourceModeFacet,
+  wysiwygModeFacet,
+  createInlineEditingExtensions,
+  createWysiwygExtensions,
+  toggleInlineFormat,
+  toggleInlineMark,
+  getSelectionFormattingState,
+  findFencedCodeAt,
+
   // Styles
   markdownStyles,
   injectMarkdownStyles,
@@ -3133,6 +3986,28 @@ const markdownExports = {
   isTableDelimiter,
   generateTableId,
   AlertTitleWidget,
+
+  // Page view pagination
+  pageViewPagination,
+};
+
+const documentTemplateExports = {
+  defaultDocumentTemplate,
+  documentTemplatePresets,
+  normalizeDocumentTemplate,
+  cloneDocumentTemplate,
+  createDocumentTemplateExtension,
+  compileDocumentTemplateCSS,
+  serializeDocumentTemplateToCss,
+  findDocumentTemplatePreset,
+  // Multi-format export
+  resolveFontForExport,
+  serializeDocumentTemplateToPandocMeta,
+  serializeDocumentTemplateToPandocYaml,
+  serializeDocumentTemplateToLatexPreamble,
+  serializeDocumentTemplateToHtml,
+  serializeDocumentTemplateToWordStyleMap,
+  buildPandocCommand,
 };
 // #endregion MARKDOWN_EXPORTS
 
@@ -3173,6 +4048,14 @@ const mrmd = {
   wikiLink: wikiLinkExports,
   // Markdown rendering (blur→render, focus→source)
   markdown: markdownExports,
+  // Frontmatter utilities
+  frontmatter: {
+    parseFrontmatter,
+    readFrontmatterValue,
+    updateFrontmatterField,
+  },
+  // Document templates (semantic content styling)
+  documentTemplates: documentTemplateExports,
   // Shell (status bar, file management, studio layout)
   shell: shellModule,
   // AI Integration (decorations, state, widgets)
@@ -3321,6 +4204,23 @@ export {
   isTableDelimiter,
   generateTableId,
   AlertTitleWidget,
+  // Document template exports
+  documentTemplateExports,
+  defaultDocumentTemplate,
+  documentTemplatePresets,
+  normalizeDocumentTemplate,
+  cloneDocumentTemplate,
+  createDocumentTemplateExtension,
+  compileDocumentTemplateCSS,
+  serializeDocumentTemplateToCss,
+  findDocumentTemplatePreset,
+  resolveFontForExport,
+  serializeDocumentTemplateToPandocMeta,
+  serializeDocumentTemplateToPandocYaml,
+  serializeDocumentTemplateToLatexPreamble,
+  serializeDocumentTemplateToHtml,
+  serializeDocumentTemplateToWordStyleMap,
+  buildPandocCommand,
   // Spellcheck exports
   createSpellcheckExtensions,
   // Grammar exports
@@ -3329,6 +4229,8 @@ export {
   forceLanguageToolRefresh,
   refreshLanguageToolDiagnostics,
   applyFirstLanguageToolSuggestion,
+  getLanguageToolSuggestionMenu,
+  applyLanguageToolSuggestionAt,
   // Wiki-link completion exports
   wikiLinkExports,
   projectFilesFacet,
@@ -3345,5 +4247,5 @@ export const { createStudio, OrchestratorClient, Drive, createDrive, ShellStateM
 
 // Document language detection and frontmatter updater
 export { getDocumentLanguages, getLanguageDisplay, isExecutableLanguage } from './document-languages.js';
-export { parseFrontmatter, readFrontmatterSession, getEffectiveSessionConfig } from './frontmatter-updater.js';
+export { parseFrontmatter, readFrontmatterSession, getEffectiveSessionConfig, readFrontmatterValue, updateFrontmatterField } from './frontmatter-updater.js';
 // #endregion EXPORTS

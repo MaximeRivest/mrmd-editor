@@ -18,6 +18,7 @@
 import { StateField } from '@codemirror/state';
 import { EditorView, Decoration, WidgetType, ViewPlugin } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
+import { sourceModeFacet, wysiwygModeFacet } from './facets.js';
 
 // =============================================================================
 // Line Height Tracking for Accurate Spacing
@@ -440,11 +441,15 @@ function buildBlockDecorations(state) {
   const cursorLine = doc.lineAt(cursorPos).number;
   const decorations = [];
 
+  // Mode flags
+  const isSourceMode = state.facet(sourceModeFacet);
+  const isWysiwygMode = state.facet(wysiwygModeFacet);
+
   // Find and process tables
   const tableRanges = findTableRanges(state);
 
   for (const range of tableRanges) {
-    const cursorInTable = cursorLine >= range.startLine && cursorLine <= range.endLine;
+    const cursorInTable = isSourceMode || (!isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
 
     // Collect lines for both rendering and height calculation
     const lines = [];
@@ -496,7 +501,7 @@ function buildBlockDecorations(state) {
   const mathRanges = findDisplayMathRanges(state);
 
   for (const range of mathRanges) {
-    const cursorInMath = cursorLine >= range.startLine && cursorLine <= range.endLine;
+    const cursorInMath = isSourceMode || (!isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
     const contentHash = 'math-' + hashContent(range.content);
 
     if (!cursorInMath) {
@@ -536,7 +541,7 @@ function buildBlockDecorations(state) {
   const fmRange = findFrontmatterRange(state);
 
   if (fmRange) {
-    const cursorInFrontmatter = cursorLine >= fmRange.startLine && cursorLine <= fmRange.endLine;
+    const cursorInFrontmatter = isSourceMode || (!isWysiwygMode && cursorLine >= fmRange.startLine && cursorLine <= fmRange.endLine);
     const contentHash = 'fm-' + hashContent(fmRange.content);
 
     if (!cursorInFrontmatter) {
@@ -592,7 +597,7 @@ export const blockDecorations = StateField.define({
     // Rebuild on any change that could affect block elements
     // For efficiency, we could map positions and only rebuild affected ranges,
     // but for now, full rebuild is acceptable
-    if (tr.docChanged || tr.selection) {
+    if (tr.docChanged || tr.selection || tr.reconfigured) {
       return buildBlockDecorations(tr.state);
     }
     return decorations;

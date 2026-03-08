@@ -5,6 +5,7 @@
 import { ViewPlugin } from '@codemirror/view';
 import { Facet } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
+import { getSelectionFormattingState } from '../markdown/inline-commands.js';
 import { createSectionControlsDom, injectSectionControlsStyles } from './widgets.js';
 
 export const sectionControlsFacet = Facet.define({
@@ -66,6 +67,20 @@ export function createSectionControlsPlugin(editor) {
         });
 
         document.body.appendChild(this.dom);
+        this.updateFormattingState();
+      }
+
+      updateFormattingState() {
+        if (!this.dom) return;
+        const formatting = getSelectionFormattingState(this.view);
+        const marks = ['bold', 'italic', 'underline', 'strikethrough', 'code'];
+        for (const mark of marks) {
+          const btn = this.dom.querySelector(`.cm-section-controls-btn.${mark}`);
+          if (!btn) continue;
+          const stateKey = mark === 'strikethrough' ? 'strikethrough' : mark;
+          btn.classList.toggle('is-active', !!formatting[stateKey]);
+          btn.classList.toggle('is-mixed', !!formatting.mixed?.[stateKey]);
+        }
       }
 
       scheduleReposition() {
@@ -120,6 +135,10 @@ export function createSectionControlsPlugin(editor) {
         if (configChanged) {
           this.config = newConfig;
           this.ensureDom();
+        }
+
+        if (configChanged || update.selectionSet || update.docChanged) {
+          this.updateFormattingState();
         }
 
         if (

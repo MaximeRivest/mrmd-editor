@@ -15588,6 +15588,33 @@ function highlightActiveLineGutter() {
     return activeLineGutterHighlighter;
 }
 
+function matcher(decorator) {
+    return ViewPlugin.define(view => ({
+        decorations: decorator.createDeco(view),
+        update(u) {
+            this.decorations = decorator.updateDeco(u, this.decorations);
+        },
+    }), {
+        decorations: v => v.decorations
+    });
+}
+const tabDeco = /*@__PURE__*/Decoration.mark({ class: "cm-highlightTab" });
+const spaceDeco = /*@__PURE__*/Decoration.mark({ class: "cm-highlightSpace" });
+const whitespaceHighlighter = /*@__PURE__*/matcher(/*@__PURE__*/new MatchDecorator({
+    regexp: /\t| /g,
+    decoration: match => match[0] == "\t" ? tabDeco : spaceDeco,
+    boundary: /\S/,
+}));
+/**
+Returns an extension that highlights whitespace, adding a
+`cm-highlightSpace` class to stretches of spaces, and a
+`cm-highlightTab` class to individual tab characters. By default,
+the former are shown as faint dots, and the latter as arrows.
+*/
+function highlightWhitespace() {
+    return whitespaceHighlighter;
+}
+
 /**
 The default maximum length of a `TreeBuffer` node.
 */
@@ -54489,6 +54516,9920 @@ function createRuntimeRegistry() {
 }
 
 /**
+ * Document template system.
+ *
+ * Semantic, reusable document styling separate from the app/editor chrome theme.
+ * Phase 1 focuses on editor preview + reusable presets.
+ *
+ * @module document-template
+ */
+
+
+const defaultDocumentTemplate = {
+  name: 'Default',
+  version: 5,
+  editor: {
+    applyDocumentStyles: true,
+  },
+  page: {
+    background: '',
+    maxWidth: '',
+    // Print / export properties (not used in editor preview)
+    paperSize: '',       // 'letter' | 'a4' | 'a5' | 'legal' | ''
+    marginTop: '',       // e.g. '1in', '2.54cm'
+    marginBottom: '',
+    marginLeft: '',
+    marginRight: '',
+  },
+  body: {
+    fontFamily: '',
+    fontSize: '',
+    lineHeight: '',
+    color: '',
+    textTransform: '', // '' | 'uppercase' | 'lowercase' | 'capitalize'
+    paragraphSpacing: '', // e.g. '1em', '12pt' — maps to CSS margin-bottom on p, LaTeX \parskip
+  },
+  // --- Inline mark styles (bold, italic, underline, strikethrough) ---
+  // Base defaults apply everywhere. Per-block overrides cascade:
+  //   inlineMarks.bold  →  heading.bold  →  heading.h1.bold
+  inlineMarks: {
+    bold: {
+      color: '',
+      fontFamily: '',
+      fontWeight: '',
+      relativeSize: '', // e.g. '1.05' → 1.05em
+      textTransform: '',
+    },
+    italic: {
+      color: '',
+      fontFamily: '',
+      fontStyle: '',
+      relativeSize: '',
+      textTransform: '',
+    },
+    underline: {
+      color: '',
+      lineColor: '',
+      lineStyle: '', // '' | 'solid' | 'dashed' | 'dotted' | 'wavy'
+      textTransform: '',
+    },
+    strikethrough: {
+      color: '',
+      lineColor: '',
+      textTransform: '',
+    },
+  },
+  heading: {
+    color: '',
+    fontFamily: '',
+    textTransform: '',
+    // Per-heading sizes plus optional inline-mark overrides
+    h1: {
+      fontFamily: '', fontSize: '', fontWeight: '', textTransform: '',
+      bold: { color: '', fontFamily: '', fontWeight: '', relativeSize: '', textTransform: '' },
+      italic: { color: '', fontFamily: '', fontStyle: '', relativeSize: '', textTransform: '' },
+      underline: { color: '', lineColor: '', lineStyle: '', textTransform: '' },
+      strikethrough: { color: '', lineColor: '', textTransform: '' },
+    },
+    h2: {
+      fontFamily: '', fontSize: '', fontWeight: '', textTransform: '',
+      bold: { color: '', fontFamily: '', fontWeight: '', relativeSize: '', textTransform: '' },
+      italic: { color: '', fontFamily: '', fontStyle: '', relativeSize: '', textTransform: '' },
+      underline: { color: '', lineColor: '', lineStyle: '', textTransform: '' },
+      strikethrough: { color: '', lineColor: '', textTransform: '' },
+    },
+    h3: {
+      fontFamily: '', fontSize: '', fontWeight: '', textTransform: '',
+      bold: { color: '', fontFamily: '', fontWeight: '', relativeSize: '', textTransform: '' },
+      italic: { color: '', fontFamily: '', fontStyle: '', relativeSize: '', textTransform: '' },
+      underline: { color: '', lineColor: '', lineStyle: '', textTransform: '' },
+      strikethrough: { color: '', lineColor: '', textTransform: '' },
+    },
+    h4: {
+      fontFamily: '', fontSize: '', fontWeight: '', textTransform: '',
+      bold: { color: '', fontFamily: '', fontWeight: '', relativeSize: '', textTransform: '' },
+      italic: { color: '', fontFamily: '', fontStyle: '', relativeSize: '', textTransform: '' },
+      underline: { color: '', lineColor: '', lineStyle: '', textTransform: '' },
+      strikethrough: { color: '', lineColor: '', textTransform: '' },
+    },
+    h5: {
+      fontFamily: '', fontSize: '', fontWeight: '', textTransform: '',
+      bold: { color: '', fontFamily: '', fontWeight: '', relativeSize: '', textTransform: '' },
+      italic: { color: '', fontFamily: '', fontStyle: '', relativeSize: '', textTransform: '' },
+      underline: { color: '', lineColor: '', lineStyle: '', textTransform: '' },
+      strikethrough: { color: '', lineColor: '', textTransform: '' },
+    },
+    h6: {
+      fontFamily: '', fontSize: '', fontWeight: '', textTransform: '',
+      bold: { color: '', fontFamily: '', fontWeight: '', relativeSize: '', textTransform: '' },
+      italic: { color: '', fontFamily: '', fontStyle: '', relativeSize: '', textTransform: '' },
+      underline: { color: '', lineColor: '', lineStyle: '', textTransform: '' },
+      strikethrough: { color: '', lineColor: '', textTransform: '' },
+    },
+    // Heading-wide mark overrides (applied to all h1-h6 unless a per-level override exists)
+    bold:          { color: '', fontFamily: '', fontWeight: '', relativeSize: '', textTransform: '' },
+    italic:        { color: '', fontFamily: '', fontStyle: '', relativeSize: '', textTransform: '' },
+    underline:     { color: '', lineColor: '', lineStyle: '', textTransform: '' },
+    strikethrough: { color: '', lineColor: '', textTransform: '' },
+    numbering: '',       // '' | 'none' | 'all' | 'h2+' — hint for Pandoc --number-sections
+  },
+  blockquote: {
+    borderLeftColor: '',
+    background: '',
+    color: '',
+    fontFamily: '',
+    fontStyle: '',       // '' | 'italic' | 'normal'
+    textTransform: '',
+    // Blockquote-specific mark overrides
+    bold:          { color: '', fontFamily: '', fontWeight: '', relativeSize: '', textTransform: '' },
+    italic:        { color: '', fontFamily: '', fontStyle: '', relativeSize: '', textTransform: '' },
+    underline:     { color: '', lineColor: '', lineStyle: '', textTransform: '' },
+    strikethrough: { color: '', lineColor: '', textTransform: '' },
+  },
+  code: {
+    inline: {
+      fontFamily: '',
+      background: '',
+      color: '',
+    },
+    block: {
+      fontFamily: '',
+      fontSize: '',
+      background: '',
+      color: '',
+      lineNumbers: '',   // '' | 'true' | 'false' — hint for Pandoc --listings / code line numbers
+      lineHeight: '',    // e.g. '1.5'
+      borderRadius: '',  // e.g. '6px'
+      borderColor: '',   // e.g. '#333'
+      padding: '',       // e.g. '1em'
+    },
+    // --- Cell chrome: header bar, run button, output area ---
+    cell: {
+      headerBackground: '',   // code cell header bar background
+      headerColor: '',        // code cell header bar text color
+      headerBorderColor: '',  // border below header
+      outputBackground: '',   // output area background
+      outputColor: '',        // output area text color
+      outputBorderColor: '',  // border above output area
+    },
+    // --- Syntax highlighting tokens ---
+    // Base token colors apply to all code blocks/languages.
+    // Per-language overrides cascade:  code.highlight.keyword  →  code.highlight.languages.python.keyword
+    //
+    // Each token property is a color string (e.g. '#569cd6').
+    // Additional style properties (fontWeight, fontStyle) are supported for some tokens.
+    highlight: {
+      // Semantic token colors (base — all languages)
+      keyword:       '',   // for, if, while, return, import, class, function, etc.
+      controlKeyword: '',  // if, else, for, while, try, catch — control flow subset
+      string:        '',   // "hello", 'world', `template`
+      number:        '',   // 42, 3.14, 0xFF
+      comment:       '',   // // line comment, /* block comment */
+      function:      '',   // function names: print(), len(), my_func()
+      variable:      '',   // variable names
+      type:          '',   // type/class names: int, String, MyClass
+      operator:      '',   // +, -, *, =, ==, !=, &&
+      punctuation:   '',   // (), {}, [], ;, :, .
+      property:      '',   // object.property, dict.key
+      constant:      '',   // true, false, null, None, nil
+      regexp:        '',   // /pattern/flags
+      escape:        '',   // \n, \t, unicode escapes
+      tag:           '',   // HTML/XML tag names
+      attribute:     '',   // HTML/XML attribute names
+      attributeValue: '',  // HTML/XML attribute values
+      meta:          '',   // preprocessor, decorators, annotations
+      inserted:      '',   // diff: added lines
+      deleted:       '',   // diff: removed lines
+      changed:       '',   // diff: changed lines
+
+      // Style modifiers for specific tokens (beyond just color)
+      keywordStyle:  '',   // '' | 'bold' | 'italic' | 'bold italic'
+      commentStyle:  '',   // '' | 'italic' | 'bold' | 'bold italic'
+      functionStyle: '',   // '' | 'bold' | 'italic'
+      typeStyle:     '',   // '' | 'bold' | 'italic'
+
+      // Per-language overrides
+      // Each language key contains the same token properties as above.
+      // Only non-empty values override the base.
+      languages: {
+        python:     { keyword: '', controlKeyword: '', string: '', number: '', comment: '', function: '', variable: '', type: '', operator: '', punctuation: '', property: '', constant: '', meta: '', keywordStyle: '', commentStyle: '', functionStyle: '', typeStyle: '' },
+        r:          { keyword: '', controlKeyword: '', string: '', number: '', comment: '', function: '', variable: '', type: '', operator: '', punctuation: '', property: '', constant: '', meta: '', keywordStyle: '', commentStyle: '', functionStyle: '', typeStyle: '' },
+        julia:      { keyword: '', controlKeyword: '', string: '', number: '', comment: '', function: '', variable: '', type: '', operator: '', punctuation: '', property: '', constant: '', meta: '', keywordStyle: '', commentStyle: '', functionStyle: '', typeStyle: '' },
+        javascript: { keyword: '', controlKeyword: '', string: '', number: '', comment: '', function: '', variable: '', type: '', operator: '', punctuation: '', property: '', constant: '', meta: '', keywordStyle: '', commentStyle: '', functionStyle: '', typeStyle: '' },
+        typescript: { keyword: '', controlKeyword: '', string: '', number: '', comment: '', function: '', variable: '', type: '', operator: '', punctuation: '', property: '', constant: '', meta: '', keywordStyle: '', commentStyle: '', functionStyle: '', typeStyle: '' },
+        html:       { keyword: '', string: '', comment: '', tag: '', attribute: '', attributeValue: '', punctuation: '', meta: '', commentStyle: '' },
+        css:        { keyword: '', string: '', number: '', comment: '', property: '', punctuation: '', constant: '', meta: '', commentStyle: '' },
+        sql:        { keyword: '', string: '', number: '', comment: '', function: '', operator: '', punctuation: '', constant: '', keywordStyle: '', commentStyle: '' },
+        rust:       { keyword: '', controlKeyword: '', string: '', number: '', comment: '', function: '', variable: '', type: '', operator: '', punctuation: '', property: '', constant: '', meta: '', keywordStyle: '', commentStyle: '', functionStyle: '', typeStyle: '' },
+        go:         { keyword: '', controlKeyword: '', string: '', number: '', comment: '', function: '', variable: '', type: '', operator: '', punctuation: '', property: '', constant: '', meta: '', keywordStyle: '', commentStyle: '', functionStyle: '', typeStyle: '' },
+        java:       { keyword: '', controlKeyword: '', string: '', number: '', comment: '', function: '', variable: '', type: '', operator: '', punctuation: '', property: '', constant: '', meta: '', keywordStyle: '', commentStyle: '', functionStyle: '', typeStyle: '' },
+        cpp:        { keyword: '', controlKeyword: '', string: '', number: '', comment: '', function: '', variable: '', type: '', operator: '', punctuation: '', property: '', constant: '', meta: '', keywordStyle: '', commentStyle: '', functionStyle: '', typeStyle: '' },
+        shell:      { keyword: '', string: '', number: '', comment: '', variable: '', operator: '', punctuation: '', constant: '', commentStyle: '' },
+        yaml:       { keyword: '', string: '', number: '', comment: '', property: '', punctuation: '', constant: '', commentStyle: '' },
+        json:       { keyword: '', string: '', number: '', property: '', punctuation: '', constant: '' },
+      },
+    },
+  },
+  link: {
+    color: '',
+    underline: '',
+  },
+  table: {
+    borderColor: '',
+    headerBackground: '',
+  },
+  hr: {
+    color: '',
+    style: '',           // '' | 'solid' | 'dashed' | 'dotted'
+    thickness: '',       // e.g. '1px', '2px'
+  },
+  list: {
+    bulletStyle: '',     // '' | 'disc' | 'circle' | 'square' | 'dash'
+    numberStyle: '',     // '' | 'decimal' | 'lower-alpha' | 'lower-roman' | 'upper-alpha' | 'upper-roman'
+  },
+  image: {
+    captionFontSize: '', // e.g. '0.9em'
+    captionColor: '',
+    borderRadius: '',    // e.g. '4px'
+    maxWidth: '',        // e.g. '100%', '80%'
+  },
+  toc: {
+    enabled: '',         // '' | 'true' | 'false' — whether export includes TOC
+    depth: '',           // '' | '2' | '3' | '4' — heading depth for TOC
+  },
+};
+
+const documentTemplatePresets = [
+  defaultDocumentTemplate,
+  {
+    name: 'Manuscript',
+    version: 1,
+    page: { background: '#fffefc', maxWidth: '760px' },
+    body: {
+      fontFamily: 'Charter, Georgia, serif',
+      fontSize: '17px',
+      lineHeight: '1.8',
+      color: '#232323',
+    },
+    heading: {
+      color: '#121212',
+      h1: { fontSize: '2.3em', fontWeight: '800' },
+      h2: { fontSize: '1.75em', fontWeight: '700' },
+      h3: { fontSize: '1.35em', fontWeight: '700' },
+    },
+    blockquote: {
+      borderLeftColor: '#7c3aed',
+      background: '#f6f1ff',
+      color: '#4b5563',
+    },
+    code: {
+      inline: {
+        fontFamily: 'JetBrains Mono, monospace',
+        background: '#f3f4f6',
+        color: '#9d174d',
+      },
+      block: {
+        fontFamily: 'JetBrains Mono, monospace',
+        fontSize: '0.84em',
+        background: '#111827',
+        color: '#e5e7eb',
+      },
+    },
+    link: { color: '#1d4ed8', underline: true },
+    table: { borderColor: '#d1d5db', headerBackground: '#f9fafb' },
+  },
+  {
+    name: 'Report',
+    version: 1,
+    page: { background: '#ffffff', maxWidth: '900px' },
+    body: {
+      fontFamily: 'Inter, system-ui, sans-serif',
+      fontSize: '15px',
+      lineHeight: '1.7',
+      color: '#1f2937',
+    },
+    heading: {
+      color: '#0f172a',
+      h1: { fontSize: '2.1em', fontWeight: '800' },
+      h2: { fontSize: '1.6em', fontWeight: '700' },
+      h3: { fontSize: '1.25em', fontWeight: '700' },
+    },
+    blockquote: {
+      borderLeftColor: '#2563eb',
+      background: '#eff6ff',
+      color: '#334155',
+    },
+    code: {
+      inline: {
+        fontFamily: 'JetBrains Mono, monospace',
+        background: '#eef2ff',
+        color: '#4338ca',
+      },
+      block: {
+        fontFamily: 'JetBrains Mono, monospace',
+        fontSize: '0.82em',
+        background: '#0f172a',
+        color: '#e2e8f0',
+      },
+    },
+    link: { color: '#2563eb', underline: true },
+    table: { borderColor: '#cbd5e1', headerBackground: '#f8fafc' },
+  },
+  {
+    name: 'Notebook',
+    version: 1,
+    page: { background: '', maxWidth: '840px' },
+    body: {
+      fontFamily: 'Alegreya, Georgia, serif',
+      fontSize: '18px',
+      lineHeight: '1.75',
+      color: '',
+    },
+    heading: {
+      color: '',
+      h1: { fontSize: '2.4em', fontWeight: '800' },
+      h2: { fontSize: '1.8em', fontWeight: '700' },
+      h3: { fontSize: '1.4em', fontWeight: '700' },
+    },
+    blockquote: {
+      borderLeftColor: '#f59e0b',
+      background: '#fffbeb',
+      color: '#5b4636',
+    },
+    code: {
+      inline: {
+        fontFamily: 'SF Mono, monospace',
+        background: '#f3f4f6',
+        color: '#b45309',
+      },
+      block: {
+        fontFamily: 'SF Mono, monospace',
+        fontSize: '0.8em',
+        background: '#f8fafc',
+        color: '#111827',
+      },
+    },
+    link: { color: '#0ea5e9', underline: true },
+    table: { borderColor: '#e5e7eb', headerBackground: '#fafaf9' },
+  },
+  // ── Academic ──────────────────────────────────────────────
+  // Formal serif layout for papers, theses, and research notes.
+  // Tight body, generous heading hierarchy, muted palette.
+  {
+    name: 'Academic',
+    version: 1,
+    page: { background: '#ffffff', maxWidth: '780px', paperSize: 'letter', marginTop: '1in', marginBottom: '1in', marginLeft: '1.25in', marginRight: '1.25in' },
+    body: {
+      fontFamily: 'Palatino, "Palatino Linotype", "Book Antiqua", Georgia, serif',
+      fontSize: '16px',
+      lineHeight: '1.65',
+      color: '#1a1a1a',
+      paragraphSpacing: '0.6em',
+    },
+    heading: {
+      color: '#1a1a1a',
+      numbering: 'all',
+      h1: { fontSize: '1.9em', fontWeight: '700' },
+      h2: { fontSize: '1.5em', fontWeight: '700' },
+      h3: { fontSize: '1.2em', fontWeight: '700' },
+      h4: { fontSize: '1.05em', fontWeight: '700' },
+    },
+    blockquote: {
+      borderLeftColor: '#6b7280',
+      background: '#f9fafb',
+      color: '#374151',
+      fontStyle: 'italic',
+    },
+    code: {
+      inline: {
+        fontFamily: 'Inconsolata, "Source Code Pro", monospace',
+        background: '#f3f4f6',
+        color: '#6d28d9',
+      },
+      block: {
+        fontFamily: 'Inconsolata, "Source Code Pro", monospace',
+        fontSize: '0.85em',
+        background: '#f8f9fa',
+        color: '#1f2937',
+        lineNumbers: 'true',
+      },
+      highlight: {
+        keyword: '#7c3aed',
+        controlKeyword: '#be185d',
+        string: '#059669',
+        number: '#d97706',
+        comment: '#6b7280',
+        function: '#1e40af',
+        variable: '#1f2937',
+        type: '#0d9488',
+        operator: '#374151',
+        punctuation: '#6b7280',
+        property: '#1e40af',
+        constant: '#7c3aed',
+        commentStyle: 'italic',
+        typeStyle: 'italic',
+      },
+    },
+    link: { color: '#1e40af', underline: true },
+    table: { borderColor: '#9ca3af', headerBackground: '#f3f4f6' },
+    hr: { color: '#d1d5db', style: 'solid', thickness: '1px' },
+    toc: { enabled: 'true', depth: '3' },
+  },
+  // ── Dark Prose ───────────────────────────────────────────
+  // Warm dark background with soft amber text — easy on the eyes
+  // for long reading sessions. Earthy blockquotes, muted code.
+  {
+    name: 'Dark Prose',
+    version: 1,
+    page: { background: '#1c1917', maxWidth: '760px' },
+    body: {
+      fontFamily: '"Libre Baskerville", Georgia, serif',
+      fontSize: '17px',
+      lineHeight: '1.85',
+      color: '#d6d3d1',
+    },
+    heading: {
+      color: '#fafaf9',
+      h1: { fontSize: '2.2em', fontWeight: '700' },
+      h2: { fontSize: '1.65em', fontWeight: '700' },
+      h3: { fontSize: '1.3em', fontWeight: '600' },
+    },
+    blockquote: {
+      borderLeftColor: '#a16207',
+      background: '#292524',
+      color: '#a8a29e',
+      fontStyle: 'italic',
+    },
+    code: {
+      inline: {
+        fontFamily: 'JetBrains Mono, monospace',
+        background: '#292524',
+        color: '#fbbf24',
+      },
+      block: {
+        fontFamily: 'JetBrains Mono, monospace',
+        fontSize: '0.84em',
+        background: '#0c0a09',
+        color: '#e7e5e4',
+      },
+      highlight: {
+        keyword: '#fbbf24',
+        controlKeyword: '#f59e0b',
+        string: '#a3e635',
+        number: '#e879f9',
+        comment: '#78716c',
+        function: '#38bdf8',
+        variable: '#e7e5e4',
+        type: '#34d399',
+        operator: '#a8a29e',
+        punctuation: '#a8a29e',
+        property: '#67e8f9',
+        constant: '#fbbf24',
+        commentStyle: 'italic',
+      },
+    },
+    link: { color: '#f59e0b', underline: false },
+    table: { borderColor: '#44403c', headerBackground: '#292524' },
+    hr: { color: '#44403c', style: 'solid', thickness: '1px' },
+    image: { borderRadius: '4px' },
+  },
+  // ── Magazine ─────────────────────────────────────────────
+  // Bold sans-serif, compact body, strong color accents.
+  // Inspired by digital publication and editorial layouts.
+  {
+    name: 'Magazine',
+    version: 1,
+    page: { background: '#ffffff', maxWidth: '880px' },
+    body: {
+      fontFamily: '"Source Sans Pro", "Open Sans", system-ui, sans-serif',
+      fontSize: '15px',
+      lineHeight: '1.65',
+      color: '#292524',
+      paragraphSpacing: '0.8em',
+    },
+    heading: {
+      color: '#0f172a',
+      h1: { fontSize: '2.8em', fontWeight: '900' },
+      h2: { fontSize: '1.9em', fontWeight: '800' },
+      h3: { fontSize: '1.35em', fontWeight: '700' },
+    },
+    blockquote: {
+      borderLeftColor: '#e11d48',
+      background: '#fff1f2',
+      color: '#4c0519',
+    },
+    code: {
+      inline: {
+        fontFamily: 'SF Mono, "Fira Code", monospace',
+        background: '#f1f5f9',
+        color: '#0f766e',
+      },
+      block: {
+        fontFamily: 'SF Mono, "Fira Code", monospace',
+        fontSize: '0.82em',
+        background: '#0f172a',
+        color: '#e2e8f0',
+      },
+    },
+    link: { color: '#e11d48', underline: false },
+    table: { borderColor: '#e2e8f0', headerBackground: '#f8fafc' },
+    hr: { color: '#e11d48', style: 'solid', thickness: '2px' },
+    image: { borderRadius: '6px', maxWidth: '100%' },
+    list: { bulletStyle: 'square' },
+  },
+  // ── Warm Novel ───────────────────────────────────────────
+  // Cream paper, generous margins, Garamond-style type.
+  // Optimized for fiction, essays, and immersive long-form reading.
+  {
+    name: 'Warm Novel',
+    version: 1,
+    page: { background: '#fdf6e3', maxWidth: '680px', paperSize: 'a5' },
+    body: {
+      fontFamily: '"EB Garamond", Garamond, "Times New Roman", serif',
+      fontSize: '19px',
+      lineHeight: '1.9',
+      color: '#3c3226',
+      paragraphSpacing: '0.5em',
+    },
+    heading: {
+      color: '#2c1810',
+      h1: { fontSize: '2.4em', fontWeight: '600' },
+      h2: { fontSize: '1.7em', fontWeight: '600' },
+      h3: { fontSize: '1.3em', fontWeight: '600' },
+    },
+    blockquote: {
+      borderLeftColor: '#92400e',
+      background: '#fef3c7',
+      color: '#78350f',
+      fontStyle: 'italic',
+    },
+    code: {
+      inline: {
+        fontFamily: '"Courier Prime", "Courier New", monospace',
+        background: '#fef9ef',
+        color: '#92400e',
+      },
+      block: {
+        fontFamily: '"Courier Prime", "Courier New", monospace',
+        fontSize: '0.82em',
+        background: '#fffbeb',
+        color: '#422006',
+      },
+    },
+    link: { color: '#b45309', underline: true },
+    table: { borderColor: '#d6cbb5', headerBackground: '#fef9ef' },
+    hr: { color: '#d6cbb5', style: 'solid', thickness: '1px' },
+  },
+  // ── Swiss Minimal ────────────────────────────────────────
+  // Ultra-clean Helvetica/system sans, lots of whitespace,
+  // no decorative accents — lets the content breathe.
+  {
+    name: 'Swiss Minimal',
+    version: 1,
+    page: { background: '#ffffff', maxWidth: '720px' },
+    body: {
+      fontFamily: '"Helvetica Neue", Helvetica, Arial, system-ui, sans-serif',
+      fontSize: '15px',
+      lineHeight: '1.7',
+      color: '#111111',
+      paragraphSpacing: '1em',
+    },
+    heading: {
+      color: '#000000',
+      h1: { fontSize: '2.6em', fontWeight: '300' },
+      h2: { fontSize: '1.8em', fontWeight: '400' },
+      h3: { fontSize: '1.2em', fontWeight: '600' },
+    },
+    blockquote: {
+      borderLeftColor: '#111111',
+      background: '',
+      color: '#555555',
+    },
+    code: {
+      inline: {
+        fontFamily: 'SF Mono, "Cascadia Code", monospace',
+        background: '#f5f5f5',
+        color: '#333333',
+      },
+      block: {
+        fontFamily: 'SF Mono, "Cascadia Code", monospace',
+        fontSize: '0.84em',
+        background: '#fafafa',
+        color: '#222222',
+      },
+    },
+    link: { color: '#111111', underline: true },
+    table: { borderColor: '#e5e5e5', headerBackground: '#fafafa' },
+    hr: { color: '#e5e5e5', style: 'solid', thickness: '1px' },
+    list: { bulletStyle: 'dash' },
+  },
+];
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function mergeDeep(base, override) {
+  if (!override || typeof override !== 'object' || Array.isArray(override)) return clone(base);
+  const result = Array.isArray(base) ? [...base] : { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    if (value && typeof value === 'object' && !Array.isArray(value) && result[key] && typeof result[key] === 'object' && !Array.isArray(result[key])) {
+      result[key] = mergeDeep(result[key], value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function normalizeDocumentTemplate(template = {}) {
+  const merged = mergeDeep(defaultDocumentTemplate, template || {});
+  if (!merged.name) merged.name = 'Untitled Template';
+  if (!merged.version) merged.version = 1;
+  return merged;
+}
+
+function cloneDocumentTemplate(template) {
+  return clone(normalizeDocumentTemplate(template));
+}
+
+function findDocumentTemplatePreset(name) {
+  return documentTemplatePresets.find((t) => t.name === name) || null;
+}
+
+const HEADING_MARK_CONTEXT_SELECTORS = ['.cm-md-h1', '.cm-md-h2', '.cm-md-h3', '.cm-md-h4', '.cm-md-h5', '.cm-md-h6'];
+
+/**
+ * Build CSS rule objects for inline mark overrides (bold, italic, underline, strikethrough).
+ * `parentSel` can be empty, a selector string, or an array of selector strings.
+ *
+ * Important detail for CodeMirror decorations:
+ * overlapping mark decorations often end up on the SAME span, not only in a
+ * parent/child DOM relationship. So for contextual mark styling we emit both:
+ *
+ *   .cm-md-h1.cm-md-bold
+ *   .cm-md-h1 .cm-md-bold
+ *
+ * Cascading order:
+ *   inlineMarks.bold  →  heading.bold  →  heading.h1.bold
+ * More-specific selectors win via normal CSS specificity.
+ */
+function inlineMarkCSS(scopeFn, source, parentSel) {
+  if (!source) return {};
+  const rules = {};
+  const parents = Array.isArray(parentSel)
+    ? parentSel.filter(Boolean)
+    : parentSel
+      ? String(parentSel).split(',').map((s) => s.trim()).filter(Boolean)
+      : [];
+
+  const mk = (cls) => {
+    const leaf = `.${cls}`;
+    if (!parents.length) return scopeFn(leaf);
+    return parents
+      .flatMap((parent) => [scopeFn(`${parent}${leaf}`), scopeFn(`${parent} ${leaf}`)])
+      .join(', ');
+  };
+
+  // Color precedence for inline marks is handled by the override extension.
+  // This structural theme keeps only non-color typography + decoration rules.
+
+  // --- Bold ---
+  const b = source.bold;
+  if (b) {
+    const decls = {};
+    if (b.fontFamily) decls.fontFamily = `${b.fontFamily} !important`;
+    if (b.fontWeight) decls.fontWeight = `${b.fontWeight} !important`;
+    if (b.relativeSize) decls.fontSize = `${b.relativeSize}em !important`;
+    if (b.textTransform) decls.textTransform = `${b.textTransform} !important`;
+    if (Object.keys(decls).length) rules[mk('cm-md-bold')] = decls;
+  }
+
+  // --- Italic ---
+  const it = source.italic;
+  if (it) {
+    const decls = {};
+    if (it.fontFamily) decls.fontFamily = `${it.fontFamily} !important`;
+    if (it.fontStyle) decls.fontStyle = `${it.fontStyle} !important`;
+    if (it.relativeSize) decls.fontSize = `${it.relativeSize}em !important`;
+    if (it.textTransform) decls.textTransform = `${it.textTransform} !important`;
+    if (Object.keys(decls).length) rules[mk('cm-md-italic')] = decls;
+  }
+
+  // --- Underline ---
+  const ul = source.underline;
+  if (ul) {
+    const decls = {};
+    if (ul.lineColor) decls.textDecorationColor = `${ul.lineColor} !important`;
+    if (ul.lineStyle) decls.textDecorationStyle = `${ul.lineStyle} !important`;
+    if (ul.textTransform) decls.textTransform = `${ul.textTransform} !important`;
+    if (Object.keys(decls).length) rules[mk('cm-md-underline')] = decls;
+  }
+
+  // --- Strikethrough ---
+  const st = source.strikethrough;
+  if (st) {
+    const decls = {};
+    if (st.lineColor) decls.textDecorationColor = `${st.lineColor} !important`;
+    if (st.textTransform) decls.textTransform = `${st.textTransform} !important`;
+    if (Object.keys(decls).length) rules[mk('cm-md-strikethrough')] = decls;
+  }
+
+  return rules;
+}
+
+function compileDocumentTemplateCSS(template, scope = '&') {
+  const t = normalizeDocumentTemplate(template);
+  const bodyFont = t.body.fontFamily || '';
+  const bodySize = t.body.fontSize || '';
+  const bodyLineHeight = t.body.lineHeight || '';
+  const applyDocumentStyles = t.editor?.applyDocumentStyles !== false;
+
+  if (!applyDocumentStyles) {
+    return {};
+  }
+
+  const s = (sel) => `${scope} ${sel}`;
+
+  return {
+    // --- Page-level background covers the whole editor ---
+    [scope]: {
+      ...(t.page.background ? { backgroundColor: t.page.background } : {}),
+      // Neutralize theme influence inside the document surface when document
+      // styling is explicitly enabled. App chrome theme stays outside this scope.
+      '--editor-background': t.page.background || '#ffffff',
+      '--editor-foreground': t.body.color || '#222222',
+      '--md-heading-color': t.heading?.color || (t.body.color || '#111827'),
+      '--md-link-color': t.link?.color || '#1d4ed8',
+      '--md-link-decoration': t.link?.underline === false ? 'none' : 'underline',
+      '--md-code-background': t.code?.inline?.background || '#f3f4f6',
+      '--md-code-color': t.code?.inline?.color || '#a31515',
+      '--md-blockquote-color': t.blockquote?.color || (t.body.color || '#4b5563'),
+      '--md-marker-color': '#9ca3af',
+      '--md-list-marker-color': '#6b7280',
+      '--md-hr-color': t.hr?.color || '#d1d5db',
+      '--widget-text': t.body.color || '#222222',
+      '--widget-text-muted': '#6b7280',
+      '--widget-text-accent': t.link?.color || '#1d4ed8',
+      '--widget-border': t.table?.borderColor || '#d1d5db',
+      '--widget-surface': t.code?.block?.background || '#f8fafc',
+      '--widget-surface-inset': '#f3f4f6',
+    },
+    [`${scope} .cm-scroller`]: {
+      ...(t.page.background ? { backgroundColor: t.page.background } : {}),
+      ...(t.page.maxWidth ? { ['--document-max-width']: t.page.maxWidth } : {}),
+      ...(bodyFont ? { fontFamily: bodyFont } : {}),
+      ...(bodySize ? { fontSize: bodySize } : {}),
+      ...(bodyLineHeight ? { lineHeight: bodyLineHeight } : {}),
+    },
+    [`${scope} .cm-content`]: {
+      ...(t.page.maxWidth ? { maxWidth: t.page.maxWidth } : {}),
+    },
+    // --- Body text ---
+    [`${scope} .cm-line`]: {
+      ...(bodyFont ? { fontFamily: bodyFont } : {}),
+      ...(bodySize ? { fontSize: bodySize } : {}),
+      ...(bodyLineHeight ? { lineHeight: bodyLineHeight } : {}),
+      ...(t.body.textTransform ? { textTransform: t.body.textTransform } : {}),
+    },
+    // --- Paragraph spacing (applied as margin between paragraphs via empty lines) ---
+    ...(t.body.paragraphSpacing ? {
+      [`${scope} .cm-line:empty + .cm-line:not(:empty)`]: {
+        marginTop: t.body.paragraphSpacing,
+      },
+    } : {}),
+    // --- Headings h1-h6 ---
+    [s('.cm-md-h1') + ', ' + s('.cm-frontmatter-title-input')]: {
+      ...(t.heading?.h1?.fontSize ? { fontSize: t.heading.h1.fontSize } : {}),
+      ...(t.heading?.h1?.fontWeight ? { fontWeight: t.heading.h1.fontWeight } : {}),
+      ...((t.heading?.h1?.fontFamily || t.heading?.fontFamily || bodyFont) ? { fontFamily: t.heading?.h1?.fontFamily || t.heading?.fontFamily || bodyFont } : {}),
+      ...((t.heading?.h1?.textTransform || t.heading?.textTransform || t.body?.textTransform) ? { textTransform: t.heading?.h1?.textTransform || t.heading?.textTransform || t.body?.textTransform } : {}),
+    },
+    [s('.cm-md-h2')]: {
+      ...(t.heading?.h2?.fontSize ? { fontSize: t.heading.h2.fontSize } : {}),
+      ...(t.heading?.h2?.fontWeight ? { fontWeight: t.heading.h2.fontWeight } : {}),
+      ...((t.heading?.h2?.fontFamily || t.heading?.fontFamily || bodyFont) ? { fontFamily: t.heading?.h2?.fontFamily || t.heading?.fontFamily || bodyFont } : {}),
+      ...((t.heading?.h2?.textTransform || t.heading?.textTransform || t.body?.textTransform) ? { textTransform: t.heading?.h2?.textTransform || t.heading?.textTransform || t.body?.textTransform } : {}),
+    },
+    [s('.cm-md-h3')]: {
+      ...(t.heading?.h3?.fontSize ? { fontSize: t.heading.h3.fontSize } : {}),
+      ...(t.heading?.h3?.fontWeight ? { fontWeight: t.heading.h3.fontWeight } : {}),
+      ...((t.heading?.h3?.fontFamily || t.heading?.fontFamily || bodyFont) ? { fontFamily: t.heading?.h3?.fontFamily || t.heading?.fontFamily || bodyFont } : {}),
+      ...((t.heading?.h3?.textTransform || t.heading?.textTransform || t.body?.textTransform) ? { textTransform: t.heading?.h3?.textTransform || t.heading?.textTransform || t.body?.textTransform } : {}),
+    },
+    [s('.cm-md-h4')]: {
+      ...(t.heading?.h4?.fontSize ? { fontSize: t.heading.h4.fontSize } : {}),
+      ...(t.heading?.h4?.fontWeight ? { fontWeight: t.heading.h4.fontWeight } : {}),
+      ...((t.heading?.h4?.fontFamily || t.heading?.fontFamily || bodyFont) ? { fontFamily: t.heading?.h4?.fontFamily || t.heading?.fontFamily || bodyFont } : {}),
+      ...((t.heading?.h4?.textTransform || t.heading?.textTransform || t.body?.textTransform) ? { textTransform: t.heading?.h4?.textTransform || t.heading?.textTransform || t.body?.textTransform } : {}),
+    },
+    [s('.cm-md-h5')]: {
+      ...(t.heading?.h5?.fontSize ? { fontSize: t.heading.h5.fontSize } : {}),
+      ...(t.heading?.h5?.fontWeight ? { fontWeight: t.heading.h5.fontWeight } : {}),
+      ...((t.heading?.h5?.fontFamily || t.heading?.fontFamily || bodyFont) ? { fontFamily: t.heading?.h5?.fontFamily || t.heading?.fontFamily || bodyFont } : {}),
+      ...((t.heading?.h5?.textTransform || t.heading?.textTransform || t.body?.textTransform) ? { textTransform: t.heading?.h5?.textTransform || t.heading?.textTransform || t.body?.textTransform } : {}),
+    },
+    [s('.cm-md-h6')]: {
+      ...(t.heading?.h6?.fontSize ? { fontSize: t.heading.h6.fontSize } : {}),
+      ...(t.heading?.h6?.fontWeight ? { fontWeight: t.heading.h6.fontWeight } : {}),
+      ...((t.heading?.h6?.fontFamily || t.heading?.fontFamily || bodyFont) ? { fontFamily: t.heading?.h6?.fontFamily || t.heading?.fontFamily || bodyFont } : {}),
+      ...((t.heading?.h6?.textTransform || t.heading?.textTransform || t.body?.textTransform) ? { textTransform: t.heading?.h6?.textTransform || t.heading?.textTransform || t.body?.textTransform } : {}),
+    },
+    [[
+      s('.cm-frontmatter-subtitle'),
+      s('.cm-frontmatter-author'),
+      s('.cm-frontmatter-author-affiliation'),
+      s('.cm-frontmatter-date'),
+      s('.cm-frontmatter-abstract'),
+      s('.cm-frontmatter-keyword'),
+    ].join(', ')]: {
+      ...(bodyFont ? { fontFamily: bodyFont } : {}),
+      ...(t.body?.textTransform ? { textTransform: t.body.textTransform } : {}),
+    },
+    // --- Blockquotes ---
+    [s('.cm-md-blockquote-line')]: {
+      ...(t.blockquote?.borderLeftColor ? { borderLeftColor: t.blockquote.borderLeftColor } : {}),
+      ...(t.blockquote?.background ? { backgroundColor: t.blockquote.background } : {}),
+      ...(t.blockquote?.fontFamily ? { fontFamily: t.blockquote.fontFamily } : bodyFont ? { fontFamily: bodyFont } : {}),
+      ...(t.blockquote?.fontStyle ? { fontStyle: t.blockquote.fontStyle } : {}),
+      ...((t.blockquote?.textTransform || t.body?.textTransform) ? { textTransform: t.blockquote?.textTransform || t.body?.textTransform } : {}),
+    },
+    // --- Inline marks: base styles ---
+    ...inlineMarkCSS(s, t.inlineMarks, ''),
+    // --- Inline marks: heading-wide overrides (all h1-h6) ---
+    ...inlineMarkCSS(s, t.heading, HEADING_MARK_CONTEXT_SELECTORS),
+    // --- Inline marks: per-heading-level overrides (h1-h6) ---
+    ...inlineMarkCSS(s, t.heading?.h1, '.cm-md-h1'),
+    ...inlineMarkCSS(s, t.heading?.h2, '.cm-md-h2'),
+    ...inlineMarkCSS(s, t.heading?.h3, '.cm-md-h3'),
+    ...inlineMarkCSS(s, t.heading?.h4, '.cm-md-h4'),
+    ...inlineMarkCSS(s, t.heading?.h5, '.cm-md-h5'),
+    ...inlineMarkCSS(s, t.heading?.h6, '.cm-md-h6'),
+    // --- Inline marks: blockquote overrides ---
+    ...inlineMarkCSS(s, t.blockquote, '.cm-md-blockquote-line'),
+    // --- Inline code ---
+    [s('.cm-md-inline-code')]: {
+      ...(t.code?.inline?.fontFamily ? { fontFamily: t.code.inline.fontFamily } : {}),
+      ...(t.code?.inline?.background ? { backgroundColor: t.code.inline.background } : {}),
+    },
+    // --- Code blocks (source) ---
+    [s('.cm-codeblock-line') + ', ' + s('.cm-codeblock-fence') + ', ' + s('.cm-wysiwyg-code-fence-line')]: {
+      ...(t.code?.block?.fontFamily ? { fontFamily: t.code.block.fontFamily } : {}),
+      ...(t.code?.block?.fontSize ? { fontSize: t.code.block.fontSize } : {}),
+      ...(t.code?.block?.background ? { backgroundColor: t.code.block.background } : {}),
+    },
+    [s('.cm-wysiwyg-code-fence-widget') + ', ' + s('.cm-wysiwyg-code-header')]: {
+      ...(t.code?.block?.background ? { backgroundColor: t.code.block.background } : {}),
+    },
+    // --- Output widgets: inherit page background so they don't punch holes ---
+    ...(t.page.background ? {
+      [s('.cm-output-widget') + ', ' + s('.cm-html-output-widget') + ', ' + s('.cm-css-output-widget') + ', ' + s('.cm-scroll-output-widget') + ', ' + s('.cm-json-output-widget')]: {
+        background: `color-mix(in srgb, ${t.page.background} 85%, black)`,
+      },
+    } : {}),
+    // --- Links ---
+    [s('.cm-md-link-text') + ', ' + s('.cm-external-link') + ', ' + s('.cm-file-link') + ', ' + s('.cm-wiki-link')]: {
+      ...(t.link?.underline === false ? { textDecoration: 'none' } : {}),
+    },
+    // --- Tables ---
+    [s('.cm-table-widget table') + ', ' + s('.cm-table-widget th') + ', ' + s('.cm-table-widget td')]: {
+      ...(t.table?.borderColor ? { borderColor: t.table.borderColor } : {}),
+    },
+    [s('.cm-table-widget th')]: {
+      ...(t.table?.headerBackground ? { backgroundColor: t.table.headerBackground } : {}),
+    },
+    // --- Horizontal rules ---
+    ...(t.hr?.color || t.hr?.thickness ? {
+      [s('.cm-md-hr-line::after')]: {
+        ...(t.hr.color ? { background: t.hr.color } : {}),
+        ...(t.hr.thickness ? { height: t.hr.thickness } : {}),
+      },
+    } : {}),
+    // --- List markers ---
+    ...(t.list?.bulletStyle ? {
+      [s('.cm-md-list-bullet')]: {
+        content: ({ disc: '"•"', circle: '"○"', square: '"■"', dash: '"—"' })[t.list.bulletStyle] || undefined,
+      },
+    } : {}),
+    // --- Neutralize syntax-theme token colors inside code surfaces when
+    // document styles own preview. When the template defines highlight tokens
+    // (code.highlight.*), we only neutralize non-code-block token spans and
+    // let the template's HighlightStyle provide code block colors.
+    // When no highlight tokens are defined, neutralize everything to inherit.
+    ...(() => {
+      const hasHighlightTokens = ['keyword', 'controlKeyword', 'string', 'number', 'comment',
+        'function', 'variable', 'type', 'operator', 'punctuation', 'property', 'constant',
+        'regexp', 'escape', 'tag', 'attribute', 'attributeValue', 'meta',
+      ].some((k) => t.code?.highlight?.[k]);
+      if (hasHighlightTokens) {
+        // Only neutralize inline code token spans (let code blocks keep template HighlightStyle)
+        return {
+          [s('.cm-md-inline-code span[class^="ͼ"], .cm-md-inline-code span[class*=" ͼ"], .cm-md-inline-code span[class*="ͼ"]')]: {
+            color: 'inherit !important',
+            backgroundColor: 'transparent !important',
+            fontStyle: 'inherit !important',
+            fontWeight: 'inherit !important',
+            textDecorationColor: 'inherit !important',
+          },
+        };
+      }
+      return {
+        [s('.cm-codeblock-line span[class^="ͼ"], .cm-codeblock-line span[class*=" ͼ"], .cm-codeblock-line span[class*="ͼ"], .cm-codeblock-fence span[class^="ͼ"], .cm-codeblock-fence span[class*=" ͼ"], .cm-codeblock-fence span[class*="ͼ"], .cm-wysiwyg-code-fence-line span[class^="ͼ"], .cm-wysiwyg-code-fence-line span[class*=" ͼ"], .cm-wysiwyg-code-fence-line span[class*="ͼ"], .cm-md-inline-code span[class^="ͼ"], .cm-md-inline-code span[class*=" ͼ"], .cm-md-inline-code span[class*="ͼ"]')]: {
+          color: 'inherit !important',
+          backgroundColor: 'transparent !important',
+          fontStyle: 'inherit !important',
+          fontWeight: 'inherit !important',
+          textDecorationColor: 'inherit !important',
+        },
+      };
+    })(),
+    // --- Code block additional properties ---
+    ...(t.code?.block?.lineHeight ? {
+      [s('.cm-codeblock-line')]: {
+        ...((rules) => rules)({}),
+        lineHeight: t.code.block.lineHeight,
+      },
+    } : {}),
+    ...(t.code?.block?.borderRadius ? {
+      [s('.cm-codeblock-fence:first-child, .cm-codeblock-line:first-child')]: {
+        borderTopLeftRadius: t.code.block.borderRadius,
+        borderTopRightRadius: t.code.block.borderRadius,
+      },
+      [s('.cm-codeblock-fence:last-child, .cm-codeblock-line:last-child')]: {
+        borderBottomLeftRadius: t.code.block.borderRadius,
+        borderBottomRightRadius: t.code.block.borderRadius,
+      },
+    } : {}),
+    ...(t.code?.block?.borderColor ? {
+      [s('.cm-codeblock-fence') + ', ' + s('.cm-codeblock-line')]: {
+        borderLeft: `1px solid ${t.code.block.borderColor}`,
+        borderRight: `1px solid ${t.code.block.borderColor}`,
+      },
+      [s('.cm-codeblock-fence:first-of-type')]: {
+        borderTop: `1px solid ${t.code.block.borderColor}`,
+      },
+      [s('.cm-codeblock-fence:last-of-type')]: {
+        borderBottom: `1px solid ${t.code.block.borderColor}`,
+      },
+    } : {}),
+    ...(t.code?.block?.padding ? {
+      [s('.cm-codeblock-line')]: {
+        paddingLeft: t.code.block.padding,
+        paddingRight: t.code.block.padding,
+      },
+    } : {}),
+    // --- Code cell chrome ---
+    ...(t.code?.cell?.headerBackground || t.code?.cell?.headerColor || t.code?.cell?.headerBorderColor ? {
+      [s('.cm-wysiwyg-code-header')]: {
+        ...(t.code.cell.headerBackground ? { backgroundColor: `${t.code.cell.headerBackground} !important` } : {}),
+        ...(t.code.cell.headerColor ? { color: `${t.code.cell.headerColor} !important` } : {}),
+        ...(t.code.cell.headerBorderColor ? { borderBottomColor: `${t.code.cell.headerBorderColor} !important` } : {}),
+      },
+    } : {}),
+    ...(t.code?.cell?.outputBackground || t.code?.cell?.outputColor || t.code?.cell?.outputBorderColor ? {
+      [s('.cm-output-widget') + ', ' + s('.cm-html-output-widget') + ', ' + s('.cm-css-output-widget') + ', ' + s('.cm-scroll-output-widget') + ', ' + s('.cm-json-output-widget')]: {
+        ...(t.code.cell.outputBackground ? { backgroundColor: `${t.code.cell.outputBackground} !important` } : {}),
+        ...(t.code.cell.outputColor ? { color: `${t.code.cell.outputColor} !important` } : {}),
+        ...(t.code.cell.outputBorderColor ? { borderTopColor: `${t.code.cell.outputBorderColor} !important` } : {}),
+      },
+    } : {}),
+    // --- Images ---
+    [s('.cm-image-block-img')]: {
+      ...(t.image?.borderRadius ? { borderRadius: t.image.borderRadius } : {}),
+      ...(t.image?.maxWidth ? { maxWidth: t.image.maxWidth } : {}),
+    },
+    [s('.cm-image-caption')]: {
+      ...(bodyFont ? { fontFamily: bodyFont } : {}),
+      ...(t.image?.captionFontSize ? { fontSize: t.image.captionFontSize } : {}),
+      ...(t.image?.captionColor ? { color: t.image.captionColor } : t.body.color ? { color: t.body.color } : {}),
+      opacity: '0.8',
+    },
+    // --- Page break markers ---
+    [s('.cm-pagebreak-line')]: {
+      position: 'relative',
+      height: '3em',
+      lineHeight: '3em',
+      textAlign: 'center',
+      color: 'transparent',
+      userSelect: 'none',
+    },
+    [s('.cm-pagebreak-line::after')]: {
+      content: '"— page break —"',
+      position: 'absolute',
+      left: '0',
+      right: '0',
+      top: '50%',
+      transform: 'translateY(-50%)',
+      color: 'var(--text-secondary, #999)',
+      fontSize: '11px',
+      letterSpacing: '0.1em',
+      textTransform: 'uppercase',
+      borderTop: '2px dashed var(--border, #ddd)',
+      paddingTop: '8px',
+    },
+  };
+}
+
+function cssDecls(obj = {}) {
+  return Object.entries(obj)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `  ${key.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`)}: ${value};`)
+    .join('\n');
+}
+
+function serializeDocumentTemplateToCss(template, scope = '.markdown-body') {
+  const t = normalizeDocumentTemplate(template);
+  const bodyFont = t.body.fontFamily || undefined;
+  const bodySize = t.body.fontSize || undefined;
+  const bodyLineHeight = t.body.lineHeight || undefined;
+
+  return [
+    `${scope} {\n${cssDecls({
+      backgroundColor: t.page.background || undefined,
+      color: t.body.color || undefined,
+      fontFamily: bodyFont,
+      fontSize: bodySize,
+      lineHeight: bodyLineHeight,
+      textTransform: t.body?.textTransform || undefined,
+      maxWidth: t.page.maxWidth || undefined,
+    })}\n}`,
+    `${scope} h1 {\n${cssDecls({
+      color: t.heading?.color || undefined,
+      fontFamily: t.heading?.h1?.fontFamily || t.heading?.fontFamily || bodyFont,
+      fontSize: t.heading?.h1?.fontSize || undefined,
+      fontWeight: t.heading?.h1?.fontWeight || undefined,
+      textTransform: t.heading?.h1?.textTransform || t.heading?.textTransform || t.body?.textTransform || undefined,
+    })}\n}`,
+    `${scope} h2 {\n${cssDecls({
+      color: t.heading?.color || undefined,
+      fontFamily: t.heading?.h2?.fontFamily || t.heading?.fontFamily || bodyFont,
+      fontSize: t.heading?.h2?.fontSize || undefined,
+      fontWeight: t.heading?.h2?.fontWeight || undefined,
+      textTransform: t.heading?.h2?.textTransform || t.heading?.textTransform || t.body?.textTransform || undefined,
+    })}\n}`,
+    `${scope} h3 {\n${cssDecls({
+      color: t.heading?.color || undefined,
+      fontFamily: t.heading?.h3?.fontFamily || t.heading?.fontFamily || bodyFont,
+      fontSize: t.heading?.h3?.fontSize || undefined,
+      fontWeight: t.heading?.h3?.fontWeight || undefined,
+      textTransform: t.heading?.h3?.textTransform || t.heading?.textTransform || t.body?.textTransform || undefined,
+    })}\n}`,
+    `${scope} blockquote {\n${cssDecls({
+      borderLeftColor: t.blockquote?.borderLeftColor || undefined,
+      backgroundColor: t.blockquote?.background || undefined,
+      color: t.blockquote?.color || undefined,
+      fontFamily: t.blockquote?.fontFamily || bodyFont,
+      fontStyle: t.blockquote?.fontStyle || undefined,
+      textTransform: t.blockquote?.textTransform || t.body?.textTransform || undefined,
+    })}\n}`,
+    `${scope} code {\n${cssDecls({
+      fontFamily: t.code?.inline?.fontFamily || undefined,
+      backgroundColor: t.code?.inline?.background || undefined,
+      color: t.code?.inline?.color || undefined,
+    })}\n}`,
+    `${scope} pre, ${scope} pre code {\n${cssDecls({
+      fontFamily: t.code?.block?.fontFamily || undefined,
+      fontSize: t.code?.block?.fontSize || undefined,
+      backgroundColor: t.code?.block?.background || undefined,
+      color: t.code?.block?.color || undefined,
+    })}\n}`,
+    `${scope} a {\n${cssDecls({
+      color: t.link?.color || undefined,
+      textDecoration: t.link?.underline === false ? 'none' : undefined,
+    })}\n}`,
+    `${scope} table, ${scope} th, ${scope} td {\n${cssDecls({ borderColor: t.table?.borderColor || undefined })}\n}`,
+    `${scope} th {\n${cssDecls({ backgroundColor: t.table?.headerBackground || undefined })}\n}`,
+    // Syntax highlighting token classes for code blocks (used by highlight.js / Pandoc)
+    ...(() => {
+      const hl = t.code?.highlight;
+      if (!hl) return [];
+      // Map our token names to common highlight.js / Pandoc CSS classes
+      const hlMap = {
+        keyword: '.hljs-keyword, .kw',
+        controlKeyword: '.hljs-keyword.hljs-control',
+        string: '.hljs-string, .st',
+        number: '.hljs-number, .fl, .dv',
+        comment: '.hljs-comment, .co',
+        function: '.hljs-function, .hljs-title.function_, .fu',
+        variable: '.hljs-variable, .va',
+        type: '.hljs-type, .hljs-title.class_, .dt',
+        operator: '.hljs-operator, .op',
+        punctuation: '.hljs-punctuation',
+        property: '.hljs-property, .hljs-attr',
+        constant: '.hljs-literal, .hljs-built_in, .cn',
+        regexp: '.hljs-regexp, .ss',
+        escape: '.hljs-char.escape_, .sc',
+        tag: '.hljs-tag, .hljs-name',
+        attribute: '.hljs-attr',
+        meta: '.hljs-meta, .an',
+      };
+      const rules = [];
+      for (const [token, sel] of Object.entries(hlMap)) {
+        if (hl[token]) {
+          const selectors = sel.split(',').map((s) => `${scope} pre ${s.trim()}`).join(', ');
+          const decls = { color: hl[token] || undefined };
+          if (token === 'keyword' && hl.keywordStyle) Object.assign(decls, parseStyleModifier(hl.keywordStyle));
+          if (token === 'comment' && hl.commentStyle) Object.assign(decls, parseStyleModifier(hl.commentStyle));
+          if (token === 'function' && hl.functionStyle) Object.assign(decls, parseStyleModifier(hl.functionStyle));
+          if (token === 'type' && hl.typeStyle) Object.assign(decls, parseStyleModifier(hl.typeStyle));
+          rules.push(`${selectors} {\n${cssDecls(decls)}\n}`);
+        }
+      }
+      return rules;
+    })(),
+  ].join('\n\n');
+}
+
+// ---------------------------------------------------------------------------
+// Font mapping: CSS font-family → system font names for Pandoc (xelatex/lualatex)
+// and LaTeX package names for pdflatex fallback.
+// ---------------------------------------------------------------------------
+
+const FONT_MAP = [
+  // CSS family pattern → { system: <OTF/TTF name for xelatex>, latex: <package for pdflatex>, category }
+  { css: /charter/i,             system: 'XCharter',            latex: 'XCharter',          category: 'serif' },
+  { css: /georgia/i,             system: 'Georgia',             latex: 'mathpazo',          category: 'serif' },
+  { css: /times\s*new\s*roman/i, system: 'Times New Roman',     latex: 'mathptmx',          category: 'serif' },
+  { css: /palatino/i,            system: 'Palatino Linotype',   latex: 'mathpazo',          category: 'serif' },
+  { css: /garamond/i,            system: 'EB Garamond',         latex: 'ebgaramond',        category: 'serif' },
+  { css: /alegreya/i,            system: 'Alegreya',            latex: 'Alegreya',          category: 'serif' },
+  { css: /crimson/i,             system: 'Crimson Pro',         latex: 'CrimsonPro',        category: 'serif' },
+  { css: /libre\s*baskerville/i, system: 'Libre Baskerville',   latex: 'LibreBaskerville',  category: 'serif' },
+  { css: /source\s*serif/i,      system: 'Source Serif Pro',    latex: 'sourceserifpro',    category: 'serif' },
+  { css: /inter/i,               system: 'Inter',               latex: 'Inter',             category: 'sans' },
+  { css: /helvetica/i,           system: 'Helvetica Neue',      latex: 'helvet',            category: 'sans' },
+  { css: /arial/i,               system: 'Arial',               latex: 'helvet',            category: 'sans' },
+  { css: /open\s*sans/i,         system: 'Open Sans',           latex: 'opensans',          category: 'sans' },
+  { css: /lato/i,                system: 'Lato',                latex: 'lato',              category: 'sans' },
+  { css: /roboto/i,              system: 'Roboto',              latex: 'roboto',            category: 'sans' },
+  { css: /source\s*sans/i,       system: 'Source Sans Pro',     latex: 'sourcesanspro',     category: 'sans' },
+  { css: /jetbrains\s*mono/i,    system: 'JetBrains Mono',      latex: '',                  category: 'mono' },
+  { css: /sf\s*mono/i,           system: 'SF Mono',             latex: '',                  category: 'mono' },
+  { css: /cascadia\s*code/i,     system: 'Cascadia Code',       latex: '',                  category: 'mono' },
+  { css: /fira\s*code/i,         system: 'Fira Code',           latex: '',                  category: 'mono' },
+  { css: /source\s*code\s*pro/i, system: 'Source Code Pro',     latex: 'sourcecodepro',     category: 'mono' },
+  { css: /inconsolata/i,         system: 'Inconsolata',         latex: 'inconsolata',       category: 'mono' },
+  { css: /courier\s*new/i,       system: 'Courier New',         latex: 'courier',           category: 'mono' },
+  // Generic fallbacks
+  { css: /\bserif\b/i,           system: '',                    latex: '',                  category: 'serif' },
+  { css: /\bsans-serif\b/i,      system: '',                    latex: '',                  category: 'sans' },
+  { css: /\bsans\b/i,            system: '',                    latex: '',                  category: 'sans' },
+  { css: /\bmonospace\b/i,       system: '',                    latex: '',                  category: 'mono' },
+  { css: /\bmono\b/i,            system: '',                    latex: '',                  category: 'mono' },
+  { css: /system-ui/i,           system: '',                    latex: '',                  category: 'sans' },
+];
+
+/**
+ * Look up a CSS font-family string in the font map.
+ * Returns { system, latex, category } for the best match, or null.
+ */
+function resolveFontForExport(cssFontFamily) {
+  if (!cssFontFamily) return null;
+  for (const entry of FONT_MAP) {
+    if (entry.css.test(cssFontFamily)) return { system: entry.system, latex: entry.latex, category: entry.category };
+  }
+  // If it's a single unquoted name, assume it's a system font name
+  const trimmed = cssFontFamily.replace(/["']/g, '').split(',')[0].trim();
+  if (trimmed && !/\b(serif|sans|mono|system|inherit)\b/i.test(trimmed)) {
+    return { system: trimmed, latex: '', category: 'serif' };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// CSS size → pt conversion (best-effort for LaTeX)
+// ---------------------------------------------------------------------------
+
+function cssSizeToPt(size) {
+  if (!size) return '';
+  const num = parseFloat(size);
+  if (isNaN(num)) return '';
+  if (/pt$/i.test(size)) return `${num}pt`;
+  if (/px$/i.test(size)) return `${Math.round(num * 0.75)}pt`;
+  if (/em$/i.test(size)) return `${Math.round(num * 12)}pt`; // rough: 1em ≈ 12pt
+  if (/rem$/i.test(size)) return `${Math.round(num * 12)}pt`;
+  // bare number → assume px
+  return `${Math.round(num * 0.75)}pt`;
+}
+
+function hexToRgbNormalized(hex) {
+  if (!hex || !/^#[0-9a-fA-F]{6}$/.test(hex)) return null;
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  return { r, g, b };
+}
+
+// ---------------------------------------------------------------------------
+// Pandoc YAML metadata serializer
+//
+// Generates YAML frontmatter variables that Pandoc understands for PDF (via
+// LaTeX), HTML, and Word output.  The recommended Pandoc engine is xelatex
+// or lualatex so that system fonts (mainfont, monofont) work.  For pdflatex,
+// a header-includes fallback with \usepackage is also emitted.
+// ---------------------------------------------------------------------------
+
+/**
+ * Serialize a document template to a Pandoc-compatible YAML metadata object.
+ *
+ * The returned object can be merged into a document's frontmatter or written
+ * as a standalone defaults file.  Values that are empty/unset are omitted so
+ * Pandoc uses its own defaults.
+ *
+ * @param {object} template
+ * @returns {object} Plain JS object suitable for YAML serialization
+ */
+function serializeDocumentTemplateToPandocMeta(template) {
+  const t = normalizeDocumentTemplate(template);
+  const meta = {};
+
+  // --- PDF engine recommendation -------------------------------------------
+  // We always recommend xelatex so system font names work via mainfont/monofont.
+  // The caller can override this.
+  meta['pdf-engine'] = 'xelatex';
+
+  // --- Fonts ---------------------------------------------------------------
+  const bodyFontInfo = resolveFontForExport(t.body.fontFamily);
+  const monoFontInfo = resolveFontForExport(t.code?.block?.fontFamily || t.code?.inline?.fontFamily);
+
+  if (bodyFontInfo?.system) meta.mainfont = bodyFontInfo.system;
+  if (monoFontInfo?.system) meta.monofont = monoFontInfo.system;
+
+  // If body font is sans, also set sansfont and documentclass hint
+  if (bodyFontInfo?.category === 'sans') {
+    if (bodyFontInfo.system) meta.sansfont = bodyFontInfo.system;
+  }
+
+  // --- Font size -----------------------------------------------------------
+  const bodyPt = cssSizeToPt(t.body.fontSize);
+  if (bodyPt) meta.fontsize = bodyPt;
+
+  // --- Line height / stretch -----------------------------------------------
+  const lh = parseFloat(t.body.lineHeight);
+  if (!isNaN(lh) && lh > 0) meta.linestretch = String(lh);
+
+  // --- Geometry (margins, paper) -------------------------------------------
+  const geoParts = [];
+  const paper = t.page.paperSize;
+  if (paper === 'a4') geoParts.push('a4paper');
+  else if (paper === 'a5') geoParts.push('a5paper');
+  else if (paper === 'legal') geoParts.push('legalpaper');
+  else if (paper === 'letter') geoParts.push('letterpaper');
+
+  if (t.page.marginTop) geoParts.push(`top=${t.page.marginTop}`);
+  if (t.page.marginBottom) geoParts.push(`bottom=${t.page.marginBottom}`);
+  if (t.page.marginLeft) geoParts.push(`left=${t.page.marginLeft}`);
+  if (t.page.marginRight) geoParts.push(`right=${t.page.marginRight}`);
+
+  if (geoParts.length) meta.geometry = geoParts.join(', ');
+
+  // --- Link color ----------------------------------------------------------
+  if (t.link.color) {
+    meta.colorlinks = true;
+    // Pandoc uses LaTeX xcolor names or HTML hex
+    meta.linkcolor = t.link.color;
+    meta.urlcolor = t.link.color;
+    meta.citecolor = t.link.color;
+  }
+
+  // --- TOC -----------------------------------------------------------------
+  if (t.toc?.enabled === 'true' || t.toc?.enabled === true) {
+    meta.toc = true;
+    const depth = parseInt(t.toc.depth, 10);
+    if (!isNaN(depth) && depth > 0) meta['toc-depth'] = depth;
+  }
+
+  // --- Heading numbering ---------------------------------------------------
+  if (t.heading.numbering === 'all' || t.heading.numbering === 'h2+') {
+    meta['number-sections'] = true;
+  } else if (t.heading.numbering === 'none') {
+    meta['number-sections'] = false;
+  }
+
+  // --- Code highlighting ---------------------------------------------------
+  if (t.code?.block?.lineNumbers === 'true' || t.code?.block?.lineNumbers === true) {
+    meta['code-line-numbers'] = true;
+  }
+
+  // --- Background page color (rare, but supported) -------------------------
+  // Pandoc doesn't natively handle page background; this goes in header-includes.
+
+  // Clean empty
+  for (const key of Object.keys(meta)) {
+    if (meta[key] === '' || meta[key] === undefined || meta[key] === null) delete meta[key];
+  }
+
+  return meta;
+}
+
+/**
+ * Serialize the Pandoc metadata to a YAML string.
+ * @param {object} template
+ * @returns {string}
+ */
+function serializeDocumentTemplateToPandocYaml(template) {
+  const meta = serializeDocumentTemplateToPandocMeta(template);
+  const lines = [];
+  for (const [key, value] of Object.entries(meta)) {
+    if (typeof value === 'boolean') {
+      lines.push(`${key}: ${value}`);
+    } else if (typeof value === 'number') {
+      lines.push(`${key}: ${value}`);
+    } else {
+      // Quote strings that contain special YAML chars
+      const str = String(value);
+      const needsQuote = /[:#\[\]{}&*!|>'"%@`]/.test(str) || str.includes(', ');
+      lines.push(`${key}: ${needsQuote ? `"${str.replace(/"/g, '\\"')}"` : str}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// LaTeX preamble serializer
+//
+// Generates \usepackage / \definecolor / \titleformat commands for fine-grained
+// PDF styling that goes beyond what Pandoc YAML variables support.
+// This is meant to be included via Pandoc's header-includes or as a .tex file.
+// ---------------------------------------------------------------------------
+
+/**
+ * Serialize a document template to a LaTeX preamble string.
+ *
+ * Covers: colors (heading, blockquote, link, code), font weight overrides,
+ * paragraph spacing, blockquote styling, code block appearance, HR, lists.
+ *
+ * @param {object} template
+ * @returns {string} LaTeX preamble commands
+ */
+function serializeDocumentTemplateToLatexPreamble(template) {
+  const t = normalizeDocumentTemplate(template);
+  const lines = [];
+
+  lines.push('% Generated by mrmd document template system');
+  lines.push('% Include via: header-includes in Pandoc YAML or \\input{style.tex}');
+  lines.push('');
+
+  // --- Required packages ---------------------------------------------------
+  lines.push('\\usepackage{xcolor}');
+  lines.push('\\usepackage{hyperref}');
+
+  // --- Define colors from template -----------------------------------------
+  const defineColor = (name, hex) => {
+    const rgb = hexToRgbNormalized(hex);
+    if (!rgb) return;
+    lines.push(`\\definecolor{${name}}{rgb}{${rgb.r.toFixed(3)}, ${rgb.g.toFixed(3)}, ${rgb.b.toFixed(3)}}`);
+  };
+
+  if (t.body.color) defineColor('mrmd-body', t.body.color);
+  if (t.heading.color) defineColor('mrmd-heading', t.heading.color);
+  if (t.link.color) defineColor('mrmd-link', t.link.color);
+  if (t.blockquote.color) defineColor('mrmd-blockquote-text', t.blockquote.color);
+  if (t.blockquote.borderLeftColor) defineColor('mrmd-blockquote-accent', t.blockquote.borderLeftColor);
+  if (t.blockquote.background) defineColor('mrmd-blockquote-bg', t.blockquote.background);
+  if (t.code?.inline?.color) defineColor('mrmd-code-inline', t.code.inline.color);
+  if (t.code?.inline?.background) defineColor('mrmd-code-inline-bg', t.code.inline.background);
+  if (t.code?.block?.color) defineColor('mrmd-code-block', t.code.block.color);
+  if (t.code?.block?.background) defineColor('mrmd-code-block-bg', t.code.block.background);
+  if (t.table?.borderColor) defineColor('mrmd-table-border', t.table.borderColor);
+  if (t.table?.headerBackground) defineColor('mrmd-table-header-bg', t.table.headerBackground);
+  if (t.hr?.color) defineColor('mrmd-hr', t.hr.color);
+
+  lines.push('');
+
+  // --- Body text color -----------------------------------------------------
+  if (t.body.color) {
+    lines.push('\\color{mrmd-body}');
+  }
+
+  // --- Paragraph spacing ---------------------------------------------------
+  if (t.body.paragraphSpacing) {
+    const pt = cssSizeToPt(t.body.paragraphSpacing);
+    if (pt) {
+      lines.push(`\\setlength{\\parskip}{${pt}}`);
+      lines.push('\\setlength{\\parindent}{0pt}');
+    }
+  }
+
+  // --- Link styling --------------------------------------------------------
+  if (t.link.color) {
+    lines.push('\\hypersetup{');
+    lines.push('  colorlinks=true,');
+    lines.push('  linkcolor=mrmd-link,');
+    lines.push('  urlcolor=mrmd-link,');
+    lines.push('  citecolor=mrmd-link,');
+    lines.push('}');
+  }
+
+  // --- Heading colors (requires titlesec) -----------------------------------
+  if (t.heading.color) {
+    lines.push('');
+    lines.push('\\usepackage{titlesec}');
+    for (const level of ['section', 'subsection', 'subsubsection', 'paragraph', 'subparagraph']) {
+      lines.push(`\\titleformat{\\${level}}{\\normalfont\\bfseries\\color{mrmd-heading}}{\\the${level}}{1em}{}`);
+    }
+  }
+
+  // --- Blockquote styling (tcolorbox or mdframed) --------------------------
+  if (t.blockquote.borderLeftColor || t.blockquote.background || t.blockquote.color) {
+    lines.push('');
+    lines.push('% Blockquote styling via mdframed');
+    lines.push('\\usepackage{mdframed}');
+    const opts = [
+      'skipabove=\\topsep',
+      'skipbelow=\\topsep',
+      t.blockquote.borderLeftColor ? 'leftline=true, linewidth=3pt, linecolor=mrmd-blockquote-accent' : 'leftline=true, linewidth=3pt',
+      t.blockquote.background ? 'backgroundcolor=mrmd-blockquote-bg' : '',
+      t.blockquote.color ? 'fontcolor=mrmd-blockquote-text' : '',
+      'rightline=false, topline=false, bottomline=false',
+      'innerleftmargin=10pt, innerrightmargin=10pt, innertopmargin=8pt, innerbottommargin=8pt',
+    ].filter(Boolean).join(',\n  ');
+    lines.push(`\\newmdenv[${opts}]{mrmdblockquote}`);
+    lines.push('% To use: wrap blockquotes in \\begin{mrmdblockquote}...\\end{mrmdblockquote}');
+    lines.push('% Pandoc does this automatically if you add a Lua filter.');
+  }
+
+  // --- Inline code background ----------------------------------------------
+  if (t.code?.inline?.background || t.code?.inline?.color) {
+    lines.push('');
+    lines.push('% Inline code styling');
+    lines.push('\\usepackage{soul}');
+    if (t.code.inline.background) {
+      lines.push('\\sethlcolor{mrmd-code-inline-bg}');
+    }
+    lines.push('% Apply with a custom Pandoc Lua filter on Code inlines');
+  }
+
+  // --- Code block background -----------------------------------------------
+  if (t.code?.block?.background || t.code?.block?.color) {
+    lines.push('');
+    lines.push('% Code block styling');
+    lines.push('\\usepackage{fancyvrb}');
+    lines.push('\\DefineVerbatimEnvironment{Highlighting}{Verbatim}{');
+    const vOpts = [];
+    if (t.code.block.color) vOpts.push('formatcom=\\color{mrmd-code-block}');
+    vOpts.push('commandchars=\\\\\\{\\}');
+    lines.push('  ' + vOpts.join(', '));
+    lines.push('}');
+    if (t.code.block.background) {
+      lines.push('\\usepackage{framed}');
+      lines.push('\\definecolor{shadecolor}{named}{mrmd-code-block-bg}');
+    }
+  }
+
+  // --- Syntax highlighting token colors (Pandoc/LaTeX) ----------------------
+  const hl = t.code?.highlight;
+  if (hl) {
+    const tokenLatexMap = {
+      keyword:  'KeywordTok',
+      string:   'StringTok',
+      number:   'DecValTok',
+      comment:  'CommentTok',
+      function: 'FunctionTok',
+      variable: 'VariableTok',
+      type:     'DataTypeTok',
+      operator: 'OperatorTok',
+      constant: 'ConstantTok',
+      regexp:   'SpecialStringTok',
+      escape:   'SpecialCharTok',
+      meta:     'AnnotationTok',
+    };
+    lines.push('');
+    lines.push('% Syntax highlighting token colors');
+    for (const [token, latexCmd] of Object.entries(tokenLatexMap)) {
+      if (hl[token]) {
+        const colorName = `mrmd-tok-${token}`;
+        defineColor(colorName, hl[token]);
+        lines.push(`\\newcommand{\\${latexCmd}}[1]{\\textcolor{${colorName}}{#1}}`);
+      }
+    }
+  }
+
+  // --- Page background color -----------------------------------------------
+  if (t.page.background && t.page.background !== '#ffffff' && t.page.background !== '#fff') {
+    lines.push('');
+    defineColor('mrmd-page-bg', t.page.background);
+    lines.push('\\usepackage{pagecolor}');
+    lines.push('\\pagecolor{mrmd-page-bg}');
+  }
+
+  // --- HR styling ----------------------------------------------------------
+  if (t.hr?.color || t.hr?.thickness) {
+    lines.push('');
+    lines.push('% Horizontal rule styling');
+    const thickness = cssSizeToPt(t.hr.thickness) || '0.4pt';
+    if (t.hr.color) {
+      lines.push(`\\renewcommand{\\rule}[2]{\\textcolor{mrmd-hr}{\\vrule width #1 height #2}}`);
+    }
+    lines.push(`% Default HR thickness: ${thickness}`);
+  }
+
+  // --- List styling --------------------------------------------------------
+  if (t.list?.bulletStyle || t.list?.numberStyle) {
+    lines.push('');
+    lines.push('\\usepackage{enumitem}');
+    if (t.list.bulletStyle) {
+      const bulletMap = {
+        disc: '$\\bullet$',
+        circle: '$\\circ$',
+        square: '$\\blacksquare$',
+        dash: '--',
+      };
+      const bullet = bulletMap[t.list.bulletStyle] || '$\\bullet$';
+      lines.push(`\\setlist[itemize]{label=${bullet}}`);
+    }
+    if (t.list.numberStyle) {
+      const numMap = {
+        decimal: '\\arabic*.',
+        'lower-alpha': '\\alph*.',
+        'lower-roman': '\\roman*.',
+        'upper-alpha': '\\Alph*.',
+        'upper-roman': '\\Roman*.',
+      };
+      const numFmt = numMap[t.list.numberStyle] || '\\arabic*.';
+      lines.push(`\\setlist[enumerate]{label=${numFmt}}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// HTML wrapper serializer
+//
+// Generates a standalone HTML page that wraps markdown-rendered HTML with the
+// template's CSS.  This is what users would use if they want to self-host or
+// render their MRMD docs on the web with the same styling.
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a standalone HTML wrapper with the template CSS embedded.
+ *
+ * @param {object} template
+ * @param {object} [options]
+ * @param {string} [options.title] - HTML <title>
+ * @param {string} [options.bodyHtml] - Pre-rendered HTML body (if available)
+ * @param {string} [options.scope] - CSS scope class (default: 'markdown-body')
+ * @returns {string} Complete HTML document string
+ */
+function serializeDocumentTemplateToHtml(template, options = {}) {
+  const scope = options.scope || 'markdown-body';
+  const css = serializeDocumentTemplateToCss(template, `.${scope}`);
+  const t = normalizeDocumentTemplate(template);
+  const title = options.title || 'Document';
+  const bodyHtml = options.bodyHtml || '';
+
+  // Collect Google Fonts URLs for web font loading
+  const fontUrls = [];
+  const addGoogleFont = (family) => {
+    if (!family) return;
+    // Extract first font name from CSS font stack
+    const name = family.replace(/["']/g, '').split(',')[0].trim();
+    if (!name || /^(serif|sans-serif|monospace|system-ui|inherit|Georgia|Times New Roman|Arial|Helvetica|Courier New)$/i.test(name)) return;
+    const encoded = name.replace(/\s+/g, '+');
+    fontUrls.push(`https://fonts.googleapis.com/css2?family=${encoded}:ital,wght@0,400;0,700;0,800;1,400&display=swap`);
+  };
+  addGoogleFont(t.body.fontFamily);
+  addGoogleFont(t.code?.inline?.fontFamily);
+  addGoogleFont(t.code?.block?.fontFamily);
+
+  const fontLinks = [...new Set(fontUrls)].map((url) => `  <link rel="stylesheet" href="${url}">`).join('\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${title.replace(/</g, '&lt;')}</title>
+${fontLinks}
+  <style>
+    /* Reset */
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      background: ${t.page.background || '#ffffff'};
+    }
+    .${scope} {
+      width: 100%;
+      max-width: ${t.page.maxWidth || '800px'};
+      padding: 2rem 1.5rem;
+      margin: 0 auto;
+    }
+    /* Template styles */
+${css.split('\n').map((l) => '    ' + l).join('\n')}
+    /* Base prose defaults (only if template doesn't override) */
+    .${scope} img { max-width: ${t.image?.maxWidth || '100%'}; height: auto; ${t.image?.borderRadius ? `border-radius: ${t.image.borderRadius};` : ''} }
+    .${scope} table { border-collapse: collapse; width: 100%; }
+    .${scope} th, .${scope} td { padding: 8px 12px; text-align: left; }
+    .${scope} hr { border: none; ${t.hr?.color ? `border-top-color: ${t.hr.color};` : ''} border-top-style: ${t.hr?.style || 'solid'}; border-top-width: ${t.hr?.thickness || '1px'}; }
+    .${scope} pre { padding: 1em; border-radius: 6px; overflow-x: auto; }
+    .${scope} code { padding: 2px 5px; border-radius: 3px; }
+    .${scope} pre code { padding: 0; background: none; }
+    .${scope} blockquote { margin: 1em 0; padding: 0.5em 1em; border-left-width: 4px; border-left-style: solid; }
+  </style>
+</head>
+<body>
+  <article class="${scope}">
+${bodyHtml}
+  </article>
+</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
+// Word (docx) export hints
+//
+// Word styling through Pandoc works best via --reference-doc.  We can't
+// generate a .docx from JS alone, but we can output the mapping between
+// template properties and Word style names that a reference doc should use.
+// ---------------------------------------------------------------------------
+
+/**
+ * Return a mapping object describing how the template properties correspond
+ * to Word style names.  This can be used to:
+ * 1. Guide users on which Word styles to customize in a reference .docx
+ * 2. Drive automated reference doc generation (via a server-side tool)
+ *
+ * @param {object} template
+ * @returns {object}
+ */
+function serializeDocumentTemplateToWordStyleMap(template) {
+  const t = normalizeDocumentTemplate(template);
+  const map = {
+    _comment: 'Map of mrmd template properties to Word style names for --reference-doc',
+    body: {
+      wordStyle: 'Body Text',
+      fontFamily: t.body.fontFamily || '(default)',
+      fontSize: t.body.fontSize || '(default)',
+      lineHeight: t.body.lineHeight || '(default)',
+      color: t.body.color || '(default)',
+    },
+    headings: [
+      { level: 1, wordStyle: 'Heading 1', fontSize: t.heading?.h1?.fontSize || '(default)', fontWeight: t.heading?.h1?.fontWeight || '(default)', color: t.heading?.color || '(default)' },
+      { level: 2, wordStyle: 'Heading 2', fontSize: t.heading?.h2?.fontSize || '(default)', fontWeight: t.heading?.h2?.fontWeight || '(default)', color: t.heading?.color || '(default)' },
+      { level: 3, wordStyle: 'Heading 3', fontSize: t.heading?.h3?.fontSize || '(default)', fontWeight: t.heading?.h3?.fontWeight || '(default)', color: t.heading?.color || '(default)' },
+      { level: 4, wordStyle: 'Heading 4', fontSize: t.heading?.h4?.fontSize || '(default)', fontWeight: t.heading?.h4?.fontWeight || '(default)', color: t.heading?.color || '(default)' },
+      { level: 5, wordStyle: 'Heading 5', fontSize: t.heading?.h5?.fontSize || '(default)', fontWeight: t.heading?.h5?.fontWeight || '(default)', color: t.heading?.color || '(default)' },
+      { level: 6, wordStyle: 'Heading 6', fontSize: t.heading?.h6?.fontSize || '(default)', fontWeight: t.heading?.h6?.fontWeight || '(default)', color: t.heading?.color || '(default)' },
+    ],
+    blockquote: { wordStyle: 'Block Text', color: t.blockquote?.color || '(default)' },
+    codeInline: { wordStyle: 'Verbatim Char', fontFamily: t.code?.inline?.fontFamily || '(default)' },
+    codeBlock: { wordStyle: 'Source Code', fontFamily: t.code?.block?.fontFamily || '(default)', fontSize: t.code?.block?.fontSize || '(default)' },
+    link: { wordStyle: 'Hyperlink', color: t.link?.color || '(default)' },
+    table: { wordStyle: 'Table', borderColor: t.table?.borderColor || '(default)', headerBackground: t.table?.headerBackground || '(default)' },
+  };
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// Pandoc command-line builder
+//
+// Generates the recommended Pandoc invocation for a given template + format.
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a Pandoc CLI command string for exporting a document.
+ *
+ * @param {object} template
+ * @param {object} options
+ * @param {'pdf'|'html'|'docx'|'latex'} options.format
+ * @param {string} options.input - Input file path
+ * @param {string} [options.output] - Output file path
+ * @param {string} [options.referenceDoc] - Path to Word reference doc
+ * @param {string} [options.preambleFile] - Path to LaTeX preamble .tex file
+ * @returns {string}
+ */
+function buildPandocCommand(template, options = {}) {
+  const meta = serializeDocumentTemplateToPandocMeta(template);
+  const format = options.format || 'pdf';
+  const input = options.input || 'document.md';
+  const output = options.output || input.replace(/\.md$/, `.${format}`);
+
+  const args = ['pandoc', input, '-o', output];
+
+  // Format-specific settings
+  if (format === 'pdf') {
+    args.push('--pdf-engine=xelatex');
+    if (options.preambleFile) {
+      args.push(`-H ${options.preambleFile}`);
+    }
+  } else if (format === 'html') {
+    args.push('--standalone');
+    // CSS can be passed with --css
+  } else if (format === 'docx') {
+    if (options.referenceDoc) {
+      args.push(`--reference-doc=${options.referenceDoc}`);
+    }
+  }
+
+  // Add metadata variables
+  for (const [key, value] of Object.entries(meta)) {
+    if (key === 'pdf-engine') continue; // already handled
+    if (typeof value === 'boolean') {
+      if (value) args.push(`-V ${key}`);
+    } else {
+      args.push(`-V ${key}="${String(value).replace(/"/g, '\\"')}"`);
+    }
+  }
+
+  if (meta.toc) args.push('--toc');
+  if (meta['number-sections']) args.push('--number-sections');
+
+  return args.join(' \\\n  ');
+}
+
+let documentTemplateOverrideId = 0;
+
+function pushInlineMarkColorRules(rules, scopeSelector, source, parentSel = '') {
+  if (!source) return;
+  const parents = Array.isArray(parentSel)
+    ? parentSel.filter(Boolean)
+    : parentSel
+      ? String(parentSel).split(',').map((s) => s.trim()).filter(Boolean)
+      : [];
+
+  const selectorsFor = (cls) => {
+    const leaf = `.${cls}`;
+    if (!parents.length) return [`${scopeSelector} ${leaf}`];
+    return parents.flatMap((parent) => [
+      `${scopeSelector} ${parent}${leaf}`,
+      `${scopeSelector} ${parent} ${leaf}`,
+    ]);
+  };
+
+  const pushColor = (cls, value) => {
+    if (!value) return;
+    rules.push(`${selectorsFor(cls).join(', ')} { color: ${value} !important; }`);
+  };
+
+  pushColor('cm-md-bold', source.bold?.color);
+  pushColor('cm-md-italic', source.italic?.color);
+  pushColor('cm-md-underline', source.underline?.color);
+  pushColor('cm-md-strikethrough', source.strikethrough?.color);
+}
+
+function buildDocumentTemplateOverrideCSS(template, scopeSelector) {
+  const t = normalizeDocumentTemplate(template);
+  if (t.editor?.applyDocumentStyles === false) return '';
+
+  const rules = [];
+  const rule = (selectors, prop, value) => {
+    if (!value) return;
+    const parts = (Array.isArray(selectors) ? selectors : String(selectors).split(','))
+      .map((s) => String(s).trim())
+      .filter(Boolean);
+    if (!parts.length) return;
+    rules.push(`${parts.map((s) => `${scopeSelector} ${s}`).join(', ')} { ${prop}: ${value} !important; }`);
+  };
+
+  // --- Heading color ---
+  if (t.heading?.color) {
+    for (let i = 1; i <= 6; i++) {
+      rule(`.cm-md-h${i}`, 'color', t.heading.color);
+    }
+    rule('.cm-frontmatter-title-input', 'color', t.heading.color);
+  }
+
+  // --- Per-heading color ---
+  for (let i = 1; i <= 6; i++) {
+    const h = t.heading?.[`h${i}`];
+    if (h?.color) rule(`.cm-md-h${i}`, 'color', h.color);
+  }
+
+  // --- Body color baseline ---
+  if (t.body?.color) {
+    rule(['.cm-line', '.cm-content'], 'color', t.body.color);
+  }
+
+  // --- Inline-mark color precedence ---
+  pushInlineMarkColorRules(rules, scopeSelector, t.inlineMarks, '');
+  pushInlineMarkColorRules(rules, scopeSelector, t.heading, HEADING_MARK_CONTEXT_SELECTORS);
+  for (let i = 1; i <= 6; i++) {
+    pushInlineMarkColorRules(rules, scopeSelector, t.heading?.[`h${i}`], `.cm-md-h${i}`);
+  }
+
+  // --- Blockquote inline marks + text ---
+  pushInlineMarkColorRules(rules, scopeSelector, t.blockquote, '.cm-md-blockquote-line');
+  if (t.blockquote?.color) {
+    rule('.cm-md-blockquote-line', 'color', t.blockquote.color);
+  }
+
+  // --- Links ---
+  if (t.link?.color) {
+    rule(['.cm-md-link-text', '.cm-external-link', '.cm-file-link', '.cm-wiki-link'], 'color', t.link.color);
+  }
+
+  // --- Inline code ---
+  if (t.code?.inline?.color) rule('.cm-md-inline-code', 'color', t.code.inline.color);
+  if (t.code?.inline?.background) rule('.cm-md-inline-code', 'background-color', t.code.inline.background);
+
+  // --- Code blocks ---
+  if (t.code?.block?.color) {
+    rule([
+      '.cm-codeblock-line',
+      '.cm-codeblock-fence',
+      '.cm-wysiwyg-code-fence-line',
+      '.cm-wysiwyg-code-fence-widget',
+      '.cm-wysiwyg-code-header',
+    ], 'color', t.code.block.color);
+  }
+  if (t.code?.block?.background) {
+    rule([
+      '.cm-codeblock-line',
+      '.cm-codeblock-fence',
+      '.cm-wysiwyg-code-fence-line',
+      '.cm-wysiwyg-code-fence-widget',
+      '.cm-wysiwyg-code-header',
+    ], 'background-color', t.code.block.background);
+  }
+
+  // --- Frontmatter secondary text ---
+  if (t.body?.color) {
+    rule([
+      '.cm-frontmatter-subtitle',
+      '.cm-frontmatter-author',
+      '.cm-frontmatter-author-affiliation',
+      '.cm-frontmatter-date',
+      '.cm-frontmatter-abstract',
+      '.cm-frontmatter-keyword',
+    ], 'color', t.body.color);
+  }
+
+  // --- Token inheritance ---
+  // Syntax-highlight token spans set color directly, which blocks color
+  // inheritance from parent prose/mark spans. When document styling owns the
+  // preview, prose tokens should inherit from the document template instead.
+  const tokenSel = 'span[class*="ͼ"]';
+  rules.push(`${scopeSelector} .cm-line:not(.cm-codeblock-line):not(.cm-codeblock-fence) ${tokenSel} { color: inherit !important; }`);
+
+  // --- Syntax highlighting: document-template-owned token colors ---
+  // When the template defines code.highlight tokens, we apply them to code
+  // blocks via data-attributes set by our ViewPlugin. The cascade is:
+  //   code.block.color (base) → code.highlight.{token} (base token) →
+  //   code.highlight.languages.{lang}.{token} (per-language override)
+  const hl = t.code?.highlight;
+  if (hl) {
+    pushSyntaxHighlightRules(rules, scopeSelector, hl);
+  }
+
+  return rules.join('\n');
+}
+
+/**
+ * Map from our semantic token names to the CSS custom properties / tag-based
+ * selectors that CodeMirror's HighlightStyle generates.
+ *
+ * CodeMirror generates classes like `ͼN` (where N varies), so we can't target
+ * those directly. Instead we use `[data-mrmd-token="keyword"]` attributes that
+ * our ViewPlugin stamps onto code block lines, OR we target the Lezer tag
+ * CSS classes via the HighlightStyle we generate ourselves.
+ *
+ * The approach: we build a secondary HighlightStyle-like system using
+ * CSS custom properties on the code block scope. The override extension
+ * sets CSS vars like `--dt-keyword`, `--dt-string`, etc. on the editor root,
+ * and a companion HighlightStyle consumes them.
+ *
+ * Actually, the simplest approach that works with CodeMirror's existing
+ * highlighting is: since we already neutralize all ͼN class colors to
+ * `inherit`, we set the base color on `.cm-codeblock-line` from code.block.color.
+ * Then we generate a NEW HighlightStyle that uses our template colors.
+ * But HighlightStyle is static and baked into the extension pipeline...
+ *
+ * Best pragmatic approach: CSS custom properties + a theme override.
+ * We set `--dt-keyword: #xxx` etc. on the editor scope, then our
+ * secondary HighlightStyle references `var(--dt-keyword)`.
+ *
+ * HOWEVER: HighlightStyle doesn't support CSS vars. So the cleanest approach
+ * is to NOT neutralize token colors when highlight tokens are defined, and
+ * instead output override rules targeting the known HighlightStyle class
+ * mappings. Since HighlightStyle classes are generated and vary, we'll use
+ * the data-attribute approach: stamp `data-lang="python"` on code block lines
+ * and use our own `.cm-dt-token-keyword` class system.
+ *
+ * FINAL APPROACH (simplest & most robust):
+ * We output CSS rules using CSS custom properties on the code block container.
+ * The existing codemirror-theme.js HighlightStyle already maps tags. When
+ * document styles are active, we:
+ * 1. Keep the "neutralize" rule that resets ͼN colors to inherit
+ * 2. Override the CSS custom properties that codemirror-theme.js reads
+ *    (--syntax-keyword, --syntax-string, etc.)
+ * 3. For per-language overrides, use data-lang attributes on code blocks
+ */
+function pushSyntaxHighlightRules(rules, scopeSelector, hl) {
+  // Map our template token names to CSS custom property names used by
+  // codemirror-theme.js (--syntax-*)
+  const TOKEN_TO_CSS_VAR = {
+    keyword:        '--syntax-keyword',
+    controlKeyword: '--syntax-control',
+    string:         '--syntax-string',
+    number:         '--syntax-number',
+    comment:        '--syntax-comment',
+    function:       '--syntax-function',
+    variable:       '--syntax-variable',
+    type:           '--syntax-type',
+    operator:       '--syntax-operator',
+    punctuation:    '--syntax-punctuation',
+    property:       '--syntax-property',
+    constant:       '--syntax-constant',
+    regexp:         '--syntax-regexp',
+    escape:         '--syntax-escape',
+    tag:            '--syntax-tag',
+    attribute:      '--syntax-attribute',
+    attributeValue: '--syntax-attribute-value',
+    meta:           '--syntax-meta',
+    inserted:       '--syntax-inserted',
+    deleted:        '--syntax-deleted',
+    changed:        '--syntax-changed',
+  };
+
+  // --- Base token CSS vars (all code blocks) ---
+  const baseVars = [];
+  for (const [token, cssVar] of Object.entries(TOKEN_TO_CSS_VAR)) {
+    if (hl[token]) {
+      baseVars.push(`${cssVar}: ${hl[token]}`);
+    }
+  }
+  if (baseVars.length) {
+    rules.push(`${scopeSelector} { ${baseVars.join('; ')} }`);
+  }
+
+  // --- Style modifiers (font-weight, font-style for specific tokens) ---
+  // These map to CodeMirror tag-based selectors. Since we can't easily
+  // target ͼN classes, we use the approach of overriding via a regenerated
+  // HighlightStyle. For now, we store them as CSS vars too.
+  if (hl.keywordStyle) {
+    const { fontWeight, fontStyle } = parseStyleModifier(hl.keywordStyle);
+    if (fontWeight) baseVars.push(`--syntax-keyword-weight: ${fontWeight}`);
+    if (fontStyle) baseVars.push(`--syntax-keyword-style: ${fontStyle}`);
+  }
+  if (hl.commentStyle) {
+    const { fontWeight, fontStyle } = parseStyleModifier(hl.commentStyle);
+    if (fontWeight) baseVars.push(`--syntax-comment-weight: ${fontWeight}`);
+    if (fontStyle) baseVars.push(`--syntax-comment-style: ${fontStyle}`);
+  }
+  if (hl.functionStyle) {
+    const { fontWeight, fontStyle } = parseStyleModifier(hl.functionStyle);
+    if (fontWeight) baseVars.push(`--syntax-function-weight: ${fontWeight}`);
+    if (fontStyle) baseVars.push(`--syntax-function-style: ${fontStyle}`);
+  }
+  if (hl.typeStyle) {
+    const { fontWeight, fontStyle } = parseStyleModifier(hl.typeStyle);
+    if (fontWeight) baseVars.push(`--syntax-type-weight: ${fontWeight}`);
+    if (fontStyle) baseVars.push(`--syntax-type-style: ${fontStyle}`);
+  }
+
+  // --- Per-language overrides ---
+  // Uses data-lang attribute that our code block decoration plugin sets.
+  const languages = hl.languages;
+  if (languages) {
+    for (const [lang, langTokens] of Object.entries(languages)) {
+      if (!langTokens || typeof langTokens !== 'object') continue;
+      const langVars = [];
+      for (const [token, cssVar] of Object.entries(TOKEN_TO_CSS_VAR)) {
+        if (langTokens[token]) {
+          langVars.push(`${cssVar}: ${langTokens[token]}`);
+        }
+      }
+      // Style modifiers per language
+      if (langTokens.keywordStyle) {
+        const { fontWeight, fontStyle } = parseStyleModifier(langTokens.keywordStyle);
+        if (fontWeight) langVars.push(`--syntax-keyword-weight: ${fontWeight}`);
+        if (fontStyle) langVars.push(`--syntax-keyword-style: ${fontStyle}`);
+      }
+      if (langTokens.commentStyle) {
+        const { fontWeight, fontStyle } = parseStyleModifier(langTokens.commentStyle);
+        if (fontWeight) langVars.push(`--syntax-comment-weight: ${fontWeight}`);
+        if (fontStyle) langVars.push(`--syntax-comment-style: ${fontStyle}`);
+      }
+      if (langTokens.functionStyle) {
+        const { fontWeight, fontStyle } = parseStyleModifier(langTokens.functionStyle);
+        if (fontWeight) langVars.push(`--syntax-function-weight: ${fontWeight}`);
+        if (fontStyle) langVars.push(`--syntax-function-style: ${fontStyle}`);
+      }
+      if (langTokens.typeStyle) {
+        const { fontWeight, fontStyle } = parseStyleModifier(langTokens.typeStyle);
+        if (fontWeight) langVars.push(`--syntax-type-weight: ${fontWeight}`);
+        if (fontStyle) langVars.push(`--syntax-type-style: ${fontStyle}`);
+      }
+      if (langVars.length) {
+        // Scope per-language overrides to code blocks with data-lang attribute
+        rules.push(`${scopeSelector} .cm-codeblock-line[data-lang="${lang}"], ${scopeSelector} .cm-codeblock-fence[data-lang="${lang}"] { ${langVars.join('; ')} }`);
+      }
+    }
+  }
+}
+
+function parseStyleModifier(value) {
+  if (!value) return {};
+  const lower = String(value).toLowerCase().trim();
+  const result = {};
+  if (lower.includes('bold')) result.fontWeight = 'bold';
+  if (lower.includes('italic')) result.fontStyle = 'italic';
+  return result;
+}
+
+function createDocumentTemplateOverrideExtension(template) {
+  const t = normalizeDocumentTemplate(template);
+  if (t.editor?.applyDocumentStyles === false) return [];
+
+  return ViewPlugin.fromClass(class {
+    constructor(view) {
+      this.view = view;
+      this.ownerDocument = view.dom.ownerDocument;
+      this.attrName = 'data-mrmd-document-template-id';
+      this.attrValue = `dt-${++documentTemplateOverrideId}`;
+      this.styleEl = this.ownerDocument.createElement('style');
+      this.styleEl.id = `mrmd-document-template-overrides-${this.attrValue}`;
+      view.dom.setAttribute(this.attrName, this.attrValue);
+      this.styleEl.textContent = buildDocumentTemplateOverrideCSS(
+        t,
+        `.cm-editor[${this.attrName}="${this.attrValue}"]`
+      );
+      (this.ownerDocument.head || this.ownerDocument.documentElement).appendChild(this.styleEl);
+    }
+
+    destroy() {
+      this.styleEl?.remove?.();
+      this.view?.dom?.removeAttribute?.(this.attrName);
+    }
+  });
+}
+
+/**
+ * Build a HighlightStyle from the template's code.highlight tokens.
+ * This applies syntax highlighting colors owned by the document template,
+ * overriding the application theme's HighlightStyle within code blocks.
+ *
+ * Uses higher specificity via the `scope` option to win over the app theme.
+ */
+function createDocumentTemplateHighlightStyle(template) {
+  const t = normalizeDocumentTemplate(template);
+  if (t.editor?.applyDocumentStyles === false) return [];
+  const hl = t.code?.highlight;
+  if (!hl) return [];
+
+  // Check if any base token color is set
+  const hasAnyToken = [
+    'keyword', 'controlKeyword', 'string', 'number', 'comment',
+    'function', 'variable', 'type', 'operator', 'punctuation',
+    'property', 'constant', 'regexp', 'escape', 'tag',
+    'attribute', 'attributeValue', 'meta', 'inserted', 'deleted', 'changed',
+  ].some((k) => hl[k]);
+
+  if (!hasAnyToken) return [];
+
+  const styles = [];
+  const addStyle = (tags, color, styleStr) => {
+    if (!color && !styleStr) return;
+    const spec = {};
+    if (color) spec.color = color;
+    if (styleStr) {
+      const { fontWeight, fontStyle } = parseStyleModifier(styleStr);
+      if (fontWeight) spec.fontWeight = fontWeight;
+      if (fontStyle) spec.fontStyle = fontStyle;
+    }
+    if (Object.keys(spec).length === 0) return;
+    const tagList = Array.isArray(tags) ? tags : [tags];
+    for (const tag of tagList) {
+      styles.push({ tag, ...spec });
+    }
+  };
+
+  addStyle([tags$1.keyword, tags$1.operatorKeyword, tags$1.definitionKeyword, tags$1.moduleKeyword], hl.keyword, hl.keywordStyle);
+  addStyle([tags$1.controlKeyword], hl.controlKeyword || hl.keyword, hl.keywordStyle);
+  addStyle([tags$1.string, tags$1.docString, tags$1.character, tags$1.special(tags$1.string)], hl.string);
+  addStyle([tags$1.number, tags$1.integer, tags$1.float], hl.number);
+  addStyle([tags$1.comment, tags$1.lineComment, tags$1.blockComment, tags$1.docComment], hl.comment, hl.commentStyle);
+  addStyle([tags$1.function(tags$1.variableName), tags$1.definition(tags$1.function(tags$1.variableName))], hl.function, hl.functionStyle);
+  addStyle([tags$1.variableName, tags$1.definition(tags$1.variableName), tags$1.local(tags$1.variableName)], hl.variable);
+  addStyle([tags$1.typeName, tags$1.className, tags$1.namespace], hl.type, hl.typeStyle);
+  addStyle([tags$1.operator], hl.operator);
+  addStyle([tags$1.punctuation, tags$1.separator, tags$1.bracket, tags$1.paren, tags$1.brace, tags$1.squareBracket, tags$1.angleBracket], hl.punctuation);
+  addStyle([tags$1.propertyName, tags$1.definition(tags$1.propertyName)], hl.property);
+  addStyle([tags$1.constant(tags$1.variableName), tags$1.standard(tags$1.variableName), tags$1.bool, tags$1.null, tags$1.atom], hl.constant);
+  addStyle([tags$1.regexp], hl.regexp);
+  addStyle([tags$1.escape], hl.escape);
+  addStyle([tags$1.tagName], hl.tag);
+  addStyle([tags$1.attributeName], hl.attribute);
+  addStyle([tags$1.attributeValue], hl.attributeValue);
+  addStyle([tags$1.meta, tags$1.processingInstruction, tags$1.annotation], hl.meta);
+  addStyle([tags$1.inserted], hl.inserted);
+  addStyle([tags$1.deleted], hl.deleted);
+  addStyle([tags$1.changed], hl.changed);
+
+  if (!styles.length) return [];
+
+  const hlStyle = HighlightStyle.define(styles);
+  return [syntaxHighlighting(hlStyle)];
+}
+
+function createDocumentTemplateExtension(template) {
+  return [
+    EditorView.theme(compileDocumentTemplateCSS(template)),
+    createDocumentTemplateOverrideExtension(template),
+    ...createDocumentTemplateHighlightStyle(template),
+  ];
+}
+
+const ALIAS = Symbol.for('yaml.alias');
+const DOC = Symbol.for('yaml.document');
+const MAP = Symbol.for('yaml.map');
+const PAIR = Symbol.for('yaml.pair');
+const SCALAR$1 = Symbol.for('yaml.scalar');
+const SEQ = Symbol.for('yaml.seq');
+const NODE_TYPE = Symbol.for('yaml.node.type');
+const isAlias = (node) => !!node && typeof node === 'object' && node[NODE_TYPE] === ALIAS;
+const isDocument = (node) => !!node && typeof node === 'object' && node[NODE_TYPE] === DOC;
+const isMap = (node) => !!node && typeof node === 'object' && node[NODE_TYPE] === MAP;
+const isPair = (node) => !!node && typeof node === 'object' && node[NODE_TYPE] === PAIR;
+const isScalar$1 = (node) => !!node && typeof node === 'object' && node[NODE_TYPE] === SCALAR$1;
+const isSeq = (node) => !!node && typeof node === 'object' && node[NODE_TYPE] === SEQ;
+function isCollection$1(node) {
+    if (node && typeof node === 'object')
+        switch (node[NODE_TYPE]) {
+            case MAP:
+            case SEQ:
+                return true;
+        }
+    return false;
+}
+function isNode(node) {
+    if (node && typeof node === 'object')
+        switch (node[NODE_TYPE]) {
+            case ALIAS:
+            case MAP:
+            case SCALAR$1:
+            case SEQ:
+                return true;
+        }
+    return false;
+}
+const hasAnchor = (node) => (isScalar$1(node) || isCollection$1(node)) && !!node.anchor;
+
+const BREAK$1 = Symbol('break visit');
+const SKIP$1 = Symbol('skip children');
+const REMOVE$1 = Symbol('remove node');
+/**
+ * Apply a visitor to an AST node or document.
+ *
+ * Walks through the tree (depth-first) starting from `node`, calling a
+ * `visitor` function with three arguments:
+ *   - `key`: For sequence values and map `Pair`, the node's index in the
+ *     collection. Within a `Pair`, `'key'` or `'value'`, correspondingly.
+ *     `null` for the root node.
+ *   - `node`: The current node.
+ *   - `path`: The ancestry of the current node.
+ *
+ * The return value of the visitor may be used to control the traversal:
+ *   - `undefined` (default): Do nothing and continue
+ *   - `visit.SKIP`: Do not visit the children of this node, continue with next
+ *     sibling
+ *   - `visit.BREAK`: Terminate traversal completely
+ *   - `visit.REMOVE`: Remove the current node, then continue with the next one
+ *   - `Node`: Replace the current node, then continue by visiting it
+ *   - `number`: While iterating the items of a sequence or map, set the index
+ *     of the next step. This is useful especially if the index of the current
+ *     node has changed.
+ *
+ * If `visitor` is a single function, it will be called with all values
+ * encountered in the tree, including e.g. `null` values. Alternatively,
+ * separate visitor functions may be defined for each `Map`, `Pair`, `Seq`,
+ * `Alias` and `Scalar` node. To define the same visitor function for more than
+ * one node type, use the `Collection` (map and seq), `Value` (map, seq & scalar)
+ * and `Node` (alias, map, seq & scalar) targets. Of all these, only the most
+ * specific defined one will be used for each node.
+ */
+function visit$1(node, visitor) {
+    const visitor_ = initVisitor(visitor);
+    if (isDocument(node)) {
+        const cd = visit_(null, node.contents, visitor_, Object.freeze([node]));
+        if (cd === REMOVE$1)
+            node.contents = null;
+    }
+    else
+        visit_(null, node, visitor_, Object.freeze([]));
+}
+// Without the `as symbol` casts, TS declares these in the `visit`
+// namespace using `var`, but then complains about that because
+// `unique symbol` must be `const`.
+/** Terminate visit traversal completely */
+visit$1.BREAK = BREAK$1;
+/** Do not visit the children of the current node */
+visit$1.SKIP = SKIP$1;
+/** Remove the current node */
+visit$1.REMOVE = REMOVE$1;
+function visit_(key, node, visitor, path) {
+    const ctrl = callVisitor(key, node, visitor, path);
+    if (isNode(ctrl) || isPair(ctrl)) {
+        replaceNode(key, path, ctrl);
+        return visit_(key, ctrl, visitor, path);
+    }
+    if (typeof ctrl !== 'symbol') {
+        if (isCollection$1(node)) {
+            path = Object.freeze(path.concat(node));
+            for (let i = 0; i < node.items.length; ++i) {
+                const ci = visit_(i, node.items[i], visitor, path);
+                if (typeof ci === 'number')
+                    i = ci - 1;
+                else if (ci === BREAK$1)
+                    return BREAK$1;
+                else if (ci === REMOVE$1) {
+                    node.items.splice(i, 1);
+                    i -= 1;
+                }
+            }
+        }
+        else if (isPair(node)) {
+            path = Object.freeze(path.concat(node));
+            const ck = visit_('key', node.key, visitor, path);
+            if (ck === BREAK$1)
+                return BREAK$1;
+            else if (ck === REMOVE$1)
+                node.key = null;
+            const cv = visit_('value', node.value, visitor, path);
+            if (cv === BREAK$1)
+                return BREAK$1;
+            else if (cv === REMOVE$1)
+                node.value = null;
+        }
+    }
+    return ctrl;
+}
+/**
+ * Apply an async visitor to an AST node or document.
+ *
+ * Walks through the tree (depth-first) starting from `node`, calling a
+ * `visitor` function with three arguments:
+ *   - `key`: For sequence values and map `Pair`, the node's index in the
+ *     collection. Within a `Pair`, `'key'` or `'value'`, correspondingly.
+ *     `null` for the root node.
+ *   - `node`: The current node.
+ *   - `path`: The ancestry of the current node.
+ *
+ * The return value of the visitor may be used to control the traversal:
+ *   - `Promise`: Must resolve to one of the following values
+ *   - `undefined` (default): Do nothing and continue
+ *   - `visit.SKIP`: Do not visit the children of this node, continue with next
+ *     sibling
+ *   - `visit.BREAK`: Terminate traversal completely
+ *   - `visit.REMOVE`: Remove the current node, then continue with the next one
+ *   - `Node`: Replace the current node, then continue by visiting it
+ *   - `number`: While iterating the items of a sequence or map, set the index
+ *     of the next step. This is useful especially if the index of the current
+ *     node has changed.
+ *
+ * If `visitor` is a single function, it will be called with all values
+ * encountered in the tree, including e.g. `null` values. Alternatively,
+ * separate visitor functions may be defined for each `Map`, `Pair`, `Seq`,
+ * `Alias` and `Scalar` node. To define the same visitor function for more than
+ * one node type, use the `Collection` (map and seq), `Value` (map, seq & scalar)
+ * and `Node` (alias, map, seq & scalar) targets. Of all these, only the most
+ * specific defined one will be used for each node.
+ */
+async function visitAsync(node, visitor) {
+    const visitor_ = initVisitor(visitor);
+    if (isDocument(node)) {
+        const cd = await visitAsync_(null, node.contents, visitor_, Object.freeze([node]));
+        if (cd === REMOVE$1)
+            node.contents = null;
+    }
+    else
+        await visitAsync_(null, node, visitor_, Object.freeze([]));
+}
+// Without the `as symbol` casts, TS declares these in the `visit`
+// namespace using `var`, but then complains about that because
+// `unique symbol` must be `const`.
+/** Terminate visit traversal completely */
+visitAsync.BREAK = BREAK$1;
+/** Do not visit the children of the current node */
+visitAsync.SKIP = SKIP$1;
+/** Remove the current node */
+visitAsync.REMOVE = REMOVE$1;
+async function visitAsync_(key, node, visitor, path) {
+    const ctrl = await callVisitor(key, node, visitor, path);
+    if (isNode(ctrl) || isPair(ctrl)) {
+        replaceNode(key, path, ctrl);
+        return visitAsync_(key, ctrl, visitor, path);
+    }
+    if (typeof ctrl !== 'symbol') {
+        if (isCollection$1(node)) {
+            path = Object.freeze(path.concat(node));
+            for (let i = 0; i < node.items.length; ++i) {
+                const ci = await visitAsync_(i, node.items[i], visitor, path);
+                if (typeof ci === 'number')
+                    i = ci - 1;
+                else if (ci === BREAK$1)
+                    return BREAK$1;
+                else if (ci === REMOVE$1) {
+                    node.items.splice(i, 1);
+                    i -= 1;
+                }
+            }
+        }
+        else if (isPair(node)) {
+            path = Object.freeze(path.concat(node));
+            const ck = await visitAsync_('key', node.key, visitor, path);
+            if (ck === BREAK$1)
+                return BREAK$1;
+            else if (ck === REMOVE$1)
+                node.key = null;
+            const cv = await visitAsync_('value', node.value, visitor, path);
+            if (cv === BREAK$1)
+                return BREAK$1;
+            else if (cv === REMOVE$1)
+                node.value = null;
+        }
+    }
+    return ctrl;
+}
+function initVisitor(visitor) {
+    if (typeof visitor === 'object' &&
+        (visitor.Collection || visitor.Node || visitor.Value)) {
+        return Object.assign({
+            Alias: visitor.Node,
+            Map: visitor.Node,
+            Scalar: visitor.Node,
+            Seq: visitor.Node
+        }, visitor.Value && {
+            Map: visitor.Value,
+            Scalar: visitor.Value,
+            Seq: visitor.Value
+        }, visitor.Collection && {
+            Map: visitor.Collection,
+            Seq: visitor.Collection
+        }, visitor);
+    }
+    return visitor;
+}
+function callVisitor(key, node, visitor, path) {
+    if (typeof visitor === 'function')
+        return visitor(key, node, path);
+    if (isMap(node))
+        return visitor.Map?.(key, node, path);
+    if (isSeq(node))
+        return visitor.Seq?.(key, node, path);
+    if (isPair(node))
+        return visitor.Pair?.(key, node, path);
+    if (isScalar$1(node))
+        return visitor.Scalar?.(key, node, path);
+    if (isAlias(node))
+        return visitor.Alias?.(key, node, path);
+    return undefined;
+}
+function replaceNode(key, path, node) {
+    const parent = path[path.length - 1];
+    if (isCollection$1(parent)) {
+        parent.items[key] = node;
+    }
+    else if (isPair(parent)) {
+        if (key === 'key')
+            parent.key = node;
+        else
+            parent.value = node;
+    }
+    else if (isDocument(parent)) {
+        parent.contents = node;
+    }
+    else {
+        const pt = isAlias(parent) ? 'alias' : 'scalar';
+        throw new Error(`Cannot replace node with ${pt} parent`);
+    }
+}
+
+const escapeChars = {
+    '!': '%21',
+    ',': '%2C',
+    '[': '%5B',
+    ']': '%5D',
+    '{': '%7B',
+    '}': '%7D'
+};
+const escapeTagName = (tn) => tn.replace(/[!,[\]{}]/g, ch => escapeChars[ch]);
+class Directives {
+    constructor(yaml, tags) {
+        /**
+         * The directives-end/doc-start marker `---`. If `null`, a marker may still be
+         * included in the document's stringified representation.
+         */
+        this.docStart = null;
+        /** The doc-end marker `...`.  */
+        this.docEnd = false;
+        this.yaml = Object.assign({}, Directives.defaultYaml, yaml);
+        this.tags = Object.assign({}, Directives.defaultTags, tags);
+    }
+    clone() {
+        const copy = new Directives(this.yaml, this.tags);
+        copy.docStart = this.docStart;
+        return copy;
+    }
+    /**
+     * During parsing, get a Directives instance for the current document and
+     * update the stream state according to the current version's spec.
+     */
+    atDocument() {
+        const res = new Directives(this.yaml, this.tags);
+        switch (this.yaml.version) {
+            case '1.1':
+                this.atNextDocument = true;
+                break;
+            case '1.2':
+                this.atNextDocument = false;
+                this.yaml = {
+                    explicit: Directives.defaultYaml.explicit,
+                    version: '1.2'
+                };
+                this.tags = Object.assign({}, Directives.defaultTags);
+                break;
+        }
+        return res;
+    }
+    /**
+     * @param onError - May be called even if the action was successful
+     * @returns `true` on success
+     */
+    add(line, onError) {
+        if (this.atNextDocument) {
+            this.yaml = { explicit: Directives.defaultYaml.explicit, version: '1.1' };
+            this.tags = Object.assign({}, Directives.defaultTags);
+            this.atNextDocument = false;
+        }
+        const parts = line.trim().split(/[ \t]+/);
+        const name = parts.shift();
+        switch (name) {
+            case '%TAG': {
+                if (parts.length !== 2) {
+                    onError(0, '%TAG directive should contain exactly two parts');
+                    if (parts.length < 2)
+                        return false;
+                }
+                const [handle, prefix] = parts;
+                this.tags[handle] = prefix;
+                return true;
+            }
+            case '%YAML': {
+                this.yaml.explicit = true;
+                if (parts.length !== 1) {
+                    onError(0, '%YAML directive should contain exactly one part');
+                    return false;
+                }
+                const [version] = parts;
+                if (version === '1.1' || version === '1.2') {
+                    this.yaml.version = version;
+                    return true;
+                }
+                else {
+                    const isValid = /^\d+\.\d+$/.test(version);
+                    onError(6, `Unsupported YAML version ${version}`, isValid);
+                    return false;
+                }
+            }
+            default:
+                onError(0, `Unknown directive ${name}`, true);
+                return false;
+        }
+    }
+    /**
+     * Resolves a tag, matching handles to those defined in %TAG directives.
+     *
+     * @returns Resolved tag, which may also be the non-specific tag `'!'` or a
+     *   `'!local'` tag, or `null` if unresolvable.
+     */
+    tagName(source, onError) {
+        if (source === '!')
+            return '!'; // non-specific tag
+        if (source[0] !== '!') {
+            onError(`Not a valid tag: ${source}`);
+            return null;
+        }
+        if (source[1] === '<') {
+            const verbatim = source.slice(2, -1);
+            if (verbatim === '!' || verbatim === '!!') {
+                onError(`Verbatim tags aren't resolved, so ${source} is invalid.`);
+                return null;
+            }
+            if (source[source.length - 1] !== '>')
+                onError('Verbatim tags must end with a >');
+            return verbatim;
+        }
+        const [, handle, suffix] = source.match(/^(.*!)([^!]*)$/s);
+        if (!suffix)
+            onError(`The ${source} tag has no suffix`);
+        const prefix = this.tags[handle];
+        if (prefix) {
+            try {
+                return prefix + decodeURIComponent(suffix);
+            }
+            catch (error) {
+                onError(String(error));
+                return null;
+            }
+        }
+        if (handle === '!')
+            return source; // local tag
+        onError(`Could not resolve tag: ${source}`);
+        return null;
+    }
+    /**
+     * Given a fully resolved tag, returns its printable string form,
+     * taking into account current tag prefixes and defaults.
+     */
+    tagString(tag) {
+        for (const [handle, prefix] of Object.entries(this.tags)) {
+            if (tag.startsWith(prefix))
+                return handle + escapeTagName(tag.substring(prefix.length));
+        }
+        return tag[0] === '!' ? tag : `!<${tag}>`;
+    }
+    toString(doc) {
+        const lines = this.yaml.explicit
+            ? [`%YAML ${this.yaml.version || '1.2'}`]
+            : [];
+        const tagEntries = Object.entries(this.tags);
+        let tagNames;
+        if (doc && tagEntries.length > 0 && isNode(doc.contents)) {
+            const tags = {};
+            visit$1(doc.contents, (_key, node) => {
+                if (isNode(node) && node.tag)
+                    tags[node.tag] = true;
+            });
+            tagNames = Object.keys(tags);
+        }
+        else
+            tagNames = [];
+        for (const [handle, prefix] of tagEntries) {
+            if (handle === '!!' && prefix === 'tag:yaml.org,2002:')
+                continue;
+            if (!doc || tagNames.some(tn => tn.startsWith(prefix)))
+                lines.push(`%TAG ${handle} ${prefix}`);
+        }
+        return lines.join('\n');
+    }
+}
+Directives.defaultYaml = { explicit: false, version: '1.2' };
+Directives.defaultTags = { '!!': 'tag:yaml.org,2002:' };
+
+/**
+ * Verify that the input string is a valid anchor.
+ *
+ * Will throw on errors.
+ */
+function anchorIsValid(anchor) {
+    if (/[\x00-\x19\s,[\]{}]/.test(anchor)) {
+        const sa = JSON.stringify(anchor);
+        const msg = `Anchor must not contain whitespace or control characters: ${sa}`;
+        throw new Error(msg);
+    }
+    return true;
+}
+function anchorNames(root) {
+    const anchors = new Set();
+    visit$1(root, {
+        Value(_key, node) {
+            if (node.anchor)
+                anchors.add(node.anchor);
+        }
+    });
+    return anchors;
+}
+/** Find a new anchor name with the given `prefix` and a one-indexed suffix. */
+function findNewAnchor(prefix, exclude) {
+    for (let i = 1; true; ++i) {
+        const name = `${prefix}${i}`;
+        if (!exclude.has(name))
+            return name;
+    }
+}
+function createNodeAnchors(doc, prefix) {
+    const aliasObjects = [];
+    const sourceObjects = new Map();
+    let prevAnchors = null;
+    return {
+        onAnchor: (source) => {
+            aliasObjects.push(source);
+            prevAnchors ?? (prevAnchors = anchorNames(doc));
+            const anchor = findNewAnchor(prefix, prevAnchors);
+            prevAnchors.add(anchor);
+            return anchor;
+        },
+        /**
+         * With circular references, the source node is only resolved after all
+         * of its child nodes are. This is why anchors are set only after all of
+         * the nodes have been created.
+         */
+        setAnchors: () => {
+            for (const source of aliasObjects) {
+                const ref = sourceObjects.get(source);
+                if (typeof ref === 'object' &&
+                    ref.anchor &&
+                    (isScalar$1(ref.node) || isCollection$1(ref.node))) {
+                    ref.node.anchor = ref.anchor;
+                }
+                else {
+                    const error = new Error('Failed to resolve repeated object (this should not happen)');
+                    error.source = source;
+                    throw error;
+                }
+            }
+        },
+        sourceObjects
+    };
+}
+
+/**
+ * Applies the JSON.parse reviver algorithm as defined in the ECMA-262 spec,
+ * in section 24.5.1.1 "Runtime Semantics: InternalizeJSONProperty" of the
+ * 2021 edition: https://tc39.es/ecma262/#sec-json.parse
+ *
+ * Includes extensions for handling Map and Set objects.
+ */
+function applyReviver(reviver, obj, key, val) {
+    if (val && typeof val === 'object') {
+        if (Array.isArray(val)) {
+            for (let i = 0, len = val.length; i < len; ++i) {
+                const v0 = val[i];
+                const v1 = applyReviver(reviver, val, String(i), v0);
+                // eslint-disable-next-line @typescript-eslint/no-array-delete
+                if (v1 === undefined)
+                    delete val[i];
+                else if (v1 !== v0)
+                    val[i] = v1;
+            }
+        }
+        else if (val instanceof Map) {
+            for (const k of Array.from(val.keys())) {
+                const v0 = val.get(k);
+                const v1 = applyReviver(reviver, val, k, v0);
+                if (v1 === undefined)
+                    val.delete(k);
+                else if (v1 !== v0)
+                    val.set(k, v1);
+            }
+        }
+        else if (val instanceof Set) {
+            for (const v0 of Array.from(val)) {
+                const v1 = applyReviver(reviver, val, v0, v0);
+                if (v1 === undefined)
+                    val.delete(v0);
+                else if (v1 !== v0) {
+                    val.delete(v0);
+                    val.add(v1);
+                }
+            }
+        }
+        else {
+            for (const [k, v0] of Object.entries(val)) {
+                const v1 = applyReviver(reviver, val, k, v0);
+                if (v1 === undefined)
+                    delete val[k];
+                else if (v1 !== v0)
+                    val[k] = v1;
+            }
+        }
+    }
+    return reviver.call(obj, key, val);
+}
+
+/**
+ * Recursively convert any node or its contents to native JavaScript
+ *
+ * @param value - The input value
+ * @param arg - If `value` defines a `toJSON()` method, use this
+ *   as its first argument
+ * @param ctx - Conversion context, originally set in Document#toJS(). If
+ *   `{ keep: true }` is not set, output should be suitable for JSON
+ *   stringification.
+ */
+function toJS(value, arg, ctx) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+    if (Array.isArray(value))
+        return value.map((v, i) => toJS(v, String(i), ctx));
+    if (value && typeof value.toJSON === 'function') {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        if (!ctx || !hasAnchor(value))
+            return value.toJSON(arg, ctx);
+        const data = { aliasCount: 0, count: 1, res: undefined };
+        ctx.anchors.set(value, data);
+        ctx.onCreate = res => {
+            data.res = res;
+            delete ctx.onCreate;
+        };
+        const res = value.toJSON(arg, ctx);
+        if (ctx.onCreate)
+            ctx.onCreate(res);
+        return res;
+    }
+    if (typeof value === 'bigint' && !ctx?.keep)
+        return Number(value);
+    return value;
+}
+
+class NodeBase {
+    constructor(type) {
+        Object.defineProperty(this, NODE_TYPE, { value: type });
+    }
+    /** Create a copy of this node.  */
+    clone() {
+        const copy = Object.create(Object.getPrototypeOf(this), Object.getOwnPropertyDescriptors(this));
+        if (this.range)
+            copy.range = this.range.slice();
+        return copy;
+    }
+    /** A plain JavaScript representation of this node. */
+    toJS(doc, { mapAsMap, maxAliasCount, onAnchor, reviver } = {}) {
+        if (!isDocument(doc))
+            throw new TypeError('A document argument is required');
+        const ctx = {
+            anchors: new Map(),
+            doc,
+            keep: true,
+            mapAsMap: mapAsMap === true,
+            mapKeyWarned: false,
+            maxAliasCount: typeof maxAliasCount === 'number' ? maxAliasCount : 100
+        };
+        const res = toJS(this, '', ctx);
+        if (typeof onAnchor === 'function')
+            for (const { count, res } of ctx.anchors.values())
+                onAnchor(res, count);
+        return typeof reviver === 'function'
+            ? applyReviver(reviver, { '': res }, '', res)
+            : res;
+    }
+}
+
+class Alias extends NodeBase {
+    constructor(source) {
+        super(ALIAS);
+        this.source = source;
+        Object.defineProperty(this, 'tag', {
+            set() {
+                throw new Error('Alias nodes cannot have tags');
+            }
+        });
+    }
+    /**
+     * Resolve the value of this alias within `doc`, finding the last
+     * instance of the `source` anchor before this node.
+     */
+    resolve(doc, ctx) {
+        let nodes;
+        if (ctx?.aliasResolveCache) {
+            nodes = ctx.aliasResolveCache;
+        }
+        else {
+            nodes = [];
+            visit$1(doc, {
+                Node: (_key, node) => {
+                    if (isAlias(node) || hasAnchor(node))
+                        nodes.push(node);
+                }
+            });
+            if (ctx)
+                ctx.aliasResolveCache = nodes;
+        }
+        let found = undefined;
+        for (const node of nodes) {
+            if (node === this)
+                break;
+            if (node.anchor === this.source)
+                found = node;
+        }
+        return found;
+    }
+    toJSON(_arg, ctx) {
+        if (!ctx)
+            return { source: this.source };
+        const { anchors, doc, maxAliasCount } = ctx;
+        const source = this.resolve(doc, ctx);
+        if (!source) {
+            const msg = `Unresolved alias (the anchor must be set before the alias): ${this.source}`;
+            throw new ReferenceError(msg);
+        }
+        let data = anchors.get(source);
+        if (!data) {
+            // Resolve anchors for Node.prototype.toJS()
+            toJS(source, null, ctx);
+            data = anchors.get(source);
+        }
+        /* istanbul ignore if */
+        if (data?.res === undefined) {
+            const msg = 'This should not happen: Alias anchor was not resolved?';
+            throw new ReferenceError(msg);
+        }
+        if (maxAliasCount >= 0) {
+            data.count += 1;
+            if (data.aliasCount === 0)
+                data.aliasCount = getAliasCount(doc, source, anchors);
+            if (data.count * data.aliasCount > maxAliasCount) {
+                const msg = 'Excessive alias count indicates a resource exhaustion attack';
+                throw new ReferenceError(msg);
+            }
+        }
+        return data.res;
+    }
+    toString(ctx, _onComment, _onChompKeep) {
+        const src = `*${this.source}`;
+        if (ctx) {
+            anchorIsValid(this.source);
+            if (ctx.options.verifyAliasOrder && !ctx.anchors.has(this.source)) {
+                const msg = `Unresolved alias (the anchor must be set before the alias): ${this.source}`;
+                throw new Error(msg);
+            }
+            if (ctx.implicitKey)
+                return `${src} `;
+        }
+        return src;
+    }
+}
+function getAliasCount(doc, node, anchors) {
+    if (isAlias(node)) {
+        const source = node.resolve(doc);
+        const anchor = anchors && source && anchors.get(source);
+        return anchor ? anchor.count * anchor.aliasCount : 0;
+    }
+    else if (isCollection$1(node)) {
+        let count = 0;
+        for (const item of node.items) {
+            const c = getAliasCount(doc, item, anchors);
+            if (c > count)
+                count = c;
+        }
+        return count;
+    }
+    else if (isPair(node)) {
+        const kc = getAliasCount(doc, node.key, anchors);
+        const vc = getAliasCount(doc, node.value, anchors);
+        return Math.max(kc, vc);
+    }
+    return 1;
+}
+
+const isScalarValue = (value) => !value || (typeof value !== 'function' && typeof value !== 'object');
+class Scalar extends NodeBase {
+    constructor(value) {
+        super(SCALAR$1);
+        this.value = value;
+    }
+    toJSON(arg, ctx) {
+        return ctx?.keep ? this.value : toJS(this.value, arg, ctx);
+    }
+    toString() {
+        return String(this.value);
+    }
+}
+Scalar.BLOCK_FOLDED = 'BLOCK_FOLDED';
+Scalar.BLOCK_LITERAL = 'BLOCK_LITERAL';
+Scalar.PLAIN = 'PLAIN';
+Scalar.QUOTE_DOUBLE = 'QUOTE_DOUBLE';
+Scalar.QUOTE_SINGLE = 'QUOTE_SINGLE';
+
+const defaultTagPrefix = 'tag:yaml.org,2002:';
+function findTagObject(value, tagName, tags) {
+    if (tagName) {
+        const match = tags.filter(t => t.tag === tagName);
+        const tagObj = match.find(t => !t.format) ?? match[0];
+        if (!tagObj)
+            throw new Error(`Tag ${tagName} not found`);
+        return tagObj;
+    }
+    return tags.find(t => t.identify?.(value) && !t.format);
+}
+function createNode(value, tagName, ctx) {
+    if (isDocument(value))
+        value = value.contents;
+    if (isNode(value))
+        return value;
+    if (isPair(value)) {
+        const map = ctx.schema[MAP].createNode?.(ctx.schema, null, ctx);
+        map.items.push(value);
+        return map;
+    }
+    if (value instanceof String ||
+        value instanceof Number ||
+        value instanceof Boolean ||
+        (typeof BigInt !== 'undefined' && value instanceof BigInt) // not supported everywhere
+    ) {
+        // https://tc39.es/ecma262/#sec-serializejsonproperty
+        value = value.valueOf();
+    }
+    const { aliasDuplicateObjects, onAnchor, onTagObj, schema, sourceObjects } = ctx;
+    // Detect duplicate references to the same object & use Alias nodes for all
+    // after first. The `ref` wrapper allows for circular references to resolve.
+    let ref = undefined;
+    if (aliasDuplicateObjects && value && typeof value === 'object') {
+        ref = sourceObjects.get(value);
+        if (ref) {
+            ref.anchor ?? (ref.anchor = onAnchor(value));
+            return new Alias(ref.anchor);
+        }
+        else {
+            ref = { anchor: null, node: null };
+            sourceObjects.set(value, ref);
+        }
+    }
+    if (tagName?.startsWith('!!'))
+        tagName = defaultTagPrefix + tagName.slice(2);
+    let tagObj = findTagObject(value, tagName, schema.tags);
+    if (!tagObj) {
+        if (value && typeof value.toJSON === 'function') {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+            value = value.toJSON();
+        }
+        if (!value || typeof value !== 'object') {
+            const node = new Scalar(value);
+            if (ref)
+                ref.node = node;
+            return node;
+        }
+        tagObj =
+            value instanceof Map
+                ? schema[MAP]
+                : Symbol.iterator in Object(value)
+                    ? schema[SEQ]
+                    : schema[MAP];
+    }
+    if (onTagObj) {
+        onTagObj(tagObj);
+        delete ctx.onTagObj;
+    }
+    const node = tagObj?.createNode
+        ? tagObj.createNode(ctx.schema, value, ctx)
+        : typeof tagObj?.nodeClass?.from === 'function'
+            ? tagObj.nodeClass.from(ctx.schema, value, ctx)
+            : new Scalar(value);
+    if (tagName)
+        node.tag = tagName;
+    else if (!tagObj.default)
+        node.tag = tagObj.tag;
+    if (ref)
+        ref.node = node;
+    return node;
+}
+
+function collectionFromPath(schema, path, value) {
+    let v = value;
+    for (let i = path.length - 1; i >= 0; --i) {
+        const k = path[i];
+        if (typeof k === 'number' && Number.isInteger(k) && k >= 0) {
+            const a = [];
+            a[k] = v;
+            v = a;
+        }
+        else {
+            v = new Map([[k, v]]);
+        }
+    }
+    return createNode(v, undefined, {
+        aliasDuplicateObjects: false,
+        keepUndefined: false,
+        onAnchor: () => {
+            throw new Error('This should not happen, please report a bug.');
+        },
+        schema,
+        sourceObjects: new Map()
+    });
+}
+// Type guard is intentionally a little wrong so as to be more useful,
+// as it does not cover untypable empty non-string iterables (e.g. []).
+const isEmptyPath = (path) => path == null ||
+    (typeof path === 'object' && !!path[Symbol.iterator]().next().done);
+class Collection extends NodeBase {
+    constructor(type, schema) {
+        super(type);
+        Object.defineProperty(this, 'schema', {
+            value: schema,
+            configurable: true,
+            enumerable: false,
+            writable: true
+        });
+    }
+    /**
+     * Create a copy of this collection.
+     *
+     * @param schema - If defined, overwrites the original's schema
+     */
+    clone(schema) {
+        const copy = Object.create(Object.getPrototypeOf(this), Object.getOwnPropertyDescriptors(this));
+        if (schema)
+            copy.schema = schema;
+        copy.items = copy.items.map(it => isNode(it) || isPair(it) ? it.clone(schema) : it);
+        if (this.range)
+            copy.range = this.range.slice();
+        return copy;
+    }
+    /**
+     * Adds a value to the collection. For `!!map` and `!!omap` the value must
+     * be a Pair instance or a `{ key, value }` object, which may not have a key
+     * that already exists in the map.
+     */
+    addIn(path, value) {
+        if (isEmptyPath(path))
+            this.add(value);
+        else {
+            const [key, ...rest] = path;
+            const node = this.get(key, true);
+            if (isCollection$1(node))
+                node.addIn(rest, value);
+            else if (node === undefined && this.schema)
+                this.set(key, collectionFromPath(this.schema, rest, value));
+            else
+                throw new Error(`Expected YAML collection at ${key}. Remaining path: ${rest}`);
+        }
+    }
+    /**
+     * Removes a value from the collection.
+     * @returns `true` if the item was found and removed.
+     */
+    deleteIn(path) {
+        const [key, ...rest] = path;
+        if (rest.length === 0)
+            return this.delete(key);
+        const node = this.get(key, true);
+        if (isCollection$1(node))
+            return node.deleteIn(rest);
+        else
+            throw new Error(`Expected YAML collection at ${key}. Remaining path: ${rest}`);
+    }
+    /**
+     * Returns item at `key`, or `undefined` if not found. By default unwraps
+     * scalar values from their surrounding node; to disable set `keepScalar` to
+     * `true` (collections are always returned intact).
+     */
+    getIn(path, keepScalar) {
+        const [key, ...rest] = path;
+        const node = this.get(key, true);
+        if (rest.length === 0)
+            return !keepScalar && isScalar$1(node) ? node.value : node;
+        else
+            return isCollection$1(node) ? node.getIn(rest, keepScalar) : undefined;
+    }
+    hasAllNullValues(allowScalar) {
+        return this.items.every(node => {
+            if (!isPair(node))
+                return false;
+            const n = node.value;
+            return (n == null ||
+                (allowScalar &&
+                    isScalar$1(n) &&
+                    n.value == null &&
+                    !n.commentBefore &&
+                    !n.comment &&
+                    !n.tag));
+        });
+    }
+    /**
+     * Checks if the collection includes a value with the key `key`.
+     */
+    hasIn(path) {
+        const [key, ...rest] = path;
+        if (rest.length === 0)
+            return this.has(key);
+        const node = this.get(key, true);
+        return isCollection$1(node) ? node.hasIn(rest) : false;
+    }
+    /**
+     * Sets a value in this collection. For `!!set`, `value` needs to be a
+     * boolean to add/remove the item from the set.
+     */
+    setIn(path, value) {
+        const [key, ...rest] = path;
+        if (rest.length === 0) {
+            this.set(key, value);
+        }
+        else {
+            const node = this.get(key, true);
+            if (isCollection$1(node))
+                node.setIn(rest, value);
+            else if (node === undefined && this.schema)
+                this.set(key, collectionFromPath(this.schema, rest, value));
+            else
+                throw new Error(`Expected YAML collection at ${key}. Remaining path: ${rest}`);
+        }
+    }
+}
+
+/**
+ * Stringifies a comment.
+ *
+ * Empty comment lines are left empty,
+ * lines consisting of a single space are replaced by `#`,
+ * and all other lines are prefixed with a `#`.
+ */
+const stringifyComment = (str) => str.replace(/^(?!$)(?: $)?/gm, '#');
+function indentComment(comment, indent) {
+    if (/^\n+$/.test(comment))
+        return comment.substring(1);
+    return indent ? comment.replace(/^(?! *$)/gm, indent) : comment;
+}
+const lineComment = (str, indent, comment) => str.endsWith('\n')
+    ? indentComment(comment, indent)
+    : comment.includes('\n')
+        ? '\n' + indentComment(comment, indent)
+        : (str.endsWith(' ') ? '' : ' ') + comment;
+
+const FOLD_FLOW = 'flow';
+const FOLD_BLOCK = 'block';
+const FOLD_QUOTED = 'quoted';
+/**
+ * Tries to keep input at up to `lineWidth` characters, splitting only on spaces
+ * not followed by newlines or spaces unless `mode` is `'quoted'`. Lines are
+ * terminated with `\n` and started with `indent`.
+ */
+function foldFlowLines(text, indent, mode = 'flow', { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
+    if (!lineWidth || lineWidth < 0)
+        return text;
+    if (lineWidth < minContentWidth)
+        minContentWidth = 0;
+    const endStep = Math.max(1 + minContentWidth, 1 + lineWidth - indent.length);
+    if (text.length <= endStep)
+        return text;
+    const folds = [];
+    const escapedFolds = {};
+    let end = lineWidth - indent.length;
+    if (typeof indentAtStart === 'number') {
+        if (indentAtStart > lineWidth - Math.max(2, minContentWidth))
+            folds.push(0);
+        else
+            end = lineWidth - indentAtStart;
+    }
+    let split = undefined;
+    let prev = undefined;
+    let overflow = false;
+    let i = -1;
+    let escStart = -1;
+    let escEnd = -1;
+    if (mode === FOLD_BLOCK) {
+        i = consumeMoreIndentedLines(text, i, indent.length);
+        if (i !== -1)
+            end = i + endStep;
+    }
+    for (let ch; (ch = text[(i += 1)]);) {
+        if (mode === FOLD_QUOTED && ch === '\\') {
+            escStart = i;
+            switch (text[i + 1]) {
+                case 'x':
+                    i += 3;
+                    break;
+                case 'u':
+                    i += 5;
+                    break;
+                case 'U':
+                    i += 9;
+                    break;
+                default:
+                    i += 1;
+            }
+            escEnd = i;
+        }
+        if (ch === '\n') {
+            if (mode === FOLD_BLOCK)
+                i = consumeMoreIndentedLines(text, i, indent.length);
+            end = i + indent.length + endStep;
+            split = undefined;
+        }
+        else {
+            if (ch === ' ' &&
+                prev &&
+                prev !== ' ' &&
+                prev !== '\n' &&
+                prev !== '\t') {
+                // space surrounded by non-space can be replaced with newline + indent
+                const next = text[i + 1];
+                if (next && next !== ' ' && next !== '\n' && next !== '\t')
+                    split = i;
+            }
+            if (i >= end) {
+                if (split) {
+                    folds.push(split);
+                    end = split + endStep;
+                    split = undefined;
+                }
+                else if (mode === FOLD_QUOTED) {
+                    // white-space collected at end may stretch past lineWidth
+                    while (prev === ' ' || prev === '\t') {
+                        prev = ch;
+                        ch = text[(i += 1)];
+                        overflow = true;
+                    }
+                    // Account for newline escape, but don't break preceding escape
+                    const j = i > escEnd + 1 ? i - 2 : escStart - 1;
+                    // Bail out if lineWidth & minContentWidth are shorter than an escape string
+                    if (escapedFolds[j])
+                        return text;
+                    folds.push(j);
+                    escapedFolds[j] = true;
+                    end = j + endStep;
+                    split = undefined;
+                }
+                else {
+                    overflow = true;
+                }
+            }
+        }
+        prev = ch;
+    }
+    if (overflow && onOverflow)
+        onOverflow();
+    if (folds.length === 0)
+        return text;
+    if (onFold)
+        onFold();
+    let res = text.slice(0, folds[0]);
+    for (let i = 0; i < folds.length; ++i) {
+        const fold = folds[i];
+        const end = folds[i + 1] || text.length;
+        if (fold === 0)
+            res = `\n${indent}${text.slice(0, end)}`;
+        else {
+            if (mode === FOLD_QUOTED && escapedFolds[fold])
+                res += `${text[fold]}\\`;
+            res += `\n${indent}${text.slice(fold + 1, end)}`;
+        }
+    }
+    return res;
+}
+/**
+ * Presumes `i + 1` is at the start of a line
+ * @returns index of last newline in more-indented block
+ */
+function consumeMoreIndentedLines(text, i, indent) {
+    let end = i;
+    let start = i + 1;
+    let ch = text[start];
+    while (ch === ' ' || ch === '\t') {
+        if (i < start + indent) {
+            ch = text[++i];
+        }
+        else {
+            do {
+                ch = text[++i];
+            } while (ch && ch !== '\n');
+            end = i;
+            start = i + 1;
+            ch = text[start];
+        }
+    }
+    return end;
+}
+
+const getFoldOptions = (ctx, isBlock) => ({
+    indentAtStart: isBlock ? ctx.indent.length : ctx.indentAtStart,
+    lineWidth: ctx.options.lineWidth,
+    minContentWidth: ctx.options.minContentWidth
+});
+// Also checks for lines starting with %, as parsing the output as YAML 1.1 will
+// presume that's starting a new document.
+const containsDocumentMarker = (str) => /^(%|---|\.\.\.)/m.test(str);
+function lineLengthOverLimit(str, lineWidth, indentLength) {
+    if (!lineWidth || lineWidth < 0)
+        return false;
+    const limit = lineWidth - indentLength;
+    const strLen = str.length;
+    if (strLen <= limit)
+        return false;
+    for (let i = 0, start = 0; i < strLen; ++i) {
+        if (str[i] === '\n') {
+            if (i - start > limit)
+                return true;
+            start = i + 1;
+            if (strLen - start <= limit)
+                return false;
+        }
+    }
+    return true;
+}
+function doubleQuotedString(value, ctx) {
+    const json = JSON.stringify(value);
+    if (ctx.options.doubleQuotedAsJSON)
+        return json;
+    const { implicitKey } = ctx;
+    const minMultiLineLength = ctx.options.doubleQuotedMinMultiLineLength;
+    const indent = ctx.indent || (containsDocumentMarker(value) ? '  ' : '');
+    let str = '';
+    let start = 0;
+    for (let i = 0, ch = json[i]; ch; ch = json[++i]) {
+        if (ch === ' ' && json[i + 1] === '\\' && json[i + 2] === 'n') {
+            // space before newline needs to be escaped to not be folded
+            str += json.slice(start, i) + '\\ ';
+            i += 1;
+            start = i;
+            ch = '\\';
+        }
+        if (ch === '\\')
+            switch (json[i + 1]) {
+                case 'u':
+                    {
+                        str += json.slice(start, i);
+                        const code = json.substr(i + 2, 4);
+                        switch (code) {
+                            case '0000':
+                                str += '\\0';
+                                break;
+                            case '0007':
+                                str += '\\a';
+                                break;
+                            case '000b':
+                                str += '\\v';
+                                break;
+                            case '001b':
+                                str += '\\e';
+                                break;
+                            case '0085':
+                                str += '\\N';
+                                break;
+                            case '00a0':
+                                str += '\\_';
+                                break;
+                            case '2028':
+                                str += '\\L';
+                                break;
+                            case '2029':
+                                str += '\\P';
+                                break;
+                            default:
+                                if (code.substr(0, 2) === '00')
+                                    str += '\\x' + code.substr(2);
+                                else
+                                    str += json.substr(i, 6);
+                        }
+                        i += 5;
+                        start = i + 1;
+                    }
+                    break;
+                case 'n':
+                    if (implicitKey ||
+                        json[i + 2] === '"' ||
+                        json.length < minMultiLineLength) {
+                        i += 1;
+                    }
+                    else {
+                        // folding will eat first newline
+                        str += json.slice(start, i) + '\n\n';
+                        while (json[i + 2] === '\\' &&
+                            json[i + 3] === 'n' &&
+                            json[i + 4] !== '"') {
+                            str += '\n';
+                            i += 2;
+                        }
+                        str += indent;
+                        // space after newline needs to be escaped to not be folded
+                        if (json[i + 2] === ' ')
+                            str += '\\';
+                        i += 1;
+                        start = i + 1;
+                    }
+                    break;
+                default:
+                    i += 1;
+            }
+    }
+    str = start ? str + json.slice(start) : json;
+    return implicitKey
+        ? str
+        : foldFlowLines(str, indent, FOLD_QUOTED, getFoldOptions(ctx, false));
+}
+function singleQuotedString(value, ctx) {
+    if (ctx.options.singleQuote === false ||
+        (ctx.implicitKey && value.includes('\n')) ||
+        /[ \t]\n|\n[ \t]/.test(value) // single quoted string can't have leading or trailing whitespace around newline
+    )
+        return doubleQuotedString(value, ctx);
+    const indent = ctx.indent || (containsDocumentMarker(value) ? '  ' : '');
+    const res = "'" + value.replace(/'/g, "''").replace(/\n+/g, `$&\n${indent}`) + "'";
+    return ctx.implicitKey
+        ? res
+        : foldFlowLines(res, indent, FOLD_FLOW, getFoldOptions(ctx, false));
+}
+function quotedString(value, ctx) {
+    const { singleQuote } = ctx.options;
+    let qs;
+    if (singleQuote === false)
+        qs = doubleQuotedString;
+    else {
+        const hasDouble = value.includes('"');
+        const hasSingle = value.includes("'");
+        if (hasDouble && !hasSingle)
+            qs = singleQuotedString;
+        else if (hasSingle && !hasDouble)
+            qs = doubleQuotedString;
+        else
+            qs = singleQuote ? singleQuotedString : doubleQuotedString;
+    }
+    return qs(value, ctx);
+}
+// The negative lookbehind avoids a polynomial search,
+// but isn't supported yet on Safari: https://caniuse.com/js-regexp-lookbehind
+let blockEndNewlines;
+try {
+    blockEndNewlines = new RegExp('(^|(?<!\n))\n+(?!\n|$)', 'g');
+}
+catch {
+    blockEndNewlines = /\n+(?!\n|$)/g;
+}
+function blockString({ comment, type, value }, ctx, onComment, onChompKeep) {
+    const { blockQuote, commentString, lineWidth } = ctx.options;
+    // 1. Block can't end in whitespace unless the last line is non-empty.
+    // 2. Strings consisting of only whitespace are best rendered explicitly.
+    if (!blockQuote || /\n[\t ]+$/.test(value)) {
+        return quotedString(value, ctx);
+    }
+    const indent = ctx.indent ||
+        (ctx.forceBlockIndent || containsDocumentMarker(value) ? '  ' : '');
+    const literal = blockQuote === 'literal'
+        ? true
+        : blockQuote === 'folded' || type === Scalar.BLOCK_FOLDED
+            ? false
+            : type === Scalar.BLOCK_LITERAL
+                ? true
+                : !lineLengthOverLimit(value, lineWidth, indent.length);
+    if (!value)
+        return literal ? '|\n' : '>\n';
+    // determine chomping from whitespace at value end
+    let chomp;
+    let endStart;
+    for (endStart = value.length; endStart > 0; --endStart) {
+        const ch = value[endStart - 1];
+        if (ch !== '\n' && ch !== '\t' && ch !== ' ')
+            break;
+    }
+    let end = value.substring(endStart);
+    const endNlPos = end.indexOf('\n');
+    if (endNlPos === -1) {
+        chomp = '-'; // strip
+    }
+    else if (value === end || endNlPos !== end.length - 1) {
+        chomp = '+'; // keep
+        if (onChompKeep)
+            onChompKeep();
+    }
+    else {
+        chomp = ''; // clip
+    }
+    if (end) {
+        value = value.slice(0, -end.length);
+        if (end[end.length - 1] === '\n')
+            end = end.slice(0, -1);
+        end = end.replace(blockEndNewlines, `$&${indent}`);
+    }
+    // determine indent indicator from whitespace at value start
+    let startWithSpace = false;
+    let startEnd;
+    let startNlPos = -1;
+    for (startEnd = 0; startEnd < value.length; ++startEnd) {
+        const ch = value[startEnd];
+        if (ch === ' ')
+            startWithSpace = true;
+        else if (ch === '\n')
+            startNlPos = startEnd;
+        else
+            break;
+    }
+    let start = value.substring(0, startNlPos < startEnd ? startNlPos + 1 : startEnd);
+    if (start) {
+        value = value.substring(start.length);
+        start = start.replace(/\n+/g, `$&${indent}`);
+    }
+    const indentSize = indent ? '2' : '1'; // root is at -1
+    // Leading | or > is added later
+    let header = (startWithSpace ? indentSize : '') + chomp;
+    if (comment) {
+        header += ' ' + commentString(comment.replace(/ ?[\r\n]+/g, ' '));
+        if (onComment)
+            onComment();
+    }
+    if (!literal) {
+        const foldedValue = value
+            .replace(/\n+/g, '\n$&')
+            .replace(/(?:^|\n)([\t ].*)(?:([\n\t ]*)\n(?![\n\t ]))?/g, '$1$2') // more-indented lines aren't folded
+            //                ^ more-ind. ^ empty     ^ capture next empty lines only at end of indent
+            .replace(/\n+/g, `$&${indent}`);
+        let literalFallback = false;
+        const foldOptions = getFoldOptions(ctx, true);
+        if (blockQuote !== 'folded' && type !== Scalar.BLOCK_FOLDED) {
+            foldOptions.onOverflow = () => {
+                literalFallback = true;
+            };
+        }
+        const body = foldFlowLines(`${start}${foldedValue}${end}`, indent, FOLD_BLOCK, foldOptions);
+        if (!literalFallback)
+            return `>${header}\n${indent}${body}`;
+    }
+    value = value.replace(/\n+/g, `$&${indent}`);
+    return `|${header}\n${indent}${start}${value}${end}`;
+}
+function plainString(item, ctx, onComment, onChompKeep) {
+    const { type, value } = item;
+    const { actualString, implicitKey, indent, indentStep, inFlow } = ctx;
+    if ((implicitKey && value.includes('\n')) ||
+        (inFlow && /[[\]{},]/.test(value))) {
+        return quotedString(value, ctx);
+    }
+    if (/^[\n\t ,[\]{}#&*!|>'"%@`]|^[?-]$|^[?-][ \t]|[\n:][ \t]|[ \t]\n|[\n\t ]#|[\n\t :]$/.test(value)) {
+        // not allowed:
+        // - '-' or '?'
+        // - start with an indicator character (except [?:-]) or /[?-] /
+        // - '\n ', ': ' or ' \n' anywhere
+        // - '#' not preceded by a non-space char
+        // - end with ' ' or ':'
+        return implicitKey || inFlow || !value.includes('\n')
+            ? quotedString(value, ctx)
+            : blockString(item, ctx, onComment, onChompKeep);
+    }
+    if (!implicitKey &&
+        !inFlow &&
+        type !== Scalar.PLAIN &&
+        value.includes('\n')) {
+        // Where allowed & type not set explicitly, prefer block style for multiline strings
+        return blockString(item, ctx, onComment, onChompKeep);
+    }
+    if (containsDocumentMarker(value)) {
+        if (indent === '') {
+            ctx.forceBlockIndent = true;
+            return blockString(item, ctx, onComment, onChompKeep);
+        }
+        else if (implicitKey && indent === indentStep) {
+            return quotedString(value, ctx);
+        }
+    }
+    const str = value.replace(/\n+/g, `$&\n${indent}`);
+    // Verify that output will be parsed as a string, as e.g. plain numbers and
+    // booleans get parsed with those types in v1.2 (e.g. '42', 'true' & '0.9e-3'),
+    // and others in v1.1.
+    if (actualString) {
+        const test = (tag) => tag.default && tag.tag !== 'tag:yaml.org,2002:str' && tag.test?.test(str);
+        const { compat, tags } = ctx.doc.schema;
+        if (tags.some(test) || compat?.some(test))
+            return quotedString(value, ctx);
+    }
+    return implicitKey
+        ? str
+        : foldFlowLines(str, indent, FOLD_FLOW, getFoldOptions(ctx, false));
+}
+function stringifyString(item, ctx, onComment, onChompKeep) {
+    const { implicitKey, inFlow } = ctx;
+    const ss = typeof item.value === 'string'
+        ? item
+        : Object.assign({}, item, { value: String(item.value) });
+    let { type } = item;
+    if (type !== Scalar.QUOTE_DOUBLE) {
+        // force double quotes on control characters & unpaired surrogates
+        if (/[\x00-\x08\x0b-\x1f\x7f-\x9f\u{D800}-\u{DFFF}]/u.test(ss.value))
+            type = Scalar.QUOTE_DOUBLE;
+    }
+    const _stringify = (_type) => {
+        switch (_type) {
+            case Scalar.BLOCK_FOLDED:
+            case Scalar.BLOCK_LITERAL:
+                return implicitKey || inFlow
+                    ? quotedString(ss.value, ctx) // blocks are not valid inside flow containers
+                    : blockString(ss, ctx, onComment, onChompKeep);
+            case Scalar.QUOTE_DOUBLE:
+                return doubleQuotedString(ss.value, ctx);
+            case Scalar.QUOTE_SINGLE:
+                return singleQuotedString(ss.value, ctx);
+            case Scalar.PLAIN:
+                return plainString(ss, ctx, onComment, onChompKeep);
+            default:
+                return null;
+        }
+    };
+    let res = _stringify(type);
+    if (res === null) {
+        const { defaultKeyType, defaultStringType } = ctx.options;
+        const t = (implicitKey && defaultKeyType) || defaultStringType;
+        res = _stringify(t);
+        if (res === null)
+            throw new Error(`Unsupported default string type ${t}`);
+    }
+    return res;
+}
+
+function createStringifyContext(doc, options) {
+    const opt = Object.assign({
+        blockQuote: true,
+        commentString: stringifyComment,
+        defaultKeyType: null,
+        defaultStringType: 'PLAIN',
+        directives: null,
+        doubleQuotedAsJSON: false,
+        doubleQuotedMinMultiLineLength: 40,
+        falseStr: 'false',
+        flowCollectionPadding: true,
+        indentSeq: true,
+        lineWidth: 80,
+        minContentWidth: 20,
+        nullStr: 'null',
+        simpleKeys: false,
+        singleQuote: null,
+        trueStr: 'true',
+        verifyAliasOrder: true
+    }, doc.schema.toStringOptions, options);
+    let inFlow;
+    switch (opt.collectionStyle) {
+        case 'block':
+            inFlow = false;
+            break;
+        case 'flow':
+            inFlow = true;
+            break;
+        default:
+            inFlow = null;
+    }
+    return {
+        anchors: new Set(),
+        doc,
+        flowCollectionPadding: opt.flowCollectionPadding ? ' ' : '',
+        indent: '',
+        indentStep: typeof opt.indent === 'number' ? ' '.repeat(opt.indent) : '  ',
+        inFlow,
+        options: opt
+    };
+}
+function getTagObject(tags, item) {
+    if (item.tag) {
+        const match = tags.filter(t => t.tag === item.tag);
+        if (match.length > 0)
+            return match.find(t => t.format === item.format) ?? match[0];
+    }
+    let tagObj = undefined;
+    let obj;
+    if (isScalar$1(item)) {
+        obj = item.value;
+        let match = tags.filter(t => t.identify?.(obj));
+        if (match.length > 1) {
+            const testMatch = match.filter(t => t.test);
+            if (testMatch.length > 0)
+                match = testMatch;
+        }
+        tagObj =
+            match.find(t => t.format === item.format) ?? match.find(t => !t.format);
+    }
+    else {
+        obj = item;
+        tagObj = tags.find(t => t.nodeClass && obj instanceof t.nodeClass);
+    }
+    if (!tagObj) {
+        const name = obj?.constructor?.name ?? (obj === null ? 'null' : typeof obj);
+        throw new Error(`Tag not resolved for ${name} value`);
+    }
+    return tagObj;
+}
+// needs to be called before value stringifier to allow for circular anchor refs
+function stringifyProps(node, tagObj, { anchors, doc }) {
+    if (!doc.directives)
+        return '';
+    const props = [];
+    const anchor = (isScalar$1(node) || isCollection$1(node)) && node.anchor;
+    if (anchor && anchorIsValid(anchor)) {
+        anchors.add(anchor);
+        props.push(`&${anchor}`);
+    }
+    const tag = node.tag ?? (tagObj.default ? null : tagObj.tag);
+    if (tag)
+        props.push(doc.directives.tagString(tag));
+    return props.join(' ');
+}
+function stringify$2(item, ctx, onComment, onChompKeep) {
+    if (isPair(item))
+        return item.toString(ctx, onComment, onChompKeep);
+    if (isAlias(item)) {
+        if (ctx.doc.directives)
+            return item.toString(ctx);
+        if (ctx.resolvedAliases?.has(item)) {
+            throw new TypeError(`Cannot stringify circular structure without alias nodes`);
+        }
+        else {
+            if (ctx.resolvedAliases)
+                ctx.resolvedAliases.add(item);
+            else
+                ctx.resolvedAliases = new Set([item]);
+            item = item.resolve(ctx.doc);
+        }
+    }
+    let tagObj = undefined;
+    const node = isNode(item)
+        ? item
+        : ctx.doc.createNode(item, { onTagObj: o => (tagObj = o) });
+    tagObj ?? (tagObj = getTagObject(ctx.doc.schema.tags, node));
+    const props = stringifyProps(node, tagObj, ctx);
+    if (props.length > 0)
+        ctx.indentAtStart = (ctx.indentAtStart ?? 0) + props.length + 1;
+    const str = typeof tagObj.stringify === 'function'
+        ? tagObj.stringify(node, ctx, onComment, onChompKeep)
+        : isScalar$1(node)
+            ? stringifyString(node, ctx, onComment, onChompKeep)
+            : node.toString(ctx, onComment, onChompKeep);
+    if (!props)
+        return str;
+    return isScalar$1(node) || str[0] === '{' || str[0] === '['
+        ? `${props} ${str}`
+        : `${props}\n${ctx.indent}${str}`;
+}
+
+function stringifyPair({ key, value }, ctx, onComment, onChompKeep) {
+    const { allNullValues, doc, indent, indentStep, options: { commentString, indentSeq, simpleKeys } } = ctx;
+    let keyComment = (isNode(key) && key.comment) || null;
+    if (simpleKeys) {
+        if (keyComment) {
+            throw new Error('With simple keys, key nodes cannot have comments');
+        }
+        if (isCollection$1(key) || (!isNode(key) && typeof key === 'object')) {
+            const msg = 'With simple keys, collection cannot be used as a key value';
+            throw new Error(msg);
+        }
+    }
+    let explicitKey = !simpleKeys &&
+        (!key ||
+            (keyComment && value == null && !ctx.inFlow) ||
+            isCollection$1(key) ||
+            (isScalar$1(key)
+                ? key.type === Scalar.BLOCK_FOLDED || key.type === Scalar.BLOCK_LITERAL
+                : typeof key === 'object'));
+    ctx = Object.assign({}, ctx, {
+        allNullValues: false,
+        implicitKey: !explicitKey && (simpleKeys || !allNullValues),
+        indent: indent + indentStep
+    });
+    let keyCommentDone = false;
+    let chompKeep = false;
+    let str = stringify$2(key, ctx, () => (keyCommentDone = true), () => (chompKeep = true));
+    if (!explicitKey && !ctx.inFlow && str.length > 1024) {
+        if (simpleKeys)
+            throw new Error('With simple keys, single line scalar must not span more than 1024 characters');
+        explicitKey = true;
+    }
+    if (ctx.inFlow) {
+        if (allNullValues || value == null) {
+            if (keyCommentDone && onComment)
+                onComment();
+            return str === '' ? '?' : explicitKey ? `? ${str}` : str;
+        }
+    }
+    else if ((allNullValues && !simpleKeys) || (value == null && explicitKey)) {
+        str = `? ${str}`;
+        if (keyComment && !keyCommentDone) {
+            str += lineComment(str, ctx.indent, commentString(keyComment));
+        }
+        else if (chompKeep && onChompKeep)
+            onChompKeep();
+        return str;
+    }
+    if (keyCommentDone)
+        keyComment = null;
+    if (explicitKey) {
+        if (keyComment)
+            str += lineComment(str, ctx.indent, commentString(keyComment));
+        str = `? ${str}\n${indent}:`;
+    }
+    else {
+        str = `${str}:`;
+        if (keyComment)
+            str += lineComment(str, ctx.indent, commentString(keyComment));
+    }
+    let vsb, vcb, valueComment;
+    if (isNode(value)) {
+        vsb = !!value.spaceBefore;
+        vcb = value.commentBefore;
+        valueComment = value.comment;
+    }
+    else {
+        vsb = false;
+        vcb = null;
+        valueComment = null;
+        if (value && typeof value === 'object')
+            value = doc.createNode(value);
+    }
+    ctx.implicitKey = false;
+    if (!explicitKey && !keyComment && isScalar$1(value))
+        ctx.indentAtStart = str.length + 1;
+    chompKeep = false;
+    if (!indentSeq &&
+        indentStep.length >= 2 &&
+        !ctx.inFlow &&
+        !explicitKey &&
+        isSeq(value) &&
+        !value.flow &&
+        !value.tag &&
+        !value.anchor) {
+        // If indentSeq === false, consider '- ' as part of indentation where possible
+        ctx.indent = ctx.indent.substring(2);
+    }
+    let valueCommentDone = false;
+    const valueStr = stringify$2(value, ctx, () => (valueCommentDone = true), () => (chompKeep = true));
+    let ws = ' ';
+    if (keyComment || vsb || vcb) {
+        ws = vsb ? '\n' : '';
+        if (vcb) {
+            const cs = commentString(vcb);
+            ws += `\n${indentComment(cs, ctx.indent)}`;
+        }
+        if (valueStr === '' && !ctx.inFlow) {
+            if (ws === '\n' && valueComment)
+                ws = '\n\n';
+        }
+        else {
+            ws += `\n${ctx.indent}`;
+        }
+    }
+    else if (!explicitKey && isCollection$1(value)) {
+        const vs0 = valueStr[0];
+        const nl0 = valueStr.indexOf('\n');
+        const hasNewline = nl0 !== -1;
+        const flow = ctx.inFlow ?? value.flow ?? value.items.length === 0;
+        if (hasNewline || !flow) {
+            let hasPropsLine = false;
+            if (hasNewline && (vs0 === '&' || vs0 === '!')) {
+                let sp0 = valueStr.indexOf(' ');
+                if (vs0 === '&' &&
+                    sp0 !== -1 &&
+                    sp0 < nl0 &&
+                    valueStr[sp0 + 1] === '!') {
+                    sp0 = valueStr.indexOf(' ', sp0 + 1);
+                }
+                if (sp0 === -1 || nl0 < sp0)
+                    hasPropsLine = true;
+            }
+            if (!hasPropsLine)
+                ws = `\n${ctx.indent}`;
+        }
+    }
+    else if (valueStr === '' || valueStr[0] === '\n') {
+        ws = '';
+    }
+    str += ws + valueStr;
+    if (ctx.inFlow) {
+        if (valueCommentDone && onComment)
+            onComment();
+    }
+    else if (valueComment && !valueCommentDone) {
+        str += lineComment(str, ctx.indent, commentString(valueComment));
+    }
+    else if (chompKeep && onChompKeep) {
+        onChompKeep();
+    }
+    return str;
+}
+
+function warn(logLevel, warning) {
+    if (logLevel === 'debug' || logLevel === 'warn') {
+        console.warn(warning);
+    }
+}
+
+// If the value associated with a merge key is a single mapping node, each of
+// its key/value pairs is inserted into the current mapping, unless the key
+// already exists in it. If the value associated with the merge key is a
+// sequence, then this sequence is expected to contain mapping nodes and each
+// of these nodes is merged in turn according to its order in the sequence.
+// Keys in mapping nodes earlier in the sequence override keys specified in
+// later mapping nodes. -- http://yaml.org/type/merge.html
+const MERGE_KEY = '<<';
+const merge = {
+    identify: value => value === MERGE_KEY ||
+        (typeof value === 'symbol' && value.description === MERGE_KEY),
+    default: 'key',
+    tag: 'tag:yaml.org,2002:merge',
+    test: /^<<$/,
+    resolve: () => Object.assign(new Scalar(Symbol(MERGE_KEY)), {
+        addToJSMap: addMergeToJSMap
+    }),
+    stringify: () => MERGE_KEY
+};
+const isMergeKey = (ctx, key) => (merge.identify(key) ||
+    (isScalar$1(key) &&
+        (!key.type || key.type === Scalar.PLAIN) &&
+        merge.identify(key.value))) &&
+    ctx?.doc.schema.tags.some(tag => tag.tag === merge.tag && tag.default);
+function addMergeToJSMap(ctx, map, value) {
+    value = ctx && isAlias(value) ? value.resolve(ctx.doc) : value;
+    if (isSeq(value))
+        for (const it of value.items)
+            mergeValue(ctx, map, it);
+    else if (Array.isArray(value))
+        for (const it of value)
+            mergeValue(ctx, map, it);
+    else
+        mergeValue(ctx, map, value);
+}
+function mergeValue(ctx, map, value) {
+    const source = ctx && isAlias(value) ? value.resolve(ctx.doc) : value;
+    if (!isMap(source))
+        throw new Error('Merge sources must be maps or map aliases');
+    const srcMap = source.toJSON(null, ctx, Map);
+    for (const [key, value] of srcMap) {
+        if (map instanceof Map) {
+            if (!map.has(key))
+                map.set(key, value);
+        }
+        else if (map instanceof Set) {
+            map.add(key);
+        }
+        else if (!Object.prototype.hasOwnProperty.call(map, key)) {
+            Object.defineProperty(map, key, {
+                value,
+                writable: true,
+                enumerable: true,
+                configurable: true
+            });
+        }
+    }
+    return map;
+}
+
+function addPairToJSMap(ctx, map, { key, value }) {
+    if (isNode(key) && key.addToJSMap)
+        key.addToJSMap(ctx, map, value);
+    // TODO: Should drop this special case for bare << handling
+    else if (isMergeKey(ctx, key))
+        addMergeToJSMap(ctx, map, value);
+    else {
+        const jsKey = toJS(key, '', ctx);
+        if (map instanceof Map) {
+            map.set(jsKey, toJS(value, jsKey, ctx));
+        }
+        else if (map instanceof Set) {
+            map.add(jsKey);
+        }
+        else {
+            const stringKey = stringifyKey(key, jsKey, ctx);
+            const jsValue = toJS(value, stringKey, ctx);
+            if (stringKey in map)
+                Object.defineProperty(map, stringKey, {
+                    value: jsValue,
+                    writable: true,
+                    enumerable: true,
+                    configurable: true
+                });
+            else
+                map[stringKey] = jsValue;
+        }
+    }
+    return map;
+}
+function stringifyKey(key, jsKey, ctx) {
+    if (jsKey === null)
+        return '';
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
+    if (typeof jsKey !== 'object')
+        return String(jsKey);
+    if (isNode(key) && ctx?.doc) {
+        const strCtx = createStringifyContext(ctx.doc, {});
+        strCtx.anchors = new Set();
+        for (const node of ctx.anchors.keys())
+            strCtx.anchors.add(node.anchor);
+        strCtx.inFlow = true;
+        strCtx.inStringifyKey = true;
+        const strKey = key.toString(strCtx);
+        if (!ctx.mapKeyWarned) {
+            let jsonStr = JSON.stringify(strKey);
+            if (jsonStr.length > 40)
+                jsonStr = jsonStr.substring(0, 36) + '..."';
+            warn(ctx.doc.options.logLevel, `Keys with collection values will be stringified due to JS Object restrictions: ${jsonStr}. Set mapAsMap: true to use object keys.`);
+            ctx.mapKeyWarned = true;
+        }
+        return strKey;
+    }
+    return JSON.stringify(jsKey);
+}
+
+function createPair(key, value, ctx) {
+    const k = createNode(key, undefined, ctx);
+    const v = createNode(value, undefined, ctx);
+    return new Pair(k, v);
+}
+class Pair {
+    constructor(key, value = null) {
+        Object.defineProperty(this, NODE_TYPE, { value: PAIR });
+        this.key = key;
+        this.value = value;
+    }
+    clone(schema) {
+        let { key, value } = this;
+        if (isNode(key))
+            key = key.clone(schema);
+        if (isNode(value))
+            value = value.clone(schema);
+        return new Pair(key, value);
+    }
+    toJSON(_, ctx) {
+        const pair = ctx?.mapAsMap ? new Map() : {};
+        return addPairToJSMap(ctx, pair, this);
+    }
+    toString(ctx, onComment, onChompKeep) {
+        return ctx?.doc
+            ? stringifyPair(this, ctx, onComment, onChompKeep)
+            : JSON.stringify(this);
+    }
+}
+
+function stringifyCollection(collection, ctx, options) {
+    const flow = ctx.inFlow ?? collection.flow;
+    const stringify = flow ? stringifyFlowCollection : stringifyBlockCollection;
+    return stringify(collection, ctx, options);
+}
+function stringifyBlockCollection({ comment, items }, ctx, { blockItemPrefix, flowChars, itemIndent, onChompKeep, onComment }) {
+    const { indent, options: { commentString } } = ctx;
+    const itemCtx = Object.assign({}, ctx, { indent: itemIndent, type: null });
+    let chompKeep = false; // flag for the preceding node's status
+    const lines = [];
+    for (let i = 0; i < items.length; ++i) {
+        const item = items[i];
+        let comment = null;
+        if (isNode(item)) {
+            if (!chompKeep && item.spaceBefore)
+                lines.push('');
+            addCommentBefore(ctx, lines, item.commentBefore, chompKeep);
+            if (item.comment)
+                comment = item.comment;
+        }
+        else if (isPair(item)) {
+            const ik = isNode(item.key) ? item.key : null;
+            if (ik) {
+                if (!chompKeep && ik.spaceBefore)
+                    lines.push('');
+                addCommentBefore(ctx, lines, ik.commentBefore, chompKeep);
+            }
+        }
+        chompKeep = false;
+        let str = stringify$2(item, itemCtx, () => (comment = null), () => (chompKeep = true));
+        if (comment)
+            str += lineComment(str, itemIndent, commentString(comment));
+        if (chompKeep && comment)
+            chompKeep = false;
+        lines.push(blockItemPrefix + str);
+    }
+    let str;
+    if (lines.length === 0) {
+        str = flowChars.start + flowChars.end;
+    }
+    else {
+        str = lines[0];
+        for (let i = 1; i < lines.length; ++i) {
+            const line = lines[i];
+            str += line ? `\n${indent}${line}` : '\n';
+        }
+    }
+    if (comment) {
+        str += '\n' + indentComment(commentString(comment), indent);
+        if (onComment)
+            onComment();
+    }
+    else if (chompKeep && onChompKeep)
+        onChompKeep();
+    return str;
+}
+function stringifyFlowCollection({ items }, ctx, { flowChars, itemIndent }) {
+    const { indent, indentStep, flowCollectionPadding: fcPadding, options: { commentString } } = ctx;
+    itemIndent += indentStep;
+    const itemCtx = Object.assign({}, ctx, {
+        indent: itemIndent,
+        inFlow: true,
+        type: null
+    });
+    let reqNewline = false;
+    let linesAtValue = 0;
+    const lines = [];
+    for (let i = 0; i < items.length; ++i) {
+        const item = items[i];
+        let comment = null;
+        if (isNode(item)) {
+            if (item.spaceBefore)
+                lines.push('');
+            addCommentBefore(ctx, lines, item.commentBefore, false);
+            if (item.comment)
+                comment = item.comment;
+        }
+        else if (isPair(item)) {
+            const ik = isNode(item.key) ? item.key : null;
+            if (ik) {
+                if (ik.spaceBefore)
+                    lines.push('');
+                addCommentBefore(ctx, lines, ik.commentBefore, false);
+                if (ik.comment)
+                    reqNewline = true;
+            }
+            const iv = isNode(item.value) ? item.value : null;
+            if (iv) {
+                if (iv.comment)
+                    comment = iv.comment;
+                if (iv.commentBefore)
+                    reqNewline = true;
+            }
+            else if (item.value == null && ik?.comment) {
+                comment = ik.comment;
+            }
+        }
+        if (comment)
+            reqNewline = true;
+        let str = stringify$2(item, itemCtx, () => (comment = null));
+        if (i < items.length - 1)
+            str += ',';
+        if (comment)
+            str += lineComment(str, itemIndent, commentString(comment));
+        if (!reqNewline && (lines.length > linesAtValue || str.includes('\n')))
+            reqNewline = true;
+        lines.push(str);
+        linesAtValue = lines.length;
+    }
+    const { start, end } = flowChars;
+    if (lines.length === 0) {
+        return start + end;
+    }
+    else {
+        if (!reqNewline) {
+            const len = lines.reduce((sum, line) => sum + line.length + 2, 2);
+            reqNewline = ctx.options.lineWidth > 0 && len > ctx.options.lineWidth;
+        }
+        if (reqNewline) {
+            let str = start;
+            for (const line of lines)
+                str += line ? `\n${indentStep}${indent}${line}` : '\n';
+            return `${str}\n${indent}${end}`;
+        }
+        else {
+            return `${start}${fcPadding}${lines.join(' ')}${fcPadding}${end}`;
+        }
+    }
+}
+function addCommentBefore({ indent, options: { commentString } }, lines, comment, chompKeep) {
+    if (comment && chompKeep)
+        comment = comment.replace(/^\n+/, '');
+    if (comment) {
+        const ic = indentComment(commentString(comment), indent);
+        lines.push(ic.trimStart()); // Avoid double indent on first line
+    }
+}
+
+function findPair(items, key) {
+    const k = isScalar$1(key) ? key.value : key;
+    for (const it of items) {
+        if (isPair(it)) {
+            if (it.key === key || it.key === k)
+                return it;
+            if (isScalar$1(it.key) && it.key.value === k)
+                return it;
+        }
+    }
+    return undefined;
+}
+class YAMLMap extends Collection {
+    static get tagName() {
+        return 'tag:yaml.org,2002:map';
+    }
+    constructor(schema) {
+        super(MAP, schema);
+        this.items = [];
+    }
+    /**
+     * A generic collection parsing method that can be extended
+     * to other node classes that inherit from YAMLMap
+     */
+    static from(schema, obj, ctx) {
+        const { keepUndefined, replacer } = ctx;
+        const map = new this(schema);
+        const add = (key, value) => {
+            if (typeof replacer === 'function')
+                value = replacer.call(obj, key, value);
+            else if (Array.isArray(replacer) && !replacer.includes(key))
+                return;
+            if (value !== undefined || keepUndefined)
+                map.items.push(createPair(key, value, ctx));
+        };
+        if (obj instanceof Map) {
+            for (const [key, value] of obj)
+                add(key, value);
+        }
+        else if (obj && typeof obj === 'object') {
+            for (const key of Object.keys(obj))
+                add(key, obj[key]);
+        }
+        if (typeof schema.sortMapEntries === 'function') {
+            map.items.sort(schema.sortMapEntries);
+        }
+        return map;
+    }
+    /**
+     * Adds a value to the collection.
+     *
+     * @param overwrite - If not set `true`, using a key that is already in the
+     *   collection will throw. Otherwise, overwrites the previous value.
+     */
+    add(pair, overwrite) {
+        let _pair;
+        if (isPair(pair))
+            _pair = pair;
+        else if (!pair || typeof pair !== 'object' || !('key' in pair)) {
+            // In TypeScript, this never happens.
+            _pair = new Pair(pair, pair?.value);
+        }
+        else
+            _pair = new Pair(pair.key, pair.value);
+        const prev = findPair(this.items, _pair.key);
+        const sortEntries = this.schema?.sortMapEntries;
+        if (prev) {
+            if (!overwrite)
+                throw new Error(`Key ${_pair.key} already set`);
+            // For scalars, keep the old node & its comments and anchors
+            if (isScalar$1(prev.value) && isScalarValue(_pair.value))
+                prev.value.value = _pair.value;
+            else
+                prev.value = _pair.value;
+        }
+        else if (sortEntries) {
+            const i = this.items.findIndex(item => sortEntries(_pair, item) < 0);
+            if (i === -1)
+                this.items.push(_pair);
+            else
+                this.items.splice(i, 0, _pair);
+        }
+        else {
+            this.items.push(_pair);
+        }
+    }
+    delete(key) {
+        const it = findPair(this.items, key);
+        if (!it)
+            return false;
+        const del = this.items.splice(this.items.indexOf(it), 1);
+        return del.length > 0;
+    }
+    get(key, keepScalar) {
+        const it = findPair(this.items, key);
+        const node = it?.value;
+        return (!keepScalar && isScalar$1(node) ? node.value : node) ?? undefined;
+    }
+    has(key) {
+        return !!findPair(this.items, key);
+    }
+    set(key, value) {
+        this.add(new Pair(key, value), true);
+    }
+    /**
+     * @param ctx - Conversion context, originally set in Document#toJS()
+     * @param {Class} Type - If set, forces the returned collection type
+     * @returns Instance of Type, Map, or Object
+     */
+    toJSON(_, ctx, Type) {
+        const map = Type ? new Type() : ctx?.mapAsMap ? new Map() : {};
+        if (ctx?.onCreate)
+            ctx.onCreate(map);
+        for (const item of this.items)
+            addPairToJSMap(ctx, map, item);
+        return map;
+    }
+    toString(ctx, onComment, onChompKeep) {
+        if (!ctx)
+            return JSON.stringify(this);
+        for (const item of this.items) {
+            if (!isPair(item))
+                throw new Error(`Map items must all be pairs; found ${JSON.stringify(item)} instead`);
+        }
+        if (!ctx.allNullValues && this.hasAllNullValues(false))
+            ctx = Object.assign({}, ctx, { allNullValues: true });
+        return stringifyCollection(this, ctx, {
+            blockItemPrefix: '',
+            flowChars: { start: '{', end: '}' },
+            itemIndent: ctx.indent || '',
+            onChompKeep,
+            onComment
+        });
+    }
+}
+
+const map = {
+    collection: 'map',
+    default: true,
+    nodeClass: YAMLMap,
+    tag: 'tag:yaml.org,2002:map',
+    resolve(map, onError) {
+        if (!isMap(map))
+            onError('Expected a mapping for this tag');
+        return map;
+    },
+    createNode: (schema, obj, ctx) => YAMLMap.from(schema, obj, ctx)
+};
+
+class YAMLSeq extends Collection {
+    static get tagName() {
+        return 'tag:yaml.org,2002:seq';
+    }
+    constructor(schema) {
+        super(SEQ, schema);
+        this.items = [];
+    }
+    add(value) {
+        this.items.push(value);
+    }
+    /**
+     * Removes a value from the collection.
+     *
+     * `key` must contain a representation of an integer for this to succeed.
+     * It may be wrapped in a `Scalar`.
+     *
+     * @returns `true` if the item was found and removed.
+     */
+    delete(key) {
+        const idx = asItemIndex(key);
+        if (typeof idx !== 'number')
+            return false;
+        const del = this.items.splice(idx, 1);
+        return del.length > 0;
+    }
+    get(key, keepScalar) {
+        const idx = asItemIndex(key);
+        if (typeof idx !== 'number')
+            return undefined;
+        const it = this.items[idx];
+        return !keepScalar && isScalar$1(it) ? it.value : it;
+    }
+    /**
+     * Checks if the collection includes a value with the key `key`.
+     *
+     * `key` must contain a representation of an integer for this to succeed.
+     * It may be wrapped in a `Scalar`.
+     */
+    has(key) {
+        const idx = asItemIndex(key);
+        return typeof idx === 'number' && idx < this.items.length;
+    }
+    /**
+     * Sets a value in this collection. For `!!set`, `value` needs to be a
+     * boolean to add/remove the item from the set.
+     *
+     * If `key` does not contain a representation of an integer, this will throw.
+     * It may be wrapped in a `Scalar`.
+     */
+    set(key, value) {
+        const idx = asItemIndex(key);
+        if (typeof idx !== 'number')
+            throw new Error(`Expected a valid index, not ${key}.`);
+        const prev = this.items[idx];
+        if (isScalar$1(prev) && isScalarValue(value))
+            prev.value = value;
+        else
+            this.items[idx] = value;
+    }
+    toJSON(_, ctx) {
+        const seq = [];
+        if (ctx?.onCreate)
+            ctx.onCreate(seq);
+        let i = 0;
+        for (const item of this.items)
+            seq.push(toJS(item, String(i++), ctx));
+        return seq;
+    }
+    toString(ctx, onComment, onChompKeep) {
+        if (!ctx)
+            return JSON.stringify(this);
+        return stringifyCollection(this, ctx, {
+            blockItemPrefix: '- ',
+            flowChars: { start: '[', end: ']' },
+            itemIndent: (ctx.indent || '') + '  ',
+            onChompKeep,
+            onComment
+        });
+    }
+    static from(schema, obj, ctx) {
+        const { replacer } = ctx;
+        const seq = new this(schema);
+        if (obj && Symbol.iterator in Object(obj)) {
+            let i = 0;
+            for (let it of obj) {
+                if (typeof replacer === 'function') {
+                    const key = obj instanceof Set ? it : String(i++);
+                    it = replacer.call(obj, key, it);
+                }
+                seq.items.push(createNode(it, undefined, ctx));
+            }
+        }
+        return seq;
+    }
+}
+function asItemIndex(key) {
+    let idx = isScalar$1(key) ? key.value : key;
+    if (idx && typeof idx === 'string')
+        idx = Number(idx);
+    return typeof idx === 'number' && Number.isInteger(idx) && idx >= 0
+        ? idx
+        : null;
+}
+
+const seq = {
+    collection: 'seq',
+    default: true,
+    nodeClass: YAMLSeq,
+    tag: 'tag:yaml.org,2002:seq',
+    resolve(seq, onError) {
+        if (!isSeq(seq))
+            onError('Expected a sequence for this tag');
+        return seq;
+    },
+    createNode: (schema, obj, ctx) => YAMLSeq.from(schema, obj, ctx)
+};
+
+const string = {
+    identify: value => typeof value === 'string',
+    default: true,
+    tag: 'tag:yaml.org,2002:str',
+    resolve: str => str,
+    stringify(item, ctx, onComment, onChompKeep) {
+        ctx = Object.assign({ actualString: true }, ctx);
+        return stringifyString(item, ctx, onComment, onChompKeep);
+    }
+};
+
+const nullTag = {
+    identify: value => value == null,
+    createNode: () => new Scalar(null),
+    default: true,
+    tag: 'tag:yaml.org,2002:null',
+    test: /^(?:~|[Nn]ull|NULL)?$/,
+    resolve: () => new Scalar(null),
+    stringify: ({ source }, ctx) => typeof source === 'string' && nullTag.test.test(source)
+        ? source
+        : ctx.options.nullStr
+};
+
+const boolTag = {
+    identify: value => typeof value === 'boolean',
+    default: true,
+    tag: 'tag:yaml.org,2002:bool',
+    test: /^(?:[Tt]rue|TRUE|[Ff]alse|FALSE)$/,
+    resolve: str => new Scalar(str[0] === 't' || str[0] === 'T'),
+    stringify({ source, value }, ctx) {
+        if (source && boolTag.test.test(source)) {
+            const sv = source[0] === 't' || source[0] === 'T';
+            if (value === sv)
+                return source;
+        }
+        return value ? ctx.options.trueStr : ctx.options.falseStr;
+    }
+};
+
+function stringifyNumber({ format, minFractionDigits, tag, value }) {
+    if (typeof value === 'bigint')
+        return String(value);
+    const num = typeof value === 'number' ? value : Number(value);
+    if (!isFinite(num))
+        return isNaN(num) ? '.nan' : num < 0 ? '-.inf' : '.inf';
+    let n = Object.is(value, -0) ? '-0' : JSON.stringify(value);
+    if (!format &&
+        minFractionDigits &&
+        (!tag || tag === 'tag:yaml.org,2002:float') &&
+        /^\d/.test(n)) {
+        let i = n.indexOf('.');
+        if (i < 0) {
+            i = n.length;
+            n += '.';
+        }
+        let d = minFractionDigits - (n.length - i - 1);
+        while (d-- > 0)
+            n += '0';
+    }
+    return n;
+}
+
+const floatNaN$1 = {
+    identify: value => typeof value === 'number',
+    default: true,
+    tag: 'tag:yaml.org,2002:float',
+    test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
+    resolve: str => str.slice(-3).toLowerCase() === 'nan'
+        ? NaN
+        : str[0] === '-'
+            ? Number.NEGATIVE_INFINITY
+            : Number.POSITIVE_INFINITY,
+    stringify: stringifyNumber
+};
+const floatExp$1 = {
+    identify: value => typeof value === 'number',
+    default: true,
+    tag: 'tag:yaml.org,2002:float',
+    format: 'EXP',
+    test: /^[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)[eE][-+]?[0-9]+$/,
+    resolve: str => parseFloat(str),
+    stringify(node) {
+        const num = Number(node.value);
+        return isFinite(num) ? num.toExponential() : stringifyNumber(node);
+    }
+};
+const float$1 = {
+    identify: value => typeof value === 'number',
+    default: true,
+    tag: 'tag:yaml.org,2002:float',
+    test: /^[-+]?(?:\.[0-9]+|[0-9]+\.[0-9]*)$/,
+    resolve(str) {
+        const node = new Scalar(parseFloat(str));
+        const dot = str.indexOf('.');
+        if (dot !== -1 && str[str.length - 1] === '0')
+            node.minFractionDigits = str.length - dot - 1;
+        return node;
+    },
+    stringify: stringifyNumber
+};
+
+const intIdentify$2 = (value) => typeof value === 'bigint' || Number.isInteger(value);
+const intResolve$1 = (str, offset, radix, { intAsBigInt }) => (intAsBigInt ? BigInt(str) : parseInt(str.substring(offset), radix));
+function intStringify$1(node, radix, prefix) {
+    const { value } = node;
+    if (intIdentify$2(value) && value >= 0)
+        return prefix + value.toString(radix);
+    return stringifyNumber(node);
+}
+const intOct$1 = {
+    identify: value => intIdentify$2(value) && value >= 0,
+    default: true,
+    tag: 'tag:yaml.org,2002:int',
+    format: 'OCT',
+    test: /^0o[0-7]+$/,
+    resolve: (str, _onError, opt) => intResolve$1(str, 2, 8, opt),
+    stringify: node => intStringify$1(node, 8, '0o')
+};
+const int$1 = {
+    identify: intIdentify$2,
+    default: true,
+    tag: 'tag:yaml.org,2002:int',
+    test: /^[-+]?[0-9]+$/,
+    resolve: (str, _onError, opt) => intResolve$1(str, 0, 10, opt),
+    stringify: stringifyNumber
+};
+const intHex$1 = {
+    identify: value => intIdentify$2(value) && value >= 0,
+    default: true,
+    tag: 'tag:yaml.org,2002:int',
+    format: 'HEX',
+    test: /^0x[0-9a-fA-F]+$/,
+    resolve: (str, _onError, opt) => intResolve$1(str, 2, 16, opt),
+    stringify: node => intStringify$1(node, 16, '0x')
+};
+
+const schema$2 = [
+    map,
+    seq,
+    string,
+    nullTag,
+    boolTag,
+    intOct$1,
+    int$1,
+    intHex$1,
+    floatNaN$1,
+    floatExp$1,
+    float$1
+];
+
+function intIdentify$1(value) {
+    return typeof value === 'bigint' || Number.isInteger(value);
+}
+const stringifyJSON = ({ value }) => JSON.stringify(value);
+const jsonScalars = [
+    {
+        identify: value => typeof value === 'string',
+        default: true,
+        tag: 'tag:yaml.org,2002:str',
+        resolve: str => str,
+        stringify: stringifyJSON
+    },
+    {
+        identify: value => value == null,
+        createNode: () => new Scalar(null),
+        default: true,
+        tag: 'tag:yaml.org,2002:null',
+        test: /^null$/,
+        resolve: () => null,
+        stringify: stringifyJSON
+    },
+    {
+        identify: value => typeof value === 'boolean',
+        default: true,
+        tag: 'tag:yaml.org,2002:bool',
+        test: /^true$|^false$/,
+        resolve: str => str === 'true',
+        stringify: stringifyJSON
+    },
+    {
+        identify: intIdentify$1,
+        default: true,
+        tag: 'tag:yaml.org,2002:int',
+        test: /^-?(?:0|[1-9][0-9]*)$/,
+        resolve: (str, _onError, { intAsBigInt }) => intAsBigInt ? BigInt(str) : parseInt(str, 10),
+        stringify: ({ value }) => intIdentify$1(value) ? value.toString() : JSON.stringify(value)
+    },
+    {
+        identify: value => typeof value === 'number',
+        default: true,
+        tag: 'tag:yaml.org,2002:float',
+        test: /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*)?(?:[eE][-+]?[0-9]+)?$/,
+        resolve: str => parseFloat(str),
+        stringify: stringifyJSON
+    }
+];
+const jsonError = {
+    default: true,
+    tag: '',
+    test: /^/,
+    resolve(str, onError) {
+        onError(`Unresolved plain scalar ${JSON.stringify(str)}`);
+        return str;
+    }
+};
+const schema$1 = [map, seq].concat(jsonScalars, jsonError);
+
+const binary = {
+    identify: value => value instanceof Uint8Array, // Buffer inherits from Uint8Array
+    default: false,
+    tag: 'tag:yaml.org,2002:binary',
+    /**
+     * Returns a Buffer in node and an Uint8Array in browsers
+     *
+     * To use the resulting buffer as an image, you'll want to do something like:
+     *
+     *   const blob = new Blob([buffer], { type: 'image/jpeg' })
+     *   document.querySelector('#photo').src = URL.createObjectURL(blob)
+     */
+    resolve(src, onError) {
+        if (typeof atob === 'function') {
+            // On IE 11, atob() can't handle newlines
+            const str = atob(src.replace(/[\n\r]/g, ''));
+            const buffer = new Uint8Array(str.length);
+            for (let i = 0; i < str.length; ++i)
+                buffer[i] = str.charCodeAt(i);
+            return buffer;
+        }
+        else {
+            onError('This environment does not support reading binary tags; either Buffer or atob is required');
+            return src;
+        }
+    },
+    stringify({ comment, type, value }, ctx, onComment, onChompKeep) {
+        if (!value)
+            return '';
+        const buf = value; // checked earlier by binary.identify()
+        let str;
+        if (typeof btoa === 'function') {
+            let s = '';
+            for (let i = 0; i < buf.length; ++i)
+                s += String.fromCharCode(buf[i]);
+            str = btoa(s);
+        }
+        else {
+            throw new Error('This environment does not support writing binary tags; either Buffer or btoa is required');
+        }
+        type ?? (type = Scalar.BLOCK_LITERAL);
+        if (type !== Scalar.QUOTE_DOUBLE) {
+            const lineWidth = Math.max(ctx.options.lineWidth - ctx.indent.length, ctx.options.minContentWidth);
+            const n = Math.ceil(str.length / lineWidth);
+            const lines = new Array(n);
+            for (let i = 0, o = 0; i < n; ++i, o += lineWidth) {
+                lines[i] = str.substr(o, lineWidth);
+            }
+            str = lines.join(type === Scalar.BLOCK_LITERAL ? '\n' : ' ');
+        }
+        return stringifyString({ comment, type, value: str }, ctx, onComment, onChompKeep);
+    }
+};
+
+function resolvePairs(seq, onError) {
+    if (isSeq(seq)) {
+        for (let i = 0; i < seq.items.length; ++i) {
+            let item = seq.items[i];
+            if (isPair(item))
+                continue;
+            else if (isMap(item)) {
+                if (item.items.length > 1)
+                    onError('Each pair must have its own sequence indicator');
+                const pair = item.items[0] || new Pair(new Scalar(null));
+                if (item.commentBefore)
+                    pair.key.commentBefore = pair.key.commentBefore
+                        ? `${item.commentBefore}\n${pair.key.commentBefore}`
+                        : item.commentBefore;
+                if (item.comment) {
+                    const cn = pair.value ?? pair.key;
+                    cn.comment = cn.comment
+                        ? `${item.comment}\n${cn.comment}`
+                        : item.comment;
+                }
+                item = pair;
+            }
+            seq.items[i] = isPair(item) ? item : new Pair(item);
+        }
+    }
+    else
+        onError('Expected a sequence for this tag');
+    return seq;
+}
+function createPairs(schema, iterable, ctx) {
+    const { replacer } = ctx;
+    const pairs = new YAMLSeq(schema);
+    pairs.tag = 'tag:yaml.org,2002:pairs';
+    let i = 0;
+    if (iterable && Symbol.iterator in Object(iterable))
+        for (let it of iterable) {
+            if (typeof replacer === 'function')
+                it = replacer.call(iterable, String(i++), it);
+            let key, value;
+            if (Array.isArray(it)) {
+                if (it.length === 2) {
+                    key = it[0];
+                    value = it[1];
+                }
+                else
+                    throw new TypeError(`Expected [key, value] tuple: ${it}`);
+            }
+            else if (it && it instanceof Object) {
+                const keys = Object.keys(it);
+                if (keys.length === 1) {
+                    key = keys[0];
+                    value = it[key];
+                }
+                else {
+                    throw new TypeError(`Expected tuple with one key, not ${keys.length} keys`);
+                }
+            }
+            else {
+                key = it;
+            }
+            pairs.items.push(createPair(key, value, ctx));
+        }
+    return pairs;
+}
+const pairs = {
+    collection: 'seq',
+    default: false,
+    tag: 'tag:yaml.org,2002:pairs',
+    resolve: resolvePairs,
+    createNode: createPairs
+};
+
+class YAMLOMap extends YAMLSeq {
+    constructor() {
+        super();
+        this.add = YAMLMap.prototype.add.bind(this);
+        this.delete = YAMLMap.prototype.delete.bind(this);
+        this.get = YAMLMap.prototype.get.bind(this);
+        this.has = YAMLMap.prototype.has.bind(this);
+        this.set = YAMLMap.prototype.set.bind(this);
+        this.tag = YAMLOMap.tag;
+    }
+    /**
+     * If `ctx` is given, the return type is actually `Map<unknown, unknown>`,
+     * but TypeScript won't allow widening the signature of a child method.
+     */
+    toJSON(_, ctx) {
+        if (!ctx)
+            return super.toJSON(_);
+        const map = new Map();
+        if (ctx?.onCreate)
+            ctx.onCreate(map);
+        for (const pair of this.items) {
+            let key, value;
+            if (isPair(pair)) {
+                key = toJS(pair.key, '', ctx);
+                value = toJS(pair.value, key, ctx);
+            }
+            else {
+                key = toJS(pair, '', ctx);
+            }
+            if (map.has(key))
+                throw new Error('Ordered maps must not include duplicate keys');
+            map.set(key, value);
+        }
+        return map;
+    }
+    static from(schema, iterable, ctx) {
+        const pairs = createPairs(schema, iterable, ctx);
+        const omap = new this();
+        omap.items = pairs.items;
+        return omap;
+    }
+}
+YAMLOMap.tag = 'tag:yaml.org,2002:omap';
+const omap = {
+    collection: 'seq',
+    identify: value => value instanceof Map,
+    nodeClass: YAMLOMap,
+    default: false,
+    tag: 'tag:yaml.org,2002:omap',
+    resolve(seq, onError) {
+        const pairs = resolvePairs(seq, onError);
+        const seenKeys = [];
+        for (const { key } of pairs.items) {
+            if (isScalar$1(key)) {
+                if (seenKeys.includes(key.value)) {
+                    onError(`Ordered maps must not include duplicate keys: ${key.value}`);
+                }
+                else {
+                    seenKeys.push(key.value);
+                }
+            }
+        }
+        return Object.assign(new YAMLOMap(), pairs);
+    },
+    createNode: (schema, iterable, ctx) => YAMLOMap.from(schema, iterable, ctx)
+};
+
+function boolStringify({ value, source }, ctx) {
+    const boolObj = value ? trueTag : falseTag;
+    if (source && boolObj.test.test(source))
+        return source;
+    return value ? ctx.options.trueStr : ctx.options.falseStr;
+}
+const trueTag = {
+    identify: value => value === true,
+    default: true,
+    tag: 'tag:yaml.org,2002:bool',
+    test: /^(?:Y|y|[Yy]es|YES|[Tt]rue|TRUE|[Oo]n|ON)$/,
+    resolve: () => new Scalar(true),
+    stringify: boolStringify
+};
+const falseTag = {
+    identify: value => value === false,
+    default: true,
+    tag: 'tag:yaml.org,2002:bool',
+    test: /^(?:N|n|[Nn]o|NO|[Ff]alse|FALSE|[Oo]ff|OFF)$/,
+    resolve: () => new Scalar(false),
+    stringify: boolStringify
+};
+
+const floatNaN = {
+    identify: value => typeof value === 'number',
+    default: true,
+    tag: 'tag:yaml.org,2002:float',
+    test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
+    resolve: (str) => str.slice(-3).toLowerCase() === 'nan'
+        ? NaN
+        : str[0] === '-'
+            ? Number.NEGATIVE_INFINITY
+            : Number.POSITIVE_INFINITY,
+    stringify: stringifyNumber
+};
+const floatExp = {
+    identify: value => typeof value === 'number',
+    default: true,
+    tag: 'tag:yaml.org,2002:float',
+    format: 'EXP',
+    test: /^[-+]?(?:[0-9][0-9_]*)?(?:\.[0-9_]*)?[eE][-+]?[0-9]+$/,
+    resolve: (str) => parseFloat(str.replace(/_/g, '')),
+    stringify(node) {
+        const num = Number(node.value);
+        return isFinite(num) ? num.toExponential() : stringifyNumber(node);
+    }
+};
+const float = {
+    identify: value => typeof value === 'number',
+    default: true,
+    tag: 'tag:yaml.org,2002:float',
+    test: /^[-+]?(?:[0-9][0-9_]*)?\.[0-9_]*$/,
+    resolve(str) {
+        const node = new Scalar(parseFloat(str.replace(/_/g, '')));
+        const dot = str.indexOf('.');
+        if (dot !== -1) {
+            const f = str.substring(dot + 1).replace(/_/g, '');
+            if (f[f.length - 1] === '0')
+                node.minFractionDigits = f.length;
+        }
+        return node;
+    },
+    stringify: stringifyNumber
+};
+
+const intIdentify = (value) => typeof value === 'bigint' || Number.isInteger(value);
+function intResolve(str, offset, radix, { intAsBigInt }) {
+    const sign = str[0];
+    if (sign === '-' || sign === '+')
+        offset += 1;
+    str = str.substring(offset).replace(/_/g, '');
+    if (intAsBigInt) {
+        switch (radix) {
+            case 2:
+                str = `0b${str}`;
+                break;
+            case 8:
+                str = `0o${str}`;
+                break;
+            case 16:
+                str = `0x${str}`;
+                break;
+        }
+        const n = BigInt(str);
+        return sign === '-' ? BigInt(-1) * n : n;
+    }
+    const n = parseInt(str, radix);
+    return sign === '-' ? -1 * n : n;
+}
+function intStringify(node, radix, prefix) {
+    const { value } = node;
+    if (intIdentify(value)) {
+        const str = value.toString(radix);
+        return value < 0 ? '-' + prefix + str.substr(1) : prefix + str;
+    }
+    return stringifyNumber(node);
+}
+const intBin = {
+    identify: intIdentify,
+    default: true,
+    tag: 'tag:yaml.org,2002:int',
+    format: 'BIN',
+    test: /^[-+]?0b[0-1_]+$/,
+    resolve: (str, _onError, opt) => intResolve(str, 2, 2, opt),
+    stringify: node => intStringify(node, 2, '0b')
+};
+const intOct = {
+    identify: intIdentify,
+    default: true,
+    tag: 'tag:yaml.org,2002:int',
+    format: 'OCT',
+    test: /^[-+]?0[0-7_]+$/,
+    resolve: (str, _onError, opt) => intResolve(str, 1, 8, opt),
+    stringify: node => intStringify(node, 8, '0')
+};
+const int = {
+    identify: intIdentify,
+    default: true,
+    tag: 'tag:yaml.org,2002:int',
+    test: /^[-+]?[0-9][0-9_]*$/,
+    resolve: (str, _onError, opt) => intResolve(str, 0, 10, opt),
+    stringify: stringifyNumber
+};
+const intHex = {
+    identify: intIdentify,
+    default: true,
+    tag: 'tag:yaml.org,2002:int',
+    format: 'HEX',
+    test: /^[-+]?0x[0-9a-fA-F_]+$/,
+    resolve: (str, _onError, opt) => intResolve(str, 2, 16, opt),
+    stringify: node => intStringify(node, 16, '0x')
+};
+
+class YAMLSet extends YAMLMap {
+    constructor(schema) {
+        super(schema);
+        this.tag = YAMLSet.tag;
+    }
+    add(key) {
+        let pair;
+        if (isPair(key))
+            pair = key;
+        else if (key &&
+            typeof key === 'object' &&
+            'key' in key &&
+            'value' in key &&
+            key.value === null)
+            pair = new Pair(key.key, null);
+        else
+            pair = new Pair(key, null);
+        const prev = findPair(this.items, pair.key);
+        if (!prev)
+            this.items.push(pair);
+    }
+    /**
+     * If `keepPair` is `true`, returns the Pair matching `key`.
+     * Otherwise, returns the value of that Pair's key.
+     */
+    get(key, keepPair) {
+        const pair = findPair(this.items, key);
+        return !keepPair && isPair(pair)
+            ? isScalar$1(pair.key)
+                ? pair.key.value
+                : pair.key
+            : pair;
+    }
+    set(key, value) {
+        if (typeof value !== 'boolean')
+            throw new Error(`Expected boolean value for set(key, value) in a YAML set, not ${typeof value}`);
+        const prev = findPair(this.items, key);
+        if (prev && !value) {
+            this.items.splice(this.items.indexOf(prev), 1);
+        }
+        else if (!prev && value) {
+            this.items.push(new Pair(key));
+        }
+    }
+    toJSON(_, ctx) {
+        return super.toJSON(_, ctx, Set);
+    }
+    toString(ctx, onComment, onChompKeep) {
+        if (!ctx)
+            return JSON.stringify(this);
+        if (this.hasAllNullValues(true))
+            return super.toString(Object.assign({}, ctx, { allNullValues: true }), onComment, onChompKeep);
+        else
+            throw new Error('Set items must all have null values');
+    }
+    static from(schema, iterable, ctx) {
+        const { replacer } = ctx;
+        const set = new this(schema);
+        if (iterable && Symbol.iterator in Object(iterable))
+            for (let value of iterable) {
+                if (typeof replacer === 'function')
+                    value = replacer.call(iterable, value, value);
+                set.items.push(createPair(value, null, ctx));
+            }
+        return set;
+    }
+}
+YAMLSet.tag = 'tag:yaml.org,2002:set';
+const set = {
+    collection: 'map',
+    identify: value => value instanceof Set,
+    nodeClass: YAMLSet,
+    default: false,
+    tag: 'tag:yaml.org,2002:set',
+    createNode: (schema, iterable, ctx) => YAMLSet.from(schema, iterable, ctx),
+    resolve(map, onError) {
+        if (isMap(map)) {
+            if (map.hasAllNullValues(true))
+                return Object.assign(new YAMLSet(), map);
+            else
+                onError('Set items must all have null values');
+        }
+        else
+            onError('Expected a mapping for this tag');
+        return map;
+    }
+};
+
+/** Internal types handle bigint as number, because TS can't figure it out. */
+function parseSexagesimal(str, asBigInt) {
+    const sign = str[0];
+    const parts = sign === '-' || sign === '+' ? str.substring(1) : str;
+    const num = (n) => asBigInt ? BigInt(n) : Number(n);
+    const res = parts
+        .replace(/_/g, '')
+        .split(':')
+        .reduce((res, p) => res * num(60) + num(p), num(0));
+    return (sign === '-' ? num(-1) * res : res);
+}
+/**
+ * hhhh:mm:ss.sss
+ *
+ * Internal types handle bigint as number, because TS can't figure it out.
+ */
+function stringifySexagesimal(node) {
+    let { value } = node;
+    let num = (n) => n;
+    if (typeof value === 'bigint')
+        num = n => BigInt(n);
+    else if (isNaN(value) || !isFinite(value))
+        return stringifyNumber(node);
+    let sign = '';
+    if (value < 0) {
+        sign = '-';
+        value *= num(-1);
+    }
+    const _60 = num(60);
+    const parts = [value % _60]; // seconds, including ms
+    if (value < 60) {
+        parts.unshift(0); // at least one : is required
+    }
+    else {
+        value = (value - parts[0]) / _60;
+        parts.unshift(value % _60); // minutes
+        if (value >= 60) {
+            value = (value - parts[0]) / _60;
+            parts.unshift(value); // hours
+        }
+    }
+    return (sign +
+        parts
+            .map(n => String(n).padStart(2, '0'))
+            .join(':')
+            .replace(/000000\d*$/, '') // % 60 may introduce error
+    );
+}
+const intTime = {
+    identify: value => typeof value === 'bigint' || Number.isInteger(value),
+    default: true,
+    tag: 'tag:yaml.org,2002:int',
+    format: 'TIME',
+    test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+$/,
+    resolve: (str, _onError, { intAsBigInt }) => parseSexagesimal(str, intAsBigInt),
+    stringify: stringifySexagesimal
+};
+const floatTime = {
+    identify: value => typeof value === 'number',
+    default: true,
+    tag: 'tag:yaml.org,2002:float',
+    format: 'TIME',
+    test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*$/,
+    resolve: str => parseSexagesimal(str, false),
+    stringify: stringifySexagesimal
+};
+const timestamp = {
+    identify: value => value instanceof Date,
+    default: true,
+    tag: 'tag:yaml.org,2002:timestamp',
+    // If the time zone is omitted, the timestamp is assumed to be specified in UTC. The time part
+    // may be omitted altogether, resulting in a date format. In such a case, the time part is
+    // assumed to be 00:00:00Z (start of day, UTC).
+    test: RegExp('^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})' + // YYYY-Mm-Dd
+        '(?:' + // time is optional
+        '(?:t|T|[ \\t]+)' + // t | T | whitespace
+        '([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2}(\\.[0-9]+)?)' + // Hh:Mm:Ss(.ss)?
+        '(?:[ \\t]*(Z|[-+][012]?[0-9](?::[0-9]{2})?))?' + // Z | +5 | -03:30
+        ')?$'),
+    resolve(str) {
+        const match = str.match(timestamp.test);
+        if (!match)
+            throw new Error('!!timestamp expects a date, starting with yyyy-mm-dd');
+        const [, year, month, day, hour, minute, second] = match.map(Number);
+        const millisec = match[7] ? Number((match[7] + '00').substr(1, 3)) : 0;
+        let date = Date.UTC(year, month - 1, day, hour || 0, minute || 0, second || 0, millisec);
+        const tz = match[8];
+        if (tz && tz !== 'Z') {
+            let d = parseSexagesimal(tz, false);
+            if (Math.abs(d) < 30)
+                d *= 60;
+            date -= 60000 * d;
+        }
+        return new Date(date);
+    },
+    stringify: ({ value }) => value?.toISOString().replace(/(T00:00:00)?\.000Z$/, '') ?? ''
+};
+
+const schema = [
+    map,
+    seq,
+    string,
+    nullTag,
+    trueTag,
+    falseTag,
+    intBin,
+    intOct,
+    int,
+    intHex,
+    floatNaN,
+    floatExp,
+    float,
+    binary,
+    merge,
+    omap,
+    pairs,
+    set,
+    intTime,
+    floatTime,
+    timestamp
+];
+
+const schemas = new Map([
+    ['core', schema$2],
+    ['failsafe', [map, seq, string]],
+    ['json', schema$1],
+    ['yaml11', schema],
+    ['yaml-1.1', schema]
+]);
+const tagsByName = {
+    binary,
+    bool: boolTag,
+    float: float$1,
+    floatExp: floatExp$1,
+    floatNaN: floatNaN$1,
+    floatTime,
+    int: int$1,
+    intHex: intHex$1,
+    intOct: intOct$1,
+    intTime,
+    map,
+    merge,
+    null: nullTag,
+    omap,
+    pairs,
+    seq,
+    set,
+    timestamp
+};
+const coreKnownTags = {
+    'tag:yaml.org,2002:binary': binary,
+    'tag:yaml.org,2002:merge': merge,
+    'tag:yaml.org,2002:omap': omap,
+    'tag:yaml.org,2002:pairs': pairs,
+    'tag:yaml.org,2002:set': set,
+    'tag:yaml.org,2002:timestamp': timestamp
+};
+function getTags(customTags, schemaName, addMergeTag) {
+    const schemaTags = schemas.get(schemaName);
+    if (schemaTags && !customTags) {
+        return addMergeTag && !schemaTags.includes(merge)
+            ? schemaTags.concat(merge)
+            : schemaTags.slice();
+    }
+    let tags = schemaTags;
+    if (!tags) {
+        if (Array.isArray(customTags))
+            tags = [];
+        else {
+            const keys = Array.from(schemas.keys())
+                .filter(key => key !== 'yaml11')
+                .map(key => JSON.stringify(key))
+                .join(', ');
+            throw new Error(`Unknown schema "${schemaName}"; use one of ${keys} or define customTags array`);
+        }
+    }
+    if (Array.isArray(customTags)) {
+        for (const tag of customTags)
+            tags = tags.concat(tag);
+    }
+    else if (typeof customTags === 'function') {
+        tags = customTags(tags.slice());
+    }
+    if (addMergeTag)
+        tags = tags.concat(merge);
+    return tags.reduce((tags, tag) => {
+        const tagObj = typeof tag === 'string' ? tagsByName[tag] : tag;
+        if (!tagObj) {
+            const tagName = JSON.stringify(tag);
+            const keys = Object.keys(tagsByName)
+                .map(key => JSON.stringify(key))
+                .join(', ');
+            throw new Error(`Unknown custom tag ${tagName}; use one of ${keys}`);
+        }
+        if (!tags.includes(tagObj))
+            tags.push(tagObj);
+        return tags;
+    }, []);
+}
+
+const sortMapEntriesByKey = (a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+class Schema {
+    constructor({ compat, customTags, merge, resolveKnownTags, schema, sortMapEntries, toStringDefaults }) {
+        this.compat = Array.isArray(compat)
+            ? getTags(compat, 'compat')
+            : compat
+                ? getTags(null, compat)
+                : null;
+        this.name = (typeof schema === 'string' && schema) || 'core';
+        this.knownTags = resolveKnownTags ? coreKnownTags : {};
+        this.tags = getTags(customTags, this.name, merge);
+        this.toStringOptions = toStringDefaults ?? null;
+        Object.defineProperty(this, MAP, { value: map });
+        Object.defineProperty(this, SCALAR$1, { value: string });
+        Object.defineProperty(this, SEQ, { value: seq });
+        // Used by createMap()
+        this.sortMapEntries =
+            typeof sortMapEntries === 'function'
+                ? sortMapEntries
+                : sortMapEntries === true
+                    ? sortMapEntriesByKey
+                    : null;
+    }
+    clone() {
+        const copy = Object.create(Schema.prototype, Object.getOwnPropertyDescriptors(this));
+        copy.tags = this.tags.slice();
+        return copy;
+    }
+}
+
+function stringifyDocument(doc, options) {
+    const lines = [];
+    let hasDirectives = options.directives === true;
+    if (options.directives !== false && doc.directives) {
+        const dir = doc.directives.toString(doc);
+        if (dir) {
+            lines.push(dir);
+            hasDirectives = true;
+        }
+        else if (doc.directives.docStart)
+            hasDirectives = true;
+    }
+    if (hasDirectives)
+        lines.push('---');
+    const ctx = createStringifyContext(doc, options);
+    const { commentString } = ctx.options;
+    if (doc.commentBefore) {
+        if (lines.length !== 1)
+            lines.unshift('');
+        const cs = commentString(doc.commentBefore);
+        lines.unshift(indentComment(cs, ''));
+    }
+    let chompKeep = false;
+    let contentComment = null;
+    if (doc.contents) {
+        if (isNode(doc.contents)) {
+            if (doc.contents.spaceBefore && hasDirectives)
+                lines.push('');
+            if (doc.contents.commentBefore) {
+                const cs = commentString(doc.contents.commentBefore);
+                lines.push(indentComment(cs, ''));
+            }
+            // top-level block scalars need to be indented if followed by a comment
+            ctx.forceBlockIndent = !!doc.comment;
+            contentComment = doc.contents.comment;
+        }
+        const onChompKeep = contentComment ? undefined : () => (chompKeep = true);
+        let body = stringify$2(doc.contents, ctx, () => (contentComment = null), onChompKeep);
+        if (contentComment)
+            body += lineComment(body, '', commentString(contentComment));
+        if ((body[0] === '|' || body[0] === '>') &&
+            lines[lines.length - 1] === '---') {
+            // Top-level block scalars with a preceding doc marker ought to use the
+            // same line for their header.
+            lines[lines.length - 1] = `--- ${body}`;
+        }
+        else
+            lines.push(body);
+    }
+    else {
+        lines.push(stringify$2(doc.contents, ctx));
+    }
+    if (doc.directives?.docEnd) {
+        if (doc.comment) {
+            const cs = commentString(doc.comment);
+            if (cs.includes('\n')) {
+                lines.push('...');
+                lines.push(indentComment(cs, ''));
+            }
+            else {
+                lines.push(`... ${cs}`);
+            }
+        }
+        else {
+            lines.push('...');
+        }
+    }
+    else {
+        let dc = doc.comment;
+        if (dc && chompKeep)
+            dc = dc.replace(/^\n+/, '');
+        if (dc) {
+            if ((!chompKeep || contentComment) && lines[lines.length - 1] !== '')
+                lines.push('');
+            lines.push(indentComment(commentString(dc), ''));
+        }
+    }
+    return lines.join('\n') + '\n';
+}
+
+class Document {
+    constructor(value, replacer, options) {
+        /** A comment before this Document */
+        this.commentBefore = null;
+        /** A comment immediately after this Document */
+        this.comment = null;
+        /** Errors encountered during parsing. */
+        this.errors = [];
+        /** Warnings encountered during parsing. */
+        this.warnings = [];
+        Object.defineProperty(this, NODE_TYPE, { value: DOC });
+        let _replacer = null;
+        if (typeof replacer === 'function' || Array.isArray(replacer)) {
+            _replacer = replacer;
+        }
+        else if (options === undefined && replacer) {
+            options = replacer;
+            replacer = undefined;
+        }
+        const opt = Object.assign({
+            intAsBigInt: false,
+            keepSourceTokens: false,
+            logLevel: 'warn',
+            prettyErrors: true,
+            strict: true,
+            stringKeys: false,
+            uniqueKeys: true,
+            version: '1.2'
+        }, options);
+        this.options = opt;
+        let { version } = opt;
+        if (options?._directives) {
+            this.directives = options._directives.atDocument();
+            if (this.directives.yaml.explicit)
+                version = this.directives.yaml.version;
+        }
+        else
+            this.directives = new Directives({ version });
+        this.setSchema(version, options);
+        // @ts-expect-error We can't really know that this matches Contents.
+        this.contents =
+            value === undefined ? null : this.createNode(value, _replacer, options);
+    }
+    /**
+     * Create a deep copy of this Document and its contents.
+     *
+     * Custom Node values that inherit from `Object` still refer to their original instances.
+     */
+    clone() {
+        const copy = Object.create(Document.prototype, {
+            [NODE_TYPE]: { value: DOC }
+        });
+        copy.commentBefore = this.commentBefore;
+        copy.comment = this.comment;
+        copy.errors = this.errors.slice();
+        copy.warnings = this.warnings.slice();
+        copy.options = Object.assign({}, this.options);
+        if (this.directives)
+            copy.directives = this.directives.clone();
+        copy.schema = this.schema.clone();
+        // @ts-expect-error We can't really know that this matches Contents.
+        copy.contents = isNode(this.contents)
+            ? this.contents.clone(copy.schema)
+            : this.contents;
+        if (this.range)
+            copy.range = this.range.slice();
+        return copy;
+    }
+    /** Adds a value to the document. */
+    add(value) {
+        if (assertCollection(this.contents))
+            this.contents.add(value);
+    }
+    /** Adds a value to the document. */
+    addIn(path, value) {
+        if (assertCollection(this.contents))
+            this.contents.addIn(path, value);
+    }
+    /**
+     * Create a new `Alias` node, ensuring that the target `node` has the required anchor.
+     *
+     * If `node` already has an anchor, `name` is ignored.
+     * Otherwise, the `node.anchor` value will be set to `name`,
+     * or if an anchor with that name is already present in the document,
+     * `name` will be used as a prefix for a new unique anchor.
+     * If `name` is undefined, the generated anchor will use 'a' as a prefix.
+     */
+    createAlias(node, name) {
+        if (!node.anchor) {
+            const prev = anchorNames(this);
+            node.anchor =
+                // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+                !name || prev.has(name) ? findNewAnchor(name || 'a', prev) : name;
+        }
+        return new Alias(node.anchor);
+    }
+    createNode(value, replacer, options) {
+        let _replacer = undefined;
+        if (typeof replacer === 'function') {
+            value = replacer.call({ '': value }, '', value);
+            _replacer = replacer;
+        }
+        else if (Array.isArray(replacer)) {
+            const keyToStr = (v) => typeof v === 'number' || v instanceof String || v instanceof Number;
+            const asStr = replacer.filter(keyToStr).map(String);
+            if (asStr.length > 0)
+                replacer = replacer.concat(asStr);
+            _replacer = replacer;
+        }
+        else if (options === undefined && replacer) {
+            options = replacer;
+            replacer = undefined;
+        }
+        const { aliasDuplicateObjects, anchorPrefix, flow, keepUndefined, onTagObj, tag } = options ?? {};
+        const { onAnchor, setAnchors, sourceObjects } = createNodeAnchors(this, 
+        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+        anchorPrefix || 'a');
+        const ctx = {
+            aliasDuplicateObjects: aliasDuplicateObjects ?? true,
+            keepUndefined: keepUndefined ?? false,
+            onAnchor,
+            onTagObj,
+            replacer: _replacer,
+            schema: this.schema,
+            sourceObjects
+        };
+        const node = createNode(value, tag, ctx);
+        if (flow && isCollection$1(node))
+            node.flow = true;
+        setAnchors();
+        return node;
+    }
+    /**
+     * Convert a key and a value into a `Pair` using the current schema,
+     * recursively wrapping all values as `Scalar` or `Collection` nodes.
+     */
+    createPair(key, value, options = {}) {
+        const k = this.createNode(key, null, options);
+        const v = this.createNode(value, null, options);
+        return new Pair(k, v);
+    }
+    /**
+     * Removes a value from the document.
+     * @returns `true` if the item was found and removed.
+     */
+    delete(key) {
+        return assertCollection(this.contents) ? this.contents.delete(key) : false;
+    }
+    /**
+     * Removes a value from the document.
+     * @returns `true` if the item was found and removed.
+     */
+    deleteIn(path) {
+        if (isEmptyPath(path)) {
+            if (this.contents == null)
+                return false;
+            // @ts-expect-error Presumed impossible if Strict extends false
+            this.contents = null;
+            return true;
+        }
+        return assertCollection(this.contents)
+            ? this.contents.deleteIn(path)
+            : false;
+    }
+    /**
+     * Returns item at `key`, or `undefined` if not found. By default unwraps
+     * scalar values from their surrounding node; to disable set `keepScalar` to
+     * `true` (collections are always returned intact).
+     */
+    get(key, keepScalar) {
+        return isCollection$1(this.contents)
+            ? this.contents.get(key, keepScalar)
+            : undefined;
+    }
+    /**
+     * Returns item at `path`, or `undefined` if not found. By default unwraps
+     * scalar values from their surrounding node; to disable set `keepScalar` to
+     * `true` (collections are always returned intact).
+     */
+    getIn(path, keepScalar) {
+        if (isEmptyPath(path))
+            return !keepScalar && isScalar$1(this.contents)
+                ? this.contents.value
+                : this.contents;
+        return isCollection$1(this.contents)
+            ? this.contents.getIn(path, keepScalar)
+            : undefined;
+    }
+    /**
+     * Checks if the document includes a value with the key `key`.
+     */
+    has(key) {
+        return isCollection$1(this.contents) ? this.contents.has(key) : false;
+    }
+    /**
+     * Checks if the document includes a value at `path`.
+     */
+    hasIn(path) {
+        if (isEmptyPath(path))
+            return this.contents !== undefined;
+        return isCollection$1(this.contents) ? this.contents.hasIn(path) : false;
+    }
+    /**
+     * Sets a value in this document. For `!!set`, `value` needs to be a
+     * boolean to add/remove the item from the set.
+     */
+    set(key, value) {
+        if (this.contents == null) {
+            // @ts-expect-error We can't really know that this matches Contents.
+            this.contents = collectionFromPath(this.schema, [key], value);
+        }
+        else if (assertCollection(this.contents)) {
+            this.contents.set(key, value);
+        }
+    }
+    /**
+     * Sets a value in this document. For `!!set`, `value` needs to be a
+     * boolean to add/remove the item from the set.
+     */
+    setIn(path, value) {
+        if (isEmptyPath(path)) {
+            // @ts-expect-error We can't really know that this matches Contents.
+            this.contents = value;
+        }
+        else if (this.contents == null) {
+            // @ts-expect-error We can't really know that this matches Contents.
+            this.contents = collectionFromPath(this.schema, Array.from(path), value);
+        }
+        else if (assertCollection(this.contents)) {
+            this.contents.setIn(path, value);
+        }
+    }
+    /**
+     * Change the YAML version and schema used by the document.
+     * A `null` version disables support for directives, explicit tags, anchors, and aliases.
+     * It also requires the `schema` option to be given as a `Schema` instance value.
+     *
+     * Overrides all previously set schema options.
+     */
+    setSchema(version, options = {}) {
+        if (typeof version === 'number')
+            version = String(version);
+        let opt;
+        switch (version) {
+            case '1.1':
+                if (this.directives)
+                    this.directives.yaml.version = '1.1';
+                else
+                    this.directives = new Directives({ version: '1.1' });
+                opt = { resolveKnownTags: false, schema: 'yaml-1.1' };
+                break;
+            case '1.2':
+            case 'next':
+                if (this.directives)
+                    this.directives.yaml.version = version;
+                else
+                    this.directives = new Directives({ version });
+                opt = { resolveKnownTags: true, schema: 'core' };
+                break;
+            case null:
+                if (this.directives)
+                    delete this.directives;
+                opt = null;
+                break;
+            default: {
+                const sv = JSON.stringify(version);
+                throw new Error(`Expected '1.1', '1.2' or null as first argument, but found: ${sv}`);
+            }
+        }
+        // Not using `instanceof Schema` to allow for duck typing
+        if (options.schema instanceof Object)
+            this.schema = options.schema;
+        else if (opt)
+            this.schema = new Schema(Object.assign(opt, options));
+        else
+            throw new Error(`With a null YAML version, the { schema: Schema } option is required`);
+    }
+    // json & jsonArg are only used from toJSON()
+    toJS({ json, jsonArg, mapAsMap, maxAliasCount, onAnchor, reviver } = {}) {
+        const ctx = {
+            anchors: new Map(),
+            doc: this,
+            keep: !json,
+            mapAsMap: mapAsMap === true,
+            mapKeyWarned: false,
+            maxAliasCount: typeof maxAliasCount === 'number' ? maxAliasCount : 100
+        };
+        const res = toJS(this.contents, jsonArg ?? '', ctx);
+        if (typeof onAnchor === 'function')
+            for (const { count, res } of ctx.anchors.values())
+                onAnchor(res, count);
+        return typeof reviver === 'function'
+            ? applyReviver(reviver, { '': res }, '', res)
+            : res;
+    }
+    /**
+     * A JSON representation of the document `contents`.
+     *
+     * @param jsonArg Used by `JSON.stringify` to indicate the array index or
+     *   property name.
+     */
+    toJSON(jsonArg, onAnchor) {
+        return this.toJS({ json: true, jsonArg, mapAsMap: false, onAnchor });
+    }
+    /** A YAML representation of the document. */
+    toString(options = {}) {
+        if (this.errors.length > 0)
+            throw new Error('Document with errors cannot be stringified');
+        if ('indent' in options &&
+            (!Number.isInteger(options.indent) || Number(options.indent) <= 0)) {
+            const s = JSON.stringify(options.indent);
+            throw new Error(`"indent" option must be a positive integer, not ${s}`);
+        }
+        return stringifyDocument(this, options);
+    }
+}
+function assertCollection(contents) {
+    if (isCollection$1(contents))
+        return true;
+    throw new Error('Expected a YAML collection as document contents');
+}
+
+class YAMLError extends Error {
+    constructor(name, pos, code, message) {
+        super();
+        this.name = name;
+        this.code = code;
+        this.message = message;
+        this.pos = pos;
+    }
+}
+class YAMLParseError extends YAMLError {
+    constructor(pos, code, message) {
+        super('YAMLParseError', pos, code, message);
+    }
+}
+class YAMLWarning extends YAMLError {
+    constructor(pos, code, message) {
+        super('YAMLWarning', pos, code, message);
+    }
+}
+const prettifyError = (src, lc) => (error) => {
+    if (error.pos[0] === -1)
+        return;
+    error.linePos = error.pos.map(pos => lc.linePos(pos));
+    const { line, col } = error.linePos[0];
+    error.message += ` at line ${line}, column ${col}`;
+    let ci = col - 1;
+    let lineStr = src
+        .substring(lc.lineStarts[line - 1], lc.lineStarts[line])
+        .replace(/[\n\r]+$/, '');
+    // Trim to max 80 chars, keeping col position near the middle
+    if (ci >= 60 && lineStr.length > 80) {
+        const trimStart = Math.min(ci - 39, lineStr.length - 79);
+        lineStr = '…' + lineStr.substring(trimStart);
+        ci -= trimStart - 1;
+    }
+    if (lineStr.length > 80)
+        lineStr = lineStr.substring(0, 79) + '…';
+    // Include previous line in context if pointing at line start
+    if (line > 1 && /^ *$/.test(lineStr.substring(0, ci))) {
+        // Regexp won't match if start is trimmed
+        let prev = src.substring(lc.lineStarts[line - 2], lc.lineStarts[line - 1]);
+        if (prev.length > 80)
+            prev = prev.substring(0, 79) + '…\n';
+        lineStr = prev + lineStr;
+    }
+    if (/[^ ]/.test(lineStr)) {
+        let count = 1;
+        const end = error.linePos[1];
+        if (end?.line === line && end.col > col) {
+            count = Math.max(1, Math.min(end.col - col, 80 - ci));
+        }
+        const pointer = ' '.repeat(ci) + '^'.repeat(count);
+        error.message += `:\n\n${lineStr}\n${pointer}\n`;
+    }
+};
+
+function resolveProps(tokens, { flow, indicator, next, offset, onError, parentIndent, startOnNewline }) {
+    let spaceBefore = false;
+    let atNewline = startOnNewline;
+    let hasSpace = startOnNewline;
+    let comment = '';
+    let commentSep = '';
+    let hasNewline = false;
+    let reqSpace = false;
+    let tab = null;
+    let anchor = null;
+    let tag = null;
+    let newlineAfterProp = null;
+    let comma = null;
+    let found = null;
+    let start = null;
+    for (const token of tokens) {
+        if (reqSpace) {
+            if (token.type !== 'space' &&
+                token.type !== 'newline' &&
+                token.type !== 'comma')
+                onError(token.offset, 'MISSING_CHAR', 'Tags and anchors must be separated from the next token by white space');
+            reqSpace = false;
+        }
+        if (tab) {
+            if (atNewline && token.type !== 'comment' && token.type !== 'newline') {
+                onError(tab, 'TAB_AS_INDENT', 'Tabs are not allowed as indentation');
+            }
+            tab = null;
+        }
+        switch (token.type) {
+            case 'space':
+                // At the doc level, tabs at line start may be parsed
+                // as leading white space rather than indentation.
+                // In a flow collection, only the parser handles indent.
+                if (!flow &&
+                    (indicator !== 'doc-start' || next?.type !== 'flow-collection') &&
+                    token.source.includes('\t')) {
+                    tab = token;
+                }
+                hasSpace = true;
+                break;
+            case 'comment': {
+                if (!hasSpace)
+                    onError(token, 'MISSING_CHAR', 'Comments must be separated from other tokens by white space characters');
+                const cb = token.source.substring(1) || ' ';
+                if (!comment)
+                    comment = cb;
+                else
+                    comment += commentSep + cb;
+                commentSep = '';
+                atNewline = false;
+                break;
+            }
+            case 'newline':
+                if (atNewline) {
+                    if (comment)
+                        comment += token.source;
+                    else if (!found || indicator !== 'seq-item-ind')
+                        spaceBefore = true;
+                }
+                else
+                    commentSep += token.source;
+                atNewline = true;
+                hasNewline = true;
+                if (anchor || tag)
+                    newlineAfterProp = token;
+                hasSpace = true;
+                break;
+            case 'anchor':
+                if (anchor)
+                    onError(token, 'MULTIPLE_ANCHORS', 'A node can have at most one anchor');
+                if (token.source.endsWith(':'))
+                    onError(token.offset + token.source.length - 1, 'BAD_ALIAS', 'Anchor ending in : is ambiguous', true);
+                anchor = token;
+                start ?? (start = token.offset);
+                atNewline = false;
+                hasSpace = false;
+                reqSpace = true;
+                break;
+            case 'tag': {
+                if (tag)
+                    onError(token, 'MULTIPLE_TAGS', 'A node can have at most one tag');
+                tag = token;
+                start ?? (start = token.offset);
+                atNewline = false;
+                hasSpace = false;
+                reqSpace = true;
+                break;
+            }
+            case indicator:
+                // Could here handle preceding comments differently
+                if (anchor || tag)
+                    onError(token, 'BAD_PROP_ORDER', `Anchors and tags must be after the ${token.source} indicator`);
+                if (found)
+                    onError(token, 'UNEXPECTED_TOKEN', `Unexpected ${token.source} in ${flow ?? 'collection'}`);
+                found = token;
+                atNewline =
+                    indicator === 'seq-item-ind' || indicator === 'explicit-key-ind';
+                hasSpace = false;
+                break;
+            case 'comma':
+                if (flow) {
+                    if (comma)
+                        onError(token, 'UNEXPECTED_TOKEN', `Unexpected , in ${flow}`);
+                    comma = token;
+                    atNewline = false;
+                    hasSpace = false;
+                    break;
+                }
+            // else fallthrough
+            default:
+                onError(token, 'UNEXPECTED_TOKEN', `Unexpected ${token.type} token`);
+                atNewline = false;
+                hasSpace = false;
+        }
+    }
+    const last = tokens[tokens.length - 1];
+    const end = last ? last.offset + last.source.length : offset;
+    if (reqSpace &&
+        next &&
+        next.type !== 'space' &&
+        next.type !== 'newline' &&
+        next.type !== 'comma' &&
+        (next.type !== 'scalar' || next.source !== '')) {
+        onError(next.offset, 'MISSING_CHAR', 'Tags and anchors must be separated from the next token by white space');
+    }
+    if (tab &&
+        ((atNewline && tab.indent <= parentIndent) ||
+            next?.type === 'block-map' ||
+            next?.type === 'block-seq'))
+        onError(tab, 'TAB_AS_INDENT', 'Tabs are not allowed as indentation');
+    return {
+        comma,
+        found,
+        spaceBefore,
+        comment,
+        hasNewline,
+        anchor,
+        tag,
+        newlineAfterProp,
+        end,
+        start: start ?? end
+    };
+}
+
+function containsNewline(key) {
+    if (!key)
+        return null;
+    switch (key.type) {
+        case 'alias':
+        case 'scalar':
+        case 'double-quoted-scalar':
+        case 'single-quoted-scalar':
+            if (key.source.includes('\n'))
+                return true;
+            if (key.end)
+                for (const st of key.end)
+                    if (st.type === 'newline')
+                        return true;
+            return false;
+        case 'flow-collection':
+            for (const it of key.items) {
+                for (const st of it.start)
+                    if (st.type === 'newline')
+                        return true;
+                if (it.sep)
+                    for (const st of it.sep)
+                        if (st.type === 'newline')
+                            return true;
+                if (containsNewline(it.key) || containsNewline(it.value))
+                    return true;
+            }
+            return false;
+        default:
+            return true;
+    }
+}
+
+function flowIndentCheck(indent, fc, onError) {
+    if (fc?.type === 'flow-collection') {
+        const end = fc.end[0];
+        if (end.indent === indent &&
+            (end.source === ']' || end.source === '}') &&
+            containsNewline(fc)) {
+            const msg = 'Flow end indicator should be more indented than parent';
+            onError(end, 'BAD_INDENT', msg, true);
+        }
+    }
+}
+
+function mapIncludes(ctx, items, search) {
+    const { uniqueKeys } = ctx.options;
+    if (uniqueKeys === false)
+        return false;
+    const isEqual = typeof uniqueKeys === 'function'
+        ? uniqueKeys
+        : (a, b) => a === b || (isScalar$1(a) && isScalar$1(b) && a.value === b.value);
+    return items.some(pair => isEqual(pair.key, search));
+}
+
+const startColMsg = 'All mapping items must start at the same column';
+function resolveBlockMap({ composeNode, composeEmptyNode }, ctx, bm, onError, tag) {
+    const NodeClass = tag?.nodeClass ?? YAMLMap;
+    const map = new NodeClass(ctx.schema);
+    if (ctx.atRoot)
+        ctx.atRoot = false;
+    let offset = bm.offset;
+    let commentEnd = null;
+    for (const collItem of bm.items) {
+        const { start, key, sep, value } = collItem;
+        // key properties
+        const keyProps = resolveProps(start, {
+            indicator: 'explicit-key-ind',
+            next: key ?? sep?.[0],
+            offset,
+            onError,
+            parentIndent: bm.indent,
+            startOnNewline: true
+        });
+        const implicitKey = !keyProps.found;
+        if (implicitKey) {
+            if (key) {
+                if (key.type === 'block-seq')
+                    onError(offset, 'BLOCK_AS_IMPLICIT_KEY', 'A block sequence may not be used as an implicit map key');
+                else if ('indent' in key && key.indent !== bm.indent)
+                    onError(offset, 'BAD_INDENT', startColMsg);
+            }
+            if (!keyProps.anchor && !keyProps.tag && !sep) {
+                commentEnd = keyProps.end;
+                if (keyProps.comment) {
+                    if (map.comment)
+                        map.comment += '\n' + keyProps.comment;
+                    else
+                        map.comment = keyProps.comment;
+                }
+                continue;
+            }
+            if (keyProps.newlineAfterProp || containsNewline(key)) {
+                onError(key ?? start[start.length - 1], 'MULTILINE_IMPLICIT_KEY', 'Implicit keys need to be on a single line');
+            }
+        }
+        else if (keyProps.found?.indent !== bm.indent) {
+            onError(offset, 'BAD_INDENT', startColMsg);
+        }
+        // key value
+        ctx.atKey = true;
+        const keyStart = keyProps.end;
+        const keyNode = key
+            ? composeNode(ctx, key, keyProps, onError)
+            : composeEmptyNode(ctx, keyStart, start, null, keyProps, onError);
+        if (ctx.schema.compat)
+            flowIndentCheck(bm.indent, key, onError);
+        ctx.atKey = false;
+        if (mapIncludes(ctx, map.items, keyNode))
+            onError(keyStart, 'DUPLICATE_KEY', 'Map keys must be unique');
+        // value properties
+        const valueProps = resolveProps(sep ?? [], {
+            indicator: 'map-value-ind',
+            next: value,
+            offset: keyNode.range[2],
+            onError,
+            parentIndent: bm.indent,
+            startOnNewline: !key || key.type === 'block-scalar'
+        });
+        offset = valueProps.end;
+        if (valueProps.found) {
+            if (implicitKey) {
+                if (value?.type === 'block-map' && !valueProps.hasNewline)
+                    onError(offset, 'BLOCK_AS_IMPLICIT_KEY', 'Nested mappings are not allowed in compact mappings');
+                if (ctx.options.strict &&
+                    keyProps.start < valueProps.found.offset - 1024)
+                    onError(keyNode.range, 'KEY_OVER_1024_CHARS', 'The : indicator must be at most 1024 chars after the start of an implicit block mapping key');
+            }
+            // value value
+            const valueNode = value
+                ? composeNode(ctx, value, valueProps, onError)
+                : composeEmptyNode(ctx, offset, sep, null, valueProps, onError);
+            if (ctx.schema.compat)
+                flowIndentCheck(bm.indent, value, onError);
+            offset = valueNode.range[2];
+            const pair = new Pair(keyNode, valueNode);
+            if (ctx.options.keepSourceTokens)
+                pair.srcToken = collItem;
+            map.items.push(pair);
+        }
+        else {
+            // key with no value
+            if (implicitKey)
+                onError(keyNode.range, 'MISSING_CHAR', 'Implicit map keys need to be followed by map values');
+            if (valueProps.comment) {
+                if (keyNode.comment)
+                    keyNode.comment += '\n' + valueProps.comment;
+                else
+                    keyNode.comment = valueProps.comment;
+            }
+            const pair = new Pair(keyNode);
+            if (ctx.options.keepSourceTokens)
+                pair.srcToken = collItem;
+            map.items.push(pair);
+        }
+    }
+    if (commentEnd && commentEnd < offset)
+        onError(commentEnd, 'IMPOSSIBLE', 'Map comment with trailing content');
+    map.range = [bm.offset, offset, commentEnd ?? offset];
+    return map;
+}
+
+function resolveBlockSeq({ composeNode, composeEmptyNode }, ctx, bs, onError, tag) {
+    const NodeClass = tag?.nodeClass ?? YAMLSeq;
+    const seq = new NodeClass(ctx.schema);
+    if (ctx.atRoot)
+        ctx.atRoot = false;
+    if (ctx.atKey)
+        ctx.atKey = false;
+    let offset = bs.offset;
+    let commentEnd = null;
+    for (const { start, value } of bs.items) {
+        const props = resolveProps(start, {
+            indicator: 'seq-item-ind',
+            next: value,
+            offset,
+            onError,
+            parentIndent: bs.indent,
+            startOnNewline: true
+        });
+        if (!props.found) {
+            if (props.anchor || props.tag || value) {
+                if (value?.type === 'block-seq')
+                    onError(props.end, 'BAD_INDENT', 'All sequence items must start at the same column');
+                else
+                    onError(offset, 'MISSING_CHAR', 'Sequence item without - indicator');
+            }
+            else {
+                commentEnd = props.end;
+                if (props.comment)
+                    seq.comment = props.comment;
+                continue;
+            }
+        }
+        const node = value
+            ? composeNode(ctx, value, props, onError)
+            : composeEmptyNode(ctx, props.end, start, null, props, onError);
+        if (ctx.schema.compat)
+            flowIndentCheck(bs.indent, value, onError);
+        offset = node.range[2];
+        seq.items.push(node);
+    }
+    seq.range = [bs.offset, offset, commentEnd ?? offset];
+    return seq;
+}
+
+function resolveEnd(end, offset, reqSpace, onError) {
+    let comment = '';
+    if (end) {
+        let hasSpace = false;
+        let sep = '';
+        for (const token of end) {
+            const { source, type } = token;
+            switch (type) {
+                case 'space':
+                    hasSpace = true;
+                    break;
+                case 'comment': {
+                    if (reqSpace && !hasSpace)
+                        onError(token, 'MISSING_CHAR', 'Comments must be separated from other tokens by white space characters');
+                    const cb = source.substring(1) || ' ';
+                    if (!comment)
+                        comment = cb;
+                    else
+                        comment += sep + cb;
+                    sep = '';
+                    break;
+                }
+                case 'newline':
+                    if (comment)
+                        sep += source;
+                    hasSpace = true;
+                    break;
+                default:
+                    onError(token, 'UNEXPECTED_TOKEN', `Unexpected ${type} at node end`);
+            }
+            offset += source.length;
+        }
+    }
+    return { comment, offset };
+}
+
+const blockMsg = 'Block collections are not allowed within flow collections';
+const isBlock = (token) => token && (token.type === 'block-map' || token.type === 'block-seq');
+function resolveFlowCollection({ composeNode, composeEmptyNode }, ctx, fc, onError, tag) {
+    const isMap = fc.start.source === '{';
+    const fcName = isMap ? 'flow map' : 'flow sequence';
+    const NodeClass = (tag?.nodeClass ?? (isMap ? YAMLMap : YAMLSeq));
+    const coll = new NodeClass(ctx.schema);
+    coll.flow = true;
+    const atRoot = ctx.atRoot;
+    if (atRoot)
+        ctx.atRoot = false;
+    if (ctx.atKey)
+        ctx.atKey = false;
+    let offset = fc.offset + fc.start.source.length;
+    for (let i = 0; i < fc.items.length; ++i) {
+        const collItem = fc.items[i];
+        const { start, key, sep, value } = collItem;
+        const props = resolveProps(start, {
+            flow: fcName,
+            indicator: 'explicit-key-ind',
+            next: key ?? sep?.[0],
+            offset,
+            onError,
+            parentIndent: fc.indent,
+            startOnNewline: false
+        });
+        if (!props.found) {
+            if (!props.anchor && !props.tag && !sep && !value) {
+                if (i === 0 && props.comma)
+                    onError(props.comma, 'UNEXPECTED_TOKEN', `Unexpected , in ${fcName}`);
+                else if (i < fc.items.length - 1)
+                    onError(props.start, 'UNEXPECTED_TOKEN', `Unexpected empty item in ${fcName}`);
+                if (props.comment) {
+                    if (coll.comment)
+                        coll.comment += '\n' + props.comment;
+                    else
+                        coll.comment = props.comment;
+                }
+                offset = props.end;
+                continue;
+            }
+            if (!isMap && ctx.options.strict && containsNewline(key))
+                onError(key, // checked by containsNewline()
+                'MULTILINE_IMPLICIT_KEY', 'Implicit keys of flow sequence pairs need to be on a single line');
+        }
+        if (i === 0) {
+            if (props.comma)
+                onError(props.comma, 'UNEXPECTED_TOKEN', `Unexpected , in ${fcName}`);
+        }
+        else {
+            if (!props.comma)
+                onError(props.start, 'MISSING_CHAR', `Missing , between ${fcName} items`);
+            if (props.comment) {
+                let prevItemComment = '';
+                loop: for (const st of start) {
+                    switch (st.type) {
+                        case 'comma':
+                        case 'space':
+                            break;
+                        case 'comment':
+                            prevItemComment = st.source.substring(1);
+                            break loop;
+                        default:
+                            break loop;
+                    }
+                }
+                if (prevItemComment) {
+                    let prev = coll.items[coll.items.length - 1];
+                    if (isPair(prev))
+                        prev = prev.value ?? prev.key;
+                    if (prev.comment)
+                        prev.comment += '\n' + prevItemComment;
+                    else
+                        prev.comment = prevItemComment;
+                    props.comment = props.comment.substring(prevItemComment.length + 1);
+                }
+            }
+        }
+        if (!isMap && !sep && !props.found) {
+            // item is a value in a seq
+            // → key & sep are empty, start does not include ? or :
+            const valueNode = value
+                ? composeNode(ctx, value, props, onError)
+                : composeEmptyNode(ctx, props.end, sep, null, props, onError);
+            coll.items.push(valueNode);
+            offset = valueNode.range[2];
+            if (isBlock(value))
+                onError(valueNode.range, 'BLOCK_IN_FLOW', blockMsg);
+        }
+        else {
+            // item is a key+value pair
+            // key value
+            ctx.atKey = true;
+            const keyStart = props.end;
+            const keyNode = key
+                ? composeNode(ctx, key, props, onError)
+                : composeEmptyNode(ctx, keyStart, start, null, props, onError);
+            if (isBlock(key))
+                onError(keyNode.range, 'BLOCK_IN_FLOW', blockMsg);
+            ctx.atKey = false;
+            // value properties
+            const valueProps = resolveProps(sep ?? [], {
+                flow: fcName,
+                indicator: 'map-value-ind',
+                next: value,
+                offset: keyNode.range[2],
+                onError,
+                parentIndent: fc.indent,
+                startOnNewline: false
+            });
+            if (valueProps.found) {
+                if (!isMap && !props.found && ctx.options.strict) {
+                    if (sep)
+                        for (const st of sep) {
+                            if (st === valueProps.found)
+                                break;
+                            if (st.type === 'newline') {
+                                onError(st, 'MULTILINE_IMPLICIT_KEY', 'Implicit keys of flow sequence pairs need to be on a single line');
+                                break;
+                            }
+                        }
+                    if (props.start < valueProps.found.offset - 1024)
+                        onError(valueProps.found, 'KEY_OVER_1024_CHARS', 'The : indicator must be at most 1024 chars after the start of an implicit flow sequence key');
+                }
+            }
+            else if (value) {
+                if ('source' in value && value.source?.[0] === ':')
+                    onError(value, 'MISSING_CHAR', `Missing space after : in ${fcName}`);
+                else
+                    onError(valueProps.start, 'MISSING_CHAR', `Missing , or : between ${fcName} items`);
+            }
+            // value value
+            const valueNode = value
+                ? composeNode(ctx, value, valueProps, onError)
+                : valueProps.found
+                    ? composeEmptyNode(ctx, valueProps.end, sep, null, valueProps, onError)
+                    : null;
+            if (valueNode) {
+                if (isBlock(value))
+                    onError(valueNode.range, 'BLOCK_IN_FLOW', blockMsg);
+            }
+            else if (valueProps.comment) {
+                if (keyNode.comment)
+                    keyNode.comment += '\n' + valueProps.comment;
+                else
+                    keyNode.comment = valueProps.comment;
+            }
+            const pair = new Pair(keyNode, valueNode);
+            if (ctx.options.keepSourceTokens)
+                pair.srcToken = collItem;
+            if (isMap) {
+                const map = coll;
+                if (mapIncludes(ctx, map.items, keyNode))
+                    onError(keyStart, 'DUPLICATE_KEY', 'Map keys must be unique');
+                map.items.push(pair);
+            }
+            else {
+                const map = new YAMLMap(ctx.schema);
+                map.flow = true;
+                map.items.push(pair);
+                const endRange = (valueNode ?? keyNode).range;
+                map.range = [keyNode.range[0], endRange[1], endRange[2]];
+                coll.items.push(map);
+            }
+            offset = valueNode ? valueNode.range[2] : valueProps.end;
+        }
+    }
+    const expectedEnd = isMap ? '}' : ']';
+    const [ce, ...ee] = fc.end;
+    let cePos = offset;
+    if (ce?.source === expectedEnd)
+        cePos = ce.offset + ce.source.length;
+    else {
+        const name = fcName[0].toUpperCase() + fcName.substring(1);
+        const msg = atRoot
+            ? `${name} must end with a ${expectedEnd}`
+            : `${name} in block collection must be sufficiently indented and end with a ${expectedEnd}`;
+        onError(offset, atRoot ? 'MISSING_CHAR' : 'BAD_INDENT', msg);
+        if (ce && ce.source.length !== 1)
+            ee.unshift(ce);
+    }
+    if (ee.length > 0) {
+        const end = resolveEnd(ee, cePos, ctx.options.strict, onError);
+        if (end.comment) {
+            if (coll.comment)
+                coll.comment += '\n' + end.comment;
+            else
+                coll.comment = end.comment;
+        }
+        coll.range = [fc.offset, cePos, end.offset];
+    }
+    else {
+        coll.range = [fc.offset, cePos, cePos];
+    }
+    return coll;
+}
+
+function resolveCollection(CN, ctx, token, onError, tagName, tag) {
+    const coll = token.type === 'block-map'
+        ? resolveBlockMap(CN, ctx, token, onError, tag)
+        : token.type === 'block-seq'
+            ? resolveBlockSeq(CN, ctx, token, onError, tag)
+            : resolveFlowCollection(CN, ctx, token, onError, tag);
+    const Coll = coll.constructor;
+    // If we got a tagName matching the class, or the tag name is '!',
+    // then use the tagName from the node class used to create it.
+    if (tagName === '!' || tagName === Coll.tagName) {
+        coll.tag = Coll.tagName;
+        return coll;
+    }
+    if (tagName)
+        coll.tag = tagName;
+    return coll;
+}
+function composeCollection(CN, ctx, token, props, onError) {
+    const tagToken = props.tag;
+    const tagName = !tagToken
+        ? null
+        : ctx.directives.tagName(tagToken.source, msg => onError(tagToken, 'TAG_RESOLVE_FAILED', msg));
+    if (token.type === 'block-seq') {
+        const { anchor, newlineAfterProp: nl } = props;
+        const lastProp = anchor && tagToken
+            ? anchor.offset > tagToken.offset
+                ? anchor
+                : tagToken
+            : (anchor ?? tagToken);
+        if (lastProp && (!nl || nl.offset < lastProp.offset)) {
+            const message = 'Missing newline after block sequence props';
+            onError(lastProp, 'MISSING_CHAR', message);
+        }
+    }
+    const expType = token.type === 'block-map'
+        ? 'map'
+        : token.type === 'block-seq'
+            ? 'seq'
+            : token.start.source === '{'
+                ? 'map'
+                : 'seq';
+    // shortcut: check if it's a generic YAMLMap or YAMLSeq
+    // before jumping into the custom tag logic.
+    if (!tagToken ||
+        !tagName ||
+        tagName === '!' ||
+        (tagName === YAMLMap.tagName && expType === 'map') ||
+        (tagName === YAMLSeq.tagName && expType === 'seq')) {
+        return resolveCollection(CN, ctx, token, onError, tagName);
+    }
+    let tag = ctx.schema.tags.find(t => t.tag === tagName && t.collection === expType);
+    if (!tag) {
+        const kt = ctx.schema.knownTags[tagName];
+        if (kt?.collection === expType) {
+            ctx.schema.tags.push(Object.assign({}, kt, { default: false }));
+            tag = kt;
+        }
+        else {
+            if (kt) {
+                onError(tagToken, 'BAD_COLLECTION_TYPE', `${kt.tag} used for ${expType} collection, but expects ${kt.collection ?? 'scalar'}`, true);
+            }
+            else {
+                onError(tagToken, 'TAG_RESOLVE_FAILED', `Unresolved tag: ${tagName}`, true);
+            }
+            return resolveCollection(CN, ctx, token, onError, tagName);
+        }
+    }
+    const coll = resolveCollection(CN, ctx, token, onError, tagName, tag);
+    const res = tag.resolve?.(coll, msg => onError(tagToken, 'TAG_RESOLVE_FAILED', msg), ctx.options) ?? coll;
+    const node = isNode(res)
+        ? res
+        : new Scalar(res);
+    node.range = coll.range;
+    node.tag = tagName;
+    if (tag?.format)
+        node.format = tag.format;
+    return node;
+}
+
+function resolveBlockScalar(ctx, scalar, onError) {
+    const start = scalar.offset;
+    const header = parseBlockScalarHeader(scalar, ctx.options.strict, onError);
+    if (!header)
+        return { value: '', type: null, comment: '', range: [start, start, start] };
+    const type = header.mode === '>' ? Scalar.BLOCK_FOLDED : Scalar.BLOCK_LITERAL;
+    const lines = scalar.source ? splitLines(scalar.source) : [];
+    // determine the end of content & start of chomping
+    let chompStart = lines.length;
+    for (let i = lines.length - 1; i >= 0; --i) {
+        const content = lines[i][1];
+        if (content === '' || content === '\r')
+            chompStart = i;
+        else
+            break;
+    }
+    // shortcut for empty contents
+    if (chompStart === 0) {
+        const value = header.chomp === '+' && lines.length > 0
+            ? '\n'.repeat(Math.max(1, lines.length - 1))
+            : '';
+        let end = start + header.length;
+        if (scalar.source)
+            end += scalar.source.length;
+        return { value, type, comment: header.comment, range: [start, end, end] };
+    }
+    // find the indentation level to trim from start
+    let trimIndent = scalar.indent + header.indent;
+    let offset = scalar.offset + header.length;
+    let contentStart = 0;
+    for (let i = 0; i < chompStart; ++i) {
+        const [indent, content] = lines[i];
+        if (content === '' || content === '\r') {
+            if (header.indent === 0 && indent.length > trimIndent)
+                trimIndent = indent.length;
+        }
+        else {
+            if (indent.length < trimIndent) {
+                const message = 'Block scalars with more-indented leading empty lines must use an explicit indentation indicator';
+                onError(offset + indent.length, 'MISSING_CHAR', message);
+            }
+            if (header.indent === 0)
+                trimIndent = indent.length;
+            contentStart = i;
+            if (trimIndent === 0 && !ctx.atRoot) {
+                const message = 'Block scalar values in collections must be indented';
+                onError(offset, 'BAD_INDENT', message);
+            }
+            break;
+        }
+        offset += indent.length + content.length + 1;
+    }
+    // include trailing more-indented empty lines in content
+    for (let i = lines.length - 1; i >= chompStart; --i) {
+        if (lines[i][0].length > trimIndent)
+            chompStart = i + 1;
+    }
+    let value = '';
+    let sep = '';
+    let prevMoreIndented = false;
+    // leading whitespace is kept intact
+    for (let i = 0; i < contentStart; ++i)
+        value += lines[i][0].slice(trimIndent) + '\n';
+    for (let i = contentStart; i < chompStart; ++i) {
+        let [indent, content] = lines[i];
+        offset += indent.length + content.length + 1;
+        const crlf = content[content.length - 1] === '\r';
+        if (crlf)
+            content = content.slice(0, -1);
+        /* istanbul ignore if already caught in lexer */
+        if (content && indent.length < trimIndent) {
+            const src = header.indent
+                ? 'explicit indentation indicator'
+                : 'first line';
+            const message = `Block scalar lines must not be less indented than their ${src}`;
+            onError(offset - content.length - (crlf ? 2 : 1), 'BAD_INDENT', message);
+            indent = '';
+        }
+        if (type === Scalar.BLOCK_LITERAL) {
+            value += sep + indent.slice(trimIndent) + content;
+            sep = '\n';
+        }
+        else if (indent.length > trimIndent || content[0] === '\t') {
+            // more-indented content within a folded block
+            if (sep === ' ')
+                sep = '\n';
+            else if (!prevMoreIndented && sep === '\n')
+                sep = '\n\n';
+            value += sep + indent.slice(trimIndent) + content;
+            sep = '\n';
+            prevMoreIndented = true;
+        }
+        else if (content === '') {
+            // empty line
+            if (sep === '\n')
+                value += '\n';
+            else
+                sep = '\n';
+        }
+        else {
+            value += sep + content;
+            sep = ' ';
+            prevMoreIndented = false;
+        }
+    }
+    switch (header.chomp) {
+        case '-':
+            break;
+        case '+':
+            for (let i = chompStart; i < lines.length; ++i)
+                value += '\n' + lines[i][0].slice(trimIndent);
+            if (value[value.length - 1] !== '\n')
+                value += '\n';
+            break;
+        default:
+            value += '\n';
+    }
+    const end = start + header.length + scalar.source.length;
+    return { value, type, comment: header.comment, range: [start, end, end] };
+}
+function parseBlockScalarHeader({ offset, props }, strict, onError) {
+    /* istanbul ignore if should not happen */
+    if (props[0].type !== 'block-scalar-header') {
+        onError(props[0], 'IMPOSSIBLE', 'Block scalar header not found');
+        return null;
+    }
+    const { source } = props[0];
+    const mode = source[0];
+    let indent = 0;
+    let chomp = '';
+    let error = -1;
+    for (let i = 1; i < source.length; ++i) {
+        const ch = source[i];
+        if (!chomp && (ch === '-' || ch === '+'))
+            chomp = ch;
+        else {
+            const n = Number(ch);
+            if (!indent && n)
+                indent = n;
+            else if (error === -1)
+                error = offset + i;
+        }
+    }
+    if (error !== -1)
+        onError(error, 'UNEXPECTED_TOKEN', `Block scalar header includes extra characters: ${source}`);
+    let hasSpace = false;
+    let comment = '';
+    let length = source.length;
+    for (let i = 1; i < props.length; ++i) {
+        const token = props[i];
+        switch (token.type) {
+            case 'space':
+                hasSpace = true;
+            // fallthrough
+            case 'newline':
+                length += token.source.length;
+                break;
+            case 'comment':
+                if (strict && !hasSpace) {
+                    const message = 'Comments must be separated from other tokens by white space characters';
+                    onError(token, 'MISSING_CHAR', message);
+                }
+                length += token.source.length;
+                comment = token.source.substring(1);
+                break;
+            case 'error':
+                onError(token, 'UNEXPECTED_TOKEN', token.message);
+                length += token.source.length;
+                break;
+            /* istanbul ignore next should not happen */
+            default: {
+                const message = `Unexpected token in block scalar header: ${token.type}`;
+                onError(token, 'UNEXPECTED_TOKEN', message);
+                const ts = token.source;
+                if (ts && typeof ts === 'string')
+                    length += ts.length;
+            }
+        }
+    }
+    return { mode, indent, chomp, comment, length };
+}
+/** @returns Array of lines split up as `[indent, content]` */
+function splitLines(source) {
+    const split = source.split(/\n( *)/);
+    const first = split[0];
+    const m = first.match(/^( *)/);
+    const line0 = m?.[1]
+        ? [m[1], first.slice(m[1].length)]
+        : ['', first];
+    const lines = [line0];
+    for (let i = 1; i < split.length; i += 2)
+        lines.push([split[i], split[i + 1]]);
+    return lines;
+}
+
+function resolveFlowScalar(scalar, strict, onError) {
+    const { offset, type, source, end } = scalar;
+    let _type;
+    let value;
+    const _onError = (rel, code, msg) => onError(offset + rel, code, msg);
+    switch (type) {
+        case 'scalar':
+            _type = Scalar.PLAIN;
+            value = plainValue(source, _onError);
+            break;
+        case 'single-quoted-scalar':
+            _type = Scalar.QUOTE_SINGLE;
+            value = singleQuotedValue(source, _onError);
+            break;
+        case 'double-quoted-scalar':
+            _type = Scalar.QUOTE_DOUBLE;
+            value = doubleQuotedValue(source, _onError);
+            break;
+        /* istanbul ignore next should not happen */
+        default:
+            onError(scalar, 'UNEXPECTED_TOKEN', `Expected a flow scalar value, but found: ${type}`);
+            return {
+                value: '',
+                type: null,
+                comment: '',
+                range: [offset, offset + source.length, offset + source.length]
+            };
+    }
+    const valueEnd = offset + source.length;
+    const re = resolveEnd(end, valueEnd, strict, onError);
+    return {
+        value,
+        type: _type,
+        comment: re.comment,
+        range: [offset, valueEnd, re.offset]
+    };
+}
+function plainValue(source, onError) {
+    let badChar = '';
+    switch (source[0]) {
+        /* istanbul ignore next should not happen */
+        case '\t':
+            badChar = 'a tab character';
+            break;
+        case ',':
+            badChar = 'flow indicator character ,';
+            break;
+        case '%':
+            badChar = 'directive indicator character %';
+            break;
+        case '|':
+        case '>': {
+            badChar = `block scalar indicator ${source[0]}`;
+            break;
+        }
+        case '@':
+        case '`': {
+            badChar = `reserved character ${source[0]}`;
+            break;
+        }
+    }
+    if (badChar)
+        onError(0, 'BAD_SCALAR_START', `Plain value cannot start with ${badChar}`);
+    return foldLines(source);
+}
+function singleQuotedValue(source, onError) {
+    if (source[source.length - 1] !== "'" || source.length === 1)
+        onError(source.length, 'MISSING_CHAR', "Missing closing 'quote");
+    return foldLines(source.slice(1, -1)).replace(/''/g, "'");
+}
+function foldLines(source) {
+    /**
+     * The negative lookbehind here and in the `re` RegExp is to
+     * prevent causing a polynomial search time in certain cases.
+     *
+     * The try-catch is for Safari, which doesn't support this yet:
+     * https://caniuse.com/js-regexp-lookbehind
+     */
+    let first, line;
+    try {
+        first = new RegExp('(.*?)(?<![ \t])[ \t]*\r?\n', 'sy');
+        line = new RegExp('[ \t]*(.*?)(?:(?<![ \t])[ \t]*)?\r?\n', 'sy');
+    }
+    catch {
+        first = /(.*?)[ \t]*\r?\n/sy;
+        line = /[ \t]*(.*?)[ \t]*\r?\n/sy;
+    }
+    let match = first.exec(source);
+    if (!match)
+        return source;
+    let res = match[1];
+    let sep = ' ';
+    let pos = first.lastIndex;
+    line.lastIndex = pos;
+    while ((match = line.exec(source))) {
+        if (match[1] === '') {
+            if (sep === '\n')
+                res += sep;
+            else
+                sep = '\n';
+        }
+        else {
+            res += sep + match[1];
+            sep = ' ';
+        }
+        pos = line.lastIndex;
+    }
+    const last = /[ \t]*(.*)/sy;
+    last.lastIndex = pos;
+    match = last.exec(source);
+    return res + sep + (match?.[1] ?? '');
+}
+function doubleQuotedValue(source, onError) {
+    let res = '';
+    for (let i = 1; i < source.length - 1; ++i) {
+        const ch = source[i];
+        if (ch === '\r' && source[i + 1] === '\n')
+            continue;
+        if (ch === '\n') {
+            const { fold, offset } = foldNewline(source, i);
+            res += fold;
+            i = offset;
+        }
+        else if (ch === '\\') {
+            let next = source[++i];
+            const cc = escapeCodes[next];
+            if (cc)
+                res += cc;
+            else if (next === '\n') {
+                // skip escaped newlines, but still trim the following line
+                next = source[i + 1];
+                while (next === ' ' || next === '\t')
+                    next = source[++i + 1];
+            }
+            else if (next === '\r' && source[i + 1] === '\n') {
+                // skip escaped CRLF newlines, but still trim the following line
+                next = source[++i + 1];
+                while (next === ' ' || next === '\t')
+                    next = source[++i + 1];
+            }
+            else if (next === 'x' || next === 'u' || next === 'U') {
+                const length = { x: 2, u: 4, U: 8 }[next];
+                res += parseCharCode(source, i + 1, length, onError);
+                i += length;
+            }
+            else {
+                const raw = source.substr(i - 1, 2);
+                onError(i - 1, 'BAD_DQ_ESCAPE', `Invalid escape sequence ${raw}`);
+                res += raw;
+            }
+        }
+        else if (ch === ' ' || ch === '\t') {
+            // trim trailing whitespace
+            const wsStart = i;
+            let next = source[i + 1];
+            while (next === ' ' || next === '\t')
+                next = source[++i + 1];
+            if (next !== '\n' && !(next === '\r' && source[i + 2] === '\n'))
+                res += i > wsStart ? source.slice(wsStart, i + 1) : ch;
+        }
+        else {
+            res += ch;
+        }
+    }
+    if (source[source.length - 1] !== '"' || source.length === 1)
+        onError(source.length, 'MISSING_CHAR', 'Missing closing "quote');
+    return res;
+}
+/**
+ * Fold a single newline into a space, multiple newlines to N - 1 newlines.
+ * Presumes `source[offset] === '\n'`
+ */
+function foldNewline(source, offset) {
+    let fold = '';
+    let ch = source[offset + 1];
+    while (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+        if (ch === '\r' && source[offset + 2] !== '\n')
+            break;
+        if (ch === '\n')
+            fold += '\n';
+        offset += 1;
+        ch = source[offset + 1];
+    }
+    if (!fold)
+        fold = ' ';
+    return { fold, offset };
+}
+const escapeCodes = {
+    '0': '\0', // null character
+    a: '\x07', // bell character
+    b: '\b', // backspace
+    e: '\x1b', // escape character
+    f: '\f', // form feed
+    n: '\n', // line feed
+    r: '\r', // carriage return
+    t: '\t', // horizontal tab
+    v: '\v', // vertical tab
+    N: '\u0085', // Unicode next line
+    _: '\u00a0', // Unicode non-breaking space
+    L: '\u2028', // Unicode line separator
+    P: '\u2029', // Unicode paragraph separator
+    ' ': ' ',
+    '"': '"',
+    '/': '/',
+    '\\': '\\',
+    '\t': '\t'
+};
+function parseCharCode(source, offset, length, onError) {
+    const cc = source.substr(offset, length);
+    const ok = cc.length === length && /^[0-9a-fA-F]+$/.test(cc);
+    const code = ok ? parseInt(cc, 16) : NaN;
+    if (isNaN(code)) {
+        const raw = source.substr(offset - 2, length + 2);
+        onError(offset - 2, 'BAD_DQ_ESCAPE', `Invalid escape sequence ${raw}`);
+        return raw;
+    }
+    return String.fromCodePoint(code);
+}
+
+function composeScalar(ctx, token, tagToken, onError) {
+    const { value, type, comment, range } = token.type === 'block-scalar'
+        ? resolveBlockScalar(ctx, token, onError)
+        : resolveFlowScalar(token, ctx.options.strict, onError);
+    const tagName = tagToken
+        ? ctx.directives.tagName(tagToken.source, msg => onError(tagToken, 'TAG_RESOLVE_FAILED', msg))
+        : null;
+    let tag;
+    if (ctx.options.stringKeys && ctx.atKey) {
+        tag = ctx.schema[SCALAR$1];
+    }
+    else if (tagName)
+        tag = findScalarTagByName(ctx.schema, value, tagName, tagToken, onError);
+    else if (token.type === 'scalar')
+        tag = findScalarTagByTest(ctx, value, token, onError);
+    else
+        tag = ctx.schema[SCALAR$1];
+    let scalar;
+    try {
+        const res = tag.resolve(value, msg => onError(tagToken ?? token, 'TAG_RESOLVE_FAILED', msg), ctx.options);
+        scalar = isScalar$1(res) ? res : new Scalar(res);
+    }
+    catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        onError(tagToken ?? token, 'TAG_RESOLVE_FAILED', msg);
+        scalar = new Scalar(value);
+    }
+    scalar.range = range;
+    scalar.source = value;
+    if (type)
+        scalar.type = type;
+    if (tagName)
+        scalar.tag = tagName;
+    if (tag.format)
+        scalar.format = tag.format;
+    if (comment)
+        scalar.comment = comment;
+    return scalar;
+}
+function findScalarTagByName(schema, value, tagName, tagToken, onError) {
+    if (tagName === '!')
+        return schema[SCALAR$1]; // non-specific tag
+    const matchWithTest = [];
+    for (const tag of schema.tags) {
+        if (!tag.collection && tag.tag === tagName) {
+            if (tag.default && tag.test)
+                matchWithTest.push(tag);
+            else
+                return tag;
+        }
+    }
+    for (const tag of matchWithTest)
+        if (tag.test?.test(value))
+            return tag;
+    const kt = schema.knownTags[tagName];
+    if (kt && !kt.collection) {
+        // Ensure that the known tag is available for stringifying,
+        // but does not get used by default.
+        schema.tags.push(Object.assign({}, kt, { default: false, test: undefined }));
+        return kt;
+    }
+    onError(tagToken, 'TAG_RESOLVE_FAILED', `Unresolved tag: ${tagName}`, tagName !== 'tag:yaml.org,2002:str');
+    return schema[SCALAR$1];
+}
+function findScalarTagByTest({ atKey, directives, schema }, value, token, onError) {
+    const tag = schema.tags.find(tag => (tag.default === true || (atKey && tag.default === 'key')) &&
+        tag.test?.test(value)) || schema[SCALAR$1];
+    if (schema.compat) {
+        const compat = schema.compat.find(tag => tag.default && tag.test?.test(value)) ??
+            schema[SCALAR$1];
+        if (tag.tag !== compat.tag) {
+            const ts = directives.tagString(tag.tag);
+            const cs = directives.tagString(compat.tag);
+            const msg = `Value may be parsed as either ${ts} or ${cs}`;
+            onError(token, 'TAG_RESOLVE_FAILED', msg, true);
+        }
+    }
+    return tag;
+}
+
+function emptyScalarPosition(offset, before, pos) {
+    if (before) {
+        pos ?? (pos = before.length);
+        for (let i = pos - 1; i >= 0; --i) {
+            let st = before[i];
+            switch (st.type) {
+                case 'space':
+                case 'comment':
+                case 'newline':
+                    offset -= st.source.length;
+                    continue;
+            }
+            // Technically, an empty scalar is immediately after the last non-empty
+            // node, but it's more useful to place it after any whitespace.
+            st = before[++i];
+            while (st?.type === 'space') {
+                offset += st.source.length;
+                st = before[++i];
+            }
+            break;
+        }
+    }
+    return offset;
+}
+
+const CN = { composeNode, composeEmptyNode };
+function composeNode(ctx, token, props, onError) {
+    const atKey = ctx.atKey;
+    const { spaceBefore, comment, anchor, tag } = props;
+    let node;
+    let isSrcToken = true;
+    switch (token.type) {
+        case 'alias':
+            node = composeAlias(ctx, token, onError);
+            if (anchor || tag)
+                onError(token, 'ALIAS_PROPS', 'An alias node must not specify any properties');
+            break;
+        case 'scalar':
+        case 'single-quoted-scalar':
+        case 'double-quoted-scalar':
+        case 'block-scalar':
+            node = composeScalar(ctx, token, tag, onError);
+            if (anchor)
+                node.anchor = anchor.source.substring(1);
+            break;
+        case 'block-map':
+        case 'block-seq':
+        case 'flow-collection':
+            node = composeCollection(CN, ctx, token, props, onError);
+            if (anchor)
+                node.anchor = anchor.source.substring(1);
+            break;
+        default: {
+            const message = token.type === 'error'
+                ? token.message
+                : `Unsupported token (type: ${token.type})`;
+            onError(token, 'UNEXPECTED_TOKEN', message);
+            node = composeEmptyNode(ctx, token.offset, undefined, null, props, onError);
+            isSrcToken = false;
+        }
+    }
+    if (anchor && node.anchor === '')
+        onError(anchor, 'BAD_ALIAS', 'Anchor cannot be an empty string');
+    if (atKey &&
+        ctx.options.stringKeys &&
+        (!isScalar$1(node) ||
+            typeof node.value !== 'string' ||
+            (node.tag && node.tag !== 'tag:yaml.org,2002:str'))) {
+        const msg = 'With stringKeys, all keys must be strings';
+        onError(tag ?? token, 'NON_STRING_KEY', msg);
+    }
+    if (spaceBefore)
+        node.spaceBefore = true;
+    if (comment) {
+        if (token.type === 'scalar' && token.source === '')
+            node.comment = comment;
+        else
+            node.commentBefore = comment;
+    }
+    // @ts-expect-error Type checking misses meaning of isSrcToken
+    if (ctx.options.keepSourceTokens && isSrcToken)
+        node.srcToken = token;
+    return node;
+}
+function composeEmptyNode(ctx, offset, before, pos, { spaceBefore, comment, anchor, tag, end }, onError) {
+    const token = {
+        type: 'scalar',
+        offset: emptyScalarPosition(offset, before, pos),
+        indent: -1,
+        source: ''
+    };
+    const node = composeScalar(ctx, token, tag, onError);
+    if (anchor) {
+        node.anchor = anchor.source.substring(1);
+        if (node.anchor === '')
+            onError(anchor, 'BAD_ALIAS', 'Anchor cannot be an empty string');
+    }
+    if (spaceBefore)
+        node.spaceBefore = true;
+    if (comment) {
+        node.comment = comment;
+        node.range[2] = end;
+    }
+    return node;
+}
+function composeAlias({ options }, { offset, source, end }, onError) {
+    const alias = new Alias(source.substring(1));
+    if (alias.source === '')
+        onError(offset, 'BAD_ALIAS', 'Alias cannot be an empty string');
+    if (alias.source.endsWith(':'))
+        onError(offset + source.length - 1, 'BAD_ALIAS', 'Alias ending in : is ambiguous', true);
+    const valueEnd = offset + source.length;
+    const re = resolveEnd(end, valueEnd, options.strict, onError);
+    alias.range = [offset, valueEnd, re.offset];
+    if (re.comment)
+        alias.comment = re.comment;
+    return alias;
+}
+
+function composeDoc(options, directives, { offset, start, value, end }, onError) {
+    const opts = Object.assign({ _directives: directives }, options);
+    const doc = new Document(undefined, opts);
+    const ctx = {
+        atKey: false,
+        atRoot: true,
+        directives: doc.directives,
+        options: doc.options,
+        schema: doc.schema
+    };
+    const props = resolveProps(start, {
+        indicator: 'doc-start',
+        next: value ?? end?.[0],
+        offset,
+        onError,
+        parentIndent: 0,
+        startOnNewline: true
+    });
+    if (props.found) {
+        doc.directives.docStart = true;
+        if (value &&
+            (value.type === 'block-map' || value.type === 'block-seq') &&
+            !props.hasNewline)
+            onError(props.end, 'MISSING_CHAR', 'Block collection cannot start on same line with directives-end marker');
+    }
+    // @ts-expect-error If Contents is set, let's trust the user
+    doc.contents = value
+        ? composeNode(ctx, value, props, onError)
+        : composeEmptyNode(ctx, props.end, start, null, props, onError);
+    const contentEnd = doc.contents.range[2];
+    const re = resolveEnd(end, contentEnd, false, onError);
+    if (re.comment)
+        doc.comment = re.comment;
+    doc.range = [offset, contentEnd, re.offset];
+    return doc;
+}
+
+function getErrorPos(src) {
+    if (typeof src === 'number')
+        return [src, src + 1];
+    if (Array.isArray(src))
+        return src.length === 2 ? src : [src[0], src[1]];
+    const { offset, source } = src;
+    return [offset, offset + (typeof source === 'string' ? source.length : 1)];
+}
+function parsePrelude(prelude) {
+    let comment = '';
+    let atComment = false;
+    let afterEmptyLine = false;
+    for (let i = 0; i < prelude.length; ++i) {
+        const source = prelude[i];
+        switch (source[0]) {
+            case '#':
+                comment +=
+                    (comment === '' ? '' : afterEmptyLine ? '\n\n' : '\n') +
+                        (source.substring(1) || ' ');
+                atComment = true;
+                afterEmptyLine = false;
+                break;
+            case '%':
+                if (prelude[i + 1]?.[0] !== '#')
+                    i += 1;
+                atComment = false;
+                break;
+            default:
+                // This may be wrong after doc-end, but in that case it doesn't matter
+                if (!atComment)
+                    afterEmptyLine = true;
+                atComment = false;
+        }
+    }
+    return { comment, afterEmptyLine };
+}
+/**
+ * Compose a stream of CST nodes into a stream of YAML Documents.
+ *
+ * ```ts
+ * import { Composer, Parser } from 'yaml'
+ *
+ * const src: string = ...
+ * const tokens = new Parser().parse(src)
+ * const docs = new Composer().compose(tokens)
+ * ```
+ */
+class Composer {
+    constructor(options = {}) {
+        this.doc = null;
+        this.atDirectives = false;
+        this.prelude = [];
+        this.errors = [];
+        this.warnings = [];
+        this.onError = (source, code, message, warning) => {
+            const pos = getErrorPos(source);
+            if (warning)
+                this.warnings.push(new YAMLWarning(pos, code, message));
+            else
+                this.errors.push(new YAMLParseError(pos, code, message));
+        };
+        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+        this.directives = new Directives({ version: options.version || '1.2' });
+        this.options = options;
+    }
+    decorate(doc, afterDoc) {
+        const { comment, afterEmptyLine } = parsePrelude(this.prelude);
+        //console.log({ dc: doc.comment, prelude, comment })
+        if (comment) {
+            const dc = doc.contents;
+            if (afterDoc) {
+                doc.comment = doc.comment ? `${doc.comment}\n${comment}` : comment;
+            }
+            else if (afterEmptyLine || doc.directives.docStart || !dc) {
+                doc.commentBefore = comment;
+            }
+            else if (isCollection$1(dc) && !dc.flow && dc.items.length > 0) {
+                let it = dc.items[0];
+                if (isPair(it))
+                    it = it.key;
+                const cb = it.commentBefore;
+                it.commentBefore = cb ? `${comment}\n${cb}` : comment;
+            }
+            else {
+                const cb = dc.commentBefore;
+                dc.commentBefore = cb ? `${comment}\n${cb}` : comment;
+            }
+        }
+        if (afterDoc) {
+            Array.prototype.push.apply(doc.errors, this.errors);
+            Array.prototype.push.apply(doc.warnings, this.warnings);
+        }
+        else {
+            doc.errors = this.errors;
+            doc.warnings = this.warnings;
+        }
+        this.prelude = [];
+        this.errors = [];
+        this.warnings = [];
+    }
+    /**
+     * Current stream status information.
+     *
+     * Mostly useful at the end of input for an empty stream.
+     */
+    streamInfo() {
+        return {
+            comment: parsePrelude(this.prelude).comment,
+            directives: this.directives,
+            errors: this.errors,
+            warnings: this.warnings
+        };
+    }
+    /**
+     * Compose tokens into documents.
+     *
+     * @param forceDoc - If the stream contains no document, still emit a final document including any comments and directives that would be applied to a subsequent document.
+     * @param endOffset - Should be set if `forceDoc` is also set, to set the document range end and to indicate errors correctly.
+     */
+    *compose(tokens, forceDoc = false, endOffset = -1) {
+        for (const token of tokens)
+            yield* this.next(token);
+        yield* this.end(forceDoc, endOffset);
+    }
+    /** Advance the composer by one CST token. */
+    *next(token) {
+        switch (token.type) {
+            case 'directive':
+                this.directives.add(token.source, (offset, message, warning) => {
+                    const pos = getErrorPos(token);
+                    pos[0] += offset;
+                    this.onError(pos, 'BAD_DIRECTIVE', message, warning);
+                });
+                this.prelude.push(token.source);
+                this.atDirectives = true;
+                break;
+            case 'document': {
+                const doc = composeDoc(this.options, this.directives, token, this.onError);
+                if (this.atDirectives && !doc.directives.docStart)
+                    this.onError(token, 'MISSING_CHAR', 'Missing directives-end/doc-start indicator line');
+                this.decorate(doc, false);
+                if (this.doc)
+                    yield this.doc;
+                this.doc = doc;
+                this.atDirectives = false;
+                break;
+            }
+            case 'byte-order-mark':
+            case 'space':
+                break;
+            case 'comment':
+            case 'newline':
+                this.prelude.push(token.source);
+                break;
+            case 'error': {
+                const msg = token.source
+                    ? `${token.message}: ${JSON.stringify(token.source)}`
+                    : token.message;
+                const error = new YAMLParseError(getErrorPos(token), 'UNEXPECTED_TOKEN', msg);
+                if (this.atDirectives || !this.doc)
+                    this.errors.push(error);
+                else
+                    this.doc.errors.push(error);
+                break;
+            }
+            case 'doc-end': {
+                if (!this.doc) {
+                    const msg = 'Unexpected doc-end without preceding document';
+                    this.errors.push(new YAMLParseError(getErrorPos(token), 'UNEXPECTED_TOKEN', msg));
+                    break;
+                }
+                this.doc.directives.docEnd = true;
+                const end = resolveEnd(token.end, token.offset + token.source.length, this.doc.options.strict, this.onError);
+                this.decorate(this.doc, true);
+                if (end.comment) {
+                    const dc = this.doc.comment;
+                    this.doc.comment = dc ? `${dc}\n${end.comment}` : end.comment;
+                }
+                this.doc.range[2] = end.offset;
+                break;
+            }
+            default:
+                this.errors.push(new YAMLParseError(getErrorPos(token), 'UNEXPECTED_TOKEN', `Unsupported token ${token.type}`));
+        }
+    }
+    /**
+     * Call at end of input to yield any remaining document.
+     *
+     * @param forceDoc - If the stream contains no document, still emit a final document including any comments and directives that would be applied to a subsequent document.
+     * @param endOffset - Should be set if `forceDoc` is also set, to set the document range end and to indicate errors correctly.
+     */
+    *end(forceDoc = false, endOffset = -1) {
+        if (this.doc) {
+            this.decorate(this.doc, true);
+            yield this.doc;
+            this.doc = null;
+        }
+        else if (forceDoc) {
+            const opts = Object.assign({ _directives: this.directives }, this.options);
+            const doc = new Document(undefined, opts);
+            if (this.atDirectives)
+                this.onError(endOffset, 'MISSING_CHAR', 'Missing directives-end indicator line');
+            doc.range = [0, endOffset, endOffset];
+            this.decorate(doc, false);
+            yield doc;
+        }
+    }
+}
+
+function resolveAsScalar(token, strict = true, onError) {
+    if (token) {
+        const _onError = (pos, code, message) => {
+            const offset = typeof pos === 'number' ? pos : Array.isArray(pos) ? pos[0] : pos.offset;
+            if (onError)
+                onError(offset, code, message);
+            else
+                throw new YAMLParseError([offset, offset + 1], code, message);
+        };
+        switch (token.type) {
+            case 'scalar':
+            case 'single-quoted-scalar':
+            case 'double-quoted-scalar':
+                return resolveFlowScalar(token, strict, _onError);
+            case 'block-scalar':
+                return resolveBlockScalar({ options: { strict } }, token, _onError);
+        }
+    }
+    return null;
+}
+/**
+ * Create a new scalar token with `value`
+ *
+ * Values that represent an actual string but may be parsed as a different type should use a `type` other than `'PLAIN'`,
+ * as this function does not support any schema operations and won't check for such conflicts.
+ *
+ * @param value The string representation of the value, which will have its content properly indented.
+ * @param context.end Comments and whitespace after the end of the value, or after the block scalar header. If undefined, a newline will be added.
+ * @param context.implicitKey Being within an implicit key may affect the resolved type of the token's value.
+ * @param context.indent The indent level of the token.
+ * @param context.inFlow Is this scalar within a flow collection? This may affect the resolved type of the token's value.
+ * @param context.offset The offset position of the token.
+ * @param context.type The preferred type of the scalar token. If undefined, the previous type of the `token` will be used, defaulting to `'PLAIN'`.
+ */
+function createScalarToken(value, context) {
+    const { implicitKey = false, indent, inFlow = false, offset = -1, type = 'PLAIN' } = context;
+    const source = stringifyString({ type, value }, {
+        implicitKey,
+        indent: indent > 0 ? ' '.repeat(indent) : '',
+        inFlow,
+        options: { blockQuote: true, lineWidth: -1 }
+    });
+    const end = context.end ?? [
+        { type: 'newline', offset: -1, indent, source: '\n' }
+    ];
+    switch (source[0]) {
+        case '|':
+        case '>': {
+            const he = source.indexOf('\n');
+            const head = source.substring(0, he);
+            const body = source.substring(he + 1) + '\n';
+            const props = [
+                { type: 'block-scalar-header', offset, indent, source: head }
+            ];
+            if (!addEndtoBlockProps(props, end))
+                props.push({ type: 'newline', offset: -1, indent, source: '\n' });
+            return { type: 'block-scalar', offset, indent, props, source: body };
+        }
+        case '"':
+            return { type: 'double-quoted-scalar', offset, indent, source, end };
+        case "'":
+            return { type: 'single-quoted-scalar', offset, indent, source, end };
+        default:
+            return { type: 'scalar', offset, indent, source, end };
+    }
+}
+/**
+ * Set the value of `token` to the given string `value`, overwriting any previous contents and type that it may have.
+ *
+ * Best efforts are made to retain any comments previously associated with the `token`,
+ * though all contents within a collection's `items` will be overwritten.
+ *
+ * Values that represent an actual string but may be parsed as a different type should use a `type` other than `'PLAIN'`,
+ * as this function does not support any schema operations and won't check for such conflicts.
+ *
+ * @param token Any token. If it does not include an `indent` value, the value will be stringified as if it were an implicit key.
+ * @param value The string representation of the value, which will have its content properly indented.
+ * @param context.afterKey In most cases, values after a key should have an additional level of indentation.
+ * @param context.implicitKey Being within an implicit key may affect the resolved type of the token's value.
+ * @param context.inFlow Being within a flow collection may affect the resolved type of the token's value.
+ * @param context.type The preferred type of the scalar token. If undefined, the previous type of the `token` will be used, defaulting to `'PLAIN'`.
+ */
+function setScalarValue(token, value, context = {}) {
+    let { afterKey = false, implicitKey = false, inFlow = false, type } = context;
+    let indent = 'indent' in token ? token.indent : null;
+    if (afterKey && typeof indent === 'number')
+        indent += 2;
+    if (!type)
+        switch (token.type) {
+            case 'single-quoted-scalar':
+                type = 'QUOTE_SINGLE';
+                break;
+            case 'double-quoted-scalar':
+                type = 'QUOTE_DOUBLE';
+                break;
+            case 'block-scalar': {
+                const header = token.props[0];
+                if (header.type !== 'block-scalar-header')
+                    throw new Error('Invalid block scalar header');
+                type = header.source[0] === '>' ? 'BLOCK_FOLDED' : 'BLOCK_LITERAL';
+                break;
+            }
+            default:
+                type = 'PLAIN';
+        }
+    const source = stringifyString({ type, value }, {
+        implicitKey: implicitKey || indent === null,
+        indent: indent !== null && indent > 0 ? ' '.repeat(indent) : '',
+        inFlow,
+        options: { blockQuote: true, lineWidth: -1 }
+    });
+    switch (source[0]) {
+        case '|':
+        case '>':
+            setBlockScalarValue(token, source);
+            break;
+        case '"':
+            setFlowScalarValue(token, source, 'double-quoted-scalar');
+            break;
+        case "'":
+            setFlowScalarValue(token, source, 'single-quoted-scalar');
+            break;
+        default:
+            setFlowScalarValue(token, source, 'scalar');
+    }
+}
+function setBlockScalarValue(token, source) {
+    const he = source.indexOf('\n');
+    const head = source.substring(0, he);
+    const body = source.substring(he + 1) + '\n';
+    if (token.type === 'block-scalar') {
+        const header = token.props[0];
+        if (header.type !== 'block-scalar-header')
+            throw new Error('Invalid block scalar header');
+        header.source = head;
+        token.source = body;
+    }
+    else {
+        const { offset } = token;
+        const indent = 'indent' in token ? token.indent : -1;
+        const props = [
+            { type: 'block-scalar-header', offset, indent, source: head }
+        ];
+        if (!addEndtoBlockProps(props, 'end' in token ? token.end : undefined))
+            props.push({ type: 'newline', offset: -1, indent, source: '\n' });
+        for (const key of Object.keys(token))
+            if (key !== 'type' && key !== 'offset')
+                delete token[key];
+        Object.assign(token, { type: 'block-scalar', indent, props, source: body });
+    }
+}
+/** @returns `true` if last token is a newline */
+function addEndtoBlockProps(props, end) {
+    if (end)
+        for (const st of end)
+            switch (st.type) {
+                case 'space':
+                case 'comment':
+                    props.push(st);
+                    break;
+                case 'newline':
+                    props.push(st);
+                    return true;
+            }
+    return false;
+}
+function setFlowScalarValue(token, source, type) {
+    switch (token.type) {
+        case 'scalar':
+        case 'double-quoted-scalar':
+        case 'single-quoted-scalar':
+            token.type = type;
+            token.source = source;
+            break;
+        case 'block-scalar': {
+            const end = token.props.slice(1);
+            let oa = source.length;
+            if (token.props[0].type === 'block-scalar-header')
+                oa -= token.props[0].source.length;
+            for (const tok of end)
+                tok.offset += oa;
+            delete token.props;
+            Object.assign(token, { type, source, end });
+            break;
+        }
+        case 'block-map':
+        case 'block-seq': {
+            const offset = token.offset + source.length;
+            const nl = { type: 'newline', offset, indent: token.indent, source: '\n' };
+            delete token.items;
+            Object.assign(token, { type, source, end: [nl] });
+            break;
+        }
+        default: {
+            const indent = 'indent' in token ? token.indent : -1;
+            const end = 'end' in token && Array.isArray(token.end)
+                ? token.end.filter(st => st.type === 'space' ||
+                    st.type === 'comment' ||
+                    st.type === 'newline')
+                : [];
+            for (const key of Object.keys(token))
+                if (key !== 'type' && key !== 'offset')
+                    delete token[key];
+            Object.assign(token, { type, indent, source, end });
+        }
+    }
+}
+
+/**
+ * Stringify a CST document, token, or collection item
+ *
+ * Fair warning: This applies no validation whatsoever, and
+ * simply concatenates the sources in their logical order.
+ */
+const stringify$1 = (cst) => 'type' in cst ? stringifyToken(cst) : stringifyItem(cst);
+function stringifyToken(token) {
+    switch (token.type) {
+        case 'block-scalar': {
+            let res = '';
+            for (const tok of token.props)
+                res += stringifyToken(tok);
+            return res + token.source;
+        }
+        case 'block-map':
+        case 'block-seq': {
+            let res = '';
+            for (const item of token.items)
+                res += stringifyItem(item);
+            return res;
+        }
+        case 'flow-collection': {
+            let res = token.start.source;
+            for (const item of token.items)
+                res += stringifyItem(item);
+            for (const st of token.end)
+                res += st.source;
+            return res;
+        }
+        case 'document': {
+            let res = stringifyItem(token);
+            if (token.end)
+                for (const st of token.end)
+                    res += st.source;
+            return res;
+        }
+        default: {
+            let res = token.source;
+            if ('end' in token && token.end)
+                for (const st of token.end)
+                    res += st.source;
+            return res;
+        }
+    }
+}
+function stringifyItem({ start, key, sep, value }) {
+    let res = '';
+    for (const st of start)
+        res += st.source;
+    if (key)
+        res += stringifyToken(key);
+    if (sep)
+        for (const st of sep)
+            res += st.source;
+    if (value)
+        res += stringifyToken(value);
+    return res;
+}
+
+const BREAK = Symbol('break visit');
+const SKIP = Symbol('skip children');
+const REMOVE = Symbol('remove item');
+/**
+ * Apply a visitor to a CST document or item.
+ *
+ * Walks through the tree (depth-first) starting from the root, calling a
+ * `visitor` function with two arguments when entering each item:
+ *   - `item`: The current item, which included the following members:
+ *     - `start: SourceToken[]` – Source tokens before the key or value,
+ *       possibly including its anchor or tag.
+ *     - `key?: Token | null` – Set for pair values. May then be `null`, if
+ *       the key before the `:` separator is empty.
+ *     - `sep?: SourceToken[]` – Source tokens between the key and the value,
+ *       which should include the `:` map value indicator if `value` is set.
+ *     - `value?: Token` – The value of a sequence item, or of a map pair.
+ *   - `path`: The steps from the root to the current node, as an array of
+ *     `['key' | 'value', number]` tuples.
+ *
+ * The return value of the visitor may be used to control the traversal:
+ *   - `undefined` (default): Do nothing and continue
+ *   - `visit.SKIP`: Do not visit the children of this token, continue with
+ *      next sibling
+ *   - `visit.BREAK`: Terminate traversal completely
+ *   - `visit.REMOVE`: Remove the current item, then continue with the next one
+ *   - `number`: Set the index of the next step. This is useful especially if
+ *     the index of the current token has changed.
+ *   - `function`: Define the next visitor for this item. After the original
+ *     visitor is called on item entry, next visitors are called after handling
+ *     a non-empty `key` and when exiting the item.
+ */
+function visit(cst, visitor) {
+    if ('type' in cst && cst.type === 'document')
+        cst = { start: cst.start, value: cst.value };
+    _visit(Object.freeze([]), cst, visitor);
+}
+// Without the `as symbol` casts, TS declares these in the `visit`
+// namespace using `var`, but then complains about that because
+// `unique symbol` must be `const`.
+/** Terminate visit traversal completely */
+visit.BREAK = BREAK;
+/** Do not visit the children of the current item */
+visit.SKIP = SKIP;
+/** Remove the current item */
+visit.REMOVE = REMOVE;
+/** Find the item at `path` from `cst` as the root */
+visit.itemAtPath = (cst, path) => {
+    let item = cst;
+    for (const [field, index] of path) {
+        const tok = item?.[field];
+        if (tok && 'items' in tok) {
+            item = tok.items[index];
+        }
+        else
+            return undefined;
+    }
+    return item;
+};
+/**
+ * Get the immediate parent collection of the item at `path` from `cst` as the root.
+ *
+ * Throws an error if the collection is not found, which should never happen if the item itself exists.
+ */
+visit.parentCollection = (cst, path) => {
+    const parent = visit.itemAtPath(cst, path.slice(0, -1));
+    const field = path[path.length - 1][0];
+    const coll = parent?.[field];
+    if (coll && 'items' in coll)
+        return coll;
+    throw new Error('Parent collection not found');
+};
+function _visit(path, item, visitor) {
+    let ctrl = visitor(item, path);
+    if (typeof ctrl === 'symbol')
+        return ctrl;
+    for (const field of ['key', 'value']) {
+        const token = item[field];
+        if (token && 'items' in token) {
+            for (let i = 0; i < token.items.length; ++i) {
+                const ci = _visit(Object.freeze(path.concat([[field, i]])), token.items[i], visitor);
+                if (typeof ci === 'number')
+                    i = ci - 1;
+                else if (ci === BREAK)
+                    return BREAK;
+                else if (ci === REMOVE) {
+                    token.items.splice(i, 1);
+                    i -= 1;
+                }
+            }
+            if (typeof ctrl === 'function' && field === 'key')
+                ctrl = ctrl(item, path);
+        }
+    }
+    return typeof ctrl === 'function' ? ctrl(item, path) : ctrl;
+}
+
+/** The byte order mark */
+const BOM = '\u{FEFF}';
+/** Start of doc-mode */
+const DOCUMENT = '\x02'; // C0: Start of Text
+/** Unexpected end of flow-mode */
+const FLOW_END = '\x18'; // C0: Cancel
+/** Next token is a scalar value */
+const SCALAR = '\x1f'; // C0: Unit Separator
+/** @returns `true` if `token` is a flow or block collection */
+const isCollection = (token) => !!token && 'items' in token;
+/** @returns `true` if `token` is a flow or block scalar; not an alias */
+const isScalar = (token) => !!token &&
+    (token.type === 'scalar' ||
+        token.type === 'single-quoted-scalar' ||
+        token.type === 'double-quoted-scalar' ||
+        token.type === 'block-scalar');
+/* istanbul ignore next */
+/** Get a printable representation of a lexer token */
+function prettyToken(token) {
+    switch (token) {
+        case BOM:
+            return '<BOM>';
+        case DOCUMENT:
+            return '<DOC>';
+        case FLOW_END:
+            return '<FLOW_END>';
+        case SCALAR:
+            return '<SCALAR>';
+        default:
+            return JSON.stringify(token);
+    }
+}
+/** Identify the type of a lexer token. May return `null` for unknown tokens. */
+function tokenType(source) {
+    switch (source) {
+        case BOM:
+            return 'byte-order-mark';
+        case DOCUMENT:
+            return 'doc-mode';
+        case FLOW_END:
+            return 'flow-error-end';
+        case SCALAR:
+            return 'scalar';
+        case '---':
+            return 'doc-start';
+        case '...':
+            return 'doc-end';
+        case '':
+        case '\n':
+        case '\r\n':
+            return 'newline';
+        case '-':
+            return 'seq-item-ind';
+        case '?':
+            return 'explicit-key-ind';
+        case ':':
+            return 'map-value-ind';
+        case '{':
+            return 'flow-map-start';
+        case '}':
+            return 'flow-map-end';
+        case '[':
+            return 'flow-seq-start';
+        case ']':
+            return 'flow-seq-end';
+        case ',':
+            return 'comma';
+    }
+    switch (source[0]) {
+        case ' ':
+        case '\t':
+            return 'space';
+        case '#':
+            return 'comment';
+        case '%':
+            return 'directive-line';
+        case '*':
+            return 'alias';
+        case '&':
+            return 'anchor';
+        case '!':
+            return 'tag';
+        case "'":
+            return 'single-quoted-scalar';
+        case '"':
+            return 'double-quoted-scalar';
+        case '|':
+        case '>':
+            return 'block-scalar-header';
+    }
+    return null;
+}
+
+var cst = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  BOM: BOM,
+  DOCUMENT: DOCUMENT,
+  FLOW_END: FLOW_END,
+  SCALAR: SCALAR,
+  createScalarToken: createScalarToken,
+  isCollection: isCollection,
+  isScalar: isScalar,
+  prettyToken: prettyToken,
+  resolveAsScalar: resolveAsScalar,
+  setScalarValue: setScalarValue,
+  stringify: stringify$1,
+  tokenType: tokenType,
+  visit: visit
+});
+
+/*
+START -> stream
+
+stream
+  directive -> line-end -> stream
+  indent + line-end -> stream
+  [else] -> line-start
+
+line-end
+  comment -> line-end
+  newline -> .
+  input-end -> END
+
+line-start
+  doc-start -> doc
+  doc-end -> stream
+  [else] -> indent -> block-start
+
+block-start
+  seq-item-start -> block-start
+  explicit-key-start -> block-start
+  map-value-start -> block-start
+  [else] -> doc
+
+doc
+  line-end -> line-start
+  spaces -> doc
+  anchor -> doc
+  tag -> doc
+  flow-start -> flow -> doc
+  flow-end -> error -> doc
+  seq-item-start -> error -> doc
+  explicit-key-start -> error -> doc
+  map-value-start -> doc
+  alias -> doc
+  quote-start -> quoted-scalar -> doc
+  block-scalar-header -> line-end -> block-scalar(min) -> line-start
+  [else] -> plain-scalar(false, min) -> doc
+
+flow
+  line-end -> flow
+  spaces -> flow
+  anchor -> flow
+  tag -> flow
+  flow-start -> flow -> flow
+  flow-end -> .
+  seq-item-start -> error -> flow
+  explicit-key-start -> flow
+  map-value-start -> flow
+  alias -> flow
+  quote-start -> quoted-scalar -> flow
+  comma -> flow
+  [else] -> plain-scalar(true, 0) -> flow
+
+quoted-scalar
+  quote-end -> .
+  [else] -> quoted-scalar
+
+block-scalar(min)
+  newline + peek(indent < min) -> .
+  [else] -> block-scalar(min)
+
+plain-scalar(is-flow, min)
+  scalar-end(is-flow) -> .
+  peek(newline + (indent < min)) -> .
+  [else] -> plain-scalar(min)
+*/
+function isEmpty(ch) {
+    switch (ch) {
+        case undefined:
+        case ' ':
+        case '\n':
+        case '\r':
+        case '\t':
+            return true;
+        default:
+            return false;
+    }
+}
+const hexDigits = new Set('0123456789ABCDEFabcdef');
+const tagChars = new Set("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-#;/?:@&=+$_.!~*'()");
+const flowIndicatorChars = new Set(',[]{}');
+const invalidAnchorChars = new Set(' ,[]{}\n\r\t');
+const isNotAnchorChar = (ch) => !ch || invalidAnchorChars.has(ch);
+/**
+ * Splits an input string into lexical tokens, i.e. smaller strings that are
+ * easily identifiable by `tokens.tokenType()`.
+ *
+ * Lexing starts always in a "stream" context. Incomplete input may be buffered
+ * until a complete token can be emitted.
+ *
+ * In addition to slices of the original input, the following control characters
+ * may also be emitted:
+ *
+ * - `\x02` (Start of Text): A document starts with the next token
+ * - `\x18` (Cancel): Unexpected end of flow-mode (indicates an error)
+ * - `\x1f` (Unit Separator): Next token is a scalar value
+ * - `\u{FEFF}` (Byte order mark): Emitted separately outside documents
+ */
+let Lexer$1 = class Lexer {
+    constructor() {
+        /**
+         * Flag indicating whether the end of the current buffer marks the end of
+         * all input
+         */
+        this.atEnd = false;
+        /**
+         * Explicit indent set in block scalar header, as an offset from the current
+         * minimum indent, so e.g. set to 1 from a header `|2+`. Set to -1 if not
+         * explicitly set.
+         */
+        this.blockScalarIndent = -1;
+        /**
+         * Block scalars that include a + (keep) chomping indicator in their header
+         * include trailing empty lines, which are otherwise excluded from the
+         * scalar's contents.
+         */
+        this.blockScalarKeep = false;
+        /** Current input */
+        this.buffer = '';
+        /**
+         * Flag noting whether the map value indicator : can immediately follow this
+         * node within a flow context.
+         */
+        this.flowKey = false;
+        /** Count of surrounding flow collection levels. */
+        this.flowLevel = 0;
+        /**
+         * Minimum level of indentation required for next lines to be parsed as a
+         * part of the current scalar value.
+         */
+        this.indentNext = 0;
+        /** Indentation level of the current line. */
+        this.indentValue = 0;
+        /** Position of the next \n character. */
+        this.lineEndPos = null;
+        /** Stores the state of the lexer if reaching the end of incpomplete input */
+        this.next = null;
+        /** A pointer to `buffer`; the current position of the lexer. */
+        this.pos = 0;
+    }
+    /**
+     * Generate YAML tokens from the `source` string. If `incomplete`,
+     * a part of the last line may be left as a buffer for the next call.
+     *
+     * @returns A generator of lexical tokens
+     */
+    *lex(source, incomplete = false) {
+        if (source) {
+            if (typeof source !== 'string')
+                throw TypeError('source is not a string');
+            this.buffer = this.buffer ? this.buffer + source : source;
+            this.lineEndPos = null;
+        }
+        this.atEnd = !incomplete;
+        let next = this.next ?? 'stream';
+        while (next && (incomplete || this.hasChars(1)))
+            next = yield* this.parseNext(next);
+    }
+    atLineEnd() {
+        let i = this.pos;
+        let ch = this.buffer[i];
+        while (ch === ' ' || ch === '\t')
+            ch = this.buffer[++i];
+        if (!ch || ch === '#' || ch === '\n')
+            return true;
+        if (ch === '\r')
+            return this.buffer[i + 1] === '\n';
+        return false;
+    }
+    charAt(n) {
+        return this.buffer[this.pos + n];
+    }
+    continueScalar(offset) {
+        let ch = this.buffer[offset];
+        if (this.indentNext > 0) {
+            let indent = 0;
+            while (ch === ' ')
+                ch = this.buffer[++indent + offset];
+            if (ch === '\r') {
+                const next = this.buffer[indent + offset + 1];
+                if (next === '\n' || (!next && !this.atEnd))
+                    return offset + indent + 1;
+            }
+            return ch === '\n' || indent >= this.indentNext || (!ch && !this.atEnd)
+                ? offset + indent
+                : -1;
+        }
+        if (ch === '-' || ch === '.') {
+            const dt = this.buffer.substr(offset, 3);
+            if ((dt === '---' || dt === '...') && isEmpty(this.buffer[offset + 3]))
+                return -1;
+        }
+        return offset;
+    }
+    getLine() {
+        let end = this.lineEndPos;
+        if (typeof end !== 'number' || (end !== -1 && end < this.pos)) {
+            end = this.buffer.indexOf('\n', this.pos);
+            this.lineEndPos = end;
+        }
+        if (end === -1)
+            return this.atEnd ? this.buffer.substring(this.pos) : null;
+        if (this.buffer[end - 1] === '\r')
+            end -= 1;
+        return this.buffer.substring(this.pos, end);
+    }
+    hasChars(n) {
+        return this.pos + n <= this.buffer.length;
+    }
+    setNext(state) {
+        this.buffer = this.buffer.substring(this.pos);
+        this.pos = 0;
+        this.lineEndPos = null;
+        this.next = state;
+        return null;
+    }
+    peek(n) {
+        return this.buffer.substr(this.pos, n);
+    }
+    *parseNext(next) {
+        switch (next) {
+            case 'stream':
+                return yield* this.parseStream();
+            case 'line-start':
+                return yield* this.parseLineStart();
+            case 'block-start':
+                return yield* this.parseBlockStart();
+            case 'doc':
+                return yield* this.parseDocument();
+            case 'flow':
+                return yield* this.parseFlowCollection();
+            case 'quoted-scalar':
+                return yield* this.parseQuotedScalar();
+            case 'block-scalar':
+                return yield* this.parseBlockScalar();
+            case 'plain-scalar':
+                return yield* this.parsePlainScalar();
+        }
+    }
+    *parseStream() {
+        let line = this.getLine();
+        if (line === null)
+            return this.setNext('stream');
+        if (line[0] === BOM) {
+            yield* this.pushCount(1);
+            line = line.substring(1);
+        }
+        if (line[0] === '%') {
+            let dirEnd = line.length;
+            let cs = line.indexOf('#');
+            while (cs !== -1) {
+                const ch = line[cs - 1];
+                if (ch === ' ' || ch === '\t') {
+                    dirEnd = cs - 1;
+                    break;
+                }
+                else {
+                    cs = line.indexOf('#', cs + 1);
+                }
+            }
+            while (true) {
+                const ch = line[dirEnd - 1];
+                if (ch === ' ' || ch === '\t')
+                    dirEnd -= 1;
+                else
+                    break;
+            }
+            const n = (yield* this.pushCount(dirEnd)) + (yield* this.pushSpaces(true));
+            yield* this.pushCount(line.length - n); // possible comment
+            this.pushNewline();
+            return 'stream';
+        }
+        if (this.atLineEnd()) {
+            const sp = yield* this.pushSpaces(true);
+            yield* this.pushCount(line.length - sp);
+            yield* this.pushNewline();
+            return 'stream';
+        }
+        yield DOCUMENT;
+        return yield* this.parseLineStart();
+    }
+    *parseLineStart() {
+        const ch = this.charAt(0);
+        if (!ch && !this.atEnd)
+            return this.setNext('line-start');
+        if (ch === '-' || ch === '.') {
+            if (!this.atEnd && !this.hasChars(4))
+                return this.setNext('line-start');
+            const s = this.peek(3);
+            if ((s === '---' || s === '...') && isEmpty(this.charAt(3))) {
+                yield* this.pushCount(3);
+                this.indentValue = 0;
+                this.indentNext = 0;
+                return s === '---' ? 'doc' : 'stream';
+            }
+        }
+        this.indentValue = yield* this.pushSpaces(false);
+        if (this.indentNext > this.indentValue && !isEmpty(this.charAt(1)))
+            this.indentNext = this.indentValue;
+        return yield* this.parseBlockStart();
+    }
+    *parseBlockStart() {
+        const [ch0, ch1] = this.peek(2);
+        if (!ch1 && !this.atEnd)
+            return this.setNext('block-start');
+        if ((ch0 === '-' || ch0 === '?' || ch0 === ':') && isEmpty(ch1)) {
+            const n = (yield* this.pushCount(1)) + (yield* this.pushSpaces(true));
+            this.indentNext = this.indentValue + 1;
+            this.indentValue += n;
+            return yield* this.parseBlockStart();
+        }
+        return 'doc';
+    }
+    *parseDocument() {
+        yield* this.pushSpaces(true);
+        const line = this.getLine();
+        if (line === null)
+            return this.setNext('doc');
+        let n = yield* this.pushIndicators();
+        switch (line[n]) {
+            case '#':
+                yield* this.pushCount(line.length - n);
+            // fallthrough
+            case undefined:
+                yield* this.pushNewline();
+                return yield* this.parseLineStart();
+            case '{':
+            case '[':
+                yield* this.pushCount(1);
+                this.flowKey = false;
+                this.flowLevel = 1;
+                return 'flow';
+            case '}':
+            case ']':
+                // this is an error
+                yield* this.pushCount(1);
+                return 'doc';
+            case '*':
+                yield* this.pushUntil(isNotAnchorChar);
+                return 'doc';
+            case '"':
+            case "'":
+                return yield* this.parseQuotedScalar();
+            case '|':
+            case '>':
+                n += yield* this.parseBlockScalarHeader();
+                n += yield* this.pushSpaces(true);
+                yield* this.pushCount(line.length - n);
+                yield* this.pushNewline();
+                return yield* this.parseBlockScalar();
+            default:
+                return yield* this.parsePlainScalar();
+        }
+    }
+    *parseFlowCollection() {
+        let nl, sp;
+        let indent = -1;
+        do {
+            nl = yield* this.pushNewline();
+            if (nl > 0) {
+                sp = yield* this.pushSpaces(false);
+                this.indentValue = indent = sp;
+            }
+            else {
+                sp = 0;
+            }
+            sp += yield* this.pushSpaces(true);
+        } while (nl + sp > 0);
+        const line = this.getLine();
+        if (line === null)
+            return this.setNext('flow');
+        if ((indent !== -1 && indent < this.indentNext && line[0] !== '#') ||
+            (indent === 0 &&
+                (line.startsWith('---') || line.startsWith('...')) &&
+                isEmpty(line[3]))) {
+            // Allowing for the terminal ] or } at the same (rather than greater)
+            // indent level as the initial [ or { is technically invalid, but
+            // failing here would be surprising to users.
+            const atFlowEndMarker = indent === this.indentNext - 1 &&
+                this.flowLevel === 1 &&
+                (line[0] === ']' || line[0] === '}');
+            if (!atFlowEndMarker) {
+                // this is an error
+                this.flowLevel = 0;
+                yield FLOW_END;
+                return yield* this.parseLineStart();
+            }
+        }
+        let n = 0;
+        while (line[n] === ',') {
+            n += yield* this.pushCount(1);
+            n += yield* this.pushSpaces(true);
+            this.flowKey = false;
+        }
+        n += yield* this.pushIndicators();
+        switch (line[n]) {
+            case undefined:
+                return 'flow';
+            case '#':
+                yield* this.pushCount(line.length - n);
+                return 'flow';
+            case '{':
+            case '[':
+                yield* this.pushCount(1);
+                this.flowKey = false;
+                this.flowLevel += 1;
+                return 'flow';
+            case '}':
+            case ']':
+                yield* this.pushCount(1);
+                this.flowKey = true;
+                this.flowLevel -= 1;
+                return this.flowLevel ? 'flow' : 'doc';
+            case '*':
+                yield* this.pushUntil(isNotAnchorChar);
+                return 'flow';
+            case '"':
+            case "'":
+                this.flowKey = true;
+                return yield* this.parseQuotedScalar();
+            case ':': {
+                const next = this.charAt(1);
+                if (this.flowKey || isEmpty(next) || next === ',') {
+                    this.flowKey = false;
+                    yield* this.pushCount(1);
+                    yield* this.pushSpaces(true);
+                    return 'flow';
+                }
+            }
+            // fallthrough
+            default:
+                this.flowKey = false;
+                return yield* this.parsePlainScalar();
+        }
+    }
+    *parseQuotedScalar() {
+        const quote = this.charAt(0);
+        let end = this.buffer.indexOf(quote, this.pos + 1);
+        if (quote === "'") {
+            while (end !== -1 && this.buffer[end + 1] === "'")
+                end = this.buffer.indexOf("'", end + 2);
+        }
+        else {
+            // double-quote
+            while (end !== -1) {
+                let n = 0;
+                while (this.buffer[end - 1 - n] === '\\')
+                    n += 1;
+                if (n % 2 === 0)
+                    break;
+                end = this.buffer.indexOf('"', end + 1);
+            }
+        }
+        // Only looking for newlines within the quotes
+        const qb = this.buffer.substring(0, end);
+        let nl = qb.indexOf('\n', this.pos);
+        if (nl !== -1) {
+            while (nl !== -1) {
+                const cs = this.continueScalar(nl + 1);
+                if (cs === -1)
+                    break;
+                nl = qb.indexOf('\n', cs);
+            }
+            if (nl !== -1) {
+                // this is an error caused by an unexpected unindent
+                end = nl - (qb[nl - 1] === '\r' ? 2 : 1);
+            }
+        }
+        if (end === -1) {
+            if (!this.atEnd)
+                return this.setNext('quoted-scalar');
+            end = this.buffer.length;
+        }
+        yield* this.pushToIndex(end + 1, false);
+        return this.flowLevel ? 'flow' : 'doc';
+    }
+    *parseBlockScalarHeader() {
+        this.blockScalarIndent = -1;
+        this.blockScalarKeep = false;
+        let i = this.pos;
+        while (true) {
+            const ch = this.buffer[++i];
+            if (ch === '+')
+                this.blockScalarKeep = true;
+            else if (ch > '0' && ch <= '9')
+                this.blockScalarIndent = Number(ch) - 1;
+            else if (ch !== '-')
+                break;
+        }
+        return yield* this.pushUntil(ch => isEmpty(ch) || ch === '#');
+    }
+    *parseBlockScalar() {
+        let nl = this.pos - 1; // may be -1 if this.pos === 0
+        let indent = 0;
+        let ch;
+        loop: for (let i = this.pos; (ch = this.buffer[i]); ++i) {
+            switch (ch) {
+                case ' ':
+                    indent += 1;
+                    break;
+                case '\n':
+                    nl = i;
+                    indent = 0;
+                    break;
+                case '\r': {
+                    const next = this.buffer[i + 1];
+                    if (!next && !this.atEnd)
+                        return this.setNext('block-scalar');
+                    if (next === '\n')
+                        break;
+                } // fallthrough
+                default:
+                    break loop;
+            }
+        }
+        if (!ch && !this.atEnd)
+            return this.setNext('block-scalar');
+        if (indent >= this.indentNext) {
+            if (this.blockScalarIndent === -1)
+                this.indentNext = indent;
+            else {
+                this.indentNext =
+                    this.blockScalarIndent + (this.indentNext === 0 ? 1 : this.indentNext);
+            }
+            do {
+                const cs = this.continueScalar(nl + 1);
+                if (cs === -1)
+                    break;
+                nl = this.buffer.indexOf('\n', cs);
+            } while (nl !== -1);
+            if (nl === -1) {
+                if (!this.atEnd)
+                    return this.setNext('block-scalar');
+                nl = this.buffer.length;
+            }
+        }
+        // Trailing insufficiently indented tabs are invalid.
+        // To catch that during parsing, we include them in the block scalar value.
+        let i = nl + 1;
+        ch = this.buffer[i];
+        while (ch === ' ')
+            ch = this.buffer[++i];
+        if (ch === '\t') {
+            while (ch === '\t' || ch === ' ' || ch === '\r' || ch === '\n')
+                ch = this.buffer[++i];
+            nl = i - 1;
+        }
+        else if (!this.blockScalarKeep) {
+            do {
+                let i = nl - 1;
+                let ch = this.buffer[i];
+                if (ch === '\r')
+                    ch = this.buffer[--i];
+                const lastChar = i; // Drop the line if last char not more indented
+                while (ch === ' ')
+                    ch = this.buffer[--i];
+                if (ch === '\n' && i >= this.pos && i + 1 + indent > lastChar)
+                    nl = i;
+                else
+                    break;
+            } while (true);
+        }
+        yield SCALAR;
+        yield* this.pushToIndex(nl + 1, true);
+        return yield* this.parseLineStart();
+    }
+    *parsePlainScalar() {
+        const inFlow = this.flowLevel > 0;
+        let end = this.pos - 1;
+        let i = this.pos - 1;
+        let ch;
+        while ((ch = this.buffer[++i])) {
+            if (ch === ':') {
+                const next = this.buffer[i + 1];
+                if (isEmpty(next) || (inFlow && flowIndicatorChars.has(next)))
+                    break;
+                end = i;
+            }
+            else if (isEmpty(ch)) {
+                let next = this.buffer[i + 1];
+                if (ch === '\r') {
+                    if (next === '\n') {
+                        i += 1;
+                        ch = '\n';
+                        next = this.buffer[i + 1];
+                    }
+                    else
+                        end = i;
+                }
+                if (next === '#' || (inFlow && flowIndicatorChars.has(next)))
+                    break;
+                if (ch === '\n') {
+                    const cs = this.continueScalar(i + 1);
+                    if (cs === -1)
+                        break;
+                    i = Math.max(i, cs - 2); // to advance, but still account for ' #'
+                }
+            }
+            else {
+                if (inFlow && flowIndicatorChars.has(ch))
+                    break;
+                end = i;
+            }
+        }
+        if (!ch && !this.atEnd)
+            return this.setNext('plain-scalar');
+        yield SCALAR;
+        yield* this.pushToIndex(end + 1, true);
+        return inFlow ? 'flow' : 'doc';
+    }
+    *pushCount(n) {
+        if (n > 0) {
+            yield this.buffer.substr(this.pos, n);
+            this.pos += n;
+            return n;
+        }
+        return 0;
+    }
+    *pushToIndex(i, allowEmpty) {
+        const s = this.buffer.slice(this.pos, i);
+        if (s) {
+            yield s;
+            this.pos += s.length;
+            return s.length;
+        }
+        else if (allowEmpty)
+            yield '';
+        return 0;
+    }
+    *pushIndicators() {
+        switch (this.charAt(0)) {
+            case '!':
+                return ((yield* this.pushTag()) +
+                    (yield* this.pushSpaces(true)) +
+                    (yield* this.pushIndicators()));
+            case '&':
+                return ((yield* this.pushUntil(isNotAnchorChar)) +
+                    (yield* this.pushSpaces(true)) +
+                    (yield* this.pushIndicators()));
+            case '-': // this is an error
+            case '?': // this is an error outside flow collections
+            case ':': {
+                const inFlow = this.flowLevel > 0;
+                const ch1 = this.charAt(1);
+                if (isEmpty(ch1) || (inFlow && flowIndicatorChars.has(ch1))) {
+                    if (!inFlow)
+                        this.indentNext = this.indentValue + 1;
+                    else if (this.flowKey)
+                        this.flowKey = false;
+                    return ((yield* this.pushCount(1)) +
+                        (yield* this.pushSpaces(true)) +
+                        (yield* this.pushIndicators()));
+                }
+            }
+        }
+        return 0;
+    }
+    *pushTag() {
+        if (this.charAt(1) === '<') {
+            let i = this.pos + 2;
+            let ch = this.buffer[i];
+            while (!isEmpty(ch) && ch !== '>')
+                ch = this.buffer[++i];
+            return yield* this.pushToIndex(ch === '>' ? i + 1 : i, false);
+        }
+        else {
+            let i = this.pos + 1;
+            let ch = this.buffer[i];
+            while (ch) {
+                if (tagChars.has(ch))
+                    ch = this.buffer[++i];
+                else if (ch === '%' &&
+                    hexDigits.has(this.buffer[i + 1]) &&
+                    hexDigits.has(this.buffer[i + 2])) {
+                    ch = this.buffer[(i += 3)];
+                }
+                else
+                    break;
+            }
+            return yield* this.pushToIndex(i, false);
+        }
+    }
+    *pushNewline() {
+        const ch = this.buffer[this.pos];
+        if (ch === '\n')
+            return yield* this.pushCount(1);
+        else if (ch === '\r' && this.charAt(1) === '\n')
+            return yield* this.pushCount(2);
+        else
+            return 0;
+    }
+    *pushSpaces(allowTabs) {
+        let i = this.pos - 1;
+        let ch;
+        do {
+            ch = this.buffer[++i];
+        } while (ch === ' ' || (allowTabs && ch === '\t'));
+        const n = i - this.pos;
+        if (n > 0) {
+            yield this.buffer.substr(this.pos, n);
+            this.pos = i;
+        }
+        return n;
+    }
+    *pushUntil(test) {
+        let i = this.pos;
+        let ch = this.buffer[i];
+        while (!test(ch))
+            ch = this.buffer[++i];
+        return yield* this.pushToIndex(i, false);
+    }
+};
+
+/**
+ * Tracks newlines during parsing in order to provide an efficient API for
+ * determining the one-indexed `{ line, col }` position for any offset
+ * within the input.
+ */
+class LineCounter {
+    constructor() {
+        this.lineStarts = [];
+        /**
+         * Should be called in ascending order. Otherwise, call
+         * `lineCounter.lineStarts.sort()` before calling `linePos()`.
+         */
+        this.addNewLine = (offset) => this.lineStarts.push(offset);
+        /**
+         * Performs a binary search and returns the 1-indexed { line, col }
+         * position of `offset`. If `line === 0`, `addNewLine` has never been
+         * called or `offset` is before the first known newline.
+         */
+        this.linePos = (offset) => {
+            let low = 0;
+            let high = this.lineStarts.length;
+            while (low < high) {
+                const mid = (low + high) >> 1; // Math.floor((low + high) / 2)
+                if (this.lineStarts[mid] < offset)
+                    low = mid + 1;
+                else
+                    high = mid;
+            }
+            if (this.lineStarts[low] === offset)
+                return { line: low + 1, col: 1 };
+            if (low === 0)
+                return { line: 0, col: offset };
+            const start = this.lineStarts[low - 1];
+            return { line: low, col: offset - start + 1 };
+        };
+    }
+}
+
+function includesToken(list, type) {
+    for (let i = 0; i < list.length; ++i)
+        if (list[i].type === type)
+            return true;
+    return false;
+}
+function findNonEmptyIndex(list) {
+    for (let i = 0; i < list.length; ++i) {
+        switch (list[i].type) {
+            case 'space':
+            case 'comment':
+            case 'newline':
+                break;
+            default:
+                return i;
+        }
+    }
+    return -1;
+}
+function isFlowToken(token) {
+    switch (token?.type) {
+        case 'alias':
+        case 'scalar':
+        case 'single-quoted-scalar':
+        case 'double-quoted-scalar':
+        case 'flow-collection':
+            return true;
+        default:
+            return false;
+    }
+}
+function getPrevProps(parent) {
+    switch (parent.type) {
+        case 'document':
+            return parent.start;
+        case 'block-map': {
+            const it = parent.items[parent.items.length - 1];
+            return it.sep ?? it.start;
+        }
+        case 'block-seq':
+            return parent.items[parent.items.length - 1].start;
+        /* istanbul ignore next should not happen */
+        default:
+            return [];
+    }
+}
+/** Note: May modify input array */
+function getFirstKeyStartProps(prev) {
+    if (prev.length === 0)
+        return [];
+    let i = prev.length;
+    loop: while (--i >= 0) {
+        switch (prev[i].type) {
+            case 'doc-start':
+            case 'explicit-key-ind':
+            case 'map-value-ind':
+            case 'seq-item-ind':
+            case 'newline':
+                break loop;
+        }
+    }
+    while (prev[++i]?.type === 'space') {
+        /* loop */
+    }
+    return prev.splice(i, prev.length);
+}
+function fixFlowSeqItems(fc) {
+    if (fc.start.type === 'flow-seq-start') {
+        for (const it of fc.items) {
+            if (it.sep &&
+                !it.value &&
+                !includesToken(it.start, 'explicit-key-ind') &&
+                !includesToken(it.sep, 'map-value-ind')) {
+                if (it.key)
+                    it.value = it.key;
+                delete it.key;
+                if (isFlowToken(it.value)) {
+                    if (it.value.end)
+                        Array.prototype.push.apply(it.value.end, it.sep);
+                    else
+                        it.value.end = it.sep;
+                }
+                else
+                    Array.prototype.push.apply(it.start, it.sep);
+                delete it.sep;
+            }
+        }
+    }
+}
+/**
+ * A YAML concrete syntax tree (CST) parser
+ *
+ * ```ts
+ * const src: string = ...
+ * for (const token of new Parser().parse(src)) {
+ *   // token: Token
+ * }
+ * ```
+ *
+ * To use the parser with a user-provided lexer:
+ *
+ * ```ts
+ * function* parse(source: string, lexer: Lexer) {
+ *   const parser = new Parser()
+ *   for (const lexeme of lexer.lex(source))
+ *     yield* parser.next(lexeme)
+ *   yield* parser.end()
+ * }
+ *
+ * const src: string = ...
+ * const lexer = new Lexer()
+ * for (const token of parse(src, lexer)) {
+ *   // token: Token
+ * }
+ * ```
+ */
+let Parser$1 = class Parser {
+    /**
+     * @param onNewLine - If defined, called separately with the start position of
+     *   each new line (in `parse()`, including the start of input).
+     */
+    constructor(onNewLine) {
+        /** If true, space and sequence indicators count as indentation */
+        this.atNewLine = true;
+        /** If true, next token is a scalar value */
+        this.atScalar = false;
+        /** Current indentation level */
+        this.indent = 0;
+        /** Current offset since the start of parsing */
+        this.offset = 0;
+        /** On the same line with a block map key */
+        this.onKeyLine = false;
+        /** Top indicates the node that's currently being built */
+        this.stack = [];
+        /** The source of the current token, set in parse() */
+        this.source = '';
+        /** The type of the current token, set in parse() */
+        this.type = '';
+        // Must be defined after `next()`
+        this.lexer = new Lexer$1();
+        this.onNewLine = onNewLine;
+    }
+    /**
+     * Parse `source` as a YAML stream.
+     * If `incomplete`, a part of the last line may be left as a buffer for the next call.
+     *
+     * Errors are not thrown, but yielded as `{ type: 'error', message }` tokens.
+     *
+     * @returns A generator of tokens representing each directive, document, and other structure.
+     */
+    *parse(source, incomplete = false) {
+        if (this.onNewLine && this.offset === 0)
+            this.onNewLine(0);
+        for (const lexeme of this.lexer.lex(source, incomplete))
+            yield* this.next(lexeme);
+        if (!incomplete)
+            yield* this.end();
+    }
+    /**
+     * Advance the parser by the `source` of one lexical token.
+     */
+    *next(source) {
+        this.source = source;
+        if (this.atScalar) {
+            this.atScalar = false;
+            yield* this.step();
+            this.offset += source.length;
+            return;
+        }
+        const type = tokenType(source);
+        if (!type) {
+            const message = `Not a YAML token: ${source}`;
+            yield* this.pop({ type: 'error', offset: this.offset, message, source });
+            this.offset += source.length;
+        }
+        else if (type === 'scalar') {
+            this.atNewLine = false;
+            this.atScalar = true;
+            this.type = 'scalar';
+        }
+        else {
+            this.type = type;
+            yield* this.step();
+            switch (type) {
+                case 'newline':
+                    this.atNewLine = true;
+                    this.indent = 0;
+                    if (this.onNewLine)
+                        this.onNewLine(this.offset + source.length);
+                    break;
+                case 'space':
+                    if (this.atNewLine && source[0] === ' ')
+                        this.indent += source.length;
+                    break;
+                case 'explicit-key-ind':
+                case 'map-value-ind':
+                case 'seq-item-ind':
+                    if (this.atNewLine)
+                        this.indent += source.length;
+                    break;
+                case 'doc-mode':
+                case 'flow-error-end':
+                    return;
+                default:
+                    this.atNewLine = false;
+            }
+            this.offset += source.length;
+        }
+    }
+    /** Call at end of input to push out any remaining constructions */
+    *end() {
+        while (this.stack.length > 0)
+            yield* this.pop();
+    }
+    get sourceToken() {
+        const st = {
+            type: this.type,
+            offset: this.offset,
+            indent: this.indent,
+            source: this.source
+        };
+        return st;
+    }
+    *step() {
+        const top = this.peek(1);
+        if (this.type === 'doc-end' && top?.type !== 'doc-end') {
+            while (this.stack.length > 0)
+                yield* this.pop();
+            this.stack.push({
+                type: 'doc-end',
+                offset: this.offset,
+                source: this.source
+            });
+            return;
+        }
+        if (!top)
+            return yield* this.stream();
+        switch (top.type) {
+            case 'document':
+                return yield* this.document(top);
+            case 'alias':
+            case 'scalar':
+            case 'single-quoted-scalar':
+            case 'double-quoted-scalar':
+                return yield* this.scalar(top);
+            case 'block-scalar':
+                return yield* this.blockScalar(top);
+            case 'block-map':
+                return yield* this.blockMap(top);
+            case 'block-seq':
+                return yield* this.blockSequence(top);
+            case 'flow-collection':
+                return yield* this.flowCollection(top);
+            case 'doc-end':
+                return yield* this.documentEnd(top);
+        }
+        /* istanbul ignore next should not happen */
+        yield* this.pop();
+    }
+    peek(n) {
+        return this.stack[this.stack.length - n];
+    }
+    *pop(error) {
+        const token = error ?? this.stack.pop();
+        /* istanbul ignore if should not happen */
+        if (!token) {
+            const message = 'Tried to pop an empty stack';
+            yield { type: 'error', offset: this.offset, source: '', message };
+        }
+        else if (this.stack.length === 0) {
+            yield token;
+        }
+        else {
+            const top = this.peek(1);
+            if (token.type === 'block-scalar') {
+                // Block scalars use their parent rather than header indent
+                token.indent = 'indent' in top ? top.indent : 0;
+            }
+            else if (token.type === 'flow-collection' && top.type === 'document') {
+                // Ignore all indent for top-level flow collections
+                token.indent = 0;
+            }
+            if (token.type === 'flow-collection')
+                fixFlowSeqItems(token);
+            switch (top.type) {
+                case 'document':
+                    top.value = token;
+                    break;
+                case 'block-scalar':
+                    top.props.push(token); // error
+                    break;
+                case 'block-map': {
+                    const it = top.items[top.items.length - 1];
+                    if (it.value) {
+                        top.items.push({ start: [], key: token, sep: [] });
+                        this.onKeyLine = true;
+                        return;
+                    }
+                    else if (it.sep) {
+                        it.value = token;
+                    }
+                    else {
+                        Object.assign(it, { key: token, sep: [] });
+                        this.onKeyLine = !it.explicitKey;
+                        return;
+                    }
+                    break;
+                }
+                case 'block-seq': {
+                    const it = top.items[top.items.length - 1];
+                    if (it.value)
+                        top.items.push({ start: [], value: token });
+                    else
+                        it.value = token;
+                    break;
+                }
+                case 'flow-collection': {
+                    const it = top.items[top.items.length - 1];
+                    if (!it || it.value)
+                        top.items.push({ start: [], key: token, sep: [] });
+                    else if (it.sep)
+                        it.value = token;
+                    else
+                        Object.assign(it, { key: token, sep: [] });
+                    return;
+                }
+                /* istanbul ignore next should not happen */
+                default:
+                    yield* this.pop();
+                    yield* this.pop(token);
+            }
+            if ((top.type === 'document' ||
+                top.type === 'block-map' ||
+                top.type === 'block-seq') &&
+                (token.type === 'block-map' || token.type === 'block-seq')) {
+                const last = token.items[token.items.length - 1];
+                if (last &&
+                    !last.sep &&
+                    !last.value &&
+                    last.start.length > 0 &&
+                    findNonEmptyIndex(last.start) === -1 &&
+                    (token.indent === 0 ||
+                        last.start.every(st => st.type !== 'comment' || st.indent < token.indent))) {
+                    if (top.type === 'document')
+                        top.end = last.start;
+                    else
+                        top.items.push({ start: last.start });
+                    token.items.splice(-1, 1);
+                }
+            }
+        }
+    }
+    *stream() {
+        switch (this.type) {
+            case 'directive-line':
+                yield { type: 'directive', offset: this.offset, source: this.source };
+                return;
+            case 'byte-order-mark':
+            case 'space':
+            case 'comment':
+            case 'newline':
+                yield this.sourceToken;
+                return;
+            case 'doc-mode':
+            case 'doc-start': {
+                const doc = {
+                    type: 'document',
+                    offset: this.offset,
+                    start: []
+                };
+                if (this.type === 'doc-start')
+                    doc.start.push(this.sourceToken);
+                this.stack.push(doc);
+                return;
+            }
+        }
+        yield {
+            type: 'error',
+            offset: this.offset,
+            message: `Unexpected ${this.type} token in YAML stream`,
+            source: this.source
+        };
+    }
+    *document(doc) {
+        if (doc.value)
+            return yield* this.lineEnd(doc);
+        switch (this.type) {
+            case 'doc-start': {
+                if (findNonEmptyIndex(doc.start) !== -1) {
+                    yield* this.pop();
+                    yield* this.step();
+                }
+                else
+                    doc.start.push(this.sourceToken);
+                return;
+            }
+            case 'anchor':
+            case 'tag':
+            case 'space':
+            case 'comment':
+            case 'newline':
+                doc.start.push(this.sourceToken);
+                return;
+        }
+        const bv = this.startBlockValue(doc);
+        if (bv)
+            this.stack.push(bv);
+        else {
+            yield {
+                type: 'error',
+                offset: this.offset,
+                message: `Unexpected ${this.type} token in YAML document`,
+                source: this.source
+            };
+        }
+    }
+    *scalar(scalar) {
+        if (this.type === 'map-value-ind') {
+            const prev = getPrevProps(this.peek(2));
+            const start = getFirstKeyStartProps(prev);
+            let sep;
+            if (scalar.end) {
+                sep = scalar.end;
+                sep.push(this.sourceToken);
+                delete scalar.end;
+            }
+            else
+                sep = [this.sourceToken];
+            const map = {
+                type: 'block-map',
+                offset: scalar.offset,
+                indent: scalar.indent,
+                items: [{ start, key: scalar, sep }]
+            };
+            this.onKeyLine = true;
+            this.stack[this.stack.length - 1] = map;
+        }
+        else
+            yield* this.lineEnd(scalar);
+    }
+    *blockScalar(scalar) {
+        switch (this.type) {
+            case 'space':
+            case 'comment':
+            case 'newline':
+                scalar.props.push(this.sourceToken);
+                return;
+            case 'scalar':
+                scalar.source = this.source;
+                // block-scalar source includes trailing newline
+                this.atNewLine = true;
+                this.indent = 0;
+                if (this.onNewLine) {
+                    let nl = this.source.indexOf('\n') + 1;
+                    while (nl !== 0) {
+                        this.onNewLine(this.offset + nl);
+                        nl = this.source.indexOf('\n', nl) + 1;
+                    }
+                }
+                yield* this.pop();
+                break;
+            /* istanbul ignore next should not happen */
+            default:
+                yield* this.pop();
+                yield* this.step();
+        }
+    }
+    *blockMap(map) {
+        const it = map.items[map.items.length - 1];
+        // it.sep is true-ish if pair already has key or : separator
+        switch (this.type) {
+            case 'newline':
+                this.onKeyLine = false;
+                if (it.value) {
+                    const end = 'end' in it.value ? it.value.end : undefined;
+                    const last = Array.isArray(end) ? end[end.length - 1] : undefined;
+                    if (last?.type === 'comment')
+                        end?.push(this.sourceToken);
+                    else
+                        map.items.push({ start: [this.sourceToken] });
+                }
+                else if (it.sep) {
+                    it.sep.push(this.sourceToken);
+                }
+                else {
+                    it.start.push(this.sourceToken);
+                }
+                return;
+            case 'space':
+            case 'comment':
+                if (it.value) {
+                    map.items.push({ start: [this.sourceToken] });
+                }
+                else if (it.sep) {
+                    it.sep.push(this.sourceToken);
+                }
+                else {
+                    if (this.atIndentedComment(it.start, map.indent)) {
+                        const prev = map.items[map.items.length - 2];
+                        const end = prev?.value?.end;
+                        if (Array.isArray(end)) {
+                            Array.prototype.push.apply(end, it.start);
+                            end.push(this.sourceToken);
+                            map.items.pop();
+                            return;
+                        }
+                    }
+                    it.start.push(this.sourceToken);
+                }
+                return;
+        }
+        if (this.indent >= map.indent) {
+            const atMapIndent = !this.onKeyLine && this.indent === map.indent;
+            const atNextItem = atMapIndent &&
+                (it.sep || it.explicitKey) &&
+                this.type !== 'seq-item-ind';
+            // For empty nodes, assign newline-separated not indented empty tokens to following node
+            let start = [];
+            if (atNextItem && it.sep && !it.value) {
+                const nl = [];
+                for (let i = 0; i < it.sep.length; ++i) {
+                    const st = it.sep[i];
+                    switch (st.type) {
+                        case 'newline':
+                            nl.push(i);
+                            break;
+                        case 'space':
+                            break;
+                        case 'comment':
+                            if (st.indent > map.indent)
+                                nl.length = 0;
+                            break;
+                        default:
+                            nl.length = 0;
+                    }
+                }
+                if (nl.length >= 2)
+                    start = it.sep.splice(nl[1]);
+            }
+            switch (this.type) {
+                case 'anchor':
+                case 'tag':
+                    if (atNextItem || it.value) {
+                        start.push(this.sourceToken);
+                        map.items.push({ start });
+                        this.onKeyLine = true;
+                    }
+                    else if (it.sep) {
+                        it.sep.push(this.sourceToken);
+                    }
+                    else {
+                        it.start.push(this.sourceToken);
+                    }
+                    return;
+                case 'explicit-key-ind':
+                    if (!it.sep && !it.explicitKey) {
+                        it.start.push(this.sourceToken);
+                        it.explicitKey = true;
+                    }
+                    else if (atNextItem || it.value) {
+                        start.push(this.sourceToken);
+                        map.items.push({ start, explicitKey: true });
+                    }
+                    else {
+                        this.stack.push({
+                            type: 'block-map',
+                            offset: this.offset,
+                            indent: this.indent,
+                            items: [{ start: [this.sourceToken], explicitKey: true }]
+                        });
+                    }
+                    this.onKeyLine = true;
+                    return;
+                case 'map-value-ind':
+                    if (it.explicitKey) {
+                        if (!it.sep) {
+                            if (includesToken(it.start, 'newline')) {
+                                Object.assign(it, { key: null, sep: [this.sourceToken] });
+                            }
+                            else {
+                                const start = getFirstKeyStartProps(it.start);
+                                this.stack.push({
+                                    type: 'block-map',
+                                    offset: this.offset,
+                                    indent: this.indent,
+                                    items: [{ start, key: null, sep: [this.sourceToken] }]
+                                });
+                            }
+                        }
+                        else if (it.value) {
+                            map.items.push({ start: [], key: null, sep: [this.sourceToken] });
+                        }
+                        else if (includesToken(it.sep, 'map-value-ind')) {
+                            this.stack.push({
+                                type: 'block-map',
+                                offset: this.offset,
+                                indent: this.indent,
+                                items: [{ start, key: null, sep: [this.sourceToken] }]
+                            });
+                        }
+                        else if (isFlowToken(it.key) &&
+                            !includesToken(it.sep, 'newline')) {
+                            const start = getFirstKeyStartProps(it.start);
+                            const key = it.key;
+                            const sep = it.sep;
+                            sep.push(this.sourceToken);
+                            // @ts-expect-error type guard is wrong here
+                            delete it.key;
+                            // @ts-expect-error type guard is wrong here
+                            delete it.sep;
+                            this.stack.push({
+                                type: 'block-map',
+                                offset: this.offset,
+                                indent: this.indent,
+                                items: [{ start, key, sep }]
+                            });
+                        }
+                        else if (start.length > 0) {
+                            // Not actually at next item
+                            it.sep = it.sep.concat(start, this.sourceToken);
+                        }
+                        else {
+                            it.sep.push(this.sourceToken);
+                        }
+                    }
+                    else {
+                        if (!it.sep) {
+                            Object.assign(it, { key: null, sep: [this.sourceToken] });
+                        }
+                        else if (it.value || atNextItem) {
+                            map.items.push({ start, key: null, sep: [this.sourceToken] });
+                        }
+                        else if (includesToken(it.sep, 'map-value-ind')) {
+                            this.stack.push({
+                                type: 'block-map',
+                                offset: this.offset,
+                                indent: this.indent,
+                                items: [{ start: [], key: null, sep: [this.sourceToken] }]
+                            });
+                        }
+                        else {
+                            it.sep.push(this.sourceToken);
+                        }
+                    }
+                    this.onKeyLine = true;
+                    return;
+                case 'alias':
+                case 'scalar':
+                case 'single-quoted-scalar':
+                case 'double-quoted-scalar': {
+                    const fs = this.flowScalar(this.type);
+                    if (atNextItem || it.value) {
+                        map.items.push({ start, key: fs, sep: [] });
+                        this.onKeyLine = true;
+                    }
+                    else if (it.sep) {
+                        this.stack.push(fs);
+                    }
+                    else {
+                        Object.assign(it, { key: fs, sep: [] });
+                        this.onKeyLine = true;
+                    }
+                    return;
+                }
+                default: {
+                    const bv = this.startBlockValue(map);
+                    if (bv) {
+                        if (bv.type === 'block-seq') {
+                            if (!it.explicitKey &&
+                                it.sep &&
+                                !includesToken(it.sep, 'newline')) {
+                                yield* this.pop({
+                                    type: 'error',
+                                    offset: this.offset,
+                                    message: 'Unexpected block-seq-ind on same line with key',
+                                    source: this.source
+                                });
+                                return;
+                            }
+                        }
+                        else if (atMapIndent) {
+                            map.items.push({ start });
+                        }
+                        this.stack.push(bv);
+                        return;
+                    }
+                }
+            }
+        }
+        yield* this.pop();
+        yield* this.step();
+    }
+    *blockSequence(seq) {
+        const it = seq.items[seq.items.length - 1];
+        switch (this.type) {
+            case 'newline':
+                if (it.value) {
+                    const end = 'end' in it.value ? it.value.end : undefined;
+                    const last = Array.isArray(end) ? end[end.length - 1] : undefined;
+                    if (last?.type === 'comment')
+                        end?.push(this.sourceToken);
+                    else
+                        seq.items.push({ start: [this.sourceToken] });
+                }
+                else
+                    it.start.push(this.sourceToken);
+                return;
+            case 'space':
+            case 'comment':
+                if (it.value)
+                    seq.items.push({ start: [this.sourceToken] });
+                else {
+                    if (this.atIndentedComment(it.start, seq.indent)) {
+                        const prev = seq.items[seq.items.length - 2];
+                        const end = prev?.value?.end;
+                        if (Array.isArray(end)) {
+                            Array.prototype.push.apply(end, it.start);
+                            end.push(this.sourceToken);
+                            seq.items.pop();
+                            return;
+                        }
+                    }
+                    it.start.push(this.sourceToken);
+                }
+                return;
+            case 'anchor':
+            case 'tag':
+                if (it.value || this.indent <= seq.indent)
+                    break;
+                it.start.push(this.sourceToken);
+                return;
+            case 'seq-item-ind':
+                if (this.indent !== seq.indent)
+                    break;
+                if (it.value || includesToken(it.start, 'seq-item-ind'))
+                    seq.items.push({ start: [this.sourceToken] });
+                else
+                    it.start.push(this.sourceToken);
+                return;
+        }
+        if (this.indent > seq.indent) {
+            const bv = this.startBlockValue(seq);
+            if (bv) {
+                this.stack.push(bv);
+                return;
+            }
+        }
+        yield* this.pop();
+        yield* this.step();
+    }
+    *flowCollection(fc) {
+        const it = fc.items[fc.items.length - 1];
+        if (this.type === 'flow-error-end') {
+            let top;
+            do {
+                yield* this.pop();
+                top = this.peek(1);
+            } while (top?.type === 'flow-collection');
+        }
+        else if (fc.end.length === 0) {
+            switch (this.type) {
+                case 'comma':
+                case 'explicit-key-ind':
+                    if (!it || it.sep)
+                        fc.items.push({ start: [this.sourceToken] });
+                    else
+                        it.start.push(this.sourceToken);
+                    return;
+                case 'map-value-ind':
+                    if (!it || it.value)
+                        fc.items.push({ start: [], key: null, sep: [this.sourceToken] });
+                    else if (it.sep)
+                        it.sep.push(this.sourceToken);
+                    else
+                        Object.assign(it, { key: null, sep: [this.sourceToken] });
+                    return;
+                case 'space':
+                case 'comment':
+                case 'newline':
+                case 'anchor':
+                case 'tag':
+                    if (!it || it.value)
+                        fc.items.push({ start: [this.sourceToken] });
+                    else if (it.sep)
+                        it.sep.push(this.sourceToken);
+                    else
+                        it.start.push(this.sourceToken);
+                    return;
+                case 'alias':
+                case 'scalar':
+                case 'single-quoted-scalar':
+                case 'double-quoted-scalar': {
+                    const fs = this.flowScalar(this.type);
+                    if (!it || it.value)
+                        fc.items.push({ start: [], key: fs, sep: [] });
+                    else if (it.sep)
+                        this.stack.push(fs);
+                    else
+                        Object.assign(it, { key: fs, sep: [] });
+                    return;
+                }
+                case 'flow-map-end':
+                case 'flow-seq-end':
+                    fc.end.push(this.sourceToken);
+                    return;
+            }
+            const bv = this.startBlockValue(fc);
+            /* istanbul ignore else should not happen */
+            if (bv)
+                this.stack.push(bv);
+            else {
+                yield* this.pop();
+                yield* this.step();
+            }
+        }
+        else {
+            const parent = this.peek(2);
+            if (parent.type === 'block-map' &&
+                ((this.type === 'map-value-ind' && parent.indent === fc.indent) ||
+                    (this.type === 'newline' &&
+                        !parent.items[parent.items.length - 1].sep))) {
+                yield* this.pop();
+                yield* this.step();
+            }
+            else if (this.type === 'map-value-ind' &&
+                parent.type !== 'flow-collection') {
+                const prev = getPrevProps(parent);
+                const start = getFirstKeyStartProps(prev);
+                fixFlowSeqItems(fc);
+                const sep = fc.end.splice(1, fc.end.length);
+                sep.push(this.sourceToken);
+                const map = {
+                    type: 'block-map',
+                    offset: fc.offset,
+                    indent: fc.indent,
+                    items: [{ start, key: fc, sep }]
+                };
+                this.onKeyLine = true;
+                this.stack[this.stack.length - 1] = map;
+            }
+            else {
+                yield* this.lineEnd(fc);
+            }
+        }
+    }
+    flowScalar(type) {
+        if (this.onNewLine) {
+            let nl = this.source.indexOf('\n') + 1;
+            while (nl !== 0) {
+                this.onNewLine(this.offset + nl);
+                nl = this.source.indexOf('\n', nl) + 1;
+            }
+        }
+        return {
+            type,
+            offset: this.offset,
+            indent: this.indent,
+            source: this.source
+        };
+    }
+    startBlockValue(parent) {
+        switch (this.type) {
+            case 'alias':
+            case 'scalar':
+            case 'single-quoted-scalar':
+            case 'double-quoted-scalar':
+                return this.flowScalar(this.type);
+            case 'block-scalar-header':
+                return {
+                    type: 'block-scalar',
+                    offset: this.offset,
+                    indent: this.indent,
+                    props: [this.sourceToken],
+                    source: ''
+                };
+            case 'flow-map-start':
+            case 'flow-seq-start':
+                return {
+                    type: 'flow-collection',
+                    offset: this.offset,
+                    indent: this.indent,
+                    start: this.sourceToken,
+                    items: [],
+                    end: []
+                };
+            case 'seq-item-ind':
+                return {
+                    type: 'block-seq',
+                    offset: this.offset,
+                    indent: this.indent,
+                    items: [{ start: [this.sourceToken] }]
+                };
+            case 'explicit-key-ind': {
+                this.onKeyLine = true;
+                const prev = getPrevProps(parent);
+                const start = getFirstKeyStartProps(prev);
+                start.push(this.sourceToken);
+                return {
+                    type: 'block-map',
+                    offset: this.offset,
+                    indent: this.indent,
+                    items: [{ start, explicitKey: true }]
+                };
+            }
+            case 'map-value-ind': {
+                this.onKeyLine = true;
+                const prev = getPrevProps(parent);
+                const start = getFirstKeyStartProps(prev);
+                return {
+                    type: 'block-map',
+                    offset: this.offset,
+                    indent: this.indent,
+                    items: [{ start, key: null, sep: [this.sourceToken] }]
+                };
+            }
+        }
+        return null;
+    }
+    atIndentedComment(start, indent) {
+        if (this.type !== 'comment')
+            return false;
+        if (this.indent <= indent)
+            return false;
+        return start.every(st => st.type === 'newline' || st.type === 'space');
+    }
+    *documentEnd(docEnd) {
+        if (this.type !== 'doc-mode') {
+            if (docEnd.end)
+                docEnd.end.push(this.sourceToken);
+            else
+                docEnd.end = [this.sourceToken];
+            if (this.type === 'newline')
+                yield* this.pop();
+        }
+    }
+    *lineEnd(token) {
+        switch (this.type) {
+            case 'comma':
+            case 'doc-start':
+            case 'doc-end':
+            case 'flow-seq-end':
+            case 'flow-map-end':
+            case 'map-value-ind':
+                yield* this.pop();
+                yield* this.step();
+                break;
+            case 'newline':
+                this.onKeyLine = false;
+            // fallthrough
+            case 'space':
+            case 'comment':
+            default:
+                // all other values are errors
+                if (token.end)
+                    token.end.push(this.sourceToken);
+                else
+                    token.end = [this.sourceToken];
+                if (this.type === 'newline')
+                    yield* this.pop();
+        }
+    }
+};
+
+function parseOptions(options) {
+    const prettyErrors = options.prettyErrors !== false;
+    const lineCounter = options.lineCounter || (prettyErrors && new LineCounter()) || null;
+    return { lineCounter, prettyErrors };
+}
+/**
+ * Parse the input as a stream of YAML documents.
+ *
+ * Documents should be separated from each other by `...` or `---` marker lines.
+ *
+ * @returns If an empty `docs` array is returned, it will be of type
+ *   EmptyStream and contain additional stream information. In
+ *   TypeScript, you should use `'empty' in docs` as a type guard for it.
+ */
+function parseAllDocuments(source, options = {}) {
+    const { lineCounter, prettyErrors } = parseOptions(options);
+    const parser = new Parser$1(lineCounter?.addNewLine);
+    const composer = new Composer(options);
+    const docs = Array.from(composer.compose(parser.parse(source)));
+    if (prettyErrors && lineCounter)
+        for (const doc of docs) {
+            doc.errors.forEach(prettifyError(source, lineCounter));
+            doc.warnings.forEach(prettifyError(source, lineCounter));
+        }
+    if (docs.length > 0)
+        return docs;
+    return Object.assign([], { empty: true }, composer.streamInfo());
+}
+/** Parse an input string into a single YAML.Document */
+function parseDocument(source, options = {}) {
+    const { lineCounter, prettyErrors } = parseOptions(options);
+    const parser = new Parser$1(lineCounter?.addNewLine);
+    const composer = new Composer(options);
+    // `doc` is always set by compose.end(true) at the very latest
+    let doc = null;
+    for (const _doc of composer.compose(parser.parse(source), true, source.length)) {
+        if (!doc)
+            doc = _doc;
+        else if (doc.options.logLevel !== 'silent') {
+            doc.errors.push(new YAMLParseError(_doc.range.slice(0, 2), 'MULTIPLE_DOCS', 'Source contains multiple documents; please use YAML.parseAllDocuments()'));
+            break;
+        }
+    }
+    if (prettyErrors && lineCounter) {
+        doc.errors.forEach(prettifyError(source, lineCounter));
+        doc.warnings.forEach(prettifyError(source, lineCounter));
+    }
+    return doc;
+}
+function parse(src, reviver, options) {
+    let _reviver = undefined;
+    if (typeof reviver === 'function') {
+        _reviver = reviver;
+    }
+    else if (options === undefined && reviver && typeof reviver === 'object') {
+        options = reviver;
+    }
+    const doc = parseDocument(src, options);
+    if (!doc)
+        return null;
+    doc.warnings.forEach(warning => warn(doc.options.logLevel, warning));
+    if (doc.errors.length > 0) {
+        if (doc.options.logLevel !== 'silent')
+            throw doc.errors[0];
+        else
+            doc.errors = [];
+    }
+    return doc.toJS(Object.assign({ reviver: _reviver }, options));
+}
+function stringify(value, replacer, options) {
+    let _replacer = null;
+    if (typeof replacer === 'function' || Array.isArray(replacer)) {
+        _replacer = replacer;
+    }
+    else if (options === undefined && replacer) {
+        options = replacer;
+    }
+    if (typeof options === 'string')
+        options = options.length;
+    if (typeof options === 'number') {
+        const indent = Math.round(options);
+        options = indent < 1 ? undefined : indent > 8 ? { indent: 8 } : { indent };
+    }
+    if (value === undefined) {
+        const { keepUndefined } = options ?? replacer ?? {};
+        if (!keepUndefined)
+            return undefined;
+    }
+    if (isDocument(value) && !_replacer)
+        return value.toString(options);
+    return new Document(value, _replacer, options).toString(options);
+}
+
+var YAML = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  Alias: Alias,
+  CST: cst,
+  Composer: Composer,
+  Document: Document,
+  Lexer: Lexer$1,
+  LineCounter: LineCounter,
+  Pair: Pair,
+  Parser: Parser$1,
+  Scalar: Scalar,
+  Schema: Schema,
+  YAMLError: YAMLError,
+  YAMLMap: YAMLMap,
+  YAMLParseError: YAMLParseError,
+  YAMLSeq: YAMLSeq,
+  YAMLWarning: YAMLWarning,
+  isAlias: isAlias,
+  isCollection: isCollection$1,
+  isDocument: isDocument,
+  isMap: isMap,
+  isNode: isNode,
+  isPair: isPair,
+  isScalar: isScalar$1,
+  isSeq: isSeq,
+  parse: parse,
+  parseAllDocuments: parseAllDocuments,
+  parseDocument: parseDocument,
+  stringify: stringify,
+  visit: visit$1,
+  visitAsync: visitAsync
+});
+
+/**
+ * Frontmatter Session Updater
+ *
+ * Programmatically updates session/runtime configuration in a document's
+ * YAML frontmatter. Used by the runtimes panel UI to persist configuration
+ * changes back to the document.
+ *
+ * @module frontmatter-updater
+ */
+
+
+/**
+ * @typedef {Object} SessionConfig
+ * @property {string} [name] - Session name
+ * @property {string} [venv] - Virtual environment path (Python)
+ * @property {string} [cwd] - Working directory
+ * @property {boolean} [auto_start] - Auto-start on project open
+ */
+
+/**
+ * Parse existing frontmatter from document content.
+ *
+ * @param {string} content - Full document content
+ * @returns {{ exists: boolean, yaml: object|null, range: {start: number, end: number}|null, raw: string|null }}
+ */
+function parseFrontmatter(content) {
+  if (!content.startsWith('---')) {
+    return { exists: false, yaml: null, range: null, raw: null };
+  }
+
+  const endIdx = content.indexOf('\n---', 3);
+  if (endIdx === -1) {
+    return { exists: false, yaml: null, range: null, raw: null };
+  }
+
+  const rawYaml = content.slice(4, endIdx); // Skip opening ---\n
+  try {
+    const parsed = YAML.parse(rawYaml) || {};
+    return {
+      exists: true,
+      yaml: parsed,
+      range: { start: 0, end: endIdx + 4 },
+      raw: rawYaml,
+    };
+  } catch (e) {
+    console.warn('[frontmatter-updater] Failed to parse YAML:', e.message);
+    return { exists: true, yaml: null, range: { start: 0, end: endIdx + 4 }, raw: rawYaml };
+  }
+}
+
+/**
+ * Build frontmatter YAML string from an object.
+ *
+ * @param {object} data - Frontmatter data
+ * @returns {string} Complete frontmatter block including --- delimiters
+ */
+function buildFrontmatter(data) {
+  const cleaned = cleanObject(data);
+
+  if (!cleaned || Object.keys(cleaned).length === 0) {
+    return '';
+  }
+
+  const yamlStr = YAML.stringify(cleaned, {
+    indent: 2,
+    lineWidth: 0,
+  }).trimEnd();
+
+  return `---\n${yamlStr}\n---`;
+}
+
+/**
+ * Recursively remove null, undefined, and empty object values.
+ *
+ * @param {any} obj
+ * @returns {any}
+ */
+function cleanObject(obj) {
+  if (obj === null || obj === undefined) return undefined;
+  if (Array.isArray(obj)) return obj.map(cloneValue).filter(v => v !== undefined);
+  if (typeof obj !== 'object') return obj;
+
+  const result = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === 'object' && !Array.isArray(value)) {
+      const cleaned = cleanObject(value);
+      if (cleaned && Object.keys(cleaned).length > 0) {
+        result[key] = cleaned;
+      }
+    } else if (Array.isArray(value)) {
+      const cleanedArray = value.map(cloneValue).filter(v => v !== undefined);
+      if (cleanedArray.length > 0) {
+        result[key] = cleanedArray;
+      }
+    } else {
+      result[key] = value;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cloneValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(cloneValue);
+  }
+  if (isPlainObject(value)) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cloneValue(v)]));
+  }
+  return value;
+}
+
+function mergeTemplateWithExisting(templateValue, existingValue) {
+  if (existingValue === undefined || existingValue === null) {
+    return cloneValue(templateValue);
+  }
+
+  if (Array.isArray(existingValue)) {
+    return cloneValue(existingValue);
+  }
+
+  if (isPlainObject(templateValue) && isPlainObject(existingValue)) {
+    const result = {};
+    const keys = new Set([...Object.keys(templateValue), ...Object.keys(existingValue)]);
+    for (const key of keys) {
+      result[key] = mergeTemplateWithExisting(templateValue?.[key], existingValue?.[key]);
+    }
+    return result;
+  }
+
+  return cloneValue(existingValue);
+}
+
+function formatLocalDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function createTitleSelection(frontmatterBlock) {
+  const prefix = 'title: ';
+  const start = frontmatterBlock.indexOf(prefix);
+  if (start === -1) return null;
+  const from = start + prefix.length;
+  const lineEnd = frontmatterBlock.indexOf('\n', from);
+  return {
+    from,
+    to: lineEnd === -1 ? from : lineEnd,
+  };
+}
+
+/**
+ * Create a scholarly frontmatter template.
+ *
+ * @param {Date} [now]
+ * @returns {object}
+ */
+function createArticleFrontmatterTemplate(now = new Date()) {
+  return {
+    title: 'Untitled',
+    date: formatLocalDate(now),
+    author: [
+      {
+        name: 'Your Name',
+        id: 'your-id',
+        orcid: '0000-0000-0000-0000',
+        email: 'you@example.com',
+        affiliation: [
+          {
+            name: 'Your Institution',
+            city: 'City',
+            state: 'State',
+            url: 'https://example.org',
+          },
+        ],
+      },
+    ],
+    abstract: 'Write your abstract here.\n',
+    keywords: ['Keyword 1', 'Keyword 2'],
+    license: 'CC BY',
+    copyright: {
+      holder: 'Your Name',
+      year: now.getFullYear(),
+    },
+    citation: {
+      'container-title': 'Journal or Venue',
+      volume: 1,
+      issue: 1,
+      doi: '10.0000/example',
+    },
+    funding: 'Add funding information here.',
+  };
+}
+
+/**
+ * Build a document edit that inserts or augments frontmatter with a template.
+ * Existing values win, while missing keys are added from the template.
+ *
+ * @param {string} content - Full document content
+ * @param {object} [templateData] - Template frontmatter data
+ * @returns {{ changes: {from: number, to: number, insert: string}, selection: {from: number, to: number}|null, data: object }|null}
+ */
+function applyFrontmatterTemplate(content, templateData = createArticleFrontmatterTemplate()) {
+  const fm = parseFrontmatter(content);
+
+  if (fm.exists && !fm.yaml) {
+    return null;
+  }
+
+  const merged = fm.exists
+    ? mergeTemplateWithExisting(templateData, fm.yaml || {})
+    : cloneValue(templateData);
+
+  const frontmatterBlock = buildFrontmatter(merged);
+  const selection = createTitleSelection(frontmatterBlock);
+
+  if (!fm.exists) {
+    return {
+      changes: {
+        from: 0,
+        to: 0,
+        insert: `${frontmatterBlock}${content.length > 0 ? '\n\n' : '\n'}`,
+      },
+      selection,
+      data: merged,
+    };
+  }
+
+  return {
+    changes: {
+      from: fm.range?.start ?? 0,
+      to: fm.range?.end ?? 0,
+      insert: frontmatterBlock,
+    },
+    selection,
+    data: merged,
+  };
+}
+
+/**
+ * Read current session configuration from document frontmatter.
+ *
+ * @param {string} content - Full document content
+ * @param {string} language - Runtime language
+ * @returns {SessionConfig} Current session config (may be empty object if using defaults)
+ */
+function readFrontmatterSession(content, language) {
+  const fm = parseFrontmatter(content);
+  if (!fm.yaml) return {};
+
+  // Check verbose syntax: session.python.venv
+  if (fm.yaml.session && fm.yaml.session[language]) {
+    return { ...fm.yaml.session[language] };
+  }
+
+  // Check minimal syntax: python: ".venv"
+  if (fm.yaml[language]) {
+    const value = fm.yaml[language];
+    if (typeof value === 'string') {
+      if (language === 'python') return { venv: value };
+      return { cwd: value };
+    }
+    if (typeof value === 'object') return { ...value };
+  }
+
+  return {};
+}
+
+/**
+ * Get the effective session configuration for a document,
+ * merging project defaults with document-level overrides.
+ *
+ * @param {string} content - Full document content
+ * @param {string} language - Runtime language
+ * @param {SessionConfig} projectDefaults - Defaults from mrmd.md
+ * @returns {SessionConfig} Effective configuration
+ */
+function getEffectiveSessionConfig(content, language, projectDefaults = {}) {
+  const docConfig = readFrontmatterSession(content, language);
+  return {
+    name: docConfig.name || projectDefaults.name || 'default',
+    venv: docConfig.venv || projectDefaults.venv || '.venv',
+    cwd: docConfig.cwd || projectDefaults.cwd || '.',
+    auto_start: docConfig.auto_start ?? projectDefaults.auto_start ?? true,
+  };
+}
+
+function setPathValue(target, path, value) {
+  const parts = Array.isArray(path) ? path : String(path).split('.').filter(Boolean);
+  if (!parts.length) return target;
+
+  let obj = target;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const key = parts[i];
+    if (!obj[key] || typeof obj[key] !== 'object' || Array.isArray(obj[key])) {
+      obj[key] = {};
+    }
+    obj = obj[key];
+  }
+
+  const leaf = parts[parts.length - 1];
+  if (value === undefined || value === null || value === '') {
+    delete obj[leaf];
+  } else {
+    obj[leaf] = value;
+  }
+  return target;
+}
+
+function readFrontmatterValue(content, path, fallback = undefined) {
+  const fm = parseFrontmatter(content);
+  const parts = Array.isArray(path) ? path : String(path).split('.').filter(Boolean);
+  let value = fm.yaml || {};
+  for (const part of parts) {
+    if (value == null || typeof value !== 'object') return fallback;
+    value = value[part];
+  }
+  return value === undefined ? fallback : value;
+}
+
+function updateFrontmatterField(content, path, value) {
+  const fm = parseFrontmatter(content);
+  if (fm.exists && !fm.yaml) return null;
+
+  const data = fm.exists ? cloneValue(fm.yaml || {}) : {};
+  setPathValue(data, path, value);
+  const frontmatterBlock = buildFrontmatter(data);
+
+  if (!fm.exists) {
+    return {
+      changes: {
+        from: 0,
+        to: 0,
+        insert: `${frontmatterBlock}${content.length > 0 ? '\n\n' : '\n'}`,
+      },
+      data,
+    };
+  }
+
+  return {
+    changes: {
+      from: fm.range?.start ?? 0,
+      to: fm.range?.end ?? 0,
+      insert: frontmatterBlock,
+    },
+    data,
+  };
+}
+
+/**
  * Terminal Buffer
  *
  * Processes streaming terminal output with proper cursor movement and ANSI handling.
@@ -75703,7736 +85644,881 @@ function createCellControls(options) {
   return new CellControlsSystem(options);
 }
 
-const ALIAS = Symbol.for('yaml.alias');
-const DOC = Symbol.for('yaml.document');
-const MAP = Symbol.for('yaml.map');
-const PAIR = Symbol.for('yaml.pair');
-const SCALAR$1 = Symbol.for('yaml.scalar');
-const SEQ = Symbol.for('yaml.seq');
-const NODE_TYPE = Symbol.for('yaml.node.type');
-const isAlias = (node) => !!node && typeof node === 'object' && node[NODE_TYPE] === ALIAS;
-const isDocument = (node) => !!node && typeof node === 'object' && node[NODE_TYPE] === DOC;
-const isMap = (node) => !!node && typeof node === 'object' && node[NODE_TYPE] === MAP;
-const isPair = (node) => !!node && typeof node === 'object' && node[NODE_TYPE] === PAIR;
-const isScalar$1 = (node) => !!node && typeof node === 'object' && node[NODE_TYPE] === SCALAR$1;
-const isSeq = (node) => !!node && typeof node === 'object' && node[NODE_TYPE] === SEQ;
-function isCollection$1(node) {
-    if (node && typeof node === 'object')
-        switch (node[NODE_TYPE]) {
-            case MAP:
-            case SEQ:
-                return true;
-        }
-    return false;
-}
-function isNode(node) {
-    if (node && typeof node === 'object')
-        switch (node[NODE_TYPE]) {
-            case ALIAS:
-            case MAP:
-            case SCALAR$1:
-            case SEQ:
-                return true;
-        }
-    return false;
-}
-const hasAnchor = (node) => (isScalar$1(node) || isCollection$1(node)) && !!node.anchor;
-
-const BREAK$1 = Symbol('break visit');
-const SKIP$1 = Symbol('skip children');
-const REMOVE$1 = Symbol('remove node');
 /**
- * Apply a visitor to an AST node or document.
+ * Shared inline formatting model.
  *
- * Walks through the tree (depth-first) starting from `node`, calling a
- * `visitor` function with three arguments:
- *   - `key`: For sequence values and map `Pair`, the node's index in the
- *     collection. Within a `Pair`, `'key'` or `'value'`, correspondingly.
- *     `null` for the root node.
- *   - `node`: The current node.
- *   - `path`: The ancestry of the current node.
- *
- * The return value of the visitor may be used to control the traversal:
- *   - `undefined` (default): Do nothing and continue
- *   - `visit.SKIP`: Do not visit the children of this node, continue with next
- *     sibling
- *   - `visit.BREAK`: Terminate traversal completely
- *   - `visit.REMOVE`: Remove the current node, then continue with the next one
- *   - `Node`: Replace the current node, then continue by visiting it
- *   - `number`: While iterating the items of a sequence or map, set the index
- *     of the next step. This is useful especially if the index of the current
- *     node has changed.
- *
- * If `visitor` is a single function, it will be called with all values
- * encountered in the tree, including e.g. `null` values. Alternatively,
- * separate visitor functions may be defined for each `Map`, `Pair`, `Seq`,
- * `Alias` and `Scalar` node. To define the same visitor function for more than
- * one node type, use the `Collection` (map and seq), `Value` (map, seq & scalar)
- * and `Node` (alias, map, seq & scalar) targets. Of all these, only the most
- * specific defined one will be used for each node.
+ * This module provides a tolerant inline parser plus helpers for caret/selection
+ * semantics, segment rewriting, and serialization. It is intentionally more
+ * forgiving than CommonMark so editing can stay stable while the user is in the
+ * middle of typing malformed markdown.
  */
-function visit$1(node, visitor) {
-    const visitor_ = initVisitor(visitor);
-    if (isDocument(node)) {
-        const cd = visit_(null, node.contents, visitor_, Object.freeze([node]));
-        if (cd === REMOVE$1)
-            node.contents = null;
-    }
-    else
-        visit_(null, node, visitor_, Object.freeze([]));
-}
-// Without the `as symbol` casts, TS declares these in the `visit`
-// namespace using `var`, but then complains about that because
-// `unique symbol` must be `const`.
-/** Terminate visit traversal completely */
-visit$1.BREAK = BREAK$1;
-/** Do not visit the children of the current node */
-visit$1.SKIP = SKIP$1;
-/** Remove the current node */
-visit$1.REMOVE = REMOVE$1;
-function visit_(key, node, visitor, path) {
-    const ctrl = callVisitor(key, node, visitor, path);
-    if (isNode(ctrl) || isPair(ctrl)) {
-        replaceNode(key, path, ctrl);
-        return visit_(key, ctrl, visitor, path);
-    }
-    if (typeof ctrl !== 'symbol') {
-        if (isCollection$1(node)) {
-            path = Object.freeze(path.concat(node));
-            for (let i = 0; i < node.items.length; ++i) {
-                const ci = visit_(i, node.items[i], visitor, path);
-                if (typeof ci === 'number')
-                    i = ci - 1;
-                else if (ci === BREAK$1)
-                    return BREAK$1;
-                else if (ci === REMOVE$1) {
-                    node.items.splice(i, 1);
-                    i -= 1;
-                }
-            }
-        }
-        else if (isPair(node)) {
-            path = Object.freeze(path.concat(node));
-            const ck = visit_('key', node.key, visitor, path);
-            if (ck === BREAK$1)
-                return BREAK$1;
-            else if (ck === REMOVE$1)
-                node.key = null;
-            const cv = visit_('value', node.value, visitor, path);
-            if (cv === BREAK$1)
-                return BREAK$1;
-            else if (cv === REMOVE$1)
-                node.value = null;
-        }
-    }
-    return ctrl;
-}
-/**
- * Apply an async visitor to an AST node or document.
- *
- * Walks through the tree (depth-first) starting from `node`, calling a
- * `visitor` function with three arguments:
- *   - `key`: For sequence values and map `Pair`, the node's index in the
- *     collection. Within a `Pair`, `'key'` or `'value'`, correspondingly.
- *     `null` for the root node.
- *   - `node`: The current node.
- *   - `path`: The ancestry of the current node.
- *
- * The return value of the visitor may be used to control the traversal:
- *   - `Promise`: Must resolve to one of the following values
- *   - `undefined` (default): Do nothing and continue
- *   - `visit.SKIP`: Do not visit the children of this node, continue with next
- *     sibling
- *   - `visit.BREAK`: Terminate traversal completely
- *   - `visit.REMOVE`: Remove the current node, then continue with the next one
- *   - `Node`: Replace the current node, then continue by visiting it
- *   - `number`: While iterating the items of a sequence or map, set the index
- *     of the next step. This is useful especially if the index of the current
- *     node has changed.
- *
- * If `visitor` is a single function, it will be called with all values
- * encountered in the tree, including e.g. `null` values. Alternatively,
- * separate visitor functions may be defined for each `Map`, `Pair`, `Seq`,
- * `Alias` and `Scalar` node. To define the same visitor function for more than
- * one node type, use the `Collection` (map and seq), `Value` (map, seq & scalar)
- * and `Node` (alias, map, seq & scalar) targets. Of all these, only the most
- * specific defined one will be used for each node.
- */
-async function visitAsync(node, visitor) {
-    const visitor_ = initVisitor(visitor);
-    if (isDocument(node)) {
-        const cd = await visitAsync_(null, node.contents, visitor_, Object.freeze([node]));
-        if (cd === REMOVE$1)
-            node.contents = null;
-    }
-    else
-        await visitAsync_(null, node, visitor_, Object.freeze([]));
-}
-// Without the `as symbol` casts, TS declares these in the `visit`
-// namespace using `var`, but then complains about that because
-// `unique symbol` must be `const`.
-/** Terminate visit traversal completely */
-visitAsync.BREAK = BREAK$1;
-/** Do not visit the children of the current node */
-visitAsync.SKIP = SKIP$1;
-/** Remove the current node */
-visitAsync.REMOVE = REMOVE$1;
-async function visitAsync_(key, node, visitor, path) {
-    const ctrl = await callVisitor(key, node, visitor, path);
-    if (isNode(ctrl) || isPair(ctrl)) {
-        replaceNode(key, path, ctrl);
-        return visitAsync_(key, ctrl, visitor, path);
-    }
-    if (typeof ctrl !== 'symbol') {
-        if (isCollection$1(node)) {
-            path = Object.freeze(path.concat(node));
-            for (let i = 0; i < node.items.length; ++i) {
-                const ci = await visitAsync_(i, node.items[i], visitor, path);
-                if (typeof ci === 'number')
-                    i = ci - 1;
-                else if (ci === BREAK$1)
-                    return BREAK$1;
-                else if (ci === REMOVE$1) {
-                    node.items.splice(i, 1);
-                    i -= 1;
-                }
-            }
-        }
-        else if (isPair(node)) {
-            path = Object.freeze(path.concat(node));
-            const ck = await visitAsync_('key', node.key, visitor, path);
-            if (ck === BREAK$1)
-                return BREAK$1;
-            else if (ck === REMOVE$1)
-                node.key = null;
-            const cv = await visitAsync_('value', node.value, visitor, path);
-            if (cv === BREAK$1)
-                return BREAK$1;
-            else if (cv === REMOVE$1)
-                node.value = null;
-        }
-    }
-    return ctrl;
-}
-function initVisitor(visitor) {
-    if (typeof visitor === 'object' &&
-        (visitor.Collection || visitor.Node || visitor.Value)) {
-        return Object.assign({
-            Alias: visitor.Node,
-            Map: visitor.Node,
-            Scalar: visitor.Node,
-            Seq: visitor.Node
-        }, visitor.Value && {
-            Map: visitor.Value,
-            Scalar: visitor.Value,
-            Seq: visitor.Value
-        }, visitor.Collection && {
-            Map: visitor.Collection,
-            Seq: visitor.Collection
-        }, visitor);
-    }
-    return visitor;
-}
-function callVisitor(key, node, visitor, path) {
-    if (typeof visitor === 'function')
-        return visitor(key, node, path);
-    if (isMap(node))
-        return visitor.Map?.(key, node, path);
-    if (isSeq(node))
-        return visitor.Seq?.(key, node, path);
-    if (isPair(node))
-        return visitor.Pair?.(key, node, path);
-    if (isScalar$1(node))
-        return visitor.Scalar?.(key, node, path);
-    if (isAlias(node))
-        return visitor.Alias?.(key, node, path);
-    return undefined;
-}
-function replaceNode(key, path, node) {
-    const parent = path[path.length - 1];
-    if (isCollection$1(parent)) {
-        parent.items[key] = node;
-    }
-    else if (isPair(parent)) {
-        if (key === 'key')
-            parent.key = node;
-        else
-            parent.value = node;
-    }
-    else if (isDocument(parent)) {
-        parent.contents = node;
-    }
-    else {
-        const pt = isAlias(parent) ? 'alias' : 'scalar';
-        throw new Error(`Cannot replace node with ${pt} parent`);
-    }
-}
 
-const escapeChars = {
-    '!': '%21',
-    ',': '%2C',
-    '[': '%5B',
-    ']': '%5D',
-    '{': '%7B',
-    '}': '%7D'
-};
-const escapeTagName = (tn) => tn.replace(/[!,[\]{}]/g, ch => escapeChars[ch]);
-class Directives {
-    constructor(yaml, tags) {
-        /**
-         * The directives-end/doc-start marker `---`. If `null`, a marker may still be
-         * included in the document's stringified representation.
-         */
-        this.docStart = null;
-        /** The doc-end marker `...`.  */
-        this.docEnd = false;
-        this.yaml = Object.assign({}, Directives.defaultYaml, yaml);
-        this.tags = Object.assign({}, Directives.defaultTags, tags);
-    }
-    clone() {
-        const copy = new Directives(this.yaml, this.tags);
-        copy.docStart = this.docStart;
-        return copy;
-    }
-    /**
-     * During parsing, get a Directives instance for the current document and
-     * update the stream state according to the current version's spec.
-     */
-    atDocument() {
-        const res = new Directives(this.yaml, this.tags);
-        switch (this.yaml.version) {
-            case '1.1':
-                this.atNextDocument = true;
-                break;
-            case '1.2':
-                this.atNextDocument = false;
-                this.yaml = {
-                    explicit: Directives.defaultYaml.explicit,
-                    version: '1.2'
-                };
-                this.tags = Object.assign({}, Directives.defaultTags);
-                break;
-        }
-        return res;
-    }
-    /**
-     * @param onError - May be called even if the action was successful
-     * @returns `true` on success
-     */
-    add(line, onError) {
-        if (this.atNextDocument) {
-            this.yaml = { explicit: Directives.defaultYaml.explicit, version: '1.1' };
-            this.tags = Object.assign({}, Directives.defaultTags);
-            this.atNextDocument = false;
-        }
-        const parts = line.trim().split(/[ \t]+/);
-        const name = parts.shift();
-        switch (name) {
-            case '%TAG': {
-                if (parts.length !== 2) {
-                    onError(0, '%TAG directive should contain exactly two parts');
-                    if (parts.length < 2)
-                        return false;
-                }
-                const [handle, prefix] = parts;
-                this.tags[handle] = prefix;
-                return true;
-            }
-            case '%YAML': {
-                this.yaml.explicit = true;
-                if (parts.length !== 1) {
-                    onError(0, '%YAML directive should contain exactly one part');
-                    return false;
-                }
-                const [version] = parts;
-                if (version === '1.1' || version === '1.2') {
-                    this.yaml.version = version;
-                    return true;
-                }
-                else {
-                    const isValid = /^\d+\.\d+$/.test(version);
-                    onError(6, `Unsupported YAML version ${version}`, isValid);
-                    return false;
-                }
-            }
-            default:
-                onError(0, `Unknown directive ${name}`, true);
-                return false;
-        }
-    }
-    /**
-     * Resolves a tag, matching handles to those defined in %TAG directives.
-     *
-     * @returns Resolved tag, which may also be the non-specific tag `'!'` or a
-     *   `'!local'` tag, or `null` if unresolvable.
-     */
-    tagName(source, onError) {
-        if (source === '!')
-            return '!'; // non-specific tag
-        if (source[0] !== '!') {
-            onError(`Not a valid tag: ${source}`);
-            return null;
-        }
-        if (source[1] === '<') {
-            const verbatim = source.slice(2, -1);
-            if (verbatim === '!' || verbatim === '!!') {
-                onError(`Verbatim tags aren't resolved, so ${source} is invalid.`);
-                return null;
-            }
-            if (source[source.length - 1] !== '>')
-                onError('Verbatim tags must end with a >');
-            return verbatim;
-        }
-        const [, handle, suffix] = source.match(/^(.*!)([^!]*)$/s);
-        if (!suffix)
-            onError(`The ${source} tag has no suffix`);
-        const prefix = this.tags[handle];
-        if (prefix) {
-            try {
-                return prefix + decodeURIComponent(suffix);
-            }
-            catch (error) {
-                onError(String(error));
-                return null;
-            }
-        }
-        if (handle === '!')
-            return source; // local tag
-        onError(`Could not resolve tag: ${source}`);
-        return null;
-    }
-    /**
-     * Given a fully resolved tag, returns its printable string form,
-     * taking into account current tag prefixes and defaults.
-     */
-    tagString(tag) {
-        for (const [handle, prefix] of Object.entries(this.tags)) {
-            if (tag.startsWith(prefix))
-                return handle + escapeTagName(tag.substring(prefix.length));
-        }
-        return tag[0] === '!' ? tag : `!<${tag}>`;
-    }
-    toString(doc) {
-        const lines = this.yaml.explicit
-            ? [`%YAML ${this.yaml.version || '1.2'}`]
-            : [];
-        const tagEntries = Object.entries(this.tags);
-        let tagNames;
-        if (doc && tagEntries.length > 0 && isNode(doc.contents)) {
-            const tags = {};
-            visit$1(doc.contents, (_key, node) => {
-                if (isNode(node) && node.tag)
-                    tags[node.tag] = true;
-            });
-            tagNames = Object.keys(tags);
-        }
-        else
-            tagNames = [];
-        for (const [handle, prefix] of tagEntries) {
-            if (handle === '!!' && prefix === 'tag:yaml.org,2002:')
-                continue;
-            if (!doc || tagNames.some(tn => tn.startsWith(prefix)))
-                lines.push(`%TAG ${handle} ${prefix}`);
-        }
-        return lines.join('\n');
-    }
-}
-Directives.defaultYaml = { explicit: false, version: '1.2' };
-Directives.defaultTags = { '!!': 'tag:yaml.org,2002:' };
+const INLINE_MARK_ORDER = ['underline', 'strike', 'italic', 'bold', 'code'];
 
-/**
- * Verify that the input string is a valid anchor.
- *
- * Will throw on errors.
- */
-function anchorIsValid(anchor) {
-    if (/[\x00-\x19\s,[\]{}]/.test(anchor)) {
-        const sa = JSON.stringify(anchor);
-        const msg = `Anchor must not contain whitespace or control characters: ${sa}`;
-        throw new Error(msg);
-    }
-    return true;
-}
-function anchorNames(root) {
-    const anchors = new Set();
-    visit$1(root, {
-        Value(_key, node) {
-            if (node.anchor)
-                anchors.add(node.anchor);
-        }
-    });
-    return anchors;
-}
-/** Find a new anchor name with the given `prefix` and a one-indexed suffix. */
-function findNewAnchor(prefix, exclude) {
-    for (let i = 1; true; ++i) {
-        const name = `${prefix}${i}`;
-        if (!exclude.has(name))
-            return name;
-    }
-}
-function createNodeAnchors(doc, prefix) {
-    const aliasObjects = [];
-    const sourceObjects = new Map();
-    let prevAnchors = null;
-    return {
-        onAnchor: (source) => {
-            aliasObjects.push(source);
-            prevAnchors ?? (prevAnchors = anchorNames(doc));
-            const anchor = findNewAnchor(prefix, prevAnchors);
-            prevAnchors.add(anchor);
-            return anchor;
-        },
-        /**
-         * With circular references, the source node is only resolved after all
-         * of its child nodes are. This is why anchors are set only after all of
-         * the nodes have been created.
-         */
-        setAnchors: () => {
-            for (const source of aliasObjects) {
-                const ref = sourceObjects.get(source);
-                if (typeof ref === 'object' &&
-                    ref.anchor &&
-                    (isScalar$1(ref.node) || isCollection$1(ref.node))) {
-                    ref.node.anchor = ref.anchor;
-                }
-                else {
-                    const error = new Error('Failed to resolve repeated object (this should not happen)');
-                    error.source = source;
-                    throw error;
-                }
-            }
-        },
-        sourceObjects
-    };
-}
-
-/**
- * Applies the JSON.parse reviver algorithm as defined in the ECMA-262 spec,
- * in section 24.5.1.1 "Runtime Semantics: InternalizeJSONProperty" of the
- * 2021 edition: https://tc39.es/ecma262/#sec-json.parse
- *
- * Includes extensions for handling Map and Set objects.
- */
-function applyReviver(reviver, obj, key, val) {
-    if (val && typeof val === 'object') {
-        if (Array.isArray(val)) {
-            for (let i = 0, len = val.length; i < len; ++i) {
-                const v0 = val[i];
-                const v1 = applyReviver(reviver, val, String(i), v0);
-                // eslint-disable-next-line @typescript-eslint/no-array-delete
-                if (v1 === undefined)
-                    delete val[i];
-                else if (v1 !== v0)
-                    val[i] = v1;
-            }
-        }
-        else if (val instanceof Map) {
-            for (const k of Array.from(val.keys())) {
-                const v0 = val.get(k);
-                const v1 = applyReviver(reviver, val, k, v0);
-                if (v1 === undefined)
-                    val.delete(k);
-                else if (v1 !== v0)
-                    val.set(k, v1);
-            }
-        }
-        else if (val instanceof Set) {
-            for (const v0 of Array.from(val)) {
-                const v1 = applyReviver(reviver, val, v0, v0);
-                if (v1 === undefined)
-                    val.delete(v0);
-                else if (v1 !== v0) {
-                    val.delete(v0);
-                    val.add(v1);
-                }
-            }
-        }
-        else {
-            for (const [k, v0] of Object.entries(val)) {
-                const v1 = applyReviver(reviver, val, k, v0);
-                if (v1 === undefined)
-                    delete val[k];
-                else if (v1 !== v0)
-                    val[k] = v1;
-            }
-        }
-    }
-    return reviver.call(obj, key, val);
-}
-
-/**
- * Recursively convert any node or its contents to native JavaScript
- *
- * @param value - The input value
- * @param arg - If `value` defines a `toJSON()` method, use this
- *   as its first argument
- * @param ctx - Conversion context, originally set in Document#toJS(). If
- *   `{ keep: true }` is not set, output should be suitable for JSON
- *   stringification.
- */
-function toJS(value, arg, ctx) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-    if (Array.isArray(value))
-        return value.map((v, i) => toJS(v, String(i), ctx));
-    if (value && typeof value.toJSON === 'function') {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-        if (!ctx || !hasAnchor(value))
-            return value.toJSON(arg, ctx);
-        const data = { aliasCount: 0, count: 1, res: undefined };
-        ctx.anchors.set(value, data);
-        ctx.onCreate = res => {
-            data.res = res;
-            delete ctx.onCreate;
-        };
-        const res = value.toJSON(arg, ctx);
-        if (ctx.onCreate)
-            ctx.onCreate(res);
-        return res;
-    }
-    if (typeof value === 'bigint' && !ctx?.keep)
-        return Number(value);
-    return value;
-}
-
-class NodeBase {
-    constructor(type) {
-        Object.defineProperty(this, NODE_TYPE, { value: type });
-    }
-    /** Create a copy of this node.  */
-    clone() {
-        const copy = Object.create(Object.getPrototypeOf(this), Object.getOwnPropertyDescriptors(this));
-        if (this.range)
-            copy.range = this.range.slice();
-        return copy;
-    }
-    /** A plain JavaScript representation of this node. */
-    toJS(doc, { mapAsMap, maxAliasCount, onAnchor, reviver } = {}) {
-        if (!isDocument(doc))
-            throw new TypeError('A document argument is required');
-        const ctx = {
-            anchors: new Map(),
-            doc,
-            keep: true,
-            mapAsMap: mapAsMap === true,
-            mapKeyWarned: false,
-            maxAliasCount: typeof maxAliasCount === 'number' ? maxAliasCount : 100
-        };
-        const res = toJS(this, '', ctx);
-        if (typeof onAnchor === 'function')
-            for (const { count, res } of ctx.anchors.values())
-                onAnchor(res, count);
-        return typeof reviver === 'function'
-            ? applyReviver(reviver, { '': res }, '', res)
-            : res;
-    }
-}
-
-class Alias extends NodeBase {
-    constructor(source) {
-        super(ALIAS);
-        this.source = source;
-        Object.defineProperty(this, 'tag', {
-            set() {
-                throw new Error('Alias nodes cannot have tags');
-            }
-        });
-    }
-    /**
-     * Resolve the value of this alias within `doc`, finding the last
-     * instance of the `source` anchor before this node.
-     */
-    resolve(doc, ctx) {
-        let nodes;
-        if (ctx?.aliasResolveCache) {
-            nodes = ctx.aliasResolveCache;
-        }
-        else {
-            nodes = [];
-            visit$1(doc, {
-                Node: (_key, node) => {
-                    if (isAlias(node) || hasAnchor(node))
-                        nodes.push(node);
-                }
-            });
-            if (ctx)
-                ctx.aliasResolveCache = nodes;
-        }
-        let found = undefined;
-        for (const node of nodes) {
-            if (node === this)
-                break;
-            if (node.anchor === this.source)
-                found = node;
-        }
-        return found;
-    }
-    toJSON(_arg, ctx) {
-        if (!ctx)
-            return { source: this.source };
-        const { anchors, doc, maxAliasCount } = ctx;
-        const source = this.resolve(doc, ctx);
-        if (!source) {
-            const msg = `Unresolved alias (the anchor must be set before the alias): ${this.source}`;
-            throw new ReferenceError(msg);
-        }
-        let data = anchors.get(source);
-        if (!data) {
-            // Resolve anchors for Node.prototype.toJS()
-            toJS(source, null, ctx);
-            data = anchors.get(source);
-        }
-        /* istanbul ignore if */
-        if (data?.res === undefined) {
-            const msg = 'This should not happen: Alias anchor was not resolved?';
-            throw new ReferenceError(msg);
-        }
-        if (maxAliasCount >= 0) {
-            data.count += 1;
-            if (data.aliasCount === 0)
-                data.aliasCount = getAliasCount(doc, source, anchors);
-            if (data.count * data.aliasCount > maxAliasCount) {
-                const msg = 'Excessive alias count indicates a resource exhaustion attack';
-                throw new ReferenceError(msg);
-            }
-        }
-        return data.res;
-    }
-    toString(ctx, _onComment, _onChompKeep) {
-        const src = `*${this.source}`;
-        if (ctx) {
-            anchorIsValid(this.source);
-            if (ctx.options.verifyAliasOrder && !ctx.anchors.has(this.source)) {
-                const msg = `Unresolved alias (the anchor must be set before the alias): ${this.source}`;
-                throw new Error(msg);
-            }
-            if (ctx.implicitKey)
-                return `${src} `;
-        }
-        return src;
-    }
-}
-function getAliasCount(doc, node, anchors) {
-    if (isAlias(node)) {
-        const source = node.resolve(doc);
-        const anchor = anchors && source && anchors.get(source);
-        return anchor ? anchor.count * anchor.aliasCount : 0;
-    }
-    else if (isCollection$1(node)) {
-        let count = 0;
-        for (const item of node.items) {
-            const c = getAliasCount(doc, item, anchors);
-            if (c > count)
-                count = c;
-        }
-        return count;
-    }
-    else if (isPair(node)) {
-        const kc = getAliasCount(doc, node.key, anchors);
-        const vc = getAliasCount(doc, node.value, anchors);
-        return Math.max(kc, vc);
-    }
-    return 1;
-}
-
-const isScalarValue = (value) => !value || (typeof value !== 'function' && typeof value !== 'object');
-class Scalar extends NodeBase {
-    constructor(value) {
-        super(SCALAR$1);
-        this.value = value;
-    }
-    toJSON(arg, ctx) {
-        return ctx?.keep ? this.value : toJS(this.value, arg, ctx);
-    }
-    toString() {
-        return String(this.value);
-    }
-}
-Scalar.BLOCK_FOLDED = 'BLOCK_FOLDED';
-Scalar.BLOCK_LITERAL = 'BLOCK_LITERAL';
-Scalar.PLAIN = 'PLAIN';
-Scalar.QUOTE_DOUBLE = 'QUOTE_DOUBLE';
-Scalar.QUOTE_SINGLE = 'QUOTE_SINGLE';
-
-const defaultTagPrefix = 'tag:yaml.org,2002:';
-function findTagObject(value, tagName, tags) {
-    if (tagName) {
-        const match = tags.filter(t => t.tag === tagName);
-        const tagObj = match.find(t => !t.format) ?? match[0];
-        if (!tagObj)
-            throw new Error(`Tag ${tagName} not found`);
-        return tagObj;
-    }
-    return tags.find(t => t.identify?.(value) && !t.format);
-}
-function createNode(value, tagName, ctx) {
-    if (isDocument(value))
-        value = value.contents;
-    if (isNode(value))
-        return value;
-    if (isPair(value)) {
-        const map = ctx.schema[MAP].createNode?.(ctx.schema, null, ctx);
-        map.items.push(value);
-        return map;
-    }
-    if (value instanceof String ||
-        value instanceof Number ||
-        value instanceof Boolean ||
-        (typeof BigInt !== 'undefined' && value instanceof BigInt) // not supported everywhere
-    ) {
-        // https://tc39.es/ecma262/#sec-serializejsonproperty
-        value = value.valueOf();
-    }
-    const { aliasDuplicateObjects, onAnchor, onTagObj, schema, sourceObjects } = ctx;
-    // Detect duplicate references to the same object & use Alias nodes for all
-    // after first. The `ref` wrapper allows for circular references to resolve.
-    let ref = undefined;
-    if (aliasDuplicateObjects && value && typeof value === 'object') {
-        ref = sourceObjects.get(value);
-        if (ref) {
-            ref.anchor ?? (ref.anchor = onAnchor(value));
-            return new Alias(ref.anchor);
-        }
-        else {
-            ref = { anchor: null, node: null };
-            sourceObjects.set(value, ref);
-        }
-    }
-    if (tagName?.startsWith('!!'))
-        tagName = defaultTagPrefix + tagName.slice(2);
-    let tagObj = findTagObject(value, tagName, schema.tags);
-    if (!tagObj) {
-        if (value && typeof value.toJSON === 'function') {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-            value = value.toJSON();
-        }
-        if (!value || typeof value !== 'object') {
-            const node = new Scalar(value);
-            if (ref)
-                ref.node = node;
-            return node;
-        }
-        tagObj =
-            value instanceof Map
-                ? schema[MAP]
-                : Symbol.iterator in Object(value)
-                    ? schema[SEQ]
-                    : schema[MAP];
-    }
-    if (onTagObj) {
-        onTagObj(tagObj);
-        delete ctx.onTagObj;
-    }
-    const node = tagObj?.createNode
-        ? tagObj.createNode(ctx.schema, value, ctx)
-        : typeof tagObj?.nodeClass?.from === 'function'
-            ? tagObj.nodeClass.from(ctx.schema, value, ctx)
-            : new Scalar(value);
-    if (tagName)
-        node.tag = tagName;
-    else if (!tagObj.default)
-        node.tag = tagObj.tag;
-    if (ref)
-        ref.node = node;
-    return node;
-}
-
-function collectionFromPath(schema, path, value) {
-    let v = value;
-    for (let i = path.length - 1; i >= 0; --i) {
-        const k = path[i];
-        if (typeof k === 'number' && Number.isInteger(k) && k >= 0) {
-            const a = [];
-            a[k] = v;
-            v = a;
-        }
-        else {
-            v = new Map([[k, v]]);
-        }
-    }
-    return createNode(v, undefined, {
-        aliasDuplicateObjects: false,
-        keepUndefined: false,
-        onAnchor: () => {
-            throw new Error('This should not happen, please report a bug.');
-        },
-        schema,
-        sourceObjects: new Map()
-    });
-}
-// Type guard is intentionally a little wrong so as to be more useful,
-// as it does not cover untypable empty non-string iterables (e.g. []).
-const isEmptyPath = (path) => path == null ||
-    (typeof path === 'object' && !!path[Symbol.iterator]().next().done);
-class Collection extends NodeBase {
-    constructor(type, schema) {
-        super(type);
-        Object.defineProperty(this, 'schema', {
-            value: schema,
-            configurable: true,
-            enumerable: false,
-            writable: true
-        });
-    }
-    /**
-     * Create a copy of this collection.
-     *
-     * @param schema - If defined, overwrites the original's schema
-     */
-    clone(schema) {
-        const copy = Object.create(Object.getPrototypeOf(this), Object.getOwnPropertyDescriptors(this));
-        if (schema)
-            copy.schema = schema;
-        copy.items = copy.items.map(it => isNode(it) || isPair(it) ? it.clone(schema) : it);
-        if (this.range)
-            copy.range = this.range.slice();
-        return copy;
-    }
-    /**
-     * Adds a value to the collection. For `!!map` and `!!omap` the value must
-     * be a Pair instance or a `{ key, value }` object, which may not have a key
-     * that already exists in the map.
-     */
-    addIn(path, value) {
-        if (isEmptyPath(path))
-            this.add(value);
-        else {
-            const [key, ...rest] = path;
-            const node = this.get(key, true);
-            if (isCollection$1(node))
-                node.addIn(rest, value);
-            else if (node === undefined && this.schema)
-                this.set(key, collectionFromPath(this.schema, rest, value));
-            else
-                throw new Error(`Expected YAML collection at ${key}. Remaining path: ${rest}`);
-        }
-    }
-    /**
-     * Removes a value from the collection.
-     * @returns `true` if the item was found and removed.
-     */
-    deleteIn(path) {
-        const [key, ...rest] = path;
-        if (rest.length === 0)
-            return this.delete(key);
-        const node = this.get(key, true);
-        if (isCollection$1(node))
-            return node.deleteIn(rest);
-        else
-            throw new Error(`Expected YAML collection at ${key}. Remaining path: ${rest}`);
-    }
-    /**
-     * Returns item at `key`, or `undefined` if not found. By default unwraps
-     * scalar values from their surrounding node; to disable set `keepScalar` to
-     * `true` (collections are always returned intact).
-     */
-    getIn(path, keepScalar) {
-        const [key, ...rest] = path;
-        const node = this.get(key, true);
-        if (rest.length === 0)
-            return !keepScalar && isScalar$1(node) ? node.value : node;
-        else
-            return isCollection$1(node) ? node.getIn(rest, keepScalar) : undefined;
-    }
-    hasAllNullValues(allowScalar) {
-        return this.items.every(node => {
-            if (!isPair(node))
-                return false;
-            const n = node.value;
-            return (n == null ||
-                (allowScalar &&
-                    isScalar$1(n) &&
-                    n.value == null &&
-                    !n.commentBefore &&
-                    !n.comment &&
-                    !n.tag));
-        });
-    }
-    /**
-     * Checks if the collection includes a value with the key `key`.
-     */
-    hasIn(path) {
-        const [key, ...rest] = path;
-        if (rest.length === 0)
-            return this.has(key);
-        const node = this.get(key, true);
-        return isCollection$1(node) ? node.hasIn(rest) : false;
-    }
-    /**
-     * Sets a value in this collection. For `!!set`, `value` needs to be a
-     * boolean to add/remove the item from the set.
-     */
-    setIn(path, value) {
-        const [key, ...rest] = path;
-        if (rest.length === 0) {
-            this.set(key, value);
-        }
-        else {
-            const node = this.get(key, true);
-            if (isCollection$1(node))
-                node.setIn(rest, value);
-            else if (node === undefined && this.schema)
-                this.set(key, collectionFromPath(this.schema, rest, value));
-            else
-                throw new Error(`Expected YAML collection at ${key}. Remaining path: ${rest}`);
-        }
-    }
-}
-
-/**
- * Stringifies a comment.
- *
- * Empty comment lines are left empty,
- * lines consisting of a single space are replaced by `#`,
- * and all other lines are prefixed with a `#`.
- */
-const stringifyComment = (str) => str.replace(/^(?!$)(?: $)?/gm, '#');
-function indentComment(comment, indent) {
-    if (/^\n+$/.test(comment))
-        return comment.substring(1);
-    return indent ? comment.replace(/^(?! *$)/gm, indent) : comment;
-}
-const lineComment = (str, indent, comment) => str.endsWith('\n')
-    ? indentComment(comment, indent)
-    : comment.includes('\n')
-        ? '\n' + indentComment(comment, indent)
-        : (str.endsWith(' ') ? '' : ' ') + comment;
-
-const FOLD_FLOW = 'flow';
-const FOLD_BLOCK = 'block';
-const FOLD_QUOTED = 'quoted';
-/**
- * Tries to keep input at up to `lineWidth` characters, splitting only on spaces
- * not followed by newlines or spaces unless `mode` is `'quoted'`. Lines are
- * terminated with `\n` and started with `indent`.
- */
-function foldFlowLines(text, indent, mode = 'flow', { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
-    if (!lineWidth || lineWidth < 0)
-        return text;
-    if (lineWidth < minContentWidth)
-        minContentWidth = 0;
-    const endStep = Math.max(1 + minContentWidth, 1 + lineWidth - indent.length);
-    if (text.length <= endStep)
-        return text;
-    const folds = [];
-    const escapedFolds = {};
-    let end = lineWidth - indent.length;
-    if (typeof indentAtStart === 'number') {
-        if (indentAtStart > lineWidth - Math.max(2, minContentWidth))
-            folds.push(0);
-        else
-            end = lineWidth - indentAtStart;
-    }
-    let split = undefined;
-    let prev = undefined;
-    let overflow = false;
-    let i = -1;
-    let escStart = -1;
-    let escEnd = -1;
-    if (mode === FOLD_BLOCK) {
-        i = consumeMoreIndentedLines(text, i, indent.length);
-        if (i !== -1)
-            end = i + endStep;
-    }
-    for (let ch; (ch = text[(i += 1)]);) {
-        if (mode === FOLD_QUOTED && ch === '\\') {
-            escStart = i;
-            switch (text[i + 1]) {
-                case 'x':
-                    i += 3;
-                    break;
-                case 'u':
-                    i += 5;
-                    break;
-                case 'U':
-                    i += 9;
-                    break;
-                default:
-                    i += 1;
-            }
-            escEnd = i;
-        }
-        if (ch === '\n') {
-            if (mode === FOLD_BLOCK)
-                i = consumeMoreIndentedLines(text, i, indent.length);
-            end = i + indent.length + endStep;
-            split = undefined;
-        }
-        else {
-            if (ch === ' ' &&
-                prev &&
-                prev !== ' ' &&
-                prev !== '\n' &&
-                prev !== '\t') {
-                // space surrounded by non-space can be replaced with newline + indent
-                const next = text[i + 1];
-                if (next && next !== ' ' && next !== '\n' && next !== '\t')
-                    split = i;
-            }
-            if (i >= end) {
-                if (split) {
-                    folds.push(split);
-                    end = split + endStep;
-                    split = undefined;
-                }
-                else if (mode === FOLD_QUOTED) {
-                    // white-space collected at end may stretch past lineWidth
-                    while (prev === ' ' || prev === '\t') {
-                        prev = ch;
-                        ch = text[(i += 1)];
-                        overflow = true;
-                    }
-                    // Account for newline escape, but don't break preceding escape
-                    const j = i > escEnd + 1 ? i - 2 : escStart - 1;
-                    // Bail out if lineWidth & minContentWidth are shorter than an escape string
-                    if (escapedFolds[j])
-                        return text;
-                    folds.push(j);
-                    escapedFolds[j] = true;
-                    end = j + endStep;
-                    split = undefined;
-                }
-                else {
-                    overflow = true;
-                }
-            }
-        }
-        prev = ch;
-    }
-    if (overflow && onOverflow)
-        onOverflow();
-    if (folds.length === 0)
-        return text;
-    if (onFold)
-        onFold();
-    let res = text.slice(0, folds[0]);
-    for (let i = 0; i < folds.length; ++i) {
-        const fold = folds[i];
-        const end = folds[i + 1] || text.length;
-        if (fold === 0)
-            res = `\n${indent}${text.slice(0, end)}`;
-        else {
-            if (mode === FOLD_QUOTED && escapedFolds[fold])
-                res += `${text[fold]}\\`;
-            res += `\n${indent}${text.slice(fold + 1, end)}`;
-        }
-    }
-    return res;
-}
-/**
- * Presumes `i + 1` is at the start of a line
- * @returns index of last newline in more-indented block
- */
-function consumeMoreIndentedLines(text, i, indent) {
-    let end = i;
-    let start = i + 1;
-    let ch = text[start];
-    while (ch === ' ' || ch === '\t') {
-        if (i < start + indent) {
-            ch = text[++i];
-        }
-        else {
-            do {
-                ch = text[++i];
-            } while (ch && ch !== '\n');
-            end = i;
-            start = i + 1;
-            ch = text[start];
-        }
-    }
-    return end;
-}
-
-const getFoldOptions = (ctx, isBlock) => ({
-    indentAtStart: isBlock ? ctx.indent.length : ctx.indentAtStart,
-    lineWidth: ctx.options.lineWidth,
-    minContentWidth: ctx.options.minContentWidth
-});
-// Also checks for lines starting with %, as parsing the output as YAML 1.1 will
-// presume that's starting a new document.
-const containsDocumentMarker = (str) => /^(%|---|\.\.\.)/m.test(str);
-function lineLengthOverLimit(str, lineWidth, indentLength) {
-    if (!lineWidth || lineWidth < 0)
-        return false;
-    const limit = lineWidth - indentLength;
-    const strLen = str.length;
-    if (strLen <= limit)
-        return false;
-    for (let i = 0, start = 0; i < strLen; ++i) {
-        if (str[i] === '\n') {
-            if (i - start > limit)
-                return true;
-            start = i + 1;
-            if (strLen - start <= limit)
-                return false;
-        }
-    }
-    return true;
-}
-function doubleQuotedString(value, ctx) {
-    const json = JSON.stringify(value);
-    if (ctx.options.doubleQuotedAsJSON)
-        return json;
-    const { implicitKey } = ctx;
-    const minMultiLineLength = ctx.options.doubleQuotedMinMultiLineLength;
-    const indent = ctx.indent || (containsDocumentMarker(value) ? '  ' : '');
-    let str = '';
-    let start = 0;
-    for (let i = 0, ch = json[i]; ch; ch = json[++i]) {
-        if (ch === ' ' && json[i + 1] === '\\' && json[i + 2] === 'n') {
-            // space before newline needs to be escaped to not be folded
-            str += json.slice(start, i) + '\\ ';
-            i += 1;
-            start = i;
-            ch = '\\';
-        }
-        if (ch === '\\')
-            switch (json[i + 1]) {
-                case 'u':
-                    {
-                        str += json.slice(start, i);
-                        const code = json.substr(i + 2, 4);
-                        switch (code) {
-                            case '0000':
-                                str += '\\0';
-                                break;
-                            case '0007':
-                                str += '\\a';
-                                break;
-                            case '000b':
-                                str += '\\v';
-                                break;
-                            case '001b':
-                                str += '\\e';
-                                break;
-                            case '0085':
-                                str += '\\N';
-                                break;
-                            case '00a0':
-                                str += '\\_';
-                                break;
-                            case '2028':
-                                str += '\\L';
-                                break;
-                            case '2029':
-                                str += '\\P';
-                                break;
-                            default:
-                                if (code.substr(0, 2) === '00')
-                                    str += '\\x' + code.substr(2);
-                                else
-                                    str += json.substr(i, 6);
-                        }
-                        i += 5;
-                        start = i + 1;
-                    }
-                    break;
-                case 'n':
-                    if (implicitKey ||
-                        json[i + 2] === '"' ||
-                        json.length < minMultiLineLength) {
-                        i += 1;
-                    }
-                    else {
-                        // folding will eat first newline
-                        str += json.slice(start, i) + '\n\n';
-                        while (json[i + 2] === '\\' &&
-                            json[i + 3] === 'n' &&
-                            json[i + 4] !== '"') {
-                            str += '\n';
-                            i += 2;
-                        }
-                        str += indent;
-                        // space after newline needs to be escaped to not be folded
-                        if (json[i + 2] === ' ')
-                            str += '\\';
-                        i += 1;
-                        start = i + 1;
-                    }
-                    break;
-                default:
-                    i += 1;
-            }
-    }
-    str = start ? str + json.slice(start) : json;
-    return implicitKey
-        ? str
-        : foldFlowLines(str, indent, FOLD_QUOTED, getFoldOptions(ctx, false));
-}
-function singleQuotedString(value, ctx) {
-    if (ctx.options.singleQuote === false ||
-        (ctx.implicitKey && value.includes('\n')) ||
-        /[ \t]\n|\n[ \t]/.test(value) // single quoted string can't have leading or trailing whitespace around newline
-    )
-        return doubleQuotedString(value, ctx);
-    const indent = ctx.indent || (containsDocumentMarker(value) ? '  ' : '');
-    const res = "'" + value.replace(/'/g, "''").replace(/\n+/g, `$&\n${indent}`) + "'";
-    return ctx.implicitKey
-        ? res
-        : foldFlowLines(res, indent, FOLD_FLOW, getFoldOptions(ctx, false));
-}
-function quotedString(value, ctx) {
-    const { singleQuote } = ctx.options;
-    let qs;
-    if (singleQuote === false)
-        qs = doubleQuotedString;
-    else {
-        const hasDouble = value.includes('"');
-        const hasSingle = value.includes("'");
-        if (hasDouble && !hasSingle)
-            qs = singleQuotedString;
-        else if (hasSingle && !hasDouble)
-            qs = doubleQuotedString;
-        else
-            qs = singleQuote ? singleQuotedString : doubleQuotedString;
-    }
-    return qs(value, ctx);
-}
-// The negative lookbehind avoids a polynomial search,
-// but isn't supported yet on Safari: https://caniuse.com/js-regexp-lookbehind
-let blockEndNewlines;
-try {
-    blockEndNewlines = new RegExp('(^|(?<!\n))\n+(?!\n|$)', 'g');
-}
-catch {
-    blockEndNewlines = /\n+(?!\n|$)/g;
-}
-function blockString({ comment, type, value }, ctx, onComment, onChompKeep) {
-    const { blockQuote, commentString, lineWidth } = ctx.options;
-    // 1. Block can't end in whitespace unless the last line is non-empty.
-    // 2. Strings consisting of only whitespace are best rendered explicitly.
-    if (!blockQuote || /\n[\t ]+$/.test(value)) {
-        return quotedString(value, ctx);
-    }
-    const indent = ctx.indent ||
-        (ctx.forceBlockIndent || containsDocumentMarker(value) ? '  ' : '');
-    const literal = blockQuote === 'literal'
-        ? true
-        : blockQuote === 'folded' || type === Scalar.BLOCK_FOLDED
-            ? false
-            : type === Scalar.BLOCK_LITERAL
-                ? true
-                : !lineLengthOverLimit(value, lineWidth, indent.length);
-    if (!value)
-        return literal ? '|\n' : '>\n';
-    // determine chomping from whitespace at value end
-    let chomp;
-    let endStart;
-    for (endStart = value.length; endStart > 0; --endStart) {
-        const ch = value[endStart - 1];
-        if (ch !== '\n' && ch !== '\t' && ch !== ' ')
-            break;
-    }
-    let end = value.substring(endStart);
-    const endNlPos = end.indexOf('\n');
-    if (endNlPos === -1) {
-        chomp = '-'; // strip
-    }
-    else if (value === end || endNlPos !== end.length - 1) {
-        chomp = '+'; // keep
-        if (onChompKeep)
-            onChompKeep();
-    }
-    else {
-        chomp = ''; // clip
-    }
-    if (end) {
-        value = value.slice(0, -end.length);
-        if (end[end.length - 1] === '\n')
-            end = end.slice(0, -1);
-        end = end.replace(blockEndNewlines, `$&${indent}`);
-    }
-    // determine indent indicator from whitespace at value start
-    let startWithSpace = false;
-    let startEnd;
-    let startNlPos = -1;
-    for (startEnd = 0; startEnd < value.length; ++startEnd) {
-        const ch = value[startEnd];
-        if (ch === ' ')
-            startWithSpace = true;
-        else if (ch === '\n')
-            startNlPos = startEnd;
-        else
-            break;
-    }
-    let start = value.substring(0, startNlPos < startEnd ? startNlPos + 1 : startEnd);
-    if (start) {
-        value = value.substring(start.length);
-        start = start.replace(/\n+/g, `$&${indent}`);
-    }
-    const indentSize = indent ? '2' : '1'; // root is at -1
-    // Leading | or > is added later
-    let header = (startWithSpace ? indentSize : '') + chomp;
-    if (comment) {
-        header += ' ' + commentString(comment.replace(/ ?[\r\n]+/g, ' '));
-        if (onComment)
-            onComment();
-    }
-    if (!literal) {
-        const foldedValue = value
-            .replace(/\n+/g, '\n$&')
-            .replace(/(?:^|\n)([\t ].*)(?:([\n\t ]*)\n(?![\n\t ]))?/g, '$1$2') // more-indented lines aren't folded
-            //                ^ more-ind. ^ empty     ^ capture next empty lines only at end of indent
-            .replace(/\n+/g, `$&${indent}`);
-        let literalFallback = false;
-        const foldOptions = getFoldOptions(ctx, true);
-        if (blockQuote !== 'folded' && type !== Scalar.BLOCK_FOLDED) {
-            foldOptions.onOverflow = () => {
-                literalFallback = true;
-            };
-        }
-        const body = foldFlowLines(`${start}${foldedValue}${end}`, indent, FOLD_BLOCK, foldOptions);
-        if (!literalFallback)
-            return `>${header}\n${indent}${body}`;
-    }
-    value = value.replace(/\n+/g, `$&${indent}`);
-    return `|${header}\n${indent}${start}${value}${end}`;
-}
-function plainString(item, ctx, onComment, onChompKeep) {
-    const { type, value } = item;
-    const { actualString, implicitKey, indent, indentStep, inFlow } = ctx;
-    if ((implicitKey && value.includes('\n')) ||
-        (inFlow && /[[\]{},]/.test(value))) {
-        return quotedString(value, ctx);
-    }
-    if (/^[\n\t ,[\]{}#&*!|>'"%@`]|^[?-]$|^[?-][ \t]|[\n:][ \t]|[ \t]\n|[\n\t ]#|[\n\t :]$/.test(value)) {
-        // not allowed:
-        // - '-' or '?'
-        // - start with an indicator character (except [?:-]) or /[?-] /
-        // - '\n ', ': ' or ' \n' anywhere
-        // - '#' not preceded by a non-space char
-        // - end with ' ' or ':'
-        return implicitKey || inFlow || !value.includes('\n')
-            ? quotedString(value, ctx)
-            : blockString(item, ctx, onComment, onChompKeep);
-    }
-    if (!implicitKey &&
-        !inFlow &&
-        type !== Scalar.PLAIN &&
-        value.includes('\n')) {
-        // Where allowed & type not set explicitly, prefer block style for multiline strings
-        return blockString(item, ctx, onComment, onChompKeep);
-    }
-    if (containsDocumentMarker(value)) {
-        if (indent === '') {
-            ctx.forceBlockIndent = true;
-            return blockString(item, ctx, onComment, onChompKeep);
-        }
-        else if (implicitKey && indent === indentStep) {
-            return quotedString(value, ctx);
-        }
-    }
-    const str = value.replace(/\n+/g, `$&\n${indent}`);
-    // Verify that output will be parsed as a string, as e.g. plain numbers and
-    // booleans get parsed with those types in v1.2 (e.g. '42', 'true' & '0.9e-3'),
-    // and others in v1.1.
-    if (actualString) {
-        const test = (tag) => tag.default && tag.tag !== 'tag:yaml.org,2002:str' && tag.test?.test(str);
-        const { compat, tags } = ctx.doc.schema;
-        if (tags.some(test) || compat?.some(test))
-            return quotedString(value, ctx);
-    }
-    return implicitKey
-        ? str
-        : foldFlowLines(str, indent, FOLD_FLOW, getFoldOptions(ctx, false));
-}
-function stringifyString(item, ctx, onComment, onChompKeep) {
-    const { implicitKey, inFlow } = ctx;
-    const ss = typeof item.value === 'string'
-        ? item
-        : Object.assign({}, item, { value: String(item.value) });
-    let { type } = item;
-    if (type !== Scalar.QUOTE_DOUBLE) {
-        // force double quotes on control characters & unpaired surrogates
-        if (/[\x00-\x08\x0b-\x1f\x7f-\x9f\u{D800}-\u{DFFF}]/u.test(ss.value))
-            type = Scalar.QUOTE_DOUBLE;
-    }
-    const _stringify = (_type) => {
-        switch (_type) {
-            case Scalar.BLOCK_FOLDED:
-            case Scalar.BLOCK_LITERAL:
-                return implicitKey || inFlow
-                    ? quotedString(ss.value, ctx) // blocks are not valid inside flow containers
-                    : blockString(ss, ctx, onComment, onChompKeep);
-            case Scalar.QUOTE_DOUBLE:
-                return doubleQuotedString(ss.value, ctx);
-            case Scalar.QUOTE_SINGLE:
-                return singleQuotedString(ss.value, ctx);
-            case Scalar.PLAIN:
-                return plainString(ss, ctx, onComment, onChompKeep);
-            default:
-                return null;
-        }
-    };
-    let res = _stringify(type);
-    if (res === null) {
-        const { defaultKeyType, defaultStringType } = ctx.options;
-        const t = (implicitKey && defaultKeyType) || defaultStringType;
-        res = _stringify(t);
-        if (res === null)
-            throw new Error(`Unsupported default string type ${t}`);
-    }
-    return res;
-}
-
-function createStringifyContext(doc, options) {
-    const opt = Object.assign({
-        blockQuote: true,
-        commentString: stringifyComment,
-        defaultKeyType: null,
-        defaultStringType: 'PLAIN',
-        directives: null,
-        doubleQuotedAsJSON: false,
-        doubleQuotedMinMultiLineLength: 40,
-        falseStr: 'false',
-        flowCollectionPadding: true,
-        indentSeq: true,
-        lineWidth: 80,
-        minContentWidth: 20,
-        nullStr: 'null',
-        simpleKeys: false,
-        singleQuote: null,
-        trueStr: 'true',
-        verifyAliasOrder: true
-    }, doc.schema.toStringOptions, options);
-    let inFlow;
-    switch (opt.collectionStyle) {
-        case 'block':
-            inFlow = false;
-            break;
-        case 'flow':
-            inFlow = true;
-            break;
-        default:
-            inFlow = null;
-    }
-    return {
-        anchors: new Set(),
-        doc,
-        flowCollectionPadding: opt.flowCollectionPadding ? ' ' : '',
-        indent: '',
-        indentStep: typeof opt.indent === 'number' ? ' '.repeat(opt.indent) : '  ',
-        inFlow,
-        options: opt
-    };
-}
-function getTagObject(tags, item) {
-    if (item.tag) {
-        const match = tags.filter(t => t.tag === item.tag);
-        if (match.length > 0)
-            return match.find(t => t.format === item.format) ?? match[0];
-    }
-    let tagObj = undefined;
-    let obj;
-    if (isScalar$1(item)) {
-        obj = item.value;
-        let match = tags.filter(t => t.identify?.(obj));
-        if (match.length > 1) {
-            const testMatch = match.filter(t => t.test);
-            if (testMatch.length > 0)
-                match = testMatch;
-        }
-        tagObj =
-            match.find(t => t.format === item.format) ?? match.find(t => !t.format);
-    }
-    else {
-        obj = item;
-        tagObj = tags.find(t => t.nodeClass && obj instanceof t.nodeClass);
-    }
-    if (!tagObj) {
-        const name = obj?.constructor?.name ?? (obj === null ? 'null' : typeof obj);
-        throw new Error(`Tag not resolved for ${name} value`);
-    }
-    return tagObj;
-}
-// needs to be called before value stringifier to allow for circular anchor refs
-function stringifyProps(node, tagObj, { anchors, doc }) {
-    if (!doc.directives)
-        return '';
-    const props = [];
-    const anchor = (isScalar$1(node) || isCollection$1(node)) && node.anchor;
-    if (anchor && anchorIsValid(anchor)) {
-        anchors.add(anchor);
-        props.push(`&${anchor}`);
-    }
-    const tag = node.tag ?? (tagObj.default ? null : tagObj.tag);
-    if (tag)
-        props.push(doc.directives.tagString(tag));
-    return props.join(' ');
-}
-function stringify$2(item, ctx, onComment, onChompKeep) {
-    if (isPair(item))
-        return item.toString(ctx, onComment, onChompKeep);
-    if (isAlias(item)) {
-        if (ctx.doc.directives)
-            return item.toString(ctx);
-        if (ctx.resolvedAliases?.has(item)) {
-            throw new TypeError(`Cannot stringify circular structure without alias nodes`);
-        }
-        else {
-            if (ctx.resolvedAliases)
-                ctx.resolvedAliases.add(item);
-            else
-                ctx.resolvedAliases = new Set([item]);
-            item = item.resolve(ctx.doc);
-        }
-    }
-    let tagObj = undefined;
-    const node = isNode(item)
-        ? item
-        : ctx.doc.createNode(item, { onTagObj: o => (tagObj = o) });
-    tagObj ?? (tagObj = getTagObject(ctx.doc.schema.tags, node));
-    const props = stringifyProps(node, tagObj, ctx);
-    if (props.length > 0)
-        ctx.indentAtStart = (ctx.indentAtStart ?? 0) + props.length + 1;
-    const str = typeof tagObj.stringify === 'function'
-        ? tagObj.stringify(node, ctx, onComment, onChompKeep)
-        : isScalar$1(node)
-            ? stringifyString(node, ctx, onComment, onChompKeep)
-            : node.toString(ctx, onComment, onChompKeep);
-    if (!props)
-        return str;
-    return isScalar$1(node) || str[0] === '{' || str[0] === '['
-        ? `${props} ${str}`
-        : `${props}\n${ctx.indent}${str}`;
-}
-
-function stringifyPair({ key, value }, ctx, onComment, onChompKeep) {
-    const { allNullValues, doc, indent, indentStep, options: { commentString, indentSeq, simpleKeys } } = ctx;
-    let keyComment = (isNode(key) && key.comment) || null;
-    if (simpleKeys) {
-        if (keyComment) {
-            throw new Error('With simple keys, key nodes cannot have comments');
-        }
-        if (isCollection$1(key) || (!isNode(key) && typeof key === 'object')) {
-            const msg = 'With simple keys, collection cannot be used as a key value';
-            throw new Error(msg);
-        }
-    }
-    let explicitKey = !simpleKeys &&
-        (!key ||
-            (keyComment && value == null && !ctx.inFlow) ||
-            isCollection$1(key) ||
-            (isScalar$1(key)
-                ? key.type === Scalar.BLOCK_FOLDED || key.type === Scalar.BLOCK_LITERAL
-                : typeof key === 'object'));
-    ctx = Object.assign({}, ctx, {
-        allNullValues: false,
-        implicitKey: !explicitKey && (simpleKeys || !allNullValues),
-        indent: indent + indentStep
-    });
-    let keyCommentDone = false;
-    let chompKeep = false;
-    let str = stringify$2(key, ctx, () => (keyCommentDone = true), () => (chompKeep = true));
-    if (!explicitKey && !ctx.inFlow && str.length > 1024) {
-        if (simpleKeys)
-            throw new Error('With simple keys, single line scalar must not span more than 1024 characters');
-        explicitKey = true;
-    }
-    if (ctx.inFlow) {
-        if (allNullValues || value == null) {
-            if (keyCommentDone && onComment)
-                onComment();
-            return str === '' ? '?' : explicitKey ? `? ${str}` : str;
-        }
-    }
-    else if ((allNullValues && !simpleKeys) || (value == null && explicitKey)) {
-        str = `? ${str}`;
-        if (keyComment && !keyCommentDone) {
-            str += lineComment(str, ctx.indent, commentString(keyComment));
-        }
-        else if (chompKeep && onChompKeep)
-            onChompKeep();
-        return str;
-    }
-    if (keyCommentDone)
-        keyComment = null;
-    if (explicitKey) {
-        if (keyComment)
-            str += lineComment(str, ctx.indent, commentString(keyComment));
-        str = `? ${str}\n${indent}:`;
-    }
-    else {
-        str = `${str}:`;
-        if (keyComment)
-            str += lineComment(str, ctx.indent, commentString(keyComment));
-    }
-    let vsb, vcb, valueComment;
-    if (isNode(value)) {
-        vsb = !!value.spaceBefore;
-        vcb = value.commentBefore;
-        valueComment = value.comment;
-    }
-    else {
-        vsb = false;
-        vcb = null;
-        valueComment = null;
-        if (value && typeof value === 'object')
-            value = doc.createNode(value);
-    }
-    ctx.implicitKey = false;
-    if (!explicitKey && !keyComment && isScalar$1(value))
-        ctx.indentAtStart = str.length + 1;
-    chompKeep = false;
-    if (!indentSeq &&
-        indentStep.length >= 2 &&
-        !ctx.inFlow &&
-        !explicitKey &&
-        isSeq(value) &&
-        !value.flow &&
-        !value.tag &&
-        !value.anchor) {
-        // If indentSeq === false, consider '- ' as part of indentation where possible
-        ctx.indent = ctx.indent.substring(2);
-    }
-    let valueCommentDone = false;
-    const valueStr = stringify$2(value, ctx, () => (valueCommentDone = true), () => (chompKeep = true));
-    let ws = ' ';
-    if (keyComment || vsb || vcb) {
-        ws = vsb ? '\n' : '';
-        if (vcb) {
-            const cs = commentString(vcb);
-            ws += `\n${indentComment(cs, ctx.indent)}`;
-        }
-        if (valueStr === '' && !ctx.inFlow) {
-            if (ws === '\n' && valueComment)
-                ws = '\n\n';
-        }
-        else {
-            ws += `\n${ctx.indent}`;
-        }
-    }
-    else if (!explicitKey && isCollection$1(value)) {
-        const vs0 = valueStr[0];
-        const nl0 = valueStr.indexOf('\n');
-        const hasNewline = nl0 !== -1;
-        const flow = ctx.inFlow ?? value.flow ?? value.items.length === 0;
-        if (hasNewline || !flow) {
-            let hasPropsLine = false;
-            if (hasNewline && (vs0 === '&' || vs0 === '!')) {
-                let sp0 = valueStr.indexOf(' ');
-                if (vs0 === '&' &&
-                    sp0 !== -1 &&
-                    sp0 < nl0 &&
-                    valueStr[sp0 + 1] === '!') {
-                    sp0 = valueStr.indexOf(' ', sp0 + 1);
-                }
-                if (sp0 === -1 || nl0 < sp0)
-                    hasPropsLine = true;
-            }
-            if (!hasPropsLine)
-                ws = `\n${ctx.indent}`;
-        }
-    }
-    else if (valueStr === '' || valueStr[0] === '\n') {
-        ws = '';
-    }
-    str += ws + valueStr;
-    if (ctx.inFlow) {
-        if (valueCommentDone && onComment)
-            onComment();
-    }
-    else if (valueComment && !valueCommentDone) {
-        str += lineComment(str, ctx.indent, commentString(valueComment));
-    }
-    else if (chompKeep && onChompKeep) {
-        onChompKeep();
-    }
-    return str;
-}
-
-function warn(logLevel, warning) {
-    if (logLevel === 'debug' || logLevel === 'warn') {
-        console.warn(warning);
-    }
-}
-
-// If the value associated with a merge key is a single mapping node, each of
-// its key/value pairs is inserted into the current mapping, unless the key
-// already exists in it. If the value associated with the merge key is a
-// sequence, then this sequence is expected to contain mapping nodes and each
-// of these nodes is merged in turn according to its order in the sequence.
-// Keys in mapping nodes earlier in the sequence override keys specified in
-// later mapping nodes. -- http://yaml.org/type/merge.html
-const MERGE_KEY = '<<';
-const merge = {
-    identify: value => value === MERGE_KEY ||
-        (typeof value === 'symbol' && value.description === MERGE_KEY),
-    default: 'key',
-    tag: 'tag:yaml.org,2002:merge',
-    test: /^<<$/,
-    resolve: () => Object.assign(new Scalar(Symbol(MERGE_KEY)), {
-        addToJSMap: addMergeToJSMap
-    }),
-    stringify: () => MERGE_KEY
-};
-const isMergeKey = (ctx, key) => (merge.identify(key) ||
-    (isScalar$1(key) &&
-        (!key.type || key.type === Scalar.PLAIN) &&
-        merge.identify(key.value))) &&
-    ctx?.doc.schema.tags.some(tag => tag.tag === merge.tag && tag.default);
-function addMergeToJSMap(ctx, map, value) {
-    value = ctx && isAlias(value) ? value.resolve(ctx.doc) : value;
-    if (isSeq(value))
-        for (const it of value.items)
-            mergeValue(ctx, map, it);
-    else if (Array.isArray(value))
-        for (const it of value)
-            mergeValue(ctx, map, it);
-    else
-        mergeValue(ctx, map, value);
-}
-function mergeValue(ctx, map, value) {
-    const source = ctx && isAlias(value) ? value.resolve(ctx.doc) : value;
-    if (!isMap(source))
-        throw new Error('Merge sources must be maps or map aliases');
-    const srcMap = source.toJSON(null, ctx, Map);
-    for (const [key, value] of srcMap) {
-        if (map instanceof Map) {
-            if (!map.has(key))
-                map.set(key, value);
-        }
-        else if (map instanceof Set) {
-            map.add(key);
-        }
-        else if (!Object.prototype.hasOwnProperty.call(map, key)) {
-            Object.defineProperty(map, key, {
-                value,
-                writable: true,
-                enumerable: true,
-                configurable: true
-            });
-        }
-    }
-    return map;
-}
-
-function addPairToJSMap(ctx, map, { key, value }) {
-    if (isNode(key) && key.addToJSMap)
-        key.addToJSMap(ctx, map, value);
-    // TODO: Should drop this special case for bare << handling
-    else if (isMergeKey(ctx, key))
-        addMergeToJSMap(ctx, map, value);
-    else {
-        const jsKey = toJS(key, '', ctx);
-        if (map instanceof Map) {
-            map.set(jsKey, toJS(value, jsKey, ctx));
-        }
-        else if (map instanceof Set) {
-            map.add(jsKey);
-        }
-        else {
-            const stringKey = stringifyKey(key, jsKey, ctx);
-            const jsValue = toJS(value, stringKey, ctx);
-            if (stringKey in map)
-                Object.defineProperty(map, stringKey, {
-                    value: jsValue,
-                    writable: true,
-                    enumerable: true,
-                    configurable: true
-                });
-            else
-                map[stringKey] = jsValue;
-        }
-    }
-    return map;
-}
-function stringifyKey(key, jsKey, ctx) {
-    if (jsKey === null)
-        return '';
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-    if (typeof jsKey !== 'object')
-        return String(jsKey);
-    if (isNode(key) && ctx?.doc) {
-        const strCtx = createStringifyContext(ctx.doc, {});
-        strCtx.anchors = new Set();
-        for (const node of ctx.anchors.keys())
-            strCtx.anchors.add(node.anchor);
-        strCtx.inFlow = true;
-        strCtx.inStringifyKey = true;
-        const strKey = key.toString(strCtx);
-        if (!ctx.mapKeyWarned) {
-            let jsonStr = JSON.stringify(strKey);
-            if (jsonStr.length > 40)
-                jsonStr = jsonStr.substring(0, 36) + '..."';
-            warn(ctx.doc.options.logLevel, `Keys with collection values will be stringified due to JS Object restrictions: ${jsonStr}. Set mapAsMap: true to use object keys.`);
-            ctx.mapKeyWarned = true;
-        }
-        return strKey;
-    }
-    return JSON.stringify(jsKey);
-}
-
-function createPair(key, value, ctx) {
-    const k = createNode(key, undefined, ctx);
-    const v = createNode(value, undefined, ctx);
-    return new Pair(k, v);
-}
-class Pair {
-    constructor(key, value = null) {
-        Object.defineProperty(this, NODE_TYPE, { value: PAIR });
-        this.key = key;
-        this.value = value;
-    }
-    clone(schema) {
-        let { key, value } = this;
-        if (isNode(key))
-            key = key.clone(schema);
-        if (isNode(value))
-            value = value.clone(schema);
-        return new Pair(key, value);
-    }
-    toJSON(_, ctx) {
-        const pair = ctx?.mapAsMap ? new Map() : {};
-        return addPairToJSMap(ctx, pair, this);
-    }
-    toString(ctx, onComment, onChompKeep) {
-        return ctx?.doc
-            ? stringifyPair(this, ctx, onComment, onChompKeep)
-            : JSON.stringify(this);
-    }
-}
-
-function stringifyCollection(collection, ctx, options) {
-    const flow = ctx.inFlow ?? collection.flow;
-    const stringify = flow ? stringifyFlowCollection : stringifyBlockCollection;
-    return stringify(collection, ctx, options);
-}
-function stringifyBlockCollection({ comment, items }, ctx, { blockItemPrefix, flowChars, itemIndent, onChompKeep, onComment }) {
-    const { indent, options: { commentString } } = ctx;
-    const itemCtx = Object.assign({}, ctx, { indent: itemIndent, type: null });
-    let chompKeep = false; // flag for the preceding node's status
-    const lines = [];
-    for (let i = 0; i < items.length; ++i) {
-        const item = items[i];
-        let comment = null;
-        if (isNode(item)) {
-            if (!chompKeep && item.spaceBefore)
-                lines.push('');
-            addCommentBefore(ctx, lines, item.commentBefore, chompKeep);
-            if (item.comment)
-                comment = item.comment;
-        }
-        else if (isPair(item)) {
-            const ik = isNode(item.key) ? item.key : null;
-            if (ik) {
-                if (!chompKeep && ik.spaceBefore)
-                    lines.push('');
-                addCommentBefore(ctx, lines, ik.commentBefore, chompKeep);
-            }
-        }
-        chompKeep = false;
-        let str = stringify$2(item, itemCtx, () => (comment = null), () => (chompKeep = true));
-        if (comment)
-            str += lineComment(str, itemIndent, commentString(comment));
-        if (chompKeep && comment)
-            chompKeep = false;
-        lines.push(blockItemPrefix + str);
-    }
-    let str;
-    if (lines.length === 0) {
-        str = flowChars.start + flowChars.end;
-    }
-    else {
-        str = lines[0];
-        for (let i = 1; i < lines.length; ++i) {
-            const line = lines[i];
-            str += line ? `\n${indent}${line}` : '\n';
-        }
-    }
-    if (comment) {
-        str += '\n' + indentComment(commentString(comment), indent);
-        if (onComment)
-            onComment();
-    }
-    else if (chompKeep && onChompKeep)
-        onChompKeep();
-    return str;
-}
-function stringifyFlowCollection({ items }, ctx, { flowChars, itemIndent }) {
-    const { indent, indentStep, flowCollectionPadding: fcPadding, options: { commentString } } = ctx;
-    itemIndent += indentStep;
-    const itemCtx = Object.assign({}, ctx, {
-        indent: itemIndent,
-        inFlow: true,
-        type: null
-    });
-    let reqNewline = false;
-    let linesAtValue = 0;
-    const lines = [];
-    for (let i = 0; i < items.length; ++i) {
-        const item = items[i];
-        let comment = null;
-        if (isNode(item)) {
-            if (item.spaceBefore)
-                lines.push('');
-            addCommentBefore(ctx, lines, item.commentBefore, false);
-            if (item.comment)
-                comment = item.comment;
-        }
-        else if (isPair(item)) {
-            const ik = isNode(item.key) ? item.key : null;
-            if (ik) {
-                if (ik.spaceBefore)
-                    lines.push('');
-                addCommentBefore(ctx, lines, ik.commentBefore, false);
-                if (ik.comment)
-                    reqNewline = true;
-            }
-            const iv = isNode(item.value) ? item.value : null;
-            if (iv) {
-                if (iv.comment)
-                    comment = iv.comment;
-                if (iv.commentBefore)
-                    reqNewline = true;
-            }
-            else if (item.value == null && ik?.comment) {
-                comment = ik.comment;
-            }
-        }
-        if (comment)
-            reqNewline = true;
-        let str = stringify$2(item, itemCtx, () => (comment = null));
-        if (i < items.length - 1)
-            str += ',';
-        if (comment)
-            str += lineComment(str, itemIndent, commentString(comment));
-        if (!reqNewline && (lines.length > linesAtValue || str.includes('\n')))
-            reqNewline = true;
-        lines.push(str);
-        linesAtValue = lines.length;
-    }
-    const { start, end } = flowChars;
-    if (lines.length === 0) {
-        return start + end;
-    }
-    else {
-        if (!reqNewline) {
-            const len = lines.reduce((sum, line) => sum + line.length + 2, 2);
-            reqNewline = ctx.options.lineWidth > 0 && len > ctx.options.lineWidth;
-        }
-        if (reqNewline) {
-            let str = start;
-            for (const line of lines)
-                str += line ? `\n${indentStep}${indent}${line}` : '\n';
-            return `${str}\n${indent}${end}`;
-        }
-        else {
-            return `${start}${fcPadding}${lines.join(' ')}${fcPadding}${end}`;
-        }
-    }
-}
-function addCommentBefore({ indent, options: { commentString } }, lines, comment, chompKeep) {
-    if (comment && chompKeep)
-        comment = comment.replace(/^\n+/, '');
-    if (comment) {
-        const ic = indentComment(commentString(comment), indent);
-        lines.push(ic.trimStart()); // Avoid double indent on first line
-    }
-}
-
-function findPair(items, key) {
-    const k = isScalar$1(key) ? key.value : key;
-    for (const it of items) {
-        if (isPair(it)) {
-            if (it.key === key || it.key === k)
-                return it;
-            if (isScalar$1(it.key) && it.key.value === k)
-                return it;
-        }
-    }
-    return undefined;
-}
-class YAMLMap extends Collection {
-    static get tagName() {
-        return 'tag:yaml.org,2002:map';
-    }
-    constructor(schema) {
-        super(MAP, schema);
-        this.items = [];
-    }
-    /**
-     * A generic collection parsing method that can be extended
-     * to other node classes that inherit from YAMLMap
-     */
-    static from(schema, obj, ctx) {
-        const { keepUndefined, replacer } = ctx;
-        const map = new this(schema);
-        const add = (key, value) => {
-            if (typeof replacer === 'function')
-                value = replacer.call(obj, key, value);
-            else if (Array.isArray(replacer) && !replacer.includes(key))
-                return;
-            if (value !== undefined || keepUndefined)
-                map.items.push(createPair(key, value, ctx));
-        };
-        if (obj instanceof Map) {
-            for (const [key, value] of obj)
-                add(key, value);
-        }
-        else if (obj && typeof obj === 'object') {
-            for (const key of Object.keys(obj))
-                add(key, obj[key]);
-        }
-        if (typeof schema.sortMapEntries === 'function') {
-            map.items.sort(schema.sortMapEntries);
-        }
-        return map;
-    }
-    /**
-     * Adds a value to the collection.
-     *
-     * @param overwrite - If not set `true`, using a key that is already in the
-     *   collection will throw. Otherwise, overwrites the previous value.
-     */
-    add(pair, overwrite) {
-        let _pair;
-        if (isPair(pair))
-            _pair = pair;
-        else if (!pair || typeof pair !== 'object' || !('key' in pair)) {
-            // In TypeScript, this never happens.
-            _pair = new Pair(pair, pair?.value);
-        }
-        else
-            _pair = new Pair(pair.key, pair.value);
-        const prev = findPair(this.items, _pair.key);
-        const sortEntries = this.schema?.sortMapEntries;
-        if (prev) {
-            if (!overwrite)
-                throw new Error(`Key ${_pair.key} already set`);
-            // For scalars, keep the old node & its comments and anchors
-            if (isScalar$1(prev.value) && isScalarValue(_pair.value))
-                prev.value.value = _pair.value;
-            else
-                prev.value = _pair.value;
-        }
-        else if (sortEntries) {
-            const i = this.items.findIndex(item => sortEntries(_pair, item) < 0);
-            if (i === -1)
-                this.items.push(_pair);
-            else
-                this.items.splice(i, 0, _pair);
-        }
-        else {
-            this.items.push(_pair);
-        }
-    }
-    delete(key) {
-        const it = findPair(this.items, key);
-        if (!it)
-            return false;
-        const del = this.items.splice(this.items.indexOf(it), 1);
-        return del.length > 0;
-    }
-    get(key, keepScalar) {
-        const it = findPair(this.items, key);
-        const node = it?.value;
-        return (!keepScalar && isScalar$1(node) ? node.value : node) ?? undefined;
-    }
-    has(key) {
-        return !!findPair(this.items, key);
-    }
-    set(key, value) {
-        this.add(new Pair(key, value), true);
-    }
-    /**
-     * @param ctx - Conversion context, originally set in Document#toJS()
-     * @param {Class} Type - If set, forces the returned collection type
-     * @returns Instance of Type, Map, or Object
-     */
-    toJSON(_, ctx, Type) {
-        const map = Type ? new Type() : ctx?.mapAsMap ? new Map() : {};
-        if (ctx?.onCreate)
-            ctx.onCreate(map);
-        for (const item of this.items)
-            addPairToJSMap(ctx, map, item);
-        return map;
-    }
-    toString(ctx, onComment, onChompKeep) {
-        if (!ctx)
-            return JSON.stringify(this);
-        for (const item of this.items) {
-            if (!isPair(item))
-                throw new Error(`Map items must all be pairs; found ${JSON.stringify(item)} instead`);
-        }
-        if (!ctx.allNullValues && this.hasAllNullValues(false))
-            ctx = Object.assign({}, ctx, { allNullValues: true });
-        return stringifyCollection(this, ctx, {
-            blockItemPrefix: '',
-            flowChars: { start: '{', end: '}' },
-            itemIndent: ctx.indent || '',
-            onChompKeep,
-            onComment
-        });
-    }
-}
-
-const map = {
-    collection: 'map',
-    default: true,
-    nodeClass: YAMLMap,
-    tag: 'tag:yaml.org,2002:map',
-    resolve(map, onError) {
-        if (!isMap(map))
-            onError('Expected a mapping for this tag');
-        return map;
-    },
-    createNode: (schema, obj, ctx) => YAMLMap.from(schema, obj, ctx)
+const INLINE_MARK_SPECS = {
+  underline: { mark: 'underline', open: '<u>', close: '</u>', kind: 'html' },
+  strike: { mark: 'strike', open: '~~', close: '~~', kind: 'markdown' },
+  bold: { mark: 'bold', open: '**', close: '**', kind: 'markdown' },
+  italic: { mark: 'italic', open: '*', close: '*', kind: 'markdown' },
+  code: { mark: 'code', open: '`', close: '`', kind: 'markdown' },
 };
 
-class YAMLSeq extends Collection {
-    static get tagName() {
-        return 'tag:yaml.org,2002:seq';
-    }
-    constructor(schema) {
-        super(SEQ, schema);
-        this.items = [];
-    }
-    add(value) {
-        this.items.push(value);
-    }
-    /**
-     * Removes a value from the collection.
-     *
-     * `key` must contain a representation of an integer for this to succeed.
-     * It may be wrapped in a `Scalar`.
-     *
-     * @returns `true` if the item was found and removed.
-     */
-    delete(key) {
-        const idx = asItemIndex(key);
-        if (typeof idx !== 'number')
-            return false;
-        const del = this.items.splice(idx, 1);
-        return del.length > 0;
-    }
-    get(key, keepScalar) {
-        const idx = asItemIndex(key);
-        if (typeof idx !== 'number')
-            return undefined;
-        const it = this.items[idx];
-        return !keepScalar && isScalar$1(it) ? it.value : it;
-    }
-    /**
-     * Checks if the collection includes a value with the key `key`.
-     *
-     * `key` must contain a representation of an integer for this to succeed.
-     * It may be wrapped in a `Scalar`.
-     */
-    has(key) {
-        const idx = asItemIndex(key);
-        return typeof idx === 'number' && idx < this.items.length;
-    }
-    /**
-     * Sets a value in this collection. For `!!set`, `value` needs to be a
-     * boolean to add/remove the item from the set.
-     *
-     * If `key` does not contain a representation of an integer, this will throw.
-     * It may be wrapped in a `Scalar`.
-     */
-    set(key, value) {
-        const idx = asItemIndex(key);
-        if (typeof idx !== 'number')
-            throw new Error(`Expected a valid index, not ${key}.`);
-        const prev = this.items[idx];
-        if (isScalar$1(prev) && isScalarValue(value))
-            prev.value = value;
-        else
-            this.items[idx] = value;
-    }
-    toJSON(_, ctx) {
-        const seq = [];
-        if (ctx?.onCreate)
-            ctx.onCreate(seq);
-        let i = 0;
-        for (const item of this.items)
-            seq.push(toJS(item, String(i++), ctx));
-        return seq;
-    }
-    toString(ctx, onComment, onChompKeep) {
-        if (!ctx)
-            return JSON.stringify(this);
-        return stringifyCollection(this, ctx, {
-            blockItemPrefix: '- ',
-            flowChars: { start: '[', end: ']' },
-            itemIndent: (ctx.indent || '') + '  ',
-            onChompKeep,
-            onComment
-        });
-    }
-    static from(schema, obj, ctx) {
-        const { replacer } = ctx;
-        const seq = new this(schema);
-        if (obj && Symbol.iterator in Object(obj)) {
-            let i = 0;
-            for (let it of obj) {
-                if (typeof replacer === 'function') {
-                    const key = obj instanceof Set ? it : String(i++);
-                    it = replacer.call(obj, key, it);
-                }
-                seq.items.push(createNode(it, undefined, ctx));
-            }
-        }
-        return seq;
-    }
-}
-function asItemIndex(key) {
-    let idx = isScalar$1(key) ? key.value : key;
-    if (idx && typeof idx === 'string')
-        idx = Number(idx);
-    return typeof idx === 'number' && Number.isInteger(idx) && idx >= 0
-        ? idx
-        : null;
-}
-
-const seq = {
-    collection: 'seq',
-    default: true,
-    nodeClass: YAMLSeq,
-    tag: 'tag:yaml.org,2002:seq',
-    resolve(seq, onError) {
-        if (!isSeq(seq))
-            onError('Expected a sequence for this tag');
-        return seq;
-    },
-    createNode: (schema, obj, ctx) => YAMLSeq.from(schema, obj, ctx)
-};
-
-const string = {
-    identify: value => typeof value === 'string',
-    default: true,
-    tag: 'tag:yaml.org,2002:str',
-    resolve: str => str,
-    stringify(item, ctx, onComment, onChompKeep) {
-        ctx = Object.assign({ actualString: true }, ctx);
-        return stringifyString(item, ctx, onComment, onChompKeep);
-    }
-};
-
-const nullTag = {
-    identify: value => value == null,
-    createNode: () => new Scalar(null),
-    default: true,
-    tag: 'tag:yaml.org,2002:null',
-    test: /^(?:~|[Nn]ull|NULL)?$/,
-    resolve: () => new Scalar(null),
-    stringify: ({ source }, ctx) => typeof source === 'string' && nullTag.test.test(source)
-        ? source
-        : ctx.options.nullStr
-};
-
-const boolTag = {
-    identify: value => typeof value === 'boolean',
-    default: true,
-    tag: 'tag:yaml.org,2002:bool',
-    test: /^(?:[Tt]rue|TRUE|[Ff]alse|FALSE)$/,
-    resolve: str => new Scalar(str[0] === 't' || str[0] === 'T'),
-    stringify({ source, value }, ctx) {
-        if (source && boolTag.test.test(source)) {
-            const sv = source[0] === 't' || source[0] === 'T';
-            if (value === sv)
-                return source;
-        }
-        return value ? ctx.options.trueStr : ctx.options.falseStr;
-    }
-};
-
-function stringifyNumber({ format, minFractionDigits, tag, value }) {
-    if (typeof value === 'bigint')
-        return String(value);
-    const num = typeof value === 'number' ? value : Number(value);
-    if (!isFinite(num))
-        return isNaN(num) ? '.nan' : num < 0 ? '-.inf' : '.inf';
-    let n = Object.is(value, -0) ? '-0' : JSON.stringify(value);
-    if (!format &&
-        minFractionDigits &&
-        (!tag || tag === 'tag:yaml.org,2002:float') &&
-        /^\d/.test(n)) {
-        let i = n.indexOf('.');
-        if (i < 0) {
-            i = n.length;
-            n += '.';
-        }
-        let d = minFractionDigits - (n.length - i - 1);
-        while (d-- > 0)
-            n += '0';
-    }
-    return n;
-}
-
-const floatNaN$1 = {
-    identify: value => typeof value === 'number',
-    default: true,
-    tag: 'tag:yaml.org,2002:float',
-    test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
-    resolve: str => str.slice(-3).toLowerCase() === 'nan'
-        ? NaN
-        : str[0] === '-'
-            ? Number.NEGATIVE_INFINITY
-            : Number.POSITIVE_INFINITY,
-    stringify: stringifyNumber
-};
-const floatExp$1 = {
-    identify: value => typeof value === 'number',
-    default: true,
-    tag: 'tag:yaml.org,2002:float',
-    format: 'EXP',
-    test: /^[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)[eE][-+]?[0-9]+$/,
-    resolve: str => parseFloat(str),
-    stringify(node) {
-        const num = Number(node.value);
-        return isFinite(num) ? num.toExponential() : stringifyNumber(node);
-    }
-};
-const float$1 = {
-    identify: value => typeof value === 'number',
-    default: true,
-    tag: 'tag:yaml.org,2002:float',
-    test: /^[-+]?(?:\.[0-9]+|[0-9]+\.[0-9]*)$/,
-    resolve(str) {
-        const node = new Scalar(parseFloat(str));
-        const dot = str.indexOf('.');
-        if (dot !== -1 && str[str.length - 1] === '0')
-            node.minFractionDigits = str.length - dot - 1;
-        return node;
-    },
-    stringify: stringifyNumber
-};
-
-const intIdentify$2 = (value) => typeof value === 'bigint' || Number.isInteger(value);
-const intResolve$1 = (str, offset, radix, { intAsBigInt }) => (intAsBigInt ? BigInt(str) : parseInt(str.substring(offset), radix));
-function intStringify$1(node, radix, prefix) {
-    const { value } = node;
-    if (intIdentify$2(value) && value >= 0)
-        return prefix + value.toString(radix);
-    return stringifyNumber(node);
-}
-const intOct$1 = {
-    identify: value => intIdentify$2(value) && value >= 0,
-    default: true,
-    tag: 'tag:yaml.org,2002:int',
-    format: 'OCT',
-    test: /^0o[0-7]+$/,
-    resolve: (str, _onError, opt) => intResolve$1(str, 2, 8, opt),
-    stringify: node => intStringify$1(node, 8, '0o')
-};
-const int$1 = {
-    identify: intIdentify$2,
-    default: true,
-    tag: 'tag:yaml.org,2002:int',
-    test: /^[-+]?[0-9]+$/,
-    resolve: (str, _onError, opt) => intResolve$1(str, 0, 10, opt),
-    stringify: stringifyNumber
-};
-const intHex$1 = {
-    identify: value => intIdentify$2(value) && value >= 0,
-    default: true,
-    tag: 'tag:yaml.org,2002:int',
-    format: 'HEX',
-    test: /^0x[0-9a-fA-F]+$/,
-    resolve: (str, _onError, opt) => intResolve$1(str, 2, 16, opt),
-    stringify: node => intStringify$1(node, 16, '0x')
-};
-
-const schema$2 = [
-    map,
-    seq,
-    string,
-    nullTag,
-    boolTag,
-    intOct$1,
-    int$1,
-    intHex$1,
-    floatNaN$1,
-    floatExp$1,
-    float$1
+const INLINE_OPEN_ORDER = [
+  INLINE_MARK_SPECS.underline,
+  INLINE_MARK_SPECS.bold,
+  INLINE_MARK_SPECS.strike,
+  INLINE_MARK_SPECS.italic,
+  INLINE_MARK_SPECS.code,
 ];
 
-function intIdentify$1(value) {
-    return typeof value === 'bigint' || Number.isInteger(value);
-}
-const stringifyJSON = ({ value }) => JSON.stringify(value);
-const jsonScalars = [
-    {
-        identify: value => typeof value === 'string',
-        default: true,
-        tag: 'tag:yaml.org,2002:str',
-        resolve: str => str,
-        stringify: stringifyJSON
-    },
-    {
-        identify: value => value == null,
-        createNode: () => new Scalar(null),
-        default: true,
-        tag: 'tag:yaml.org,2002:null',
-        test: /^null$/,
-        resolve: () => null,
-        stringify: stringifyJSON
-    },
-    {
-        identify: value => typeof value === 'boolean',
-        default: true,
-        tag: 'tag:yaml.org,2002:bool',
-        test: /^true$|^false$/,
-        resolve: str => str === 'true',
-        stringify: stringifyJSON
-    },
-    {
-        identify: intIdentify$1,
-        default: true,
-        tag: 'tag:yaml.org,2002:int',
-        test: /^-?(?:0|[1-9][0-9]*)$/,
-        resolve: (str, _onError, { intAsBigInt }) => intAsBigInt ? BigInt(str) : parseInt(str, 10),
-        stringify: ({ value }) => intIdentify$1(value) ? value.toString() : JSON.stringify(value)
-    },
-    {
-        identify: value => typeof value === 'number',
-        default: true,
-        tag: 'tag:yaml.org,2002:float',
-        test: /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*)?(?:[eE][-+]?[0-9]+)?$/,
-        resolve: str => parseFloat(str),
-        stringify: stringifyJSON
-    }
-];
-const jsonError = {
-    default: true,
-    tag: '',
-    test: /^/,
-    resolve(str, onError) {
-        onError(`Unresolved plain scalar ${JSON.stringify(str)}`);
-        return str;
-    }
-};
-const schema$1 = [map, seq].concat(jsonScalars, jsonError);
-
-const binary = {
-    identify: value => value instanceof Uint8Array, // Buffer inherits from Uint8Array
-    default: false,
-    tag: 'tag:yaml.org,2002:binary',
-    /**
-     * Returns a Buffer in node and an Uint8Array in browsers
-     *
-     * To use the resulting buffer as an image, you'll want to do something like:
-     *
-     *   const blob = new Blob([buffer], { type: 'image/jpeg' })
-     *   document.querySelector('#photo').src = URL.createObjectURL(blob)
-     */
-    resolve(src, onError) {
-        if (typeof atob === 'function') {
-            // On IE 11, atob() can't handle newlines
-            const str = atob(src.replace(/[\n\r]/g, ''));
-            const buffer = new Uint8Array(str.length);
-            for (let i = 0; i < str.length; ++i)
-                buffer[i] = str.charCodeAt(i);
-            return buffer;
-        }
-        else {
-            onError('This environment does not support reading binary tags; either Buffer or atob is required');
-            return src;
-        }
-    },
-    stringify({ comment, type, value }, ctx, onComment, onChompKeep) {
-        if (!value)
-            return '';
-        const buf = value; // checked earlier by binary.identify()
-        let str;
-        if (typeof btoa === 'function') {
-            let s = '';
-            for (let i = 0; i < buf.length; ++i)
-                s += String.fromCharCode(buf[i]);
-            str = btoa(s);
-        }
-        else {
-            throw new Error('This environment does not support writing binary tags; either Buffer or btoa is required');
-        }
-        type ?? (type = Scalar.BLOCK_LITERAL);
-        if (type !== Scalar.QUOTE_DOUBLE) {
-            const lineWidth = Math.max(ctx.options.lineWidth - ctx.indent.length, ctx.options.minContentWidth);
-            const n = Math.ceil(str.length / lineWidth);
-            const lines = new Array(n);
-            for (let i = 0, o = 0; i < n; ++i, o += lineWidth) {
-                lines[i] = str.substr(o, lineWidth);
-            }
-            str = lines.join(type === Scalar.BLOCK_LITERAL ? '\n' : ' ');
-        }
-        return stringifyString({ comment, type, value: str }, ctx, onComment, onChompKeep);
-    }
-};
-
-function resolvePairs(seq, onError) {
-    if (isSeq(seq)) {
-        for (let i = 0; i < seq.items.length; ++i) {
-            let item = seq.items[i];
-            if (isPair(item))
-                continue;
-            else if (isMap(item)) {
-                if (item.items.length > 1)
-                    onError('Each pair must have its own sequence indicator');
-                const pair = item.items[0] || new Pair(new Scalar(null));
-                if (item.commentBefore)
-                    pair.key.commentBefore = pair.key.commentBefore
-                        ? `${item.commentBefore}\n${pair.key.commentBefore}`
-                        : item.commentBefore;
-                if (item.comment) {
-                    const cn = pair.value ?? pair.key;
-                    cn.comment = cn.comment
-                        ? `${item.comment}\n${cn.comment}`
-                        : item.comment;
-                }
-                item = pair;
-            }
-            seq.items[i] = isPair(item) ? item : new Pair(item);
-        }
-    }
-    else
-        onError('Expected a sequence for this tag');
-    return seq;
-}
-function createPairs(schema, iterable, ctx) {
-    const { replacer } = ctx;
-    const pairs = new YAMLSeq(schema);
-    pairs.tag = 'tag:yaml.org,2002:pairs';
-    let i = 0;
-    if (iterable && Symbol.iterator in Object(iterable))
-        for (let it of iterable) {
-            if (typeof replacer === 'function')
-                it = replacer.call(iterable, String(i++), it);
-            let key, value;
-            if (Array.isArray(it)) {
-                if (it.length === 2) {
-                    key = it[0];
-                    value = it[1];
-                }
-                else
-                    throw new TypeError(`Expected [key, value] tuple: ${it}`);
-            }
-            else if (it && it instanceof Object) {
-                const keys = Object.keys(it);
-                if (keys.length === 1) {
-                    key = keys[0];
-                    value = it[key];
-                }
-                else {
-                    throw new TypeError(`Expected tuple with one key, not ${keys.length} keys`);
-                }
-            }
-            else {
-                key = it;
-            }
-            pairs.items.push(createPair(key, value, ctx));
-        }
-    return pairs;
-}
-const pairs = {
-    collection: 'seq',
-    default: false,
-    tag: 'tag:yaml.org,2002:pairs',
-    resolve: resolvePairs,
-    createNode: createPairs
-};
-
-class YAMLOMap extends YAMLSeq {
-    constructor() {
-        super();
-        this.add = YAMLMap.prototype.add.bind(this);
-        this.delete = YAMLMap.prototype.delete.bind(this);
-        this.get = YAMLMap.prototype.get.bind(this);
-        this.has = YAMLMap.prototype.has.bind(this);
-        this.set = YAMLMap.prototype.set.bind(this);
-        this.tag = YAMLOMap.tag;
-    }
-    /**
-     * If `ctx` is given, the return type is actually `Map<unknown, unknown>`,
-     * but TypeScript won't allow widening the signature of a child method.
-     */
-    toJSON(_, ctx) {
-        if (!ctx)
-            return super.toJSON(_);
-        const map = new Map();
-        if (ctx?.onCreate)
-            ctx.onCreate(map);
-        for (const pair of this.items) {
-            let key, value;
-            if (isPair(pair)) {
-                key = toJS(pair.key, '', ctx);
-                value = toJS(pair.value, key, ctx);
-            }
-            else {
-                key = toJS(pair, '', ctx);
-            }
-            if (map.has(key))
-                throw new Error('Ordered maps must not include duplicate keys');
-            map.set(key, value);
-        }
-        return map;
-    }
-    static from(schema, iterable, ctx) {
-        const pairs = createPairs(schema, iterable, ctx);
-        const omap = new this();
-        omap.items = pairs.items;
-        return omap;
-    }
-}
-YAMLOMap.tag = 'tag:yaml.org,2002:omap';
-const omap = {
-    collection: 'seq',
-    identify: value => value instanceof Map,
-    nodeClass: YAMLOMap,
-    default: false,
-    tag: 'tag:yaml.org,2002:omap',
-    resolve(seq, onError) {
-        const pairs = resolvePairs(seq, onError);
-        const seenKeys = [];
-        for (const { key } of pairs.items) {
-            if (isScalar$1(key)) {
-                if (seenKeys.includes(key.value)) {
-                    onError(`Ordered maps must not include duplicate keys: ${key.value}`);
-                }
-                else {
-                    seenKeys.push(key.value);
-                }
-            }
-        }
-        return Object.assign(new YAMLOMap(), pairs);
-    },
-    createNode: (schema, iterable, ctx) => YAMLOMap.from(schema, iterable, ctx)
-};
-
-function boolStringify({ value, source }, ctx) {
-    const boolObj = value ? trueTag : falseTag;
-    if (source && boolObj.test.test(source))
-        return source;
-    return value ? ctx.options.trueStr : ctx.options.falseStr;
-}
-const trueTag = {
-    identify: value => value === true,
-    default: true,
-    tag: 'tag:yaml.org,2002:bool',
-    test: /^(?:Y|y|[Yy]es|YES|[Tt]rue|TRUE|[Oo]n|ON)$/,
-    resolve: () => new Scalar(true),
-    stringify: boolStringify
-};
-const falseTag = {
-    identify: value => value === false,
-    default: true,
-    tag: 'tag:yaml.org,2002:bool',
-    test: /^(?:N|n|[Nn]o|NO|[Ff]alse|FALSE|[Oo]ff|OFF)$/,
-    resolve: () => new Scalar(false),
-    stringify: boolStringify
-};
-
-const floatNaN = {
-    identify: value => typeof value === 'number',
-    default: true,
-    tag: 'tag:yaml.org,2002:float',
-    test: /^(?:[-+]?\.(?:inf|Inf|INF)|\.nan|\.NaN|\.NAN)$/,
-    resolve: (str) => str.slice(-3).toLowerCase() === 'nan'
-        ? NaN
-        : str[0] === '-'
-            ? Number.NEGATIVE_INFINITY
-            : Number.POSITIVE_INFINITY,
-    stringify: stringifyNumber
-};
-const floatExp = {
-    identify: value => typeof value === 'number',
-    default: true,
-    tag: 'tag:yaml.org,2002:float',
-    format: 'EXP',
-    test: /^[-+]?(?:[0-9][0-9_]*)?(?:\.[0-9_]*)?[eE][-+]?[0-9]+$/,
-    resolve: (str) => parseFloat(str.replace(/_/g, '')),
-    stringify(node) {
-        const num = Number(node.value);
-        return isFinite(num) ? num.toExponential() : stringifyNumber(node);
-    }
-};
-const float = {
-    identify: value => typeof value === 'number',
-    default: true,
-    tag: 'tag:yaml.org,2002:float',
-    test: /^[-+]?(?:[0-9][0-9_]*)?\.[0-9_]*$/,
-    resolve(str) {
-        const node = new Scalar(parseFloat(str.replace(/_/g, '')));
-        const dot = str.indexOf('.');
-        if (dot !== -1) {
-            const f = str.substring(dot + 1).replace(/_/g, '');
-            if (f[f.length - 1] === '0')
-                node.minFractionDigits = f.length;
-        }
-        return node;
-    },
-    stringify: stringifyNumber
-};
-
-const intIdentify = (value) => typeof value === 'bigint' || Number.isInteger(value);
-function intResolve(str, offset, radix, { intAsBigInt }) {
-    const sign = str[0];
-    if (sign === '-' || sign === '+')
-        offset += 1;
-    str = str.substring(offset).replace(/_/g, '');
-    if (intAsBigInt) {
-        switch (radix) {
-            case 2:
-                str = `0b${str}`;
-                break;
-            case 8:
-                str = `0o${str}`;
-                break;
-            case 16:
-                str = `0x${str}`;
-                break;
-        }
-        const n = BigInt(str);
-        return sign === '-' ? BigInt(-1) * n : n;
-    }
-    const n = parseInt(str, radix);
-    return sign === '-' ? -1 * n : n;
-}
-function intStringify(node, radix, prefix) {
-    const { value } = node;
-    if (intIdentify(value)) {
-        const str = value.toString(radix);
-        return value < 0 ? '-' + prefix + str.substr(1) : prefix + str;
-    }
-    return stringifyNumber(node);
-}
-const intBin = {
-    identify: intIdentify,
-    default: true,
-    tag: 'tag:yaml.org,2002:int',
-    format: 'BIN',
-    test: /^[-+]?0b[0-1_]+$/,
-    resolve: (str, _onError, opt) => intResolve(str, 2, 2, opt),
-    stringify: node => intStringify(node, 2, '0b')
-};
-const intOct = {
-    identify: intIdentify,
-    default: true,
-    tag: 'tag:yaml.org,2002:int',
-    format: 'OCT',
-    test: /^[-+]?0[0-7_]+$/,
-    resolve: (str, _onError, opt) => intResolve(str, 1, 8, opt),
-    stringify: node => intStringify(node, 8, '0')
-};
-const int = {
-    identify: intIdentify,
-    default: true,
-    tag: 'tag:yaml.org,2002:int',
-    test: /^[-+]?[0-9][0-9_]*$/,
-    resolve: (str, _onError, opt) => intResolve(str, 0, 10, opt),
-    stringify: stringifyNumber
-};
-const intHex = {
-    identify: intIdentify,
-    default: true,
-    tag: 'tag:yaml.org,2002:int',
-    format: 'HEX',
-    test: /^[-+]?0x[0-9a-fA-F_]+$/,
-    resolve: (str, _onError, opt) => intResolve(str, 2, 16, opt),
-    stringify: node => intStringify(node, 16, '0x')
-};
-
-class YAMLSet extends YAMLMap {
-    constructor(schema) {
-        super(schema);
-        this.tag = YAMLSet.tag;
-    }
-    add(key) {
-        let pair;
-        if (isPair(key))
-            pair = key;
-        else if (key &&
-            typeof key === 'object' &&
-            'key' in key &&
-            'value' in key &&
-            key.value === null)
-            pair = new Pair(key.key, null);
-        else
-            pair = new Pair(key, null);
-        const prev = findPair(this.items, pair.key);
-        if (!prev)
-            this.items.push(pair);
-    }
-    /**
-     * If `keepPair` is `true`, returns the Pair matching `key`.
-     * Otherwise, returns the value of that Pair's key.
-     */
-    get(key, keepPair) {
-        const pair = findPair(this.items, key);
-        return !keepPair && isPair(pair)
-            ? isScalar$1(pair.key)
-                ? pair.key.value
-                : pair.key
-            : pair;
-    }
-    set(key, value) {
-        if (typeof value !== 'boolean')
-            throw new Error(`Expected boolean value for set(key, value) in a YAML set, not ${typeof value}`);
-        const prev = findPair(this.items, key);
-        if (prev && !value) {
-            this.items.splice(this.items.indexOf(prev), 1);
-        }
-        else if (!prev && value) {
-            this.items.push(new Pair(key));
-        }
-    }
-    toJSON(_, ctx) {
-        return super.toJSON(_, ctx, Set);
-    }
-    toString(ctx, onComment, onChompKeep) {
-        if (!ctx)
-            return JSON.stringify(this);
-        if (this.hasAllNullValues(true))
-            return super.toString(Object.assign({}, ctx, { allNullValues: true }), onComment, onChompKeep);
-        else
-            throw new Error('Set items must all have null values');
-    }
-    static from(schema, iterable, ctx) {
-        const { replacer } = ctx;
-        const set = new this(schema);
-        if (iterable && Symbol.iterator in Object(iterable))
-            for (let value of iterable) {
-                if (typeof replacer === 'function')
-                    value = replacer.call(iterable, value, value);
-                set.items.push(createPair(value, null, ctx));
-            }
-        return set;
-    }
-}
-YAMLSet.tag = 'tag:yaml.org,2002:set';
-const set = {
-    collection: 'map',
-    identify: value => value instanceof Set,
-    nodeClass: YAMLSet,
-    default: false,
-    tag: 'tag:yaml.org,2002:set',
-    createNode: (schema, iterable, ctx) => YAMLSet.from(schema, iterable, ctx),
-    resolve(map, onError) {
-        if (isMap(map)) {
-            if (map.hasAllNullValues(true))
-                return Object.assign(new YAMLSet(), map);
-            else
-                onError('Set items must all have null values');
-        }
-        else
-            onError('Expected a mapping for this tag');
-        return map;
-    }
-};
-
-/** Internal types handle bigint as number, because TS can't figure it out. */
-function parseSexagesimal(str, asBigInt) {
-    const sign = str[0];
-    const parts = sign === '-' || sign === '+' ? str.substring(1) : str;
-    const num = (n) => asBigInt ? BigInt(n) : Number(n);
-    const res = parts
-        .replace(/_/g, '')
-        .split(':')
-        .reduce((res, p) => res * num(60) + num(p), num(0));
-    return (sign === '-' ? num(-1) * res : res);
-}
-/**
- * hhhh:mm:ss.sss
- *
- * Internal types handle bigint as number, because TS can't figure it out.
- */
-function stringifySexagesimal(node) {
-    let { value } = node;
-    let num = (n) => n;
-    if (typeof value === 'bigint')
-        num = n => BigInt(n);
-    else if (isNaN(value) || !isFinite(value))
-        return stringifyNumber(node);
-    let sign = '';
-    if (value < 0) {
-        sign = '-';
-        value *= num(-1);
-    }
-    const _60 = num(60);
-    const parts = [value % _60]; // seconds, including ms
-    if (value < 60) {
-        parts.unshift(0); // at least one : is required
-    }
-    else {
-        value = (value - parts[0]) / _60;
-        parts.unshift(value % _60); // minutes
-        if (value >= 60) {
-            value = (value - parts[0]) / _60;
-            parts.unshift(value); // hours
-        }
-    }
-    return (sign +
-        parts
-            .map(n => String(n).padStart(2, '0'))
-            .join(':')
-            .replace(/000000\d*$/, '') // % 60 may introduce error
-    );
-}
-const intTime = {
-    identify: value => typeof value === 'bigint' || Number.isInteger(value),
-    default: true,
-    tag: 'tag:yaml.org,2002:int',
-    format: 'TIME',
-    test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+$/,
-    resolve: (str, _onError, { intAsBigInt }) => parseSexagesimal(str, intAsBigInt),
-    stringify: stringifySexagesimal
-};
-const floatTime = {
-    identify: value => typeof value === 'number',
-    default: true,
-    tag: 'tag:yaml.org,2002:float',
-    format: 'TIME',
-    test: /^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*$/,
-    resolve: str => parseSexagesimal(str, false),
-    stringify: stringifySexagesimal
-};
-const timestamp = {
-    identify: value => value instanceof Date,
-    default: true,
-    tag: 'tag:yaml.org,2002:timestamp',
-    // If the time zone is omitted, the timestamp is assumed to be specified in UTC. The time part
-    // may be omitted altogether, resulting in a date format. In such a case, the time part is
-    // assumed to be 00:00:00Z (start of day, UTC).
-    test: RegExp('^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})' + // YYYY-Mm-Dd
-        '(?:' + // time is optional
-        '(?:t|T|[ \\t]+)' + // t | T | whitespace
-        '([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2}(\\.[0-9]+)?)' + // Hh:Mm:Ss(.ss)?
-        '(?:[ \\t]*(Z|[-+][012]?[0-9](?::[0-9]{2})?))?' + // Z | +5 | -03:30
-        ')?$'),
-    resolve(str) {
-        const match = str.match(timestamp.test);
-        if (!match)
-            throw new Error('!!timestamp expects a date, starting with yyyy-mm-dd');
-        const [, year, month, day, hour, minute, second] = match.map(Number);
-        const millisec = match[7] ? Number((match[7] + '00').substr(1, 3)) : 0;
-        let date = Date.UTC(year, month - 1, day, hour || 0, minute || 0, second || 0, millisec);
-        const tz = match[8];
-        if (tz && tz !== 'Z') {
-            let d = parseSexagesimal(tz, false);
-            if (Math.abs(d) < 30)
-                d *= 60;
-            date -= 60000 * d;
-        }
-        return new Date(date);
-    },
-    stringify: ({ value }) => value?.toISOString().replace(/(T00:00:00)?\.000Z$/, '') ?? ''
-};
-
-const schema = [
-    map,
-    seq,
-    string,
-    nullTag,
-    trueTag,
-    falseTag,
-    intBin,
-    intOct,
-    int,
-    intHex,
-    floatNaN,
-    floatExp,
-    float,
-    binary,
-    merge,
-    omap,
-    pairs,
-    set,
-    intTime,
-    floatTime,
-    timestamp
-];
-
-const schemas = new Map([
-    ['core', schema$2],
-    ['failsafe', [map, seq, string]],
-    ['json', schema$1],
-    ['yaml11', schema],
-    ['yaml-1.1', schema]
-]);
-const tagsByName = {
-    binary,
-    bool: boolTag,
-    float: float$1,
-    floatExp: floatExp$1,
-    floatNaN: floatNaN$1,
-    floatTime,
-    int: int$1,
-    intHex: intHex$1,
-    intOct: intOct$1,
-    intTime,
-    map,
-    merge,
-    null: nullTag,
-    omap,
-    pairs,
-    seq,
-    set,
-    timestamp
-};
-const coreKnownTags = {
-    'tag:yaml.org,2002:binary': binary,
-    'tag:yaml.org,2002:merge': merge,
-    'tag:yaml.org,2002:omap': omap,
-    'tag:yaml.org,2002:pairs': pairs,
-    'tag:yaml.org,2002:set': set,
-    'tag:yaml.org,2002:timestamp': timestamp
-};
-function getTags(customTags, schemaName, addMergeTag) {
-    const schemaTags = schemas.get(schemaName);
-    if (schemaTags && !customTags) {
-        return addMergeTag && !schemaTags.includes(merge)
-            ? schemaTags.concat(merge)
-            : schemaTags.slice();
-    }
-    let tags = schemaTags;
-    if (!tags) {
-        if (Array.isArray(customTags))
-            tags = [];
-        else {
-            const keys = Array.from(schemas.keys())
-                .filter(key => key !== 'yaml11')
-                .map(key => JSON.stringify(key))
-                .join(', ');
-            throw new Error(`Unknown schema "${schemaName}"; use one of ${keys} or define customTags array`);
-        }
-    }
-    if (Array.isArray(customTags)) {
-        for (const tag of customTags)
-            tags = tags.concat(tag);
-    }
-    else if (typeof customTags === 'function') {
-        tags = customTags(tags.slice());
-    }
-    if (addMergeTag)
-        tags = tags.concat(merge);
-    return tags.reduce((tags, tag) => {
-        const tagObj = typeof tag === 'string' ? tagsByName[tag] : tag;
-        if (!tagObj) {
-            const tagName = JSON.stringify(tag);
-            const keys = Object.keys(tagsByName)
-                .map(key => JSON.stringify(key))
-                .join(', ');
-            throw new Error(`Unknown custom tag ${tagName}; use one of ${keys}`);
-        }
-        if (!tags.includes(tagObj))
-            tags.push(tagObj);
-        return tags;
-    }, []);
+function cloneMarkSet(value) {
+  return new Set(value ? Array.from(value) : []);
 }
 
-const sortMapEntriesByKey = (a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
-class Schema {
-    constructor({ compat, customTags, merge, resolveKnownTags, schema, sortMapEntries, toStringDefaults }) {
-        this.compat = Array.isArray(compat)
-            ? getTags(compat, 'compat')
-            : compat
-                ? getTags(null, compat)
-                : null;
-        this.name = (typeof schema === 'string' && schema) || 'core';
-        this.knownTags = resolveKnownTags ? coreKnownTags : {};
-        this.tags = getTags(customTags, this.name, merge);
-        this.toStringOptions = toStringDefaults ?? null;
-        Object.defineProperty(this, MAP, { value: map });
-        Object.defineProperty(this, SCALAR$1, { value: string });
-        Object.defineProperty(this, SEQ, { value: seq });
-        // Used by createMap()
-        this.sortMapEntries =
-            typeof sortMapEntries === 'function'
-                ? sortMapEntries
-                : sortMapEntries === true
-                    ? sortMapEntriesByKey
-                    : null;
-    }
-    clone() {
-        const copy = Object.create(Schema.prototype, Object.getOwnPropertyDescriptors(this));
-        copy.tags = this.tags.slice();
-        return copy;
-    }
-}
-
-function stringifyDocument(doc, options) {
-    const lines = [];
-    let hasDirectives = options.directives === true;
-    if (options.directives !== false && doc.directives) {
-        const dir = doc.directives.toString(doc);
-        if (dir) {
-            lines.push(dir);
-            hasDirectives = true;
-        }
-        else if (doc.directives.docStart)
-            hasDirectives = true;
-    }
-    if (hasDirectives)
-        lines.push('---');
-    const ctx = createStringifyContext(doc, options);
-    const { commentString } = ctx.options;
-    if (doc.commentBefore) {
-        if (lines.length !== 1)
-            lines.unshift('');
-        const cs = commentString(doc.commentBefore);
-        lines.unshift(indentComment(cs, ''));
-    }
-    let chompKeep = false;
-    let contentComment = null;
-    if (doc.contents) {
-        if (isNode(doc.contents)) {
-            if (doc.contents.spaceBefore && hasDirectives)
-                lines.push('');
-            if (doc.contents.commentBefore) {
-                const cs = commentString(doc.contents.commentBefore);
-                lines.push(indentComment(cs, ''));
-            }
-            // top-level block scalars need to be indented if followed by a comment
-            ctx.forceBlockIndent = !!doc.comment;
-            contentComment = doc.contents.comment;
-        }
-        const onChompKeep = contentComment ? undefined : () => (chompKeep = true);
-        let body = stringify$2(doc.contents, ctx, () => (contentComment = null), onChompKeep);
-        if (contentComment)
-            body += lineComment(body, '', commentString(contentComment));
-        if ((body[0] === '|' || body[0] === '>') &&
-            lines[lines.length - 1] === '---') {
-            // Top-level block scalars with a preceding doc marker ought to use the
-            // same line for their header.
-            lines[lines.length - 1] = `--- ${body}`;
-        }
-        else
-            lines.push(body);
-    }
-    else {
-        lines.push(stringify$2(doc.contents, ctx));
-    }
-    if (doc.directives?.docEnd) {
-        if (doc.comment) {
-            const cs = commentString(doc.comment);
-            if (cs.includes('\n')) {
-                lines.push('...');
-                lines.push(indentComment(cs, ''));
-            }
-            else {
-                lines.push(`... ${cs}`);
-            }
-        }
-        else {
-            lines.push('...');
-        }
-    }
-    else {
-        let dc = doc.comment;
-        if (dc && chompKeep)
-            dc = dc.replace(/^\n+/, '');
-        if (dc) {
-            if ((!chompKeep || contentComment) && lines[lines.length - 1] !== '')
-                lines.push('');
-            lines.push(indentComment(commentString(dc), ''));
-        }
-    }
-    return lines.join('\n') + '\n';
-}
-
-class Document {
-    constructor(value, replacer, options) {
-        /** A comment before this Document */
-        this.commentBefore = null;
-        /** A comment immediately after this Document */
-        this.comment = null;
-        /** Errors encountered during parsing. */
-        this.errors = [];
-        /** Warnings encountered during parsing. */
-        this.warnings = [];
-        Object.defineProperty(this, NODE_TYPE, { value: DOC });
-        let _replacer = null;
-        if (typeof replacer === 'function' || Array.isArray(replacer)) {
-            _replacer = replacer;
-        }
-        else if (options === undefined && replacer) {
-            options = replacer;
-            replacer = undefined;
-        }
-        const opt = Object.assign({
-            intAsBigInt: false,
-            keepSourceTokens: false,
-            logLevel: 'warn',
-            prettyErrors: true,
-            strict: true,
-            stringKeys: false,
-            uniqueKeys: true,
-            version: '1.2'
-        }, options);
-        this.options = opt;
-        let { version } = opt;
-        if (options?._directives) {
-            this.directives = options._directives.atDocument();
-            if (this.directives.yaml.explicit)
-                version = this.directives.yaml.version;
-        }
-        else
-            this.directives = new Directives({ version });
-        this.setSchema(version, options);
-        // @ts-expect-error We can't really know that this matches Contents.
-        this.contents =
-            value === undefined ? null : this.createNode(value, _replacer, options);
-    }
-    /**
-     * Create a deep copy of this Document and its contents.
-     *
-     * Custom Node values that inherit from `Object` still refer to their original instances.
-     */
-    clone() {
-        const copy = Object.create(Document.prototype, {
-            [NODE_TYPE]: { value: DOC }
-        });
-        copy.commentBefore = this.commentBefore;
-        copy.comment = this.comment;
-        copy.errors = this.errors.slice();
-        copy.warnings = this.warnings.slice();
-        copy.options = Object.assign({}, this.options);
-        if (this.directives)
-            copy.directives = this.directives.clone();
-        copy.schema = this.schema.clone();
-        // @ts-expect-error We can't really know that this matches Contents.
-        copy.contents = isNode(this.contents)
-            ? this.contents.clone(copy.schema)
-            : this.contents;
-        if (this.range)
-            copy.range = this.range.slice();
-        return copy;
-    }
-    /** Adds a value to the document. */
-    add(value) {
-        if (assertCollection(this.contents))
-            this.contents.add(value);
-    }
-    /** Adds a value to the document. */
-    addIn(path, value) {
-        if (assertCollection(this.contents))
-            this.contents.addIn(path, value);
-    }
-    /**
-     * Create a new `Alias` node, ensuring that the target `node` has the required anchor.
-     *
-     * If `node` already has an anchor, `name` is ignored.
-     * Otherwise, the `node.anchor` value will be set to `name`,
-     * or if an anchor with that name is already present in the document,
-     * `name` will be used as a prefix for a new unique anchor.
-     * If `name` is undefined, the generated anchor will use 'a' as a prefix.
-     */
-    createAlias(node, name) {
-        if (!node.anchor) {
-            const prev = anchorNames(this);
-            node.anchor =
-                // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-                !name || prev.has(name) ? findNewAnchor(name || 'a', prev) : name;
-        }
-        return new Alias(node.anchor);
-    }
-    createNode(value, replacer, options) {
-        let _replacer = undefined;
-        if (typeof replacer === 'function') {
-            value = replacer.call({ '': value }, '', value);
-            _replacer = replacer;
-        }
-        else if (Array.isArray(replacer)) {
-            const keyToStr = (v) => typeof v === 'number' || v instanceof String || v instanceof Number;
-            const asStr = replacer.filter(keyToStr).map(String);
-            if (asStr.length > 0)
-                replacer = replacer.concat(asStr);
-            _replacer = replacer;
-        }
-        else if (options === undefined && replacer) {
-            options = replacer;
-            replacer = undefined;
-        }
-        const { aliasDuplicateObjects, anchorPrefix, flow, keepUndefined, onTagObj, tag } = options ?? {};
-        const { onAnchor, setAnchors, sourceObjects } = createNodeAnchors(this, 
-        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-        anchorPrefix || 'a');
-        const ctx = {
-            aliasDuplicateObjects: aliasDuplicateObjects ?? true,
-            keepUndefined: keepUndefined ?? false,
-            onAnchor,
-            onTagObj,
-            replacer: _replacer,
-            schema: this.schema,
-            sourceObjects
-        };
-        const node = createNode(value, tag, ctx);
-        if (flow && isCollection$1(node))
-            node.flow = true;
-        setAnchors();
-        return node;
-    }
-    /**
-     * Convert a key and a value into a `Pair` using the current schema,
-     * recursively wrapping all values as `Scalar` or `Collection` nodes.
-     */
-    createPair(key, value, options = {}) {
-        const k = this.createNode(key, null, options);
-        const v = this.createNode(value, null, options);
-        return new Pair(k, v);
-    }
-    /**
-     * Removes a value from the document.
-     * @returns `true` if the item was found and removed.
-     */
-    delete(key) {
-        return assertCollection(this.contents) ? this.contents.delete(key) : false;
-    }
-    /**
-     * Removes a value from the document.
-     * @returns `true` if the item was found and removed.
-     */
-    deleteIn(path) {
-        if (isEmptyPath(path)) {
-            if (this.contents == null)
-                return false;
-            // @ts-expect-error Presumed impossible if Strict extends false
-            this.contents = null;
-            return true;
-        }
-        return assertCollection(this.contents)
-            ? this.contents.deleteIn(path)
-            : false;
-    }
-    /**
-     * Returns item at `key`, or `undefined` if not found. By default unwraps
-     * scalar values from their surrounding node; to disable set `keepScalar` to
-     * `true` (collections are always returned intact).
-     */
-    get(key, keepScalar) {
-        return isCollection$1(this.contents)
-            ? this.contents.get(key, keepScalar)
-            : undefined;
-    }
-    /**
-     * Returns item at `path`, or `undefined` if not found. By default unwraps
-     * scalar values from their surrounding node; to disable set `keepScalar` to
-     * `true` (collections are always returned intact).
-     */
-    getIn(path, keepScalar) {
-        if (isEmptyPath(path))
-            return !keepScalar && isScalar$1(this.contents)
-                ? this.contents.value
-                : this.contents;
-        return isCollection$1(this.contents)
-            ? this.contents.getIn(path, keepScalar)
-            : undefined;
-    }
-    /**
-     * Checks if the document includes a value with the key `key`.
-     */
-    has(key) {
-        return isCollection$1(this.contents) ? this.contents.has(key) : false;
-    }
-    /**
-     * Checks if the document includes a value at `path`.
-     */
-    hasIn(path) {
-        if (isEmptyPath(path))
-            return this.contents !== undefined;
-        return isCollection$1(this.contents) ? this.contents.hasIn(path) : false;
-    }
-    /**
-     * Sets a value in this document. For `!!set`, `value` needs to be a
-     * boolean to add/remove the item from the set.
-     */
-    set(key, value) {
-        if (this.contents == null) {
-            // @ts-expect-error We can't really know that this matches Contents.
-            this.contents = collectionFromPath(this.schema, [key], value);
-        }
-        else if (assertCollection(this.contents)) {
-            this.contents.set(key, value);
-        }
-    }
-    /**
-     * Sets a value in this document. For `!!set`, `value` needs to be a
-     * boolean to add/remove the item from the set.
-     */
-    setIn(path, value) {
-        if (isEmptyPath(path)) {
-            // @ts-expect-error We can't really know that this matches Contents.
-            this.contents = value;
-        }
-        else if (this.contents == null) {
-            // @ts-expect-error We can't really know that this matches Contents.
-            this.contents = collectionFromPath(this.schema, Array.from(path), value);
-        }
-        else if (assertCollection(this.contents)) {
-            this.contents.setIn(path, value);
-        }
-    }
-    /**
-     * Change the YAML version and schema used by the document.
-     * A `null` version disables support for directives, explicit tags, anchors, and aliases.
-     * It also requires the `schema` option to be given as a `Schema` instance value.
-     *
-     * Overrides all previously set schema options.
-     */
-    setSchema(version, options = {}) {
-        if (typeof version === 'number')
-            version = String(version);
-        let opt;
-        switch (version) {
-            case '1.1':
-                if (this.directives)
-                    this.directives.yaml.version = '1.1';
-                else
-                    this.directives = new Directives({ version: '1.1' });
-                opt = { resolveKnownTags: false, schema: 'yaml-1.1' };
-                break;
-            case '1.2':
-            case 'next':
-                if (this.directives)
-                    this.directives.yaml.version = version;
-                else
-                    this.directives = new Directives({ version });
-                opt = { resolveKnownTags: true, schema: 'core' };
-                break;
-            case null:
-                if (this.directives)
-                    delete this.directives;
-                opt = null;
-                break;
-            default: {
-                const sv = JSON.stringify(version);
-                throw new Error(`Expected '1.1', '1.2' or null as first argument, but found: ${sv}`);
-            }
-        }
-        // Not using `instanceof Schema` to allow for duck typing
-        if (options.schema instanceof Object)
-            this.schema = options.schema;
-        else if (opt)
-            this.schema = new Schema(Object.assign(opt, options));
-        else
-            throw new Error(`With a null YAML version, the { schema: Schema } option is required`);
-    }
-    // json & jsonArg are only used from toJSON()
-    toJS({ json, jsonArg, mapAsMap, maxAliasCount, onAnchor, reviver } = {}) {
-        const ctx = {
-            anchors: new Map(),
-            doc: this,
-            keep: !json,
-            mapAsMap: mapAsMap === true,
-            mapKeyWarned: false,
-            maxAliasCount: typeof maxAliasCount === 'number' ? maxAliasCount : 100
-        };
-        const res = toJS(this.contents, jsonArg ?? '', ctx);
-        if (typeof onAnchor === 'function')
-            for (const { count, res } of ctx.anchors.values())
-                onAnchor(res, count);
-        return typeof reviver === 'function'
-            ? applyReviver(reviver, { '': res }, '', res)
-            : res;
-    }
-    /**
-     * A JSON representation of the document `contents`.
-     *
-     * @param jsonArg Used by `JSON.stringify` to indicate the array index or
-     *   property name.
-     */
-    toJSON(jsonArg, onAnchor) {
-        return this.toJS({ json: true, jsonArg, mapAsMap: false, onAnchor });
-    }
-    /** A YAML representation of the document. */
-    toString(options = {}) {
-        if (this.errors.length > 0)
-            throw new Error('Document with errors cannot be stringified');
-        if ('indent' in options &&
-            (!Number.isInteger(options.indent) || Number(options.indent) <= 0)) {
-            const s = JSON.stringify(options.indent);
-            throw new Error(`"indent" option must be a positive integer, not ${s}`);
-        }
-        return stringifyDocument(this, options);
-    }
-}
-function assertCollection(contents) {
-    if (isCollection$1(contents))
-        return true;
-    throw new Error('Expected a YAML collection as document contents');
-}
-
-class YAMLError extends Error {
-    constructor(name, pos, code, message) {
-        super();
-        this.name = name;
-        this.code = code;
-        this.message = message;
-        this.pos = pos;
-    }
-}
-class YAMLParseError extends YAMLError {
-    constructor(pos, code, message) {
-        super('YAMLParseError', pos, code, message);
-    }
-}
-class YAMLWarning extends YAMLError {
-    constructor(pos, code, message) {
-        super('YAMLWarning', pos, code, message);
-    }
-}
-const prettifyError = (src, lc) => (error) => {
-    if (error.pos[0] === -1)
-        return;
-    error.linePos = error.pos.map(pos => lc.linePos(pos));
-    const { line, col } = error.linePos[0];
-    error.message += ` at line ${line}, column ${col}`;
-    let ci = col - 1;
-    let lineStr = src
-        .substring(lc.lineStarts[line - 1], lc.lineStarts[line])
-        .replace(/[\n\r]+$/, '');
-    // Trim to max 80 chars, keeping col position near the middle
-    if (ci >= 60 && lineStr.length > 80) {
-        const trimStart = Math.min(ci - 39, lineStr.length - 79);
-        lineStr = '…' + lineStr.substring(trimStart);
-        ci -= trimStart - 1;
-    }
-    if (lineStr.length > 80)
-        lineStr = lineStr.substring(0, 79) + '…';
-    // Include previous line in context if pointing at line start
-    if (line > 1 && /^ *$/.test(lineStr.substring(0, ci))) {
-        // Regexp won't match if start is trimmed
-        let prev = src.substring(lc.lineStarts[line - 2], lc.lineStarts[line - 1]);
-        if (prev.length > 80)
-            prev = prev.substring(0, 79) + '…\n';
-        lineStr = prev + lineStr;
-    }
-    if (/[^ ]/.test(lineStr)) {
-        let count = 1;
-        const end = error.linePos[1];
-        if (end?.line === line && end.col > col) {
-            count = Math.max(1, Math.min(end.col - col, 80 - ci));
-        }
-        const pointer = ' '.repeat(ci) + '^'.repeat(count);
-        error.message += `:\n\n${lineStr}\n${pointer}\n`;
-    }
-};
-
-function resolveProps(tokens, { flow, indicator, next, offset, onError, parentIndent, startOnNewline }) {
-    let spaceBefore = false;
-    let atNewline = startOnNewline;
-    let hasSpace = startOnNewline;
-    let comment = '';
-    let commentSep = '';
-    let hasNewline = false;
-    let reqSpace = false;
-    let tab = null;
-    let anchor = null;
-    let tag = null;
-    let newlineAfterProp = null;
-    let comma = null;
-    let found = null;
-    let start = null;
-    for (const token of tokens) {
-        if (reqSpace) {
-            if (token.type !== 'space' &&
-                token.type !== 'newline' &&
-                token.type !== 'comma')
-                onError(token.offset, 'MISSING_CHAR', 'Tags and anchors must be separated from the next token by white space');
-            reqSpace = false;
-        }
-        if (tab) {
-            if (atNewline && token.type !== 'comment' && token.type !== 'newline') {
-                onError(tab, 'TAB_AS_INDENT', 'Tabs are not allowed as indentation');
-            }
-            tab = null;
-        }
-        switch (token.type) {
-            case 'space':
-                // At the doc level, tabs at line start may be parsed
-                // as leading white space rather than indentation.
-                // In a flow collection, only the parser handles indent.
-                if (!flow &&
-                    (indicator !== 'doc-start' || next?.type !== 'flow-collection') &&
-                    token.source.includes('\t')) {
-                    tab = token;
-                }
-                hasSpace = true;
-                break;
-            case 'comment': {
-                if (!hasSpace)
-                    onError(token, 'MISSING_CHAR', 'Comments must be separated from other tokens by white space characters');
-                const cb = token.source.substring(1) || ' ';
-                if (!comment)
-                    comment = cb;
-                else
-                    comment += commentSep + cb;
-                commentSep = '';
-                atNewline = false;
-                break;
-            }
-            case 'newline':
-                if (atNewline) {
-                    if (comment)
-                        comment += token.source;
-                    else if (!found || indicator !== 'seq-item-ind')
-                        spaceBefore = true;
-                }
-                else
-                    commentSep += token.source;
-                atNewline = true;
-                hasNewline = true;
-                if (anchor || tag)
-                    newlineAfterProp = token;
-                hasSpace = true;
-                break;
-            case 'anchor':
-                if (anchor)
-                    onError(token, 'MULTIPLE_ANCHORS', 'A node can have at most one anchor');
-                if (token.source.endsWith(':'))
-                    onError(token.offset + token.source.length - 1, 'BAD_ALIAS', 'Anchor ending in : is ambiguous', true);
-                anchor = token;
-                start ?? (start = token.offset);
-                atNewline = false;
-                hasSpace = false;
-                reqSpace = true;
-                break;
-            case 'tag': {
-                if (tag)
-                    onError(token, 'MULTIPLE_TAGS', 'A node can have at most one tag');
-                tag = token;
-                start ?? (start = token.offset);
-                atNewline = false;
-                hasSpace = false;
-                reqSpace = true;
-                break;
-            }
-            case indicator:
-                // Could here handle preceding comments differently
-                if (anchor || tag)
-                    onError(token, 'BAD_PROP_ORDER', `Anchors and tags must be after the ${token.source} indicator`);
-                if (found)
-                    onError(token, 'UNEXPECTED_TOKEN', `Unexpected ${token.source} in ${flow ?? 'collection'}`);
-                found = token;
-                atNewline =
-                    indicator === 'seq-item-ind' || indicator === 'explicit-key-ind';
-                hasSpace = false;
-                break;
-            case 'comma':
-                if (flow) {
-                    if (comma)
-                        onError(token, 'UNEXPECTED_TOKEN', `Unexpected , in ${flow}`);
-                    comma = token;
-                    atNewline = false;
-                    hasSpace = false;
-                    break;
-                }
-            // else fallthrough
-            default:
-                onError(token, 'UNEXPECTED_TOKEN', `Unexpected ${token.type} token`);
-                atNewline = false;
-                hasSpace = false;
-        }
-    }
-    const last = tokens[tokens.length - 1];
-    const end = last ? last.offset + last.source.length : offset;
-    if (reqSpace &&
-        next &&
-        next.type !== 'space' &&
-        next.type !== 'newline' &&
-        next.type !== 'comma' &&
-        (next.type !== 'scalar' || next.source !== '')) {
-        onError(next.offset, 'MISSING_CHAR', 'Tags and anchors must be separated from the next token by white space');
-    }
-    if (tab &&
-        ((atNewline && tab.indent <= parentIndent) ||
-            next?.type === 'block-map' ||
-            next?.type === 'block-seq'))
-        onError(tab, 'TAB_AS_INDENT', 'Tabs are not allowed as indentation');
-    return {
-        comma,
-        found,
-        spaceBefore,
-        comment,
-        hasNewline,
-        anchor,
-        tag,
-        newlineAfterProp,
-        end,
-        start: start ?? end
-    };
-}
-
-function containsNewline(key) {
-    if (!key)
-        return null;
-    switch (key.type) {
-        case 'alias':
-        case 'scalar':
-        case 'double-quoted-scalar':
-        case 'single-quoted-scalar':
-            if (key.source.includes('\n'))
-                return true;
-            if (key.end)
-                for (const st of key.end)
-                    if (st.type === 'newline')
-                        return true;
-            return false;
-        case 'flow-collection':
-            for (const it of key.items) {
-                for (const st of it.start)
-                    if (st.type === 'newline')
-                        return true;
-                if (it.sep)
-                    for (const st of it.sep)
-                        if (st.type === 'newline')
-                            return true;
-                if (containsNewline(it.key) || containsNewline(it.value))
-                    return true;
-            }
-            return false;
-        default:
-            return true;
-    }
-}
-
-function flowIndentCheck(indent, fc, onError) {
-    if (fc?.type === 'flow-collection') {
-        const end = fc.end[0];
-        if (end.indent === indent &&
-            (end.source === ']' || end.source === '}') &&
-            containsNewline(fc)) {
-            const msg = 'Flow end indicator should be more indented than parent';
-            onError(end, 'BAD_INDENT', msg, true);
-        }
-    }
-}
-
-function mapIncludes(ctx, items, search) {
-    const { uniqueKeys } = ctx.options;
-    if (uniqueKeys === false)
-        return false;
-    const isEqual = typeof uniqueKeys === 'function'
-        ? uniqueKeys
-        : (a, b) => a === b || (isScalar$1(a) && isScalar$1(b) && a.value === b.value);
-    return items.some(pair => isEqual(pair.key, search));
-}
-
-const startColMsg = 'All mapping items must start at the same column';
-function resolveBlockMap({ composeNode, composeEmptyNode }, ctx, bm, onError, tag) {
-    const NodeClass = tag?.nodeClass ?? YAMLMap;
-    const map = new NodeClass(ctx.schema);
-    if (ctx.atRoot)
-        ctx.atRoot = false;
-    let offset = bm.offset;
-    let commentEnd = null;
-    for (const collItem of bm.items) {
-        const { start, key, sep, value } = collItem;
-        // key properties
-        const keyProps = resolveProps(start, {
-            indicator: 'explicit-key-ind',
-            next: key ?? sep?.[0],
-            offset,
-            onError,
-            parentIndent: bm.indent,
-            startOnNewline: true
-        });
-        const implicitKey = !keyProps.found;
-        if (implicitKey) {
-            if (key) {
-                if (key.type === 'block-seq')
-                    onError(offset, 'BLOCK_AS_IMPLICIT_KEY', 'A block sequence may not be used as an implicit map key');
-                else if ('indent' in key && key.indent !== bm.indent)
-                    onError(offset, 'BAD_INDENT', startColMsg);
-            }
-            if (!keyProps.anchor && !keyProps.tag && !sep) {
-                commentEnd = keyProps.end;
-                if (keyProps.comment) {
-                    if (map.comment)
-                        map.comment += '\n' + keyProps.comment;
-                    else
-                        map.comment = keyProps.comment;
-                }
-                continue;
-            }
-            if (keyProps.newlineAfterProp || containsNewline(key)) {
-                onError(key ?? start[start.length - 1], 'MULTILINE_IMPLICIT_KEY', 'Implicit keys need to be on a single line');
-            }
-        }
-        else if (keyProps.found?.indent !== bm.indent) {
-            onError(offset, 'BAD_INDENT', startColMsg);
-        }
-        // key value
-        ctx.atKey = true;
-        const keyStart = keyProps.end;
-        const keyNode = key
-            ? composeNode(ctx, key, keyProps, onError)
-            : composeEmptyNode(ctx, keyStart, start, null, keyProps, onError);
-        if (ctx.schema.compat)
-            flowIndentCheck(bm.indent, key, onError);
-        ctx.atKey = false;
-        if (mapIncludes(ctx, map.items, keyNode))
-            onError(keyStart, 'DUPLICATE_KEY', 'Map keys must be unique');
-        // value properties
-        const valueProps = resolveProps(sep ?? [], {
-            indicator: 'map-value-ind',
-            next: value,
-            offset: keyNode.range[2],
-            onError,
-            parentIndent: bm.indent,
-            startOnNewline: !key || key.type === 'block-scalar'
-        });
-        offset = valueProps.end;
-        if (valueProps.found) {
-            if (implicitKey) {
-                if (value?.type === 'block-map' && !valueProps.hasNewline)
-                    onError(offset, 'BLOCK_AS_IMPLICIT_KEY', 'Nested mappings are not allowed in compact mappings');
-                if (ctx.options.strict &&
-                    keyProps.start < valueProps.found.offset - 1024)
-                    onError(keyNode.range, 'KEY_OVER_1024_CHARS', 'The : indicator must be at most 1024 chars after the start of an implicit block mapping key');
-            }
-            // value value
-            const valueNode = value
-                ? composeNode(ctx, value, valueProps, onError)
-                : composeEmptyNode(ctx, offset, sep, null, valueProps, onError);
-            if (ctx.schema.compat)
-                flowIndentCheck(bm.indent, value, onError);
-            offset = valueNode.range[2];
-            const pair = new Pair(keyNode, valueNode);
-            if (ctx.options.keepSourceTokens)
-                pair.srcToken = collItem;
-            map.items.push(pair);
-        }
-        else {
-            // key with no value
-            if (implicitKey)
-                onError(keyNode.range, 'MISSING_CHAR', 'Implicit map keys need to be followed by map values');
-            if (valueProps.comment) {
-                if (keyNode.comment)
-                    keyNode.comment += '\n' + valueProps.comment;
-                else
-                    keyNode.comment = valueProps.comment;
-            }
-            const pair = new Pair(keyNode);
-            if (ctx.options.keepSourceTokens)
-                pair.srcToken = collItem;
-            map.items.push(pair);
-        }
-    }
-    if (commentEnd && commentEnd < offset)
-        onError(commentEnd, 'IMPOSSIBLE', 'Map comment with trailing content');
-    map.range = [bm.offset, offset, commentEnd ?? offset];
-    return map;
-}
-
-function resolveBlockSeq({ composeNode, composeEmptyNode }, ctx, bs, onError, tag) {
-    const NodeClass = tag?.nodeClass ?? YAMLSeq;
-    const seq = new NodeClass(ctx.schema);
-    if (ctx.atRoot)
-        ctx.atRoot = false;
-    if (ctx.atKey)
-        ctx.atKey = false;
-    let offset = bs.offset;
-    let commentEnd = null;
-    for (const { start, value } of bs.items) {
-        const props = resolveProps(start, {
-            indicator: 'seq-item-ind',
-            next: value,
-            offset,
-            onError,
-            parentIndent: bs.indent,
-            startOnNewline: true
-        });
-        if (!props.found) {
-            if (props.anchor || props.tag || value) {
-                if (value?.type === 'block-seq')
-                    onError(props.end, 'BAD_INDENT', 'All sequence items must start at the same column');
-                else
-                    onError(offset, 'MISSING_CHAR', 'Sequence item without - indicator');
-            }
-            else {
-                commentEnd = props.end;
-                if (props.comment)
-                    seq.comment = props.comment;
-                continue;
-            }
-        }
-        const node = value
-            ? composeNode(ctx, value, props, onError)
-            : composeEmptyNode(ctx, props.end, start, null, props, onError);
-        if (ctx.schema.compat)
-            flowIndentCheck(bs.indent, value, onError);
-        offset = node.range[2];
-        seq.items.push(node);
-    }
-    seq.range = [bs.offset, offset, commentEnd ?? offset];
-    return seq;
-}
-
-function resolveEnd(end, offset, reqSpace, onError) {
-    let comment = '';
-    if (end) {
-        let hasSpace = false;
-        let sep = '';
-        for (const token of end) {
-            const { source, type } = token;
-            switch (type) {
-                case 'space':
-                    hasSpace = true;
-                    break;
-                case 'comment': {
-                    if (reqSpace && !hasSpace)
-                        onError(token, 'MISSING_CHAR', 'Comments must be separated from other tokens by white space characters');
-                    const cb = source.substring(1) || ' ';
-                    if (!comment)
-                        comment = cb;
-                    else
-                        comment += sep + cb;
-                    sep = '';
-                    break;
-                }
-                case 'newline':
-                    if (comment)
-                        sep += source;
-                    hasSpace = true;
-                    break;
-                default:
-                    onError(token, 'UNEXPECTED_TOKEN', `Unexpected ${type} at node end`);
-            }
-            offset += source.length;
-        }
-    }
-    return { comment, offset };
-}
-
-const blockMsg = 'Block collections are not allowed within flow collections';
-const isBlock = (token) => token && (token.type === 'block-map' || token.type === 'block-seq');
-function resolveFlowCollection({ composeNode, composeEmptyNode }, ctx, fc, onError, tag) {
-    const isMap = fc.start.source === '{';
-    const fcName = isMap ? 'flow map' : 'flow sequence';
-    const NodeClass = (tag?.nodeClass ?? (isMap ? YAMLMap : YAMLSeq));
-    const coll = new NodeClass(ctx.schema);
-    coll.flow = true;
-    const atRoot = ctx.atRoot;
-    if (atRoot)
-        ctx.atRoot = false;
-    if (ctx.atKey)
-        ctx.atKey = false;
-    let offset = fc.offset + fc.start.source.length;
-    for (let i = 0; i < fc.items.length; ++i) {
-        const collItem = fc.items[i];
-        const { start, key, sep, value } = collItem;
-        const props = resolveProps(start, {
-            flow: fcName,
-            indicator: 'explicit-key-ind',
-            next: key ?? sep?.[0],
-            offset,
-            onError,
-            parentIndent: fc.indent,
-            startOnNewline: false
-        });
-        if (!props.found) {
-            if (!props.anchor && !props.tag && !sep && !value) {
-                if (i === 0 && props.comma)
-                    onError(props.comma, 'UNEXPECTED_TOKEN', `Unexpected , in ${fcName}`);
-                else if (i < fc.items.length - 1)
-                    onError(props.start, 'UNEXPECTED_TOKEN', `Unexpected empty item in ${fcName}`);
-                if (props.comment) {
-                    if (coll.comment)
-                        coll.comment += '\n' + props.comment;
-                    else
-                        coll.comment = props.comment;
-                }
-                offset = props.end;
-                continue;
-            }
-            if (!isMap && ctx.options.strict && containsNewline(key))
-                onError(key, // checked by containsNewline()
-                'MULTILINE_IMPLICIT_KEY', 'Implicit keys of flow sequence pairs need to be on a single line');
-        }
-        if (i === 0) {
-            if (props.comma)
-                onError(props.comma, 'UNEXPECTED_TOKEN', `Unexpected , in ${fcName}`);
-        }
-        else {
-            if (!props.comma)
-                onError(props.start, 'MISSING_CHAR', `Missing , between ${fcName} items`);
-            if (props.comment) {
-                let prevItemComment = '';
-                loop: for (const st of start) {
-                    switch (st.type) {
-                        case 'comma':
-                        case 'space':
-                            break;
-                        case 'comment':
-                            prevItemComment = st.source.substring(1);
-                            break loop;
-                        default:
-                            break loop;
-                    }
-                }
-                if (prevItemComment) {
-                    let prev = coll.items[coll.items.length - 1];
-                    if (isPair(prev))
-                        prev = prev.value ?? prev.key;
-                    if (prev.comment)
-                        prev.comment += '\n' + prevItemComment;
-                    else
-                        prev.comment = prevItemComment;
-                    props.comment = props.comment.substring(prevItemComment.length + 1);
-                }
-            }
-        }
-        if (!isMap && !sep && !props.found) {
-            // item is a value in a seq
-            // → key & sep are empty, start does not include ? or :
-            const valueNode = value
-                ? composeNode(ctx, value, props, onError)
-                : composeEmptyNode(ctx, props.end, sep, null, props, onError);
-            coll.items.push(valueNode);
-            offset = valueNode.range[2];
-            if (isBlock(value))
-                onError(valueNode.range, 'BLOCK_IN_FLOW', blockMsg);
-        }
-        else {
-            // item is a key+value pair
-            // key value
-            ctx.atKey = true;
-            const keyStart = props.end;
-            const keyNode = key
-                ? composeNode(ctx, key, props, onError)
-                : composeEmptyNode(ctx, keyStart, start, null, props, onError);
-            if (isBlock(key))
-                onError(keyNode.range, 'BLOCK_IN_FLOW', blockMsg);
-            ctx.atKey = false;
-            // value properties
-            const valueProps = resolveProps(sep ?? [], {
-                flow: fcName,
-                indicator: 'map-value-ind',
-                next: value,
-                offset: keyNode.range[2],
-                onError,
-                parentIndent: fc.indent,
-                startOnNewline: false
-            });
-            if (valueProps.found) {
-                if (!isMap && !props.found && ctx.options.strict) {
-                    if (sep)
-                        for (const st of sep) {
-                            if (st === valueProps.found)
-                                break;
-                            if (st.type === 'newline') {
-                                onError(st, 'MULTILINE_IMPLICIT_KEY', 'Implicit keys of flow sequence pairs need to be on a single line');
-                                break;
-                            }
-                        }
-                    if (props.start < valueProps.found.offset - 1024)
-                        onError(valueProps.found, 'KEY_OVER_1024_CHARS', 'The : indicator must be at most 1024 chars after the start of an implicit flow sequence key');
-                }
-            }
-            else if (value) {
-                if ('source' in value && value.source?.[0] === ':')
-                    onError(value, 'MISSING_CHAR', `Missing space after : in ${fcName}`);
-                else
-                    onError(valueProps.start, 'MISSING_CHAR', `Missing , or : between ${fcName} items`);
-            }
-            // value value
-            const valueNode = value
-                ? composeNode(ctx, value, valueProps, onError)
-                : valueProps.found
-                    ? composeEmptyNode(ctx, valueProps.end, sep, null, valueProps, onError)
-                    : null;
-            if (valueNode) {
-                if (isBlock(value))
-                    onError(valueNode.range, 'BLOCK_IN_FLOW', blockMsg);
-            }
-            else if (valueProps.comment) {
-                if (keyNode.comment)
-                    keyNode.comment += '\n' + valueProps.comment;
-                else
-                    keyNode.comment = valueProps.comment;
-            }
-            const pair = new Pair(keyNode, valueNode);
-            if (ctx.options.keepSourceTokens)
-                pair.srcToken = collItem;
-            if (isMap) {
-                const map = coll;
-                if (mapIncludes(ctx, map.items, keyNode))
-                    onError(keyStart, 'DUPLICATE_KEY', 'Map keys must be unique');
-                map.items.push(pair);
-            }
-            else {
-                const map = new YAMLMap(ctx.schema);
-                map.flow = true;
-                map.items.push(pair);
-                const endRange = (valueNode ?? keyNode).range;
-                map.range = [keyNode.range[0], endRange[1], endRange[2]];
-                coll.items.push(map);
-            }
-            offset = valueNode ? valueNode.range[2] : valueProps.end;
-        }
-    }
-    const expectedEnd = isMap ? '}' : ']';
-    const [ce, ...ee] = fc.end;
-    let cePos = offset;
-    if (ce?.source === expectedEnd)
-        cePos = ce.offset + ce.source.length;
-    else {
-        const name = fcName[0].toUpperCase() + fcName.substring(1);
-        const msg = atRoot
-            ? `${name} must end with a ${expectedEnd}`
-            : `${name} in block collection must be sufficiently indented and end with a ${expectedEnd}`;
-        onError(offset, atRoot ? 'MISSING_CHAR' : 'BAD_INDENT', msg);
-        if (ce && ce.source.length !== 1)
-            ee.unshift(ce);
-    }
-    if (ee.length > 0) {
-        const end = resolveEnd(ee, cePos, ctx.options.strict, onError);
-        if (end.comment) {
-            if (coll.comment)
-                coll.comment += '\n' + end.comment;
-            else
-                coll.comment = end.comment;
-        }
-        coll.range = [fc.offset, cePos, end.offset];
-    }
-    else {
-        coll.range = [fc.offset, cePos, cePos];
-    }
-    return coll;
-}
-
-function resolveCollection(CN, ctx, token, onError, tagName, tag) {
-    const coll = token.type === 'block-map'
-        ? resolveBlockMap(CN, ctx, token, onError, tag)
-        : token.type === 'block-seq'
-            ? resolveBlockSeq(CN, ctx, token, onError, tag)
-            : resolveFlowCollection(CN, ctx, token, onError, tag);
-    const Coll = coll.constructor;
-    // If we got a tagName matching the class, or the tag name is '!',
-    // then use the tagName from the node class used to create it.
-    if (tagName === '!' || tagName === Coll.tagName) {
-        coll.tag = Coll.tagName;
-        return coll;
-    }
-    if (tagName)
-        coll.tag = tagName;
-    return coll;
-}
-function composeCollection(CN, ctx, token, props, onError) {
-    const tagToken = props.tag;
-    const tagName = !tagToken
-        ? null
-        : ctx.directives.tagName(tagToken.source, msg => onError(tagToken, 'TAG_RESOLVE_FAILED', msg));
-    if (token.type === 'block-seq') {
-        const { anchor, newlineAfterProp: nl } = props;
-        const lastProp = anchor && tagToken
-            ? anchor.offset > tagToken.offset
-                ? anchor
-                : tagToken
-            : (anchor ?? tagToken);
-        if (lastProp && (!nl || nl.offset < lastProp.offset)) {
-            const message = 'Missing newline after block sequence props';
-            onError(lastProp, 'MISSING_CHAR', message);
-        }
-    }
-    const expType = token.type === 'block-map'
-        ? 'map'
-        : token.type === 'block-seq'
-            ? 'seq'
-            : token.start.source === '{'
-                ? 'map'
-                : 'seq';
-    // shortcut: check if it's a generic YAMLMap or YAMLSeq
-    // before jumping into the custom tag logic.
-    if (!tagToken ||
-        !tagName ||
-        tagName === '!' ||
-        (tagName === YAMLMap.tagName && expType === 'map') ||
-        (tagName === YAMLSeq.tagName && expType === 'seq')) {
-        return resolveCollection(CN, ctx, token, onError, tagName);
-    }
-    let tag = ctx.schema.tags.find(t => t.tag === tagName && t.collection === expType);
-    if (!tag) {
-        const kt = ctx.schema.knownTags[tagName];
-        if (kt?.collection === expType) {
-            ctx.schema.tags.push(Object.assign({}, kt, { default: false }));
-            tag = kt;
-        }
-        else {
-            if (kt) {
-                onError(tagToken, 'BAD_COLLECTION_TYPE', `${kt.tag} used for ${expType} collection, but expects ${kt.collection ?? 'scalar'}`, true);
-            }
-            else {
-                onError(tagToken, 'TAG_RESOLVE_FAILED', `Unresolved tag: ${tagName}`, true);
-            }
-            return resolveCollection(CN, ctx, token, onError, tagName);
-        }
-    }
-    const coll = resolveCollection(CN, ctx, token, onError, tagName, tag);
-    const res = tag.resolve?.(coll, msg => onError(tagToken, 'TAG_RESOLVE_FAILED', msg), ctx.options) ?? coll;
-    const node = isNode(res)
-        ? res
-        : new Scalar(res);
-    node.range = coll.range;
-    node.tag = tagName;
-    if (tag?.format)
-        node.format = tag.format;
-    return node;
-}
-
-function resolveBlockScalar(ctx, scalar, onError) {
-    const start = scalar.offset;
-    const header = parseBlockScalarHeader(scalar, ctx.options.strict, onError);
-    if (!header)
-        return { value: '', type: null, comment: '', range: [start, start, start] };
-    const type = header.mode === '>' ? Scalar.BLOCK_FOLDED : Scalar.BLOCK_LITERAL;
-    const lines = scalar.source ? splitLines(scalar.source) : [];
-    // determine the end of content & start of chomping
-    let chompStart = lines.length;
-    for (let i = lines.length - 1; i >= 0; --i) {
-        const content = lines[i][1];
-        if (content === '' || content === '\r')
-            chompStart = i;
-        else
-            break;
-    }
-    // shortcut for empty contents
-    if (chompStart === 0) {
-        const value = header.chomp === '+' && lines.length > 0
-            ? '\n'.repeat(Math.max(1, lines.length - 1))
-            : '';
-        let end = start + header.length;
-        if (scalar.source)
-            end += scalar.source.length;
-        return { value, type, comment: header.comment, range: [start, end, end] };
-    }
-    // find the indentation level to trim from start
-    let trimIndent = scalar.indent + header.indent;
-    let offset = scalar.offset + header.length;
-    let contentStart = 0;
-    for (let i = 0; i < chompStart; ++i) {
-        const [indent, content] = lines[i];
-        if (content === '' || content === '\r') {
-            if (header.indent === 0 && indent.length > trimIndent)
-                trimIndent = indent.length;
-        }
-        else {
-            if (indent.length < trimIndent) {
-                const message = 'Block scalars with more-indented leading empty lines must use an explicit indentation indicator';
-                onError(offset + indent.length, 'MISSING_CHAR', message);
-            }
-            if (header.indent === 0)
-                trimIndent = indent.length;
-            contentStart = i;
-            if (trimIndent === 0 && !ctx.atRoot) {
-                const message = 'Block scalar values in collections must be indented';
-                onError(offset, 'BAD_INDENT', message);
-            }
-            break;
-        }
-        offset += indent.length + content.length + 1;
-    }
-    // include trailing more-indented empty lines in content
-    for (let i = lines.length - 1; i >= chompStart; --i) {
-        if (lines[i][0].length > trimIndent)
-            chompStart = i + 1;
-    }
-    let value = '';
-    let sep = '';
-    let prevMoreIndented = false;
-    // leading whitespace is kept intact
-    for (let i = 0; i < contentStart; ++i)
-        value += lines[i][0].slice(trimIndent) + '\n';
-    for (let i = contentStart; i < chompStart; ++i) {
-        let [indent, content] = lines[i];
-        offset += indent.length + content.length + 1;
-        const crlf = content[content.length - 1] === '\r';
-        if (crlf)
-            content = content.slice(0, -1);
-        /* istanbul ignore if already caught in lexer */
-        if (content && indent.length < trimIndent) {
-            const src = header.indent
-                ? 'explicit indentation indicator'
-                : 'first line';
-            const message = `Block scalar lines must not be less indented than their ${src}`;
-            onError(offset - content.length - (crlf ? 2 : 1), 'BAD_INDENT', message);
-            indent = '';
-        }
-        if (type === Scalar.BLOCK_LITERAL) {
-            value += sep + indent.slice(trimIndent) + content;
-            sep = '\n';
-        }
-        else if (indent.length > trimIndent || content[0] === '\t') {
-            // more-indented content within a folded block
-            if (sep === ' ')
-                sep = '\n';
-            else if (!prevMoreIndented && sep === '\n')
-                sep = '\n\n';
-            value += sep + indent.slice(trimIndent) + content;
-            sep = '\n';
-            prevMoreIndented = true;
-        }
-        else if (content === '') {
-            // empty line
-            if (sep === '\n')
-                value += '\n';
-            else
-                sep = '\n';
-        }
-        else {
-            value += sep + content;
-            sep = ' ';
-            prevMoreIndented = false;
-        }
-    }
-    switch (header.chomp) {
-        case '-':
-            break;
-        case '+':
-            for (let i = chompStart; i < lines.length; ++i)
-                value += '\n' + lines[i][0].slice(trimIndent);
-            if (value[value.length - 1] !== '\n')
-                value += '\n';
-            break;
-        default:
-            value += '\n';
-    }
-    const end = start + header.length + scalar.source.length;
-    return { value, type, comment: header.comment, range: [start, end, end] };
-}
-function parseBlockScalarHeader({ offset, props }, strict, onError) {
-    /* istanbul ignore if should not happen */
-    if (props[0].type !== 'block-scalar-header') {
-        onError(props[0], 'IMPOSSIBLE', 'Block scalar header not found');
-        return null;
-    }
-    const { source } = props[0];
-    const mode = source[0];
-    let indent = 0;
-    let chomp = '';
-    let error = -1;
-    for (let i = 1; i < source.length; ++i) {
-        const ch = source[i];
-        if (!chomp && (ch === '-' || ch === '+'))
-            chomp = ch;
-        else {
-            const n = Number(ch);
-            if (!indent && n)
-                indent = n;
-            else if (error === -1)
-                error = offset + i;
-        }
-    }
-    if (error !== -1)
-        onError(error, 'UNEXPECTED_TOKEN', `Block scalar header includes extra characters: ${source}`);
-    let hasSpace = false;
-    let comment = '';
-    let length = source.length;
-    for (let i = 1; i < props.length; ++i) {
-        const token = props[i];
-        switch (token.type) {
-            case 'space':
-                hasSpace = true;
-            // fallthrough
-            case 'newline':
-                length += token.source.length;
-                break;
-            case 'comment':
-                if (strict && !hasSpace) {
-                    const message = 'Comments must be separated from other tokens by white space characters';
-                    onError(token, 'MISSING_CHAR', message);
-                }
-                length += token.source.length;
-                comment = token.source.substring(1);
-                break;
-            case 'error':
-                onError(token, 'UNEXPECTED_TOKEN', token.message);
-                length += token.source.length;
-                break;
-            /* istanbul ignore next should not happen */
-            default: {
-                const message = `Unexpected token in block scalar header: ${token.type}`;
-                onError(token, 'UNEXPECTED_TOKEN', message);
-                const ts = token.source;
-                if (ts && typeof ts === 'string')
-                    length += ts.length;
-            }
-        }
-    }
-    return { mode, indent, chomp, comment, length };
-}
-/** @returns Array of lines split up as `[indent, content]` */
-function splitLines(source) {
-    const split = source.split(/\n( *)/);
-    const first = split[0];
-    const m = first.match(/^( *)/);
-    const line0 = m?.[1]
-        ? [m[1], first.slice(m[1].length)]
-        : ['', first];
-    const lines = [line0];
-    for (let i = 1; i < split.length; i += 2)
-        lines.push([split[i], split[i + 1]]);
-    return lines;
-}
-
-function resolveFlowScalar(scalar, strict, onError) {
-    const { offset, type, source, end } = scalar;
-    let _type;
-    let value;
-    const _onError = (rel, code, msg) => onError(offset + rel, code, msg);
-    switch (type) {
-        case 'scalar':
-            _type = Scalar.PLAIN;
-            value = plainValue(source, _onError);
-            break;
-        case 'single-quoted-scalar':
-            _type = Scalar.QUOTE_SINGLE;
-            value = singleQuotedValue(source, _onError);
-            break;
-        case 'double-quoted-scalar':
-            _type = Scalar.QUOTE_DOUBLE;
-            value = doubleQuotedValue(source, _onError);
-            break;
-        /* istanbul ignore next should not happen */
-        default:
-            onError(scalar, 'UNEXPECTED_TOKEN', `Expected a flow scalar value, but found: ${type}`);
-            return {
-                value: '',
-                type: null,
-                comment: '',
-                range: [offset, offset + source.length, offset + source.length]
-            };
-    }
-    const valueEnd = offset + source.length;
-    const re = resolveEnd(end, valueEnd, strict, onError);
-    return {
-        value,
-        type: _type,
-        comment: re.comment,
-        range: [offset, valueEnd, re.offset]
-    };
-}
-function plainValue(source, onError) {
-    let badChar = '';
-    switch (source[0]) {
-        /* istanbul ignore next should not happen */
-        case '\t':
-            badChar = 'a tab character';
-            break;
-        case ',':
-            badChar = 'flow indicator character ,';
-            break;
-        case '%':
-            badChar = 'directive indicator character %';
-            break;
-        case '|':
-        case '>': {
-            badChar = `block scalar indicator ${source[0]}`;
-            break;
-        }
-        case '@':
-        case '`': {
-            badChar = `reserved character ${source[0]}`;
-            break;
-        }
-    }
-    if (badChar)
-        onError(0, 'BAD_SCALAR_START', `Plain value cannot start with ${badChar}`);
-    return foldLines(source);
-}
-function singleQuotedValue(source, onError) {
-    if (source[source.length - 1] !== "'" || source.length === 1)
-        onError(source.length, 'MISSING_CHAR', "Missing closing 'quote");
-    return foldLines(source.slice(1, -1)).replace(/''/g, "'");
-}
-function foldLines(source) {
-    /**
-     * The negative lookbehind here and in the `re` RegExp is to
-     * prevent causing a polynomial search time in certain cases.
-     *
-     * The try-catch is for Safari, which doesn't support this yet:
-     * https://caniuse.com/js-regexp-lookbehind
-     */
-    let first, line;
-    try {
-        first = new RegExp('(.*?)(?<![ \t])[ \t]*\r?\n', 'sy');
-        line = new RegExp('[ \t]*(.*?)(?:(?<![ \t])[ \t]*)?\r?\n', 'sy');
-    }
-    catch {
-        first = /(.*?)[ \t]*\r?\n/sy;
-        line = /[ \t]*(.*?)[ \t]*\r?\n/sy;
-    }
-    let match = first.exec(source);
-    if (!match)
-        return source;
-    let res = match[1];
-    let sep = ' ';
-    let pos = first.lastIndex;
-    line.lastIndex = pos;
-    while ((match = line.exec(source))) {
-        if (match[1] === '') {
-            if (sep === '\n')
-                res += sep;
-            else
-                sep = '\n';
-        }
-        else {
-            res += sep + match[1];
-            sep = ' ';
-        }
-        pos = line.lastIndex;
-    }
-    const last = /[ \t]*(.*)/sy;
-    last.lastIndex = pos;
-    match = last.exec(source);
-    return res + sep + (match?.[1] ?? '');
-}
-function doubleQuotedValue(source, onError) {
-    let res = '';
-    for (let i = 1; i < source.length - 1; ++i) {
-        const ch = source[i];
-        if (ch === '\r' && source[i + 1] === '\n')
-            continue;
-        if (ch === '\n') {
-            const { fold, offset } = foldNewline(source, i);
-            res += fold;
-            i = offset;
-        }
-        else if (ch === '\\') {
-            let next = source[++i];
-            const cc = escapeCodes[next];
-            if (cc)
-                res += cc;
-            else if (next === '\n') {
-                // skip escaped newlines, but still trim the following line
-                next = source[i + 1];
-                while (next === ' ' || next === '\t')
-                    next = source[++i + 1];
-            }
-            else if (next === '\r' && source[i + 1] === '\n') {
-                // skip escaped CRLF newlines, but still trim the following line
-                next = source[++i + 1];
-                while (next === ' ' || next === '\t')
-                    next = source[++i + 1];
-            }
-            else if (next === 'x' || next === 'u' || next === 'U') {
-                const length = { x: 2, u: 4, U: 8 }[next];
-                res += parseCharCode(source, i + 1, length, onError);
-                i += length;
-            }
-            else {
-                const raw = source.substr(i - 1, 2);
-                onError(i - 1, 'BAD_DQ_ESCAPE', `Invalid escape sequence ${raw}`);
-                res += raw;
-            }
-        }
-        else if (ch === ' ' || ch === '\t') {
-            // trim trailing whitespace
-            const wsStart = i;
-            let next = source[i + 1];
-            while (next === ' ' || next === '\t')
-                next = source[++i + 1];
-            if (next !== '\n' && !(next === '\r' && source[i + 2] === '\n'))
-                res += i > wsStart ? source.slice(wsStart, i + 1) : ch;
-        }
-        else {
-            res += ch;
-        }
-    }
-    if (source[source.length - 1] !== '"' || source.length === 1)
-        onError(source.length, 'MISSING_CHAR', 'Missing closing "quote');
-    return res;
-}
-/**
- * Fold a single newline into a space, multiple newlines to N - 1 newlines.
- * Presumes `source[offset] === '\n'`
- */
-function foldNewline(source, offset) {
-    let fold = '';
-    let ch = source[offset + 1];
-    while (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
-        if (ch === '\r' && source[offset + 2] !== '\n')
-            break;
-        if (ch === '\n')
-            fold += '\n';
-        offset += 1;
-        ch = source[offset + 1];
-    }
-    if (!fold)
-        fold = ' ';
-    return { fold, offset };
-}
-const escapeCodes = {
-    '0': '\0', // null character
-    a: '\x07', // bell character
-    b: '\b', // backspace
-    e: '\x1b', // escape character
-    f: '\f', // form feed
-    n: '\n', // line feed
-    r: '\r', // carriage return
-    t: '\t', // horizontal tab
-    v: '\v', // vertical tab
-    N: '\u0085', // Unicode next line
-    _: '\u00a0', // Unicode non-breaking space
-    L: '\u2028', // Unicode line separator
-    P: '\u2029', // Unicode paragraph separator
-    ' ': ' ',
-    '"': '"',
-    '/': '/',
-    '\\': '\\',
-    '\t': '\t'
-};
-function parseCharCode(source, offset, length, onError) {
-    const cc = source.substr(offset, length);
-    const ok = cc.length === length && /^[0-9a-fA-F]+$/.test(cc);
-    const code = ok ? parseInt(cc, 16) : NaN;
-    if (isNaN(code)) {
-        const raw = source.substr(offset - 2, length + 2);
-        onError(offset - 2, 'BAD_DQ_ESCAPE', `Invalid escape sequence ${raw}`);
-        return raw;
-    }
-    return String.fromCodePoint(code);
-}
-
-function composeScalar(ctx, token, tagToken, onError) {
-    const { value, type, comment, range } = token.type === 'block-scalar'
-        ? resolveBlockScalar(ctx, token, onError)
-        : resolveFlowScalar(token, ctx.options.strict, onError);
-    const tagName = tagToken
-        ? ctx.directives.tagName(tagToken.source, msg => onError(tagToken, 'TAG_RESOLVE_FAILED', msg))
-        : null;
-    let tag;
-    if (ctx.options.stringKeys && ctx.atKey) {
-        tag = ctx.schema[SCALAR$1];
-    }
-    else if (tagName)
-        tag = findScalarTagByName(ctx.schema, value, tagName, tagToken, onError);
-    else if (token.type === 'scalar')
-        tag = findScalarTagByTest(ctx, value, token, onError);
-    else
-        tag = ctx.schema[SCALAR$1];
-    let scalar;
-    try {
-        const res = tag.resolve(value, msg => onError(tagToken ?? token, 'TAG_RESOLVE_FAILED', msg), ctx.options);
-        scalar = isScalar$1(res) ? res : new Scalar(res);
-    }
-    catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        onError(tagToken ?? token, 'TAG_RESOLVE_FAILED', msg);
-        scalar = new Scalar(value);
-    }
-    scalar.range = range;
-    scalar.source = value;
-    if (type)
-        scalar.type = type;
-    if (tagName)
-        scalar.tag = tagName;
-    if (tag.format)
-        scalar.format = tag.format;
-    if (comment)
-        scalar.comment = comment;
-    return scalar;
-}
-function findScalarTagByName(schema, value, tagName, tagToken, onError) {
-    if (tagName === '!')
-        return schema[SCALAR$1]; // non-specific tag
-    const matchWithTest = [];
-    for (const tag of schema.tags) {
-        if (!tag.collection && tag.tag === tagName) {
-            if (tag.default && tag.test)
-                matchWithTest.push(tag);
-            else
-                return tag;
-        }
-    }
-    for (const tag of matchWithTest)
-        if (tag.test?.test(value))
-            return tag;
-    const kt = schema.knownTags[tagName];
-    if (kt && !kt.collection) {
-        // Ensure that the known tag is available for stringifying,
-        // but does not get used by default.
-        schema.tags.push(Object.assign({}, kt, { default: false, test: undefined }));
-        return kt;
-    }
-    onError(tagToken, 'TAG_RESOLVE_FAILED', `Unresolved tag: ${tagName}`, tagName !== 'tag:yaml.org,2002:str');
-    return schema[SCALAR$1];
-}
-function findScalarTagByTest({ atKey, directives, schema }, value, token, onError) {
-    const tag = schema.tags.find(tag => (tag.default === true || (atKey && tag.default === 'key')) &&
-        tag.test?.test(value)) || schema[SCALAR$1];
-    if (schema.compat) {
-        const compat = schema.compat.find(tag => tag.default && tag.test?.test(value)) ??
-            schema[SCALAR$1];
-        if (tag.tag !== compat.tag) {
-            const ts = directives.tagString(tag.tag);
-            const cs = directives.tagString(compat.tag);
-            const msg = `Value may be parsed as either ${ts} or ${cs}`;
-            onError(token, 'TAG_RESOLVE_FAILED', msg, true);
-        }
-    }
-    return tag;
-}
-
-function emptyScalarPosition(offset, before, pos) {
-    if (before) {
-        pos ?? (pos = before.length);
-        for (let i = pos - 1; i >= 0; --i) {
-            let st = before[i];
-            switch (st.type) {
-                case 'space':
-                case 'comment':
-                case 'newline':
-                    offset -= st.source.length;
-                    continue;
-            }
-            // Technically, an empty scalar is immediately after the last non-empty
-            // node, but it's more useful to place it after any whitespace.
-            st = before[++i];
-            while (st?.type === 'space') {
-                offset += st.source.length;
-                st = before[++i];
-            }
-            break;
-        }
-    }
-    return offset;
-}
-
-const CN = { composeNode, composeEmptyNode };
-function composeNode(ctx, token, props, onError) {
-    const atKey = ctx.atKey;
-    const { spaceBefore, comment, anchor, tag } = props;
-    let node;
-    let isSrcToken = true;
-    switch (token.type) {
-        case 'alias':
-            node = composeAlias(ctx, token, onError);
-            if (anchor || tag)
-                onError(token, 'ALIAS_PROPS', 'An alias node must not specify any properties');
-            break;
-        case 'scalar':
-        case 'single-quoted-scalar':
-        case 'double-quoted-scalar':
-        case 'block-scalar':
-            node = composeScalar(ctx, token, tag, onError);
-            if (anchor)
-                node.anchor = anchor.source.substring(1);
-            break;
-        case 'block-map':
-        case 'block-seq':
-        case 'flow-collection':
-            node = composeCollection(CN, ctx, token, props, onError);
-            if (anchor)
-                node.anchor = anchor.source.substring(1);
-            break;
-        default: {
-            const message = token.type === 'error'
-                ? token.message
-                : `Unsupported token (type: ${token.type})`;
-            onError(token, 'UNEXPECTED_TOKEN', message);
-            node = composeEmptyNode(ctx, token.offset, undefined, null, props, onError);
-            isSrcToken = false;
-        }
-    }
-    if (anchor && node.anchor === '')
-        onError(anchor, 'BAD_ALIAS', 'Anchor cannot be an empty string');
-    if (atKey &&
-        ctx.options.stringKeys &&
-        (!isScalar$1(node) ||
-            typeof node.value !== 'string' ||
-            (node.tag && node.tag !== 'tag:yaml.org,2002:str'))) {
-        const msg = 'With stringKeys, all keys must be strings';
-        onError(tag ?? token, 'NON_STRING_KEY', msg);
-    }
-    if (spaceBefore)
-        node.spaceBefore = true;
-    if (comment) {
-        if (token.type === 'scalar' && token.source === '')
-            node.comment = comment;
-        else
-            node.commentBefore = comment;
-    }
-    // @ts-expect-error Type checking misses meaning of isSrcToken
-    if (ctx.options.keepSourceTokens && isSrcToken)
-        node.srcToken = token;
-    return node;
-}
-function composeEmptyNode(ctx, offset, before, pos, { spaceBefore, comment, anchor, tag, end }, onError) {
-    const token = {
-        type: 'scalar',
-        offset: emptyScalarPosition(offset, before, pos),
-        indent: -1,
-        source: ''
-    };
-    const node = composeScalar(ctx, token, tag, onError);
-    if (anchor) {
-        node.anchor = anchor.source.substring(1);
-        if (node.anchor === '')
-            onError(anchor, 'BAD_ALIAS', 'Anchor cannot be an empty string');
-    }
-    if (spaceBefore)
-        node.spaceBefore = true;
-    if (comment) {
-        node.comment = comment;
-        node.range[2] = end;
-    }
-    return node;
-}
-function composeAlias({ options }, { offset, source, end }, onError) {
-    const alias = new Alias(source.substring(1));
-    if (alias.source === '')
-        onError(offset, 'BAD_ALIAS', 'Alias cannot be an empty string');
-    if (alias.source.endsWith(':'))
-        onError(offset + source.length - 1, 'BAD_ALIAS', 'Alias ending in : is ambiguous', true);
-    const valueEnd = offset + source.length;
-    const re = resolveEnd(end, valueEnd, options.strict, onError);
-    alias.range = [offset, valueEnd, re.offset];
-    if (re.comment)
-        alias.comment = re.comment;
-    return alias;
-}
-
-function composeDoc(options, directives, { offset, start, value, end }, onError) {
-    const opts = Object.assign({ _directives: directives }, options);
-    const doc = new Document(undefined, opts);
-    const ctx = {
-        atKey: false,
-        atRoot: true,
-        directives: doc.directives,
-        options: doc.options,
-        schema: doc.schema
-    };
-    const props = resolveProps(start, {
-        indicator: 'doc-start',
-        next: value ?? end?.[0],
-        offset,
-        onError,
-        parentIndent: 0,
-        startOnNewline: true
-    });
-    if (props.found) {
-        doc.directives.docStart = true;
-        if (value &&
-            (value.type === 'block-map' || value.type === 'block-seq') &&
-            !props.hasNewline)
-            onError(props.end, 'MISSING_CHAR', 'Block collection cannot start on same line with directives-end marker');
-    }
-    // @ts-expect-error If Contents is set, let's trust the user
-    doc.contents = value
-        ? composeNode(ctx, value, props, onError)
-        : composeEmptyNode(ctx, props.end, start, null, props, onError);
-    const contentEnd = doc.contents.range[2];
-    const re = resolveEnd(end, contentEnd, false, onError);
-    if (re.comment)
-        doc.comment = re.comment;
-    doc.range = [offset, contentEnd, re.offset];
-    return doc;
-}
-
-function getErrorPos(src) {
-    if (typeof src === 'number')
-        return [src, src + 1];
-    if (Array.isArray(src))
-        return src.length === 2 ? src : [src[0], src[1]];
-    const { offset, source } = src;
-    return [offset, offset + (typeof source === 'string' ? source.length : 1)];
-}
-function parsePrelude(prelude) {
-    let comment = '';
-    let atComment = false;
-    let afterEmptyLine = false;
-    for (let i = 0; i < prelude.length; ++i) {
-        const source = prelude[i];
-        switch (source[0]) {
-            case '#':
-                comment +=
-                    (comment === '' ? '' : afterEmptyLine ? '\n\n' : '\n') +
-                        (source.substring(1) || ' ');
-                atComment = true;
-                afterEmptyLine = false;
-                break;
-            case '%':
-                if (prelude[i + 1]?.[0] !== '#')
-                    i += 1;
-                atComment = false;
-                break;
-            default:
-                // This may be wrong after doc-end, but in that case it doesn't matter
-                if (!atComment)
-                    afterEmptyLine = true;
-                atComment = false;
-        }
-    }
-    return { comment, afterEmptyLine };
-}
-/**
- * Compose a stream of CST nodes into a stream of YAML Documents.
- *
- * ```ts
- * import { Composer, Parser } from 'yaml'
- *
- * const src: string = ...
- * const tokens = new Parser().parse(src)
- * const docs = new Composer().compose(tokens)
- * ```
- */
-class Composer {
-    constructor(options = {}) {
-        this.doc = null;
-        this.atDirectives = false;
-        this.prelude = [];
-        this.errors = [];
-        this.warnings = [];
-        this.onError = (source, code, message, warning) => {
-            const pos = getErrorPos(source);
-            if (warning)
-                this.warnings.push(new YAMLWarning(pos, code, message));
-            else
-                this.errors.push(new YAMLParseError(pos, code, message));
-        };
-        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-        this.directives = new Directives({ version: options.version || '1.2' });
-        this.options = options;
-    }
-    decorate(doc, afterDoc) {
-        const { comment, afterEmptyLine } = parsePrelude(this.prelude);
-        //console.log({ dc: doc.comment, prelude, comment })
-        if (comment) {
-            const dc = doc.contents;
-            if (afterDoc) {
-                doc.comment = doc.comment ? `${doc.comment}\n${comment}` : comment;
-            }
-            else if (afterEmptyLine || doc.directives.docStart || !dc) {
-                doc.commentBefore = comment;
-            }
-            else if (isCollection$1(dc) && !dc.flow && dc.items.length > 0) {
-                let it = dc.items[0];
-                if (isPair(it))
-                    it = it.key;
-                const cb = it.commentBefore;
-                it.commentBefore = cb ? `${comment}\n${cb}` : comment;
-            }
-            else {
-                const cb = dc.commentBefore;
-                dc.commentBefore = cb ? `${comment}\n${cb}` : comment;
-            }
-        }
-        if (afterDoc) {
-            Array.prototype.push.apply(doc.errors, this.errors);
-            Array.prototype.push.apply(doc.warnings, this.warnings);
-        }
-        else {
-            doc.errors = this.errors;
-            doc.warnings = this.warnings;
-        }
-        this.prelude = [];
-        this.errors = [];
-        this.warnings = [];
-    }
-    /**
-     * Current stream status information.
-     *
-     * Mostly useful at the end of input for an empty stream.
-     */
-    streamInfo() {
-        return {
-            comment: parsePrelude(this.prelude).comment,
-            directives: this.directives,
-            errors: this.errors,
-            warnings: this.warnings
-        };
-    }
-    /**
-     * Compose tokens into documents.
-     *
-     * @param forceDoc - If the stream contains no document, still emit a final document including any comments and directives that would be applied to a subsequent document.
-     * @param endOffset - Should be set if `forceDoc` is also set, to set the document range end and to indicate errors correctly.
-     */
-    *compose(tokens, forceDoc = false, endOffset = -1) {
-        for (const token of tokens)
-            yield* this.next(token);
-        yield* this.end(forceDoc, endOffset);
-    }
-    /** Advance the composer by one CST token. */
-    *next(token) {
-        switch (token.type) {
-            case 'directive':
-                this.directives.add(token.source, (offset, message, warning) => {
-                    const pos = getErrorPos(token);
-                    pos[0] += offset;
-                    this.onError(pos, 'BAD_DIRECTIVE', message, warning);
-                });
-                this.prelude.push(token.source);
-                this.atDirectives = true;
-                break;
-            case 'document': {
-                const doc = composeDoc(this.options, this.directives, token, this.onError);
-                if (this.atDirectives && !doc.directives.docStart)
-                    this.onError(token, 'MISSING_CHAR', 'Missing directives-end/doc-start indicator line');
-                this.decorate(doc, false);
-                if (this.doc)
-                    yield this.doc;
-                this.doc = doc;
-                this.atDirectives = false;
-                break;
-            }
-            case 'byte-order-mark':
-            case 'space':
-                break;
-            case 'comment':
-            case 'newline':
-                this.prelude.push(token.source);
-                break;
-            case 'error': {
-                const msg = token.source
-                    ? `${token.message}: ${JSON.stringify(token.source)}`
-                    : token.message;
-                const error = new YAMLParseError(getErrorPos(token), 'UNEXPECTED_TOKEN', msg);
-                if (this.atDirectives || !this.doc)
-                    this.errors.push(error);
-                else
-                    this.doc.errors.push(error);
-                break;
-            }
-            case 'doc-end': {
-                if (!this.doc) {
-                    const msg = 'Unexpected doc-end without preceding document';
-                    this.errors.push(new YAMLParseError(getErrorPos(token), 'UNEXPECTED_TOKEN', msg));
-                    break;
-                }
-                this.doc.directives.docEnd = true;
-                const end = resolveEnd(token.end, token.offset + token.source.length, this.doc.options.strict, this.onError);
-                this.decorate(this.doc, true);
-                if (end.comment) {
-                    const dc = this.doc.comment;
-                    this.doc.comment = dc ? `${dc}\n${end.comment}` : end.comment;
-                }
-                this.doc.range[2] = end.offset;
-                break;
-            }
-            default:
-                this.errors.push(new YAMLParseError(getErrorPos(token), 'UNEXPECTED_TOKEN', `Unsupported token ${token.type}`));
-        }
-    }
-    /**
-     * Call at end of input to yield any remaining document.
-     *
-     * @param forceDoc - If the stream contains no document, still emit a final document including any comments and directives that would be applied to a subsequent document.
-     * @param endOffset - Should be set if `forceDoc` is also set, to set the document range end and to indicate errors correctly.
-     */
-    *end(forceDoc = false, endOffset = -1) {
-        if (this.doc) {
-            this.decorate(this.doc, true);
-            yield this.doc;
-            this.doc = null;
-        }
-        else if (forceDoc) {
-            const opts = Object.assign({ _directives: this.directives }, this.options);
-            const doc = new Document(undefined, opts);
-            if (this.atDirectives)
-                this.onError(endOffset, 'MISSING_CHAR', 'Missing directives-end indicator line');
-            doc.range = [0, endOffset, endOffset];
-            this.decorate(doc, false);
-            yield doc;
-        }
-    }
-}
-
-function resolveAsScalar(token, strict = true, onError) {
-    if (token) {
-        const _onError = (pos, code, message) => {
-            const offset = typeof pos === 'number' ? pos : Array.isArray(pos) ? pos[0] : pos.offset;
-            if (onError)
-                onError(offset, code, message);
-            else
-                throw new YAMLParseError([offset, offset + 1], code, message);
-        };
-        switch (token.type) {
-            case 'scalar':
-            case 'single-quoted-scalar':
-            case 'double-quoted-scalar':
-                return resolveFlowScalar(token, strict, _onError);
-            case 'block-scalar':
-                return resolveBlockScalar({ options: { strict } }, token, _onError);
-        }
-    }
-    return null;
-}
-/**
- * Create a new scalar token with `value`
- *
- * Values that represent an actual string but may be parsed as a different type should use a `type` other than `'PLAIN'`,
- * as this function does not support any schema operations and won't check for such conflicts.
- *
- * @param value The string representation of the value, which will have its content properly indented.
- * @param context.end Comments and whitespace after the end of the value, or after the block scalar header. If undefined, a newline will be added.
- * @param context.implicitKey Being within an implicit key may affect the resolved type of the token's value.
- * @param context.indent The indent level of the token.
- * @param context.inFlow Is this scalar within a flow collection? This may affect the resolved type of the token's value.
- * @param context.offset The offset position of the token.
- * @param context.type The preferred type of the scalar token. If undefined, the previous type of the `token` will be used, defaulting to `'PLAIN'`.
- */
-function createScalarToken(value, context) {
-    const { implicitKey = false, indent, inFlow = false, offset = -1, type = 'PLAIN' } = context;
-    const source = stringifyString({ type, value }, {
-        implicitKey,
-        indent: indent > 0 ? ' '.repeat(indent) : '',
-        inFlow,
-        options: { blockQuote: true, lineWidth: -1 }
-    });
-    const end = context.end ?? [
-        { type: 'newline', offset: -1, indent, source: '\n' }
-    ];
-    switch (source[0]) {
-        case '|':
-        case '>': {
-            const he = source.indexOf('\n');
-            const head = source.substring(0, he);
-            const body = source.substring(he + 1) + '\n';
-            const props = [
-                { type: 'block-scalar-header', offset, indent, source: head }
-            ];
-            if (!addEndtoBlockProps(props, end))
-                props.push({ type: 'newline', offset: -1, indent, source: '\n' });
-            return { type: 'block-scalar', offset, indent, props, source: body };
-        }
-        case '"':
-            return { type: 'double-quoted-scalar', offset, indent, source, end };
-        case "'":
-            return { type: 'single-quoted-scalar', offset, indent, source, end };
-        default:
-            return { type: 'scalar', offset, indent, source, end };
-    }
-}
-/**
- * Set the value of `token` to the given string `value`, overwriting any previous contents and type that it may have.
- *
- * Best efforts are made to retain any comments previously associated with the `token`,
- * though all contents within a collection's `items` will be overwritten.
- *
- * Values that represent an actual string but may be parsed as a different type should use a `type` other than `'PLAIN'`,
- * as this function does not support any schema operations and won't check for such conflicts.
- *
- * @param token Any token. If it does not include an `indent` value, the value will be stringified as if it were an implicit key.
- * @param value The string representation of the value, which will have its content properly indented.
- * @param context.afterKey In most cases, values after a key should have an additional level of indentation.
- * @param context.implicitKey Being within an implicit key may affect the resolved type of the token's value.
- * @param context.inFlow Being within a flow collection may affect the resolved type of the token's value.
- * @param context.type The preferred type of the scalar token. If undefined, the previous type of the `token` will be used, defaulting to `'PLAIN'`.
- */
-function setScalarValue(token, value, context = {}) {
-    let { afterKey = false, implicitKey = false, inFlow = false, type } = context;
-    let indent = 'indent' in token ? token.indent : null;
-    if (afterKey && typeof indent === 'number')
-        indent += 2;
-    if (!type)
-        switch (token.type) {
-            case 'single-quoted-scalar':
-                type = 'QUOTE_SINGLE';
-                break;
-            case 'double-quoted-scalar':
-                type = 'QUOTE_DOUBLE';
-                break;
-            case 'block-scalar': {
-                const header = token.props[0];
-                if (header.type !== 'block-scalar-header')
-                    throw new Error('Invalid block scalar header');
-                type = header.source[0] === '>' ? 'BLOCK_FOLDED' : 'BLOCK_LITERAL';
-                break;
-            }
-            default:
-                type = 'PLAIN';
-        }
-    const source = stringifyString({ type, value }, {
-        implicitKey: implicitKey || indent === null,
-        indent: indent !== null && indent > 0 ? ' '.repeat(indent) : '',
-        inFlow,
-        options: { blockQuote: true, lineWidth: -1 }
-    });
-    switch (source[0]) {
-        case '|':
-        case '>':
-            setBlockScalarValue(token, source);
-            break;
-        case '"':
-            setFlowScalarValue(token, source, 'double-quoted-scalar');
-            break;
-        case "'":
-            setFlowScalarValue(token, source, 'single-quoted-scalar');
-            break;
-        default:
-            setFlowScalarValue(token, source, 'scalar');
-    }
-}
-function setBlockScalarValue(token, source) {
-    const he = source.indexOf('\n');
-    const head = source.substring(0, he);
-    const body = source.substring(he + 1) + '\n';
-    if (token.type === 'block-scalar') {
-        const header = token.props[0];
-        if (header.type !== 'block-scalar-header')
-            throw new Error('Invalid block scalar header');
-        header.source = head;
-        token.source = body;
-    }
-    else {
-        const { offset } = token;
-        const indent = 'indent' in token ? token.indent : -1;
-        const props = [
-            { type: 'block-scalar-header', offset, indent, source: head }
-        ];
-        if (!addEndtoBlockProps(props, 'end' in token ? token.end : undefined))
-            props.push({ type: 'newline', offset: -1, indent, source: '\n' });
-        for (const key of Object.keys(token))
-            if (key !== 'type' && key !== 'offset')
-                delete token[key];
-        Object.assign(token, { type: 'block-scalar', indent, props, source: body });
-    }
-}
-/** @returns `true` if last token is a newline */
-function addEndtoBlockProps(props, end) {
-    if (end)
-        for (const st of end)
-            switch (st.type) {
-                case 'space':
-                case 'comment':
-                    props.push(st);
-                    break;
-                case 'newline':
-                    props.push(st);
-                    return true;
-            }
-    return false;
-}
-function setFlowScalarValue(token, source, type) {
-    switch (token.type) {
-        case 'scalar':
-        case 'double-quoted-scalar':
-        case 'single-quoted-scalar':
-            token.type = type;
-            token.source = source;
-            break;
-        case 'block-scalar': {
-            const end = token.props.slice(1);
-            let oa = source.length;
-            if (token.props[0].type === 'block-scalar-header')
-                oa -= token.props[0].source.length;
-            for (const tok of end)
-                tok.offset += oa;
-            delete token.props;
-            Object.assign(token, { type, source, end });
-            break;
-        }
-        case 'block-map':
-        case 'block-seq': {
-            const offset = token.offset + source.length;
-            const nl = { type: 'newline', offset, indent: token.indent, source: '\n' };
-            delete token.items;
-            Object.assign(token, { type, source, end: [nl] });
-            break;
-        }
-        default: {
-            const indent = 'indent' in token ? token.indent : -1;
-            const end = 'end' in token && Array.isArray(token.end)
-                ? token.end.filter(st => st.type === 'space' ||
-                    st.type === 'comment' ||
-                    st.type === 'newline')
-                : [];
-            for (const key of Object.keys(token))
-                if (key !== 'type' && key !== 'offset')
-                    delete token[key];
-            Object.assign(token, { type, indent, source, end });
-        }
-    }
-}
-
-/**
- * Stringify a CST document, token, or collection item
- *
- * Fair warning: This applies no validation whatsoever, and
- * simply concatenates the sources in their logical order.
- */
-const stringify$1 = (cst) => 'type' in cst ? stringifyToken(cst) : stringifyItem(cst);
-function stringifyToken(token) {
-    switch (token.type) {
-        case 'block-scalar': {
-            let res = '';
-            for (const tok of token.props)
-                res += stringifyToken(tok);
-            return res + token.source;
-        }
-        case 'block-map':
-        case 'block-seq': {
-            let res = '';
-            for (const item of token.items)
-                res += stringifyItem(item);
-            return res;
-        }
-        case 'flow-collection': {
-            let res = token.start.source;
-            for (const item of token.items)
-                res += stringifyItem(item);
-            for (const st of token.end)
-                res += st.source;
-            return res;
-        }
-        case 'document': {
-            let res = stringifyItem(token);
-            if (token.end)
-                for (const st of token.end)
-                    res += st.source;
-            return res;
-        }
-        default: {
-            let res = token.source;
-            if ('end' in token && token.end)
-                for (const st of token.end)
-                    res += st.source;
-            return res;
-        }
-    }
-}
-function stringifyItem({ start, key, sep, value }) {
-    let res = '';
-    for (const st of start)
-        res += st.source;
-    if (key)
-        res += stringifyToken(key);
-    if (sep)
-        for (const st of sep)
-            res += st.source;
-    if (value)
-        res += stringifyToken(value);
-    return res;
-}
-
-const BREAK = Symbol('break visit');
-const SKIP = Symbol('skip children');
-const REMOVE = Symbol('remove item');
-/**
- * Apply a visitor to a CST document or item.
- *
- * Walks through the tree (depth-first) starting from the root, calling a
- * `visitor` function with two arguments when entering each item:
- *   - `item`: The current item, which included the following members:
- *     - `start: SourceToken[]` – Source tokens before the key or value,
- *       possibly including its anchor or tag.
- *     - `key?: Token | null` – Set for pair values. May then be `null`, if
- *       the key before the `:` separator is empty.
- *     - `sep?: SourceToken[]` – Source tokens between the key and the value,
- *       which should include the `:` map value indicator if `value` is set.
- *     - `value?: Token` – The value of a sequence item, or of a map pair.
- *   - `path`: The steps from the root to the current node, as an array of
- *     `['key' | 'value', number]` tuples.
- *
- * The return value of the visitor may be used to control the traversal:
- *   - `undefined` (default): Do nothing and continue
- *   - `visit.SKIP`: Do not visit the children of this token, continue with
- *      next sibling
- *   - `visit.BREAK`: Terminate traversal completely
- *   - `visit.REMOVE`: Remove the current item, then continue with the next one
- *   - `number`: Set the index of the next step. This is useful especially if
- *     the index of the current token has changed.
- *   - `function`: Define the next visitor for this item. After the original
- *     visitor is called on item entry, next visitors are called after handling
- *     a non-empty `key` and when exiting the item.
- */
-function visit(cst, visitor) {
-    if ('type' in cst && cst.type === 'document')
-        cst = { start: cst.start, value: cst.value };
-    _visit(Object.freeze([]), cst, visitor);
-}
-// Without the `as symbol` casts, TS declares these in the `visit`
-// namespace using `var`, but then complains about that because
-// `unique symbol` must be `const`.
-/** Terminate visit traversal completely */
-visit.BREAK = BREAK;
-/** Do not visit the children of the current item */
-visit.SKIP = SKIP;
-/** Remove the current item */
-visit.REMOVE = REMOVE;
-/** Find the item at `path` from `cst` as the root */
-visit.itemAtPath = (cst, path) => {
-    let item = cst;
-    for (const [field, index] of path) {
-        const tok = item?.[field];
-        if (tok && 'items' in tok) {
-            item = tok.items[index];
-        }
-        else
-            return undefined;
-    }
-    return item;
-};
-/**
- * Get the immediate parent collection of the item at `path` from `cst` as the root.
- *
- * Throws an error if the collection is not found, which should never happen if the item itself exists.
- */
-visit.parentCollection = (cst, path) => {
-    const parent = visit.itemAtPath(cst, path.slice(0, -1));
-    const field = path[path.length - 1][0];
-    const coll = parent?.[field];
-    if (coll && 'items' in coll)
-        return coll;
-    throw new Error('Parent collection not found');
-};
-function _visit(path, item, visitor) {
-    let ctrl = visitor(item, path);
-    if (typeof ctrl === 'symbol')
-        return ctrl;
-    for (const field of ['key', 'value']) {
-        const token = item[field];
-        if (token && 'items' in token) {
-            for (let i = 0; i < token.items.length; ++i) {
-                const ci = _visit(Object.freeze(path.concat([[field, i]])), token.items[i], visitor);
-                if (typeof ci === 'number')
-                    i = ci - 1;
-                else if (ci === BREAK)
-                    return BREAK;
-                else if (ci === REMOVE) {
-                    token.items.splice(i, 1);
-                    i -= 1;
-                }
-            }
-            if (typeof ctrl === 'function' && field === 'key')
-                ctrl = ctrl(item, path);
-        }
-    }
-    return typeof ctrl === 'function' ? ctrl(item, path) : ctrl;
-}
-
-/** The byte order mark */
-const BOM = '\u{FEFF}';
-/** Start of doc-mode */
-const DOCUMENT = '\x02'; // C0: Start of Text
-/** Unexpected end of flow-mode */
-const FLOW_END = '\x18'; // C0: Cancel
-/** Next token is a scalar value */
-const SCALAR = '\x1f'; // C0: Unit Separator
-/** @returns `true` if `token` is a flow or block collection */
-const isCollection = (token) => !!token && 'items' in token;
-/** @returns `true` if `token` is a flow or block scalar; not an alias */
-const isScalar = (token) => !!token &&
-    (token.type === 'scalar' ||
-        token.type === 'single-quoted-scalar' ||
-        token.type === 'double-quoted-scalar' ||
-        token.type === 'block-scalar');
-/* istanbul ignore next */
-/** Get a printable representation of a lexer token */
-function prettyToken(token) {
-    switch (token) {
-        case BOM:
-            return '<BOM>';
-        case DOCUMENT:
-            return '<DOC>';
-        case FLOW_END:
-            return '<FLOW_END>';
-        case SCALAR:
-            return '<SCALAR>';
-        default:
-            return JSON.stringify(token);
-    }
-}
-/** Identify the type of a lexer token. May return `null` for unknown tokens. */
-function tokenType(source) {
-    switch (source) {
-        case BOM:
-            return 'byte-order-mark';
-        case DOCUMENT:
-            return 'doc-mode';
-        case FLOW_END:
-            return 'flow-error-end';
-        case SCALAR:
-            return 'scalar';
-        case '---':
-            return 'doc-start';
-        case '...':
-            return 'doc-end';
-        case '':
-        case '\n':
-        case '\r\n':
-            return 'newline';
-        case '-':
-            return 'seq-item-ind';
-        case '?':
-            return 'explicit-key-ind';
-        case ':':
-            return 'map-value-ind';
-        case '{':
-            return 'flow-map-start';
-        case '}':
-            return 'flow-map-end';
-        case '[':
-            return 'flow-seq-start';
-        case ']':
-            return 'flow-seq-end';
-        case ',':
-            return 'comma';
-    }
-    switch (source[0]) {
-        case ' ':
-        case '\t':
-            return 'space';
-        case '#':
-            return 'comment';
-        case '%':
-            return 'directive-line';
-        case '*':
-            return 'alias';
-        case '&':
-            return 'anchor';
-        case '!':
-            return 'tag';
-        case "'":
-            return 'single-quoted-scalar';
-        case '"':
-            return 'double-quoted-scalar';
-        case '|':
-        case '>':
-            return 'block-scalar-header';
-    }
-    return null;
-}
-
-var cst = /*#__PURE__*/Object.freeze({
-  __proto__: null,
-  BOM: BOM,
-  DOCUMENT: DOCUMENT,
-  FLOW_END: FLOW_END,
-  SCALAR: SCALAR,
-  createScalarToken: createScalarToken,
-  isCollection: isCollection,
-  isScalar: isScalar,
-  prettyToken: prettyToken,
-  resolveAsScalar: resolveAsScalar,
-  setScalarValue: setScalarValue,
-  stringify: stringify$1,
-  tokenType: tokenType,
-  visit: visit
-});
-
-/*
-START -> stream
-
-stream
-  directive -> line-end -> stream
-  indent + line-end -> stream
-  [else] -> line-start
-
-line-end
-  comment -> line-end
-  newline -> .
-  input-end -> END
-
-line-start
-  doc-start -> doc
-  doc-end -> stream
-  [else] -> indent -> block-start
-
-block-start
-  seq-item-start -> block-start
-  explicit-key-start -> block-start
-  map-value-start -> block-start
-  [else] -> doc
-
-doc
-  line-end -> line-start
-  spaces -> doc
-  anchor -> doc
-  tag -> doc
-  flow-start -> flow -> doc
-  flow-end -> error -> doc
-  seq-item-start -> error -> doc
-  explicit-key-start -> error -> doc
-  map-value-start -> doc
-  alias -> doc
-  quote-start -> quoted-scalar -> doc
-  block-scalar-header -> line-end -> block-scalar(min) -> line-start
-  [else] -> plain-scalar(false, min) -> doc
-
-flow
-  line-end -> flow
-  spaces -> flow
-  anchor -> flow
-  tag -> flow
-  flow-start -> flow -> flow
-  flow-end -> .
-  seq-item-start -> error -> flow
-  explicit-key-start -> flow
-  map-value-start -> flow
-  alias -> flow
-  quote-start -> quoted-scalar -> flow
-  comma -> flow
-  [else] -> plain-scalar(true, 0) -> flow
-
-quoted-scalar
-  quote-end -> .
-  [else] -> quoted-scalar
-
-block-scalar(min)
-  newline + peek(indent < min) -> .
-  [else] -> block-scalar(min)
-
-plain-scalar(is-flow, min)
-  scalar-end(is-flow) -> .
-  peek(newline + (indent < min)) -> .
-  [else] -> plain-scalar(min)
-*/
-function isEmpty(ch) {
-    switch (ch) {
-        case undefined:
-        case ' ':
-        case '\n':
-        case '\r':
-        case '\t':
-            return true;
-        default:
-            return false;
-    }
-}
-const hexDigits = new Set('0123456789ABCDEFabcdef');
-const tagChars = new Set("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-#;/?:@&=+$_.!~*'()");
-const flowIndicatorChars = new Set(',[]{}');
-const invalidAnchorChars = new Set(' ,[]{}\n\r\t');
-const isNotAnchorChar = (ch) => !ch || invalidAnchorChars.has(ch);
-/**
- * Splits an input string into lexical tokens, i.e. smaller strings that are
- * easily identifiable by `tokens.tokenType()`.
- *
- * Lexing starts always in a "stream" context. Incomplete input may be buffered
- * until a complete token can be emitted.
- *
- * In addition to slices of the original input, the following control characters
- * may also be emitted:
- *
- * - `\x02` (Start of Text): A document starts with the next token
- * - `\x18` (Cancel): Unexpected end of flow-mode (indicates an error)
- * - `\x1f` (Unit Separator): Next token is a scalar value
- * - `\u{FEFF}` (Byte order mark): Emitted separately outside documents
- */
-let Lexer$1 = class Lexer {
-    constructor() {
-        /**
-         * Flag indicating whether the end of the current buffer marks the end of
-         * all input
-         */
-        this.atEnd = false;
-        /**
-         * Explicit indent set in block scalar header, as an offset from the current
-         * minimum indent, so e.g. set to 1 from a header `|2+`. Set to -1 if not
-         * explicitly set.
-         */
-        this.blockScalarIndent = -1;
-        /**
-         * Block scalars that include a + (keep) chomping indicator in their header
-         * include trailing empty lines, which are otherwise excluded from the
-         * scalar's contents.
-         */
-        this.blockScalarKeep = false;
-        /** Current input */
-        this.buffer = '';
-        /**
-         * Flag noting whether the map value indicator : can immediately follow this
-         * node within a flow context.
-         */
-        this.flowKey = false;
-        /** Count of surrounding flow collection levels. */
-        this.flowLevel = 0;
-        /**
-         * Minimum level of indentation required for next lines to be parsed as a
-         * part of the current scalar value.
-         */
-        this.indentNext = 0;
-        /** Indentation level of the current line. */
-        this.indentValue = 0;
-        /** Position of the next \n character. */
-        this.lineEndPos = null;
-        /** Stores the state of the lexer if reaching the end of incpomplete input */
-        this.next = null;
-        /** A pointer to `buffer`; the current position of the lexer. */
-        this.pos = 0;
-    }
-    /**
-     * Generate YAML tokens from the `source` string. If `incomplete`,
-     * a part of the last line may be left as a buffer for the next call.
-     *
-     * @returns A generator of lexical tokens
-     */
-    *lex(source, incomplete = false) {
-        if (source) {
-            if (typeof source !== 'string')
-                throw TypeError('source is not a string');
-            this.buffer = this.buffer ? this.buffer + source : source;
-            this.lineEndPos = null;
-        }
-        this.atEnd = !incomplete;
-        let next = this.next ?? 'stream';
-        while (next && (incomplete || this.hasChars(1)))
-            next = yield* this.parseNext(next);
-    }
-    atLineEnd() {
-        let i = this.pos;
-        let ch = this.buffer[i];
-        while (ch === ' ' || ch === '\t')
-            ch = this.buffer[++i];
-        if (!ch || ch === '#' || ch === '\n')
-            return true;
-        if (ch === '\r')
-            return this.buffer[i + 1] === '\n';
-        return false;
-    }
-    charAt(n) {
-        return this.buffer[this.pos + n];
-    }
-    continueScalar(offset) {
-        let ch = this.buffer[offset];
-        if (this.indentNext > 0) {
-            let indent = 0;
-            while (ch === ' ')
-                ch = this.buffer[++indent + offset];
-            if (ch === '\r') {
-                const next = this.buffer[indent + offset + 1];
-                if (next === '\n' || (!next && !this.atEnd))
-                    return offset + indent + 1;
-            }
-            return ch === '\n' || indent >= this.indentNext || (!ch && !this.atEnd)
-                ? offset + indent
-                : -1;
-        }
-        if (ch === '-' || ch === '.') {
-            const dt = this.buffer.substr(offset, 3);
-            if ((dt === '---' || dt === '...') && isEmpty(this.buffer[offset + 3]))
-                return -1;
-        }
-        return offset;
-    }
-    getLine() {
-        let end = this.lineEndPos;
-        if (typeof end !== 'number' || (end !== -1 && end < this.pos)) {
-            end = this.buffer.indexOf('\n', this.pos);
-            this.lineEndPos = end;
-        }
-        if (end === -1)
-            return this.atEnd ? this.buffer.substring(this.pos) : null;
-        if (this.buffer[end - 1] === '\r')
-            end -= 1;
-        return this.buffer.substring(this.pos, end);
-    }
-    hasChars(n) {
-        return this.pos + n <= this.buffer.length;
-    }
-    setNext(state) {
-        this.buffer = this.buffer.substring(this.pos);
-        this.pos = 0;
-        this.lineEndPos = null;
-        this.next = state;
-        return null;
-    }
-    peek(n) {
-        return this.buffer.substr(this.pos, n);
-    }
-    *parseNext(next) {
-        switch (next) {
-            case 'stream':
-                return yield* this.parseStream();
-            case 'line-start':
-                return yield* this.parseLineStart();
-            case 'block-start':
-                return yield* this.parseBlockStart();
-            case 'doc':
-                return yield* this.parseDocument();
-            case 'flow':
-                return yield* this.parseFlowCollection();
-            case 'quoted-scalar':
-                return yield* this.parseQuotedScalar();
-            case 'block-scalar':
-                return yield* this.parseBlockScalar();
-            case 'plain-scalar':
-                return yield* this.parsePlainScalar();
-        }
-    }
-    *parseStream() {
-        let line = this.getLine();
-        if (line === null)
-            return this.setNext('stream');
-        if (line[0] === BOM) {
-            yield* this.pushCount(1);
-            line = line.substring(1);
-        }
-        if (line[0] === '%') {
-            let dirEnd = line.length;
-            let cs = line.indexOf('#');
-            while (cs !== -1) {
-                const ch = line[cs - 1];
-                if (ch === ' ' || ch === '\t') {
-                    dirEnd = cs - 1;
-                    break;
-                }
-                else {
-                    cs = line.indexOf('#', cs + 1);
-                }
-            }
-            while (true) {
-                const ch = line[dirEnd - 1];
-                if (ch === ' ' || ch === '\t')
-                    dirEnd -= 1;
-                else
-                    break;
-            }
-            const n = (yield* this.pushCount(dirEnd)) + (yield* this.pushSpaces(true));
-            yield* this.pushCount(line.length - n); // possible comment
-            this.pushNewline();
-            return 'stream';
-        }
-        if (this.atLineEnd()) {
-            const sp = yield* this.pushSpaces(true);
-            yield* this.pushCount(line.length - sp);
-            yield* this.pushNewline();
-            return 'stream';
-        }
-        yield DOCUMENT;
-        return yield* this.parseLineStart();
-    }
-    *parseLineStart() {
-        const ch = this.charAt(0);
-        if (!ch && !this.atEnd)
-            return this.setNext('line-start');
-        if (ch === '-' || ch === '.') {
-            if (!this.atEnd && !this.hasChars(4))
-                return this.setNext('line-start');
-            const s = this.peek(3);
-            if ((s === '---' || s === '...') && isEmpty(this.charAt(3))) {
-                yield* this.pushCount(3);
-                this.indentValue = 0;
-                this.indentNext = 0;
-                return s === '---' ? 'doc' : 'stream';
-            }
-        }
-        this.indentValue = yield* this.pushSpaces(false);
-        if (this.indentNext > this.indentValue && !isEmpty(this.charAt(1)))
-            this.indentNext = this.indentValue;
-        return yield* this.parseBlockStart();
-    }
-    *parseBlockStart() {
-        const [ch0, ch1] = this.peek(2);
-        if (!ch1 && !this.atEnd)
-            return this.setNext('block-start');
-        if ((ch0 === '-' || ch0 === '?' || ch0 === ':') && isEmpty(ch1)) {
-            const n = (yield* this.pushCount(1)) + (yield* this.pushSpaces(true));
-            this.indentNext = this.indentValue + 1;
-            this.indentValue += n;
-            return yield* this.parseBlockStart();
-        }
-        return 'doc';
-    }
-    *parseDocument() {
-        yield* this.pushSpaces(true);
-        const line = this.getLine();
-        if (line === null)
-            return this.setNext('doc');
-        let n = yield* this.pushIndicators();
-        switch (line[n]) {
-            case '#':
-                yield* this.pushCount(line.length - n);
-            // fallthrough
-            case undefined:
-                yield* this.pushNewline();
-                return yield* this.parseLineStart();
-            case '{':
-            case '[':
-                yield* this.pushCount(1);
-                this.flowKey = false;
-                this.flowLevel = 1;
-                return 'flow';
-            case '}':
-            case ']':
-                // this is an error
-                yield* this.pushCount(1);
-                return 'doc';
-            case '*':
-                yield* this.pushUntil(isNotAnchorChar);
-                return 'doc';
-            case '"':
-            case "'":
-                return yield* this.parseQuotedScalar();
-            case '|':
-            case '>':
-                n += yield* this.parseBlockScalarHeader();
-                n += yield* this.pushSpaces(true);
-                yield* this.pushCount(line.length - n);
-                yield* this.pushNewline();
-                return yield* this.parseBlockScalar();
-            default:
-                return yield* this.parsePlainScalar();
-        }
-    }
-    *parseFlowCollection() {
-        let nl, sp;
-        let indent = -1;
-        do {
-            nl = yield* this.pushNewline();
-            if (nl > 0) {
-                sp = yield* this.pushSpaces(false);
-                this.indentValue = indent = sp;
-            }
-            else {
-                sp = 0;
-            }
-            sp += yield* this.pushSpaces(true);
-        } while (nl + sp > 0);
-        const line = this.getLine();
-        if (line === null)
-            return this.setNext('flow');
-        if ((indent !== -1 && indent < this.indentNext && line[0] !== '#') ||
-            (indent === 0 &&
-                (line.startsWith('---') || line.startsWith('...')) &&
-                isEmpty(line[3]))) {
-            // Allowing for the terminal ] or } at the same (rather than greater)
-            // indent level as the initial [ or { is technically invalid, but
-            // failing here would be surprising to users.
-            const atFlowEndMarker = indent === this.indentNext - 1 &&
-                this.flowLevel === 1 &&
-                (line[0] === ']' || line[0] === '}');
-            if (!atFlowEndMarker) {
-                // this is an error
-                this.flowLevel = 0;
-                yield FLOW_END;
-                return yield* this.parseLineStart();
-            }
-        }
-        let n = 0;
-        while (line[n] === ',') {
-            n += yield* this.pushCount(1);
-            n += yield* this.pushSpaces(true);
-            this.flowKey = false;
-        }
-        n += yield* this.pushIndicators();
-        switch (line[n]) {
-            case undefined:
-                return 'flow';
-            case '#':
-                yield* this.pushCount(line.length - n);
-                return 'flow';
-            case '{':
-            case '[':
-                yield* this.pushCount(1);
-                this.flowKey = false;
-                this.flowLevel += 1;
-                return 'flow';
-            case '}':
-            case ']':
-                yield* this.pushCount(1);
-                this.flowKey = true;
-                this.flowLevel -= 1;
-                return this.flowLevel ? 'flow' : 'doc';
-            case '*':
-                yield* this.pushUntil(isNotAnchorChar);
-                return 'flow';
-            case '"':
-            case "'":
-                this.flowKey = true;
-                return yield* this.parseQuotedScalar();
-            case ':': {
-                const next = this.charAt(1);
-                if (this.flowKey || isEmpty(next) || next === ',') {
-                    this.flowKey = false;
-                    yield* this.pushCount(1);
-                    yield* this.pushSpaces(true);
-                    return 'flow';
-                }
-            }
-            // fallthrough
-            default:
-                this.flowKey = false;
-                return yield* this.parsePlainScalar();
-        }
-    }
-    *parseQuotedScalar() {
-        const quote = this.charAt(0);
-        let end = this.buffer.indexOf(quote, this.pos + 1);
-        if (quote === "'") {
-            while (end !== -1 && this.buffer[end + 1] === "'")
-                end = this.buffer.indexOf("'", end + 2);
-        }
-        else {
-            // double-quote
-            while (end !== -1) {
-                let n = 0;
-                while (this.buffer[end - 1 - n] === '\\')
-                    n += 1;
-                if (n % 2 === 0)
-                    break;
-                end = this.buffer.indexOf('"', end + 1);
-            }
-        }
-        // Only looking for newlines within the quotes
-        const qb = this.buffer.substring(0, end);
-        let nl = qb.indexOf('\n', this.pos);
-        if (nl !== -1) {
-            while (nl !== -1) {
-                const cs = this.continueScalar(nl + 1);
-                if (cs === -1)
-                    break;
-                nl = qb.indexOf('\n', cs);
-            }
-            if (nl !== -1) {
-                // this is an error caused by an unexpected unindent
-                end = nl - (qb[nl - 1] === '\r' ? 2 : 1);
-            }
-        }
-        if (end === -1) {
-            if (!this.atEnd)
-                return this.setNext('quoted-scalar');
-            end = this.buffer.length;
-        }
-        yield* this.pushToIndex(end + 1, false);
-        return this.flowLevel ? 'flow' : 'doc';
-    }
-    *parseBlockScalarHeader() {
-        this.blockScalarIndent = -1;
-        this.blockScalarKeep = false;
-        let i = this.pos;
-        while (true) {
-            const ch = this.buffer[++i];
-            if (ch === '+')
-                this.blockScalarKeep = true;
-            else if (ch > '0' && ch <= '9')
-                this.blockScalarIndent = Number(ch) - 1;
-            else if (ch !== '-')
-                break;
-        }
-        return yield* this.pushUntil(ch => isEmpty(ch) || ch === '#');
-    }
-    *parseBlockScalar() {
-        let nl = this.pos - 1; // may be -1 if this.pos === 0
-        let indent = 0;
-        let ch;
-        loop: for (let i = this.pos; (ch = this.buffer[i]); ++i) {
-            switch (ch) {
-                case ' ':
-                    indent += 1;
-                    break;
-                case '\n':
-                    nl = i;
-                    indent = 0;
-                    break;
-                case '\r': {
-                    const next = this.buffer[i + 1];
-                    if (!next && !this.atEnd)
-                        return this.setNext('block-scalar');
-                    if (next === '\n')
-                        break;
-                } // fallthrough
-                default:
-                    break loop;
-            }
-        }
-        if (!ch && !this.atEnd)
-            return this.setNext('block-scalar');
-        if (indent >= this.indentNext) {
-            if (this.blockScalarIndent === -1)
-                this.indentNext = indent;
-            else {
-                this.indentNext =
-                    this.blockScalarIndent + (this.indentNext === 0 ? 1 : this.indentNext);
-            }
-            do {
-                const cs = this.continueScalar(nl + 1);
-                if (cs === -1)
-                    break;
-                nl = this.buffer.indexOf('\n', cs);
-            } while (nl !== -1);
-            if (nl === -1) {
-                if (!this.atEnd)
-                    return this.setNext('block-scalar');
-                nl = this.buffer.length;
-            }
-        }
-        // Trailing insufficiently indented tabs are invalid.
-        // To catch that during parsing, we include them in the block scalar value.
-        let i = nl + 1;
-        ch = this.buffer[i];
-        while (ch === ' ')
-            ch = this.buffer[++i];
-        if (ch === '\t') {
-            while (ch === '\t' || ch === ' ' || ch === '\r' || ch === '\n')
-                ch = this.buffer[++i];
-            nl = i - 1;
-        }
-        else if (!this.blockScalarKeep) {
-            do {
-                let i = nl - 1;
-                let ch = this.buffer[i];
-                if (ch === '\r')
-                    ch = this.buffer[--i];
-                const lastChar = i; // Drop the line if last char not more indented
-                while (ch === ' ')
-                    ch = this.buffer[--i];
-                if (ch === '\n' && i >= this.pos && i + 1 + indent > lastChar)
-                    nl = i;
-                else
-                    break;
-            } while (true);
-        }
-        yield SCALAR;
-        yield* this.pushToIndex(nl + 1, true);
-        return yield* this.parseLineStart();
-    }
-    *parsePlainScalar() {
-        const inFlow = this.flowLevel > 0;
-        let end = this.pos - 1;
-        let i = this.pos - 1;
-        let ch;
-        while ((ch = this.buffer[++i])) {
-            if (ch === ':') {
-                const next = this.buffer[i + 1];
-                if (isEmpty(next) || (inFlow && flowIndicatorChars.has(next)))
-                    break;
-                end = i;
-            }
-            else if (isEmpty(ch)) {
-                let next = this.buffer[i + 1];
-                if (ch === '\r') {
-                    if (next === '\n') {
-                        i += 1;
-                        ch = '\n';
-                        next = this.buffer[i + 1];
-                    }
-                    else
-                        end = i;
-                }
-                if (next === '#' || (inFlow && flowIndicatorChars.has(next)))
-                    break;
-                if (ch === '\n') {
-                    const cs = this.continueScalar(i + 1);
-                    if (cs === -1)
-                        break;
-                    i = Math.max(i, cs - 2); // to advance, but still account for ' #'
-                }
-            }
-            else {
-                if (inFlow && flowIndicatorChars.has(ch))
-                    break;
-                end = i;
-            }
-        }
-        if (!ch && !this.atEnd)
-            return this.setNext('plain-scalar');
-        yield SCALAR;
-        yield* this.pushToIndex(end + 1, true);
-        return inFlow ? 'flow' : 'doc';
-    }
-    *pushCount(n) {
-        if (n > 0) {
-            yield this.buffer.substr(this.pos, n);
-            this.pos += n;
-            return n;
-        }
-        return 0;
-    }
-    *pushToIndex(i, allowEmpty) {
-        const s = this.buffer.slice(this.pos, i);
-        if (s) {
-            yield s;
-            this.pos += s.length;
-            return s.length;
-        }
-        else if (allowEmpty)
-            yield '';
-        return 0;
-    }
-    *pushIndicators() {
-        switch (this.charAt(0)) {
-            case '!':
-                return ((yield* this.pushTag()) +
-                    (yield* this.pushSpaces(true)) +
-                    (yield* this.pushIndicators()));
-            case '&':
-                return ((yield* this.pushUntil(isNotAnchorChar)) +
-                    (yield* this.pushSpaces(true)) +
-                    (yield* this.pushIndicators()));
-            case '-': // this is an error
-            case '?': // this is an error outside flow collections
-            case ':': {
-                const inFlow = this.flowLevel > 0;
-                const ch1 = this.charAt(1);
-                if (isEmpty(ch1) || (inFlow && flowIndicatorChars.has(ch1))) {
-                    if (!inFlow)
-                        this.indentNext = this.indentValue + 1;
-                    else if (this.flowKey)
-                        this.flowKey = false;
-                    return ((yield* this.pushCount(1)) +
-                        (yield* this.pushSpaces(true)) +
-                        (yield* this.pushIndicators()));
-                }
-            }
-        }
-        return 0;
-    }
-    *pushTag() {
-        if (this.charAt(1) === '<') {
-            let i = this.pos + 2;
-            let ch = this.buffer[i];
-            while (!isEmpty(ch) && ch !== '>')
-                ch = this.buffer[++i];
-            return yield* this.pushToIndex(ch === '>' ? i + 1 : i, false);
-        }
-        else {
-            let i = this.pos + 1;
-            let ch = this.buffer[i];
-            while (ch) {
-                if (tagChars.has(ch))
-                    ch = this.buffer[++i];
-                else if (ch === '%' &&
-                    hexDigits.has(this.buffer[i + 1]) &&
-                    hexDigits.has(this.buffer[i + 2])) {
-                    ch = this.buffer[(i += 3)];
-                }
-                else
-                    break;
-            }
-            return yield* this.pushToIndex(i, false);
-        }
-    }
-    *pushNewline() {
-        const ch = this.buffer[this.pos];
-        if (ch === '\n')
-            return yield* this.pushCount(1);
-        else if (ch === '\r' && this.charAt(1) === '\n')
-            return yield* this.pushCount(2);
-        else
-            return 0;
-    }
-    *pushSpaces(allowTabs) {
-        let i = this.pos - 1;
-        let ch;
-        do {
-            ch = this.buffer[++i];
-        } while (ch === ' ' || (allowTabs && ch === '\t'));
-        const n = i - this.pos;
-        if (n > 0) {
-            yield this.buffer.substr(this.pos, n);
-            this.pos = i;
-        }
-        return n;
-    }
-    *pushUntil(test) {
-        let i = this.pos;
-        let ch = this.buffer[i];
-        while (!test(ch))
-            ch = this.buffer[++i];
-        return yield* this.pushToIndex(i, false);
-    }
-};
-
-/**
- * Tracks newlines during parsing in order to provide an efficient API for
- * determining the one-indexed `{ line, col }` position for any offset
- * within the input.
- */
-class LineCounter {
-    constructor() {
-        this.lineStarts = [];
-        /**
-         * Should be called in ascending order. Otherwise, call
-         * `lineCounter.lineStarts.sort()` before calling `linePos()`.
-         */
-        this.addNewLine = (offset) => this.lineStarts.push(offset);
-        /**
-         * Performs a binary search and returns the 1-indexed { line, col }
-         * position of `offset`. If `line === 0`, `addNewLine` has never been
-         * called or `offset` is before the first known newline.
-         */
-        this.linePos = (offset) => {
-            let low = 0;
-            let high = this.lineStarts.length;
-            while (low < high) {
-                const mid = (low + high) >> 1; // Math.floor((low + high) / 2)
-                if (this.lineStarts[mid] < offset)
-                    low = mid + 1;
-                else
-                    high = mid;
-            }
-            if (this.lineStarts[low] === offset)
-                return { line: low + 1, col: 1 };
-            if (low === 0)
-                return { line: 0, col: offset };
-            const start = this.lineStarts[low - 1];
-            return { line: low, col: offset - start + 1 };
-        };
-    }
-}
-
-function includesToken(list, type) {
-    for (let i = 0; i < list.length; ++i)
-        if (list[i].type === type)
-            return true;
-    return false;
-}
-function findNonEmptyIndex(list) {
-    for (let i = 0; i < list.length; ++i) {
-        switch (list[i].type) {
-            case 'space':
-            case 'comment':
-            case 'newline':
-                break;
-            default:
-                return i;
-        }
-    }
-    return -1;
-}
-function isFlowToken(token) {
-    switch (token?.type) {
-        case 'alias':
-        case 'scalar':
-        case 'single-quoted-scalar':
-        case 'double-quoted-scalar':
-        case 'flow-collection':
-            return true;
-        default:
-            return false;
-    }
-}
-function getPrevProps(parent) {
-    switch (parent.type) {
-        case 'document':
-            return parent.start;
-        case 'block-map': {
-            const it = parent.items[parent.items.length - 1];
-            return it.sep ?? it.start;
-        }
-        case 'block-seq':
-            return parent.items[parent.items.length - 1].start;
-        /* istanbul ignore next should not happen */
-        default:
-            return [];
-    }
-}
-/** Note: May modify input array */
-function getFirstKeyStartProps(prev) {
-    if (prev.length === 0)
-        return [];
-    let i = prev.length;
-    loop: while (--i >= 0) {
-        switch (prev[i].type) {
-            case 'doc-start':
-            case 'explicit-key-ind':
-            case 'map-value-ind':
-            case 'seq-item-ind':
-            case 'newline':
-                break loop;
-        }
-    }
-    while (prev[++i]?.type === 'space') {
-        /* loop */
-    }
-    return prev.splice(i, prev.length);
-}
-function fixFlowSeqItems(fc) {
-    if (fc.start.type === 'flow-seq-start') {
-        for (const it of fc.items) {
-            if (it.sep &&
-                !it.value &&
-                !includesToken(it.start, 'explicit-key-ind') &&
-                !includesToken(it.sep, 'map-value-ind')) {
-                if (it.key)
-                    it.value = it.key;
-                delete it.key;
-                if (isFlowToken(it.value)) {
-                    if (it.value.end)
-                        Array.prototype.push.apply(it.value.end, it.sep);
-                    else
-                        it.value.end = it.sep;
-                }
-                else
-                    Array.prototype.push.apply(it.start, it.sep);
-                delete it.sep;
-            }
-        }
-    }
-}
-/**
- * A YAML concrete syntax tree (CST) parser
- *
- * ```ts
- * const src: string = ...
- * for (const token of new Parser().parse(src)) {
- *   // token: Token
- * }
- * ```
- *
- * To use the parser with a user-provided lexer:
- *
- * ```ts
- * function* parse(source: string, lexer: Lexer) {
- *   const parser = new Parser()
- *   for (const lexeme of lexer.lex(source))
- *     yield* parser.next(lexeme)
- *   yield* parser.end()
- * }
- *
- * const src: string = ...
- * const lexer = new Lexer()
- * for (const token of parse(src, lexer)) {
- *   // token: Token
- * }
- * ```
- */
-let Parser$1 = class Parser {
-    /**
-     * @param onNewLine - If defined, called separately with the start position of
-     *   each new line (in `parse()`, including the start of input).
-     */
-    constructor(onNewLine) {
-        /** If true, space and sequence indicators count as indentation */
-        this.atNewLine = true;
-        /** If true, next token is a scalar value */
-        this.atScalar = false;
-        /** Current indentation level */
-        this.indent = 0;
-        /** Current offset since the start of parsing */
-        this.offset = 0;
-        /** On the same line with a block map key */
-        this.onKeyLine = false;
-        /** Top indicates the node that's currently being built */
-        this.stack = [];
-        /** The source of the current token, set in parse() */
-        this.source = '';
-        /** The type of the current token, set in parse() */
-        this.type = '';
-        // Must be defined after `next()`
-        this.lexer = new Lexer$1();
-        this.onNewLine = onNewLine;
-    }
-    /**
-     * Parse `source` as a YAML stream.
-     * If `incomplete`, a part of the last line may be left as a buffer for the next call.
-     *
-     * Errors are not thrown, but yielded as `{ type: 'error', message }` tokens.
-     *
-     * @returns A generator of tokens representing each directive, document, and other structure.
-     */
-    *parse(source, incomplete = false) {
-        if (this.onNewLine && this.offset === 0)
-            this.onNewLine(0);
-        for (const lexeme of this.lexer.lex(source, incomplete))
-            yield* this.next(lexeme);
-        if (!incomplete)
-            yield* this.end();
-    }
-    /**
-     * Advance the parser by the `source` of one lexical token.
-     */
-    *next(source) {
-        this.source = source;
-        if (this.atScalar) {
-            this.atScalar = false;
-            yield* this.step();
-            this.offset += source.length;
-            return;
-        }
-        const type = tokenType(source);
-        if (!type) {
-            const message = `Not a YAML token: ${source}`;
-            yield* this.pop({ type: 'error', offset: this.offset, message, source });
-            this.offset += source.length;
-        }
-        else if (type === 'scalar') {
-            this.atNewLine = false;
-            this.atScalar = true;
-            this.type = 'scalar';
-        }
-        else {
-            this.type = type;
-            yield* this.step();
-            switch (type) {
-                case 'newline':
-                    this.atNewLine = true;
-                    this.indent = 0;
-                    if (this.onNewLine)
-                        this.onNewLine(this.offset + source.length);
-                    break;
-                case 'space':
-                    if (this.atNewLine && source[0] === ' ')
-                        this.indent += source.length;
-                    break;
-                case 'explicit-key-ind':
-                case 'map-value-ind':
-                case 'seq-item-ind':
-                    if (this.atNewLine)
-                        this.indent += source.length;
-                    break;
-                case 'doc-mode':
-                case 'flow-error-end':
-                    return;
-                default:
-                    this.atNewLine = false;
-            }
-            this.offset += source.length;
-        }
-    }
-    /** Call at end of input to push out any remaining constructions */
-    *end() {
-        while (this.stack.length > 0)
-            yield* this.pop();
-    }
-    get sourceToken() {
-        const st = {
-            type: this.type,
-            offset: this.offset,
-            indent: this.indent,
-            source: this.source
-        };
-        return st;
-    }
-    *step() {
-        const top = this.peek(1);
-        if (this.type === 'doc-end' && top?.type !== 'doc-end') {
-            while (this.stack.length > 0)
-                yield* this.pop();
-            this.stack.push({
-                type: 'doc-end',
-                offset: this.offset,
-                source: this.source
-            });
-            return;
-        }
-        if (!top)
-            return yield* this.stream();
-        switch (top.type) {
-            case 'document':
-                return yield* this.document(top);
-            case 'alias':
-            case 'scalar':
-            case 'single-quoted-scalar':
-            case 'double-quoted-scalar':
-                return yield* this.scalar(top);
-            case 'block-scalar':
-                return yield* this.blockScalar(top);
-            case 'block-map':
-                return yield* this.blockMap(top);
-            case 'block-seq':
-                return yield* this.blockSequence(top);
-            case 'flow-collection':
-                return yield* this.flowCollection(top);
-            case 'doc-end':
-                return yield* this.documentEnd(top);
-        }
-        /* istanbul ignore next should not happen */
-        yield* this.pop();
-    }
-    peek(n) {
-        return this.stack[this.stack.length - n];
-    }
-    *pop(error) {
-        const token = error ?? this.stack.pop();
-        /* istanbul ignore if should not happen */
-        if (!token) {
-            const message = 'Tried to pop an empty stack';
-            yield { type: 'error', offset: this.offset, source: '', message };
-        }
-        else if (this.stack.length === 0) {
-            yield token;
-        }
-        else {
-            const top = this.peek(1);
-            if (token.type === 'block-scalar') {
-                // Block scalars use their parent rather than header indent
-                token.indent = 'indent' in top ? top.indent : 0;
-            }
-            else if (token.type === 'flow-collection' && top.type === 'document') {
-                // Ignore all indent for top-level flow collections
-                token.indent = 0;
-            }
-            if (token.type === 'flow-collection')
-                fixFlowSeqItems(token);
-            switch (top.type) {
-                case 'document':
-                    top.value = token;
-                    break;
-                case 'block-scalar':
-                    top.props.push(token); // error
-                    break;
-                case 'block-map': {
-                    const it = top.items[top.items.length - 1];
-                    if (it.value) {
-                        top.items.push({ start: [], key: token, sep: [] });
-                        this.onKeyLine = true;
-                        return;
-                    }
-                    else if (it.sep) {
-                        it.value = token;
-                    }
-                    else {
-                        Object.assign(it, { key: token, sep: [] });
-                        this.onKeyLine = !it.explicitKey;
-                        return;
-                    }
-                    break;
-                }
-                case 'block-seq': {
-                    const it = top.items[top.items.length - 1];
-                    if (it.value)
-                        top.items.push({ start: [], value: token });
-                    else
-                        it.value = token;
-                    break;
-                }
-                case 'flow-collection': {
-                    const it = top.items[top.items.length - 1];
-                    if (!it || it.value)
-                        top.items.push({ start: [], key: token, sep: [] });
-                    else if (it.sep)
-                        it.value = token;
-                    else
-                        Object.assign(it, { key: token, sep: [] });
-                    return;
-                }
-                /* istanbul ignore next should not happen */
-                default:
-                    yield* this.pop();
-                    yield* this.pop(token);
-            }
-            if ((top.type === 'document' ||
-                top.type === 'block-map' ||
-                top.type === 'block-seq') &&
-                (token.type === 'block-map' || token.type === 'block-seq')) {
-                const last = token.items[token.items.length - 1];
-                if (last &&
-                    !last.sep &&
-                    !last.value &&
-                    last.start.length > 0 &&
-                    findNonEmptyIndex(last.start) === -1 &&
-                    (token.indent === 0 ||
-                        last.start.every(st => st.type !== 'comment' || st.indent < token.indent))) {
-                    if (top.type === 'document')
-                        top.end = last.start;
-                    else
-                        top.items.push({ start: last.start });
-                    token.items.splice(-1, 1);
-                }
-            }
-        }
-    }
-    *stream() {
-        switch (this.type) {
-            case 'directive-line':
-                yield { type: 'directive', offset: this.offset, source: this.source };
-                return;
-            case 'byte-order-mark':
-            case 'space':
-            case 'comment':
-            case 'newline':
-                yield this.sourceToken;
-                return;
-            case 'doc-mode':
-            case 'doc-start': {
-                const doc = {
-                    type: 'document',
-                    offset: this.offset,
-                    start: []
-                };
-                if (this.type === 'doc-start')
-                    doc.start.push(this.sourceToken);
-                this.stack.push(doc);
-                return;
-            }
-        }
-        yield {
-            type: 'error',
-            offset: this.offset,
-            message: `Unexpected ${this.type} token in YAML stream`,
-            source: this.source
-        };
-    }
-    *document(doc) {
-        if (doc.value)
-            return yield* this.lineEnd(doc);
-        switch (this.type) {
-            case 'doc-start': {
-                if (findNonEmptyIndex(doc.start) !== -1) {
-                    yield* this.pop();
-                    yield* this.step();
-                }
-                else
-                    doc.start.push(this.sourceToken);
-                return;
-            }
-            case 'anchor':
-            case 'tag':
-            case 'space':
-            case 'comment':
-            case 'newline':
-                doc.start.push(this.sourceToken);
-                return;
-        }
-        const bv = this.startBlockValue(doc);
-        if (bv)
-            this.stack.push(bv);
-        else {
-            yield {
-                type: 'error',
-                offset: this.offset,
-                message: `Unexpected ${this.type} token in YAML document`,
-                source: this.source
-            };
-        }
-    }
-    *scalar(scalar) {
-        if (this.type === 'map-value-ind') {
-            const prev = getPrevProps(this.peek(2));
-            const start = getFirstKeyStartProps(prev);
-            let sep;
-            if (scalar.end) {
-                sep = scalar.end;
-                sep.push(this.sourceToken);
-                delete scalar.end;
-            }
-            else
-                sep = [this.sourceToken];
-            const map = {
-                type: 'block-map',
-                offset: scalar.offset,
-                indent: scalar.indent,
-                items: [{ start, key: scalar, sep }]
-            };
-            this.onKeyLine = true;
-            this.stack[this.stack.length - 1] = map;
-        }
-        else
-            yield* this.lineEnd(scalar);
-    }
-    *blockScalar(scalar) {
-        switch (this.type) {
-            case 'space':
-            case 'comment':
-            case 'newline':
-                scalar.props.push(this.sourceToken);
-                return;
-            case 'scalar':
-                scalar.source = this.source;
-                // block-scalar source includes trailing newline
-                this.atNewLine = true;
-                this.indent = 0;
-                if (this.onNewLine) {
-                    let nl = this.source.indexOf('\n') + 1;
-                    while (nl !== 0) {
-                        this.onNewLine(this.offset + nl);
-                        nl = this.source.indexOf('\n', nl) + 1;
-                    }
-                }
-                yield* this.pop();
-                break;
-            /* istanbul ignore next should not happen */
-            default:
-                yield* this.pop();
-                yield* this.step();
-        }
-    }
-    *blockMap(map) {
-        const it = map.items[map.items.length - 1];
-        // it.sep is true-ish if pair already has key or : separator
-        switch (this.type) {
-            case 'newline':
-                this.onKeyLine = false;
-                if (it.value) {
-                    const end = 'end' in it.value ? it.value.end : undefined;
-                    const last = Array.isArray(end) ? end[end.length - 1] : undefined;
-                    if (last?.type === 'comment')
-                        end?.push(this.sourceToken);
-                    else
-                        map.items.push({ start: [this.sourceToken] });
-                }
-                else if (it.sep) {
-                    it.sep.push(this.sourceToken);
-                }
-                else {
-                    it.start.push(this.sourceToken);
-                }
-                return;
-            case 'space':
-            case 'comment':
-                if (it.value) {
-                    map.items.push({ start: [this.sourceToken] });
-                }
-                else if (it.sep) {
-                    it.sep.push(this.sourceToken);
-                }
-                else {
-                    if (this.atIndentedComment(it.start, map.indent)) {
-                        const prev = map.items[map.items.length - 2];
-                        const end = prev?.value?.end;
-                        if (Array.isArray(end)) {
-                            Array.prototype.push.apply(end, it.start);
-                            end.push(this.sourceToken);
-                            map.items.pop();
-                            return;
-                        }
-                    }
-                    it.start.push(this.sourceToken);
-                }
-                return;
-        }
-        if (this.indent >= map.indent) {
-            const atMapIndent = !this.onKeyLine && this.indent === map.indent;
-            const atNextItem = atMapIndent &&
-                (it.sep || it.explicitKey) &&
-                this.type !== 'seq-item-ind';
-            // For empty nodes, assign newline-separated not indented empty tokens to following node
-            let start = [];
-            if (atNextItem && it.sep && !it.value) {
-                const nl = [];
-                for (let i = 0; i < it.sep.length; ++i) {
-                    const st = it.sep[i];
-                    switch (st.type) {
-                        case 'newline':
-                            nl.push(i);
-                            break;
-                        case 'space':
-                            break;
-                        case 'comment':
-                            if (st.indent > map.indent)
-                                nl.length = 0;
-                            break;
-                        default:
-                            nl.length = 0;
-                    }
-                }
-                if (nl.length >= 2)
-                    start = it.sep.splice(nl[1]);
-            }
-            switch (this.type) {
-                case 'anchor':
-                case 'tag':
-                    if (atNextItem || it.value) {
-                        start.push(this.sourceToken);
-                        map.items.push({ start });
-                        this.onKeyLine = true;
-                    }
-                    else if (it.sep) {
-                        it.sep.push(this.sourceToken);
-                    }
-                    else {
-                        it.start.push(this.sourceToken);
-                    }
-                    return;
-                case 'explicit-key-ind':
-                    if (!it.sep && !it.explicitKey) {
-                        it.start.push(this.sourceToken);
-                        it.explicitKey = true;
-                    }
-                    else if (atNextItem || it.value) {
-                        start.push(this.sourceToken);
-                        map.items.push({ start, explicitKey: true });
-                    }
-                    else {
-                        this.stack.push({
-                            type: 'block-map',
-                            offset: this.offset,
-                            indent: this.indent,
-                            items: [{ start: [this.sourceToken], explicitKey: true }]
-                        });
-                    }
-                    this.onKeyLine = true;
-                    return;
-                case 'map-value-ind':
-                    if (it.explicitKey) {
-                        if (!it.sep) {
-                            if (includesToken(it.start, 'newline')) {
-                                Object.assign(it, { key: null, sep: [this.sourceToken] });
-                            }
-                            else {
-                                const start = getFirstKeyStartProps(it.start);
-                                this.stack.push({
-                                    type: 'block-map',
-                                    offset: this.offset,
-                                    indent: this.indent,
-                                    items: [{ start, key: null, sep: [this.sourceToken] }]
-                                });
-                            }
-                        }
-                        else if (it.value) {
-                            map.items.push({ start: [], key: null, sep: [this.sourceToken] });
-                        }
-                        else if (includesToken(it.sep, 'map-value-ind')) {
-                            this.stack.push({
-                                type: 'block-map',
-                                offset: this.offset,
-                                indent: this.indent,
-                                items: [{ start, key: null, sep: [this.sourceToken] }]
-                            });
-                        }
-                        else if (isFlowToken(it.key) &&
-                            !includesToken(it.sep, 'newline')) {
-                            const start = getFirstKeyStartProps(it.start);
-                            const key = it.key;
-                            const sep = it.sep;
-                            sep.push(this.sourceToken);
-                            // @ts-expect-error type guard is wrong here
-                            delete it.key;
-                            // @ts-expect-error type guard is wrong here
-                            delete it.sep;
-                            this.stack.push({
-                                type: 'block-map',
-                                offset: this.offset,
-                                indent: this.indent,
-                                items: [{ start, key, sep }]
-                            });
-                        }
-                        else if (start.length > 0) {
-                            // Not actually at next item
-                            it.sep = it.sep.concat(start, this.sourceToken);
-                        }
-                        else {
-                            it.sep.push(this.sourceToken);
-                        }
-                    }
-                    else {
-                        if (!it.sep) {
-                            Object.assign(it, { key: null, sep: [this.sourceToken] });
-                        }
-                        else if (it.value || atNextItem) {
-                            map.items.push({ start, key: null, sep: [this.sourceToken] });
-                        }
-                        else if (includesToken(it.sep, 'map-value-ind')) {
-                            this.stack.push({
-                                type: 'block-map',
-                                offset: this.offset,
-                                indent: this.indent,
-                                items: [{ start: [], key: null, sep: [this.sourceToken] }]
-                            });
-                        }
-                        else {
-                            it.sep.push(this.sourceToken);
-                        }
-                    }
-                    this.onKeyLine = true;
-                    return;
-                case 'alias':
-                case 'scalar':
-                case 'single-quoted-scalar':
-                case 'double-quoted-scalar': {
-                    const fs = this.flowScalar(this.type);
-                    if (atNextItem || it.value) {
-                        map.items.push({ start, key: fs, sep: [] });
-                        this.onKeyLine = true;
-                    }
-                    else if (it.sep) {
-                        this.stack.push(fs);
-                    }
-                    else {
-                        Object.assign(it, { key: fs, sep: [] });
-                        this.onKeyLine = true;
-                    }
-                    return;
-                }
-                default: {
-                    const bv = this.startBlockValue(map);
-                    if (bv) {
-                        if (bv.type === 'block-seq') {
-                            if (!it.explicitKey &&
-                                it.sep &&
-                                !includesToken(it.sep, 'newline')) {
-                                yield* this.pop({
-                                    type: 'error',
-                                    offset: this.offset,
-                                    message: 'Unexpected block-seq-ind on same line with key',
-                                    source: this.source
-                                });
-                                return;
-                            }
-                        }
-                        else if (atMapIndent) {
-                            map.items.push({ start });
-                        }
-                        this.stack.push(bv);
-                        return;
-                    }
-                }
-            }
-        }
-        yield* this.pop();
-        yield* this.step();
-    }
-    *blockSequence(seq) {
-        const it = seq.items[seq.items.length - 1];
-        switch (this.type) {
-            case 'newline':
-                if (it.value) {
-                    const end = 'end' in it.value ? it.value.end : undefined;
-                    const last = Array.isArray(end) ? end[end.length - 1] : undefined;
-                    if (last?.type === 'comment')
-                        end?.push(this.sourceToken);
-                    else
-                        seq.items.push({ start: [this.sourceToken] });
-                }
-                else
-                    it.start.push(this.sourceToken);
-                return;
-            case 'space':
-            case 'comment':
-                if (it.value)
-                    seq.items.push({ start: [this.sourceToken] });
-                else {
-                    if (this.atIndentedComment(it.start, seq.indent)) {
-                        const prev = seq.items[seq.items.length - 2];
-                        const end = prev?.value?.end;
-                        if (Array.isArray(end)) {
-                            Array.prototype.push.apply(end, it.start);
-                            end.push(this.sourceToken);
-                            seq.items.pop();
-                            return;
-                        }
-                    }
-                    it.start.push(this.sourceToken);
-                }
-                return;
-            case 'anchor':
-            case 'tag':
-                if (it.value || this.indent <= seq.indent)
-                    break;
-                it.start.push(this.sourceToken);
-                return;
-            case 'seq-item-ind':
-                if (this.indent !== seq.indent)
-                    break;
-                if (it.value || includesToken(it.start, 'seq-item-ind'))
-                    seq.items.push({ start: [this.sourceToken] });
-                else
-                    it.start.push(this.sourceToken);
-                return;
-        }
-        if (this.indent > seq.indent) {
-            const bv = this.startBlockValue(seq);
-            if (bv) {
-                this.stack.push(bv);
-                return;
-            }
-        }
-        yield* this.pop();
-        yield* this.step();
-    }
-    *flowCollection(fc) {
-        const it = fc.items[fc.items.length - 1];
-        if (this.type === 'flow-error-end') {
-            let top;
-            do {
-                yield* this.pop();
-                top = this.peek(1);
-            } while (top?.type === 'flow-collection');
-        }
-        else if (fc.end.length === 0) {
-            switch (this.type) {
-                case 'comma':
-                case 'explicit-key-ind':
-                    if (!it || it.sep)
-                        fc.items.push({ start: [this.sourceToken] });
-                    else
-                        it.start.push(this.sourceToken);
-                    return;
-                case 'map-value-ind':
-                    if (!it || it.value)
-                        fc.items.push({ start: [], key: null, sep: [this.sourceToken] });
-                    else if (it.sep)
-                        it.sep.push(this.sourceToken);
-                    else
-                        Object.assign(it, { key: null, sep: [this.sourceToken] });
-                    return;
-                case 'space':
-                case 'comment':
-                case 'newline':
-                case 'anchor':
-                case 'tag':
-                    if (!it || it.value)
-                        fc.items.push({ start: [this.sourceToken] });
-                    else if (it.sep)
-                        it.sep.push(this.sourceToken);
-                    else
-                        it.start.push(this.sourceToken);
-                    return;
-                case 'alias':
-                case 'scalar':
-                case 'single-quoted-scalar':
-                case 'double-quoted-scalar': {
-                    const fs = this.flowScalar(this.type);
-                    if (!it || it.value)
-                        fc.items.push({ start: [], key: fs, sep: [] });
-                    else if (it.sep)
-                        this.stack.push(fs);
-                    else
-                        Object.assign(it, { key: fs, sep: [] });
-                    return;
-                }
-                case 'flow-map-end':
-                case 'flow-seq-end':
-                    fc.end.push(this.sourceToken);
-                    return;
-            }
-            const bv = this.startBlockValue(fc);
-            /* istanbul ignore else should not happen */
-            if (bv)
-                this.stack.push(bv);
-            else {
-                yield* this.pop();
-                yield* this.step();
-            }
-        }
-        else {
-            const parent = this.peek(2);
-            if (parent.type === 'block-map' &&
-                ((this.type === 'map-value-ind' && parent.indent === fc.indent) ||
-                    (this.type === 'newline' &&
-                        !parent.items[parent.items.length - 1].sep))) {
-                yield* this.pop();
-                yield* this.step();
-            }
-            else if (this.type === 'map-value-ind' &&
-                parent.type !== 'flow-collection') {
-                const prev = getPrevProps(parent);
-                const start = getFirstKeyStartProps(prev);
-                fixFlowSeqItems(fc);
-                const sep = fc.end.splice(1, fc.end.length);
-                sep.push(this.sourceToken);
-                const map = {
-                    type: 'block-map',
-                    offset: fc.offset,
-                    indent: fc.indent,
-                    items: [{ start, key: fc, sep }]
-                };
-                this.onKeyLine = true;
-                this.stack[this.stack.length - 1] = map;
-            }
-            else {
-                yield* this.lineEnd(fc);
-            }
-        }
-    }
-    flowScalar(type) {
-        if (this.onNewLine) {
-            let nl = this.source.indexOf('\n') + 1;
-            while (nl !== 0) {
-                this.onNewLine(this.offset + nl);
-                nl = this.source.indexOf('\n', nl) + 1;
-            }
-        }
-        return {
-            type,
-            offset: this.offset,
-            indent: this.indent,
-            source: this.source
-        };
-    }
-    startBlockValue(parent) {
-        switch (this.type) {
-            case 'alias':
-            case 'scalar':
-            case 'single-quoted-scalar':
-            case 'double-quoted-scalar':
-                return this.flowScalar(this.type);
-            case 'block-scalar-header':
-                return {
-                    type: 'block-scalar',
-                    offset: this.offset,
-                    indent: this.indent,
-                    props: [this.sourceToken],
-                    source: ''
-                };
-            case 'flow-map-start':
-            case 'flow-seq-start':
-                return {
-                    type: 'flow-collection',
-                    offset: this.offset,
-                    indent: this.indent,
-                    start: this.sourceToken,
-                    items: [],
-                    end: []
-                };
-            case 'seq-item-ind':
-                return {
-                    type: 'block-seq',
-                    offset: this.offset,
-                    indent: this.indent,
-                    items: [{ start: [this.sourceToken] }]
-                };
-            case 'explicit-key-ind': {
-                this.onKeyLine = true;
-                const prev = getPrevProps(parent);
-                const start = getFirstKeyStartProps(prev);
-                start.push(this.sourceToken);
-                return {
-                    type: 'block-map',
-                    offset: this.offset,
-                    indent: this.indent,
-                    items: [{ start, explicitKey: true }]
-                };
-            }
-            case 'map-value-ind': {
-                this.onKeyLine = true;
-                const prev = getPrevProps(parent);
-                const start = getFirstKeyStartProps(prev);
-                return {
-                    type: 'block-map',
-                    offset: this.offset,
-                    indent: this.indent,
-                    items: [{ start, key: null, sep: [this.sourceToken] }]
-                };
-            }
-        }
-        return null;
-    }
-    atIndentedComment(start, indent) {
-        if (this.type !== 'comment')
-            return false;
-        if (this.indent <= indent)
-            return false;
-        return start.every(st => st.type === 'newline' || st.type === 'space');
-    }
-    *documentEnd(docEnd) {
-        if (this.type !== 'doc-mode') {
-            if (docEnd.end)
-                docEnd.end.push(this.sourceToken);
-            else
-                docEnd.end = [this.sourceToken];
-            if (this.type === 'newline')
-                yield* this.pop();
-        }
-    }
-    *lineEnd(token) {
-        switch (this.type) {
-            case 'comma':
-            case 'doc-start':
-            case 'doc-end':
-            case 'flow-seq-end':
-            case 'flow-map-end':
-            case 'map-value-ind':
-                yield* this.pop();
-                yield* this.step();
-                break;
-            case 'newline':
-                this.onKeyLine = false;
-            // fallthrough
-            case 'space':
-            case 'comment':
-            default:
-                // all other values are errors
-                if (token.end)
-                    token.end.push(this.sourceToken);
-                else
-                    token.end = [this.sourceToken];
-                if (this.type === 'newline')
-                    yield* this.pop();
-        }
-    }
-};
-
-function parseOptions(options) {
-    const prettyErrors = options.prettyErrors !== false;
-    const lineCounter = options.lineCounter || (prettyErrors && new LineCounter()) || null;
-    return { lineCounter, prettyErrors };
-}
-/**
- * Parse the input as a stream of YAML documents.
- *
- * Documents should be separated from each other by `...` or `---` marker lines.
- *
- * @returns If an empty `docs` array is returned, it will be of type
- *   EmptyStream and contain additional stream information. In
- *   TypeScript, you should use `'empty' in docs` as a type guard for it.
- */
-function parseAllDocuments(source, options = {}) {
-    const { lineCounter, prettyErrors } = parseOptions(options);
-    const parser = new Parser$1(lineCounter?.addNewLine);
-    const composer = new Composer(options);
-    const docs = Array.from(composer.compose(parser.parse(source)));
-    if (prettyErrors && lineCounter)
-        for (const doc of docs) {
-            doc.errors.forEach(prettifyError(source, lineCounter));
-            doc.warnings.forEach(prettifyError(source, lineCounter));
-        }
-    if (docs.length > 0)
-        return docs;
-    return Object.assign([], { empty: true }, composer.streamInfo());
-}
-/** Parse an input string into a single YAML.Document */
-function parseDocument(source, options = {}) {
-    const { lineCounter, prettyErrors } = parseOptions(options);
-    const parser = new Parser$1(lineCounter?.addNewLine);
-    const composer = new Composer(options);
-    // `doc` is always set by compose.end(true) at the very latest
-    let doc = null;
-    for (const _doc of composer.compose(parser.parse(source), true, source.length)) {
-        if (!doc)
-            doc = _doc;
-        else if (doc.options.logLevel !== 'silent') {
-            doc.errors.push(new YAMLParseError(_doc.range.slice(0, 2), 'MULTIPLE_DOCS', 'Source contains multiple documents; please use YAML.parseAllDocuments()'));
-            break;
-        }
-    }
-    if (prettyErrors && lineCounter) {
-        doc.errors.forEach(prettifyError(source, lineCounter));
-        doc.warnings.forEach(prettifyError(source, lineCounter));
-    }
-    return doc;
-}
-function parse(src, reviver, options) {
-    let _reviver = undefined;
-    if (typeof reviver === 'function') {
-        _reviver = reviver;
-    }
-    else if (options === undefined && reviver && typeof reviver === 'object') {
-        options = reviver;
-    }
-    const doc = parseDocument(src, options);
-    if (!doc)
-        return null;
-    doc.warnings.forEach(warning => warn(doc.options.logLevel, warning));
-    if (doc.errors.length > 0) {
-        if (doc.options.logLevel !== 'silent')
-            throw doc.errors[0];
-        else
-            doc.errors = [];
-    }
-    return doc.toJS(Object.assign({ reviver: _reviver }, options));
-}
-function stringify(value, replacer, options) {
-    let _replacer = null;
-    if (typeof replacer === 'function' || Array.isArray(replacer)) {
-        _replacer = replacer;
-    }
-    else if (options === undefined && replacer) {
-        options = replacer;
-    }
-    if (typeof options === 'string')
-        options = options.length;
-    if (typeof options === 'number') {
-        const indent = Math.round(options);
-        options = indent < 1 ? undefined : indent > 8 ? { indent: 8 } : { indent };
-    }
-    if (value === undefined) {
-        const { keepUndefined } = options ?? replacer ?? {};
-        if (!keepUndefined)
-            return undefined;
-    }
-    if (isDocument(value) && !_replacer)
-        return value.toString(options);
-    return new Document(value, _replacer, options).toString(options);
-}
-
-var YAML = /*#__PURE__*/Object.freeze({
-  __proto__: null,
-  Alias: Alias,
-  CST: cst,
-  Composer: Composer,
-  Document: Document,
-  Lexer: Lexer$1,
-  LineCounter: LineCounter,
-  Pair: Pair,
-  Parser: Parser$1,
-  Scalar: Scalar,
-  Schema: Schema,
-  YAMLError: YAMLError,
-  YAMLMap: YAMLMap,
-  YAMLParseError: YAMLParseError,
-  YAMLSeq: YAMLSeq,
-  YAMLWarning: YAMLWarning,
-  isAlias: isAlias,
-  isCollection: isCollection$1,
-  isDocument: isDocument,
-  isMap: isMap,
-  isNode: isNode,
-  isPair: isPair,
-  isScalar: isScalar$1,
-  isSeq: isSeq,
-  parse: parse,
-  parseAllDocuments: parseAllDocuments,
-  parseDocument: parseDocument,
-  stringify: stringify,
-  visit: visit$1,
-  visitAsync: visitAsync
-});
-
-/**
- * Frontmatter Session Updater
- *
- * Programmatically updates session/runtime configuration in a document's
- * YAML frontmatter. Used by the runtimes panel UI to persist configuration
- * changes back to the document.
- *
- * @module frontmatter-updater
- */
-
-
-/**
- * @typedef {Object} SessionConfig
- * @property {string} [name] - Session name
- * @property {string} [venv] - Virtual environment path (Python)
- * @property {string} [cwd] - Working directory
- * @property {boolean} [auto_start] - Auto-start on project open
- */
-
-/**
- * Parse existing frontmatter from document content.
- *
- * @param {string} content - Full document content
- * @returns {{ exists: boolean, yaml: object|null, range: {start: number, end: number}|null, raw: string|null }}
- */
-function parseFrontmatter(content) {
-  if (!content.startsWith('---')) {
-    return { exists: false, yaml: null, range: null, raw: null };
+function markSetsEqual(a, b) {
+  if (a.size !== b.size) return false;
+  for (const value of a) {
+    if (!b.has(value)) return false;
   }
+  return true;
+}
 
-  const endIdx = content.indexOf('\n---', 3);
-  if (endIdx === -1) {
-    return { exists: false, yaml: null, range: null, raw: null };
+function commonMarkSet(a, b) {
+  const out = new Set();
+  for (const value of a) {
+    if (b.has(value)) out.add(value);
   }
+  return out;
+}
 
-  const rawYaml = content.slice(4, endIdx); // Skip opening ---\n
-  try {
-    const parsed = YAML.parse(rawYaml) || {};
-    return {
-      exists: true,
-      yaml: parsed,
-      range: { start: 0, end: endIdx + 4 },
-      raw: rawYaml,
-    };
-  } catch (e) {
-    console.warn('[frontmatter-updater] Failed to parse YAML:', e.message);
-    return { exists: true, yaml: null, range: { start: 0, end: endIdx + 4 }, raw: rawYaml };
+function syntaxToMark(open, close = open) {
+  for (const spec of Object.values(INLINE_MARK_SPECS)) {
+    if (spec.open === open && spec.close === close) return spec.mark;
+  }
+  return null;
+}
+
+function markToSyntax(mark) {
+  return INLINE_MARK_SPECS[mark] || null;
+}
+
+function inlineClassForMark(mark) {
+  switch (mark) {
+    case 'bold': return 'cm-md-bold';
+    case 'italic': return 'cm-md-italic';
+    case 'underline': return 'cm-md-underline';
+    case 'strike': return 'cm-md-strikethrough';
+    case 'code': return 'cm-md-inline-code';
+    default: return null;
   }
 }
 
-/**
- * Build frontmatter YAML string from an object.
- *
- * @param {object} data - Frontmatter data
- * @returns {string} Complete frontmatter block including --- delimiters
- */
-function buildFrontmatter(data) {
-  const cleaned = cleanObject(data);
+function isEscapedMarkdownDelimiter(text, index) {
+  let backslashes = 0;
+  for (let i = index - 1; i >= 0 && text[i] === '\\'; i--) backslashes++;
+  return (backslashes % 2) === 1;
+}
 
-  if (!cleaned || Object.keys(cleaned).length === 0) {
+function matchesSpecToken(text, index, token, spec) {
+  if (!text.startsWith(token, index)) return false;
+  if (spec.kind === 'markdown') {
+    return !isEscapedMarkdownDelimiter(text, index);
+  }
+  return true;
+}
+
+function matchOpenSpec(text, index) {
+  for (const spec of INLINE_OPEN_ORDER) {
+    if (!matchesSpecToken(text, index, spec.open, spec)) continue;
+    if (spec.mark === 'italic' && text.startsWith('**', index)) continue;
+    if (spec.mark === 'code' && text.startsWith('```', index)) continue;
+    return spec;
+  }
+  return null;
+}
+
+function parseInlineNodes(text, index = 0, endSpec = null, activeMarks = new Set()) {
+  const nodes = [];
+  let cursor = index;
+  let textStart = index;
+
+  const flushText = (to) => {
+    if (to <= textStart) return;
+    nodes.push({
+      type: 'text',
+      from: textStart,
+      to,
+      text: text.slice(textStart, to),
+    });
+  };
+
+  while (cursor < text.length) {
+    if (endSpec && matchesSpecToken(text, cursor, endSpec.close, endSpec)) {
+      flushText(cursor);
+      return {
+        nodes,
+        index: cursor + endSpec.close.length,
+        closeStart: cursor,
+        closed: true,
+      };
+    }
+
+    const spec = matchOpenSpec(text, cursor);
+    if (!spec || activeMarks.has(spec.mark)) {
+      cursor++;
+      continue;
+    }
+
+    if (spec.mark === 'code') {
+      let close = cursor + spec.open.length;
+      while (close <= text.length - spec.close.length) {
+        if (matchesSpecToken(text, close, spec.close, spec)) break;
+        close++;
+      }
+      if (close <= text.length - spec.close.length) {
+        flushText(cursor);
+        const contentFrom = cursor + spec.open.length;
+        const contentTo = close;
+        nodes.push({
+          type: 'mark',
+          mark: spec.mark,
+          from: cursor,
+          to: close + spec.close.length,
+          contentFrom,
+          contentTo,
+          children: contentFrom < contentTo
+            ? [{ type: 'text', from: contentFrom, to: contentTo, text: text.slice(contentFrom, contentTo) }]
+            : [],
+        });
+        cursor = close + spec.close.length;
+        textStart = cursor;
+        continue;
+      }
+      cursor++;
+      continue;
+    }
+
+    const nextActive = new Set(activeMarks);
+    nextActive.add(spec.mark);
+    const inner = parseInlineNodes(text, cursor + spec.open.length, spec, nextActive);
+    if (inner.closed && inner.closeStart >= cursor + spec.open.length) {
+      flushText(cursor);
+      nodes.push({
+        type: 'mark',
+        mark: spec.mark,
+        from: cursor,
+        to: inner.index,
+        contentFrom: cursor + spec.open.length,
+        contentTo: inner.closeStart,
+        children: inner.nodes,
+      });
+      cursor = inner.index;
+      textStart = cursor;
+      continue;
+    }
+
+    cursor++;
+  }
+
+  flushText(text.length);
+  return {
+    nodes,
+    index: text.length,
+    closeStart: -1,
+    closed: false,
+  };
+}
+
+function buildTextSegments(nodes, lineFrom, activeMarks = new Set(), out = []) {
+  for (const node of nodes) {
+    if (node.type === 'text') {
+      if (node.from < node.to) {
+        out.push({
+          from: lineFrom + node.from,
+          to: lineFrom + node.to,
+          text: node.text,
+          marks: cloneMarkSet(activeMarks),
+        });
+      }
+      continue;
+    }
+
+    const nextMarks = cloneMarkSet(activeMarks);
+    nextMarks.add(node.mark);
+    buildTextSegments(node.children || [], lineFrom, nextMarks, out);
+  }
+  return out;
+}
+
+function collectSpans(nodes, lineFrom, out = []) {
+  for (const node of nodes) {
+    if (node.type !== 'mark') continue;
+    out.push({
+      mark: node.mark,
+      from: lineFrom + node.from,
+      to: lineFrom + node.to,
+      contentFrom: lineFrom + node.contentFrom,
+      contentTo: lineFrom + node.contentTo,
+      openLength: node.contentFrom - node.from,
+      closeLength: node.to - node.contentTo,
+      children: node.children || [],
+    });
+    collectSpans(node.children || [], lineFrom, out);
+  }
+  return out;
+}
+
+function mergeAdjacentSegments(segments) {
+  const out = [];
+  for (const segment of segments) {
+    if (!segment || segment.text.length === 0) continue;
+    const prev = out[out.length - 1];
+    if (prev && prev.to === segment.from && markSetsEqual(prev.marks, segment.marks)) {
+      prev.to = segment.to;
+      prev.text += segment.text;
+      continue;
+    }
+    out.push({
+      from: segment.from,
+      to: segment.to,
+      text: segment.text,
+      marks: cloneMarkSet(segment.marks),
+    });
+  }
+  return out;
+}
+
+function cloneSegments(segments) {
+  return segments.map((segment) => ({
+    ...segment,
+    from: segment.from,
+    to: segment.to,
+    text: segment.text,
+    marks: cloneMarkSet(segment.marks),
+  }));
+}
+
+function stripBoundaryWhitespace(segment, side) {
+  if (!segment || segment.text.length === 0 || segment.marks.size === 0 || segment.marks.has('code')) {
     return '';
   }
 
-  const yamlStr = YAML.stringify(cleaned, {
-    indent: 2,
-    lineWidth: 0,
-  }).trimEnd();
+  if (side === 'leading') {
+    const match = segment.text.match(/^[ \t]+/);
+    if (!match) return '';
+    segment.text = segment.text.slice(match[0].length);
+    segment.from += match[0].length;
+    return match[0];
+  }
 
-  return `---\n${yamlStr}\n---`;
+  const match = segment.text.match(/[ \t]+$/);
+  if (!match) return '';
+  segment.text = segment.text.slice(0, -match[0].length);
+  segment.to -= match[0].length;
+  return match[0];
 }
 
-/**
- * Recursively remove null, undefined, and empty object values.
- *
- * @param {any} obj
- * @returns {any}
- */
-function cleanObject(obj) {
-  if (obj === null || obj === undefined) return undefined;
-  if (Array.isArray(obj)) return obj.map(cloneValue).filter(v => v !== undefined);
-  if (typeof obj !== 'object') return obj;
+function normalizeWhitespaceSegments(segments) {
+  const working = cloneSegments(segments).filter((segment) => segment.text.length > 0);
+  if (working.length === 0) return working;
 
-  const result = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (value === null || value === undefined) continue;
-    if (typeof value === 'object' && !Array.isArray(value)) {
-      const cleaned = cleanObject(value);
-      if (cleaned && Object.keys(cleaned).length > 0) {
-        result[key] = cleaned;
-      }
-    } else if (Array.isArray(value)) {
-      const cleanedArray = value.map(cloneValue).filter(v => v !== undefined);
-      if (cleanedArray.length > 0) {
-        result[key] = cleanedArray;
-      }
+  const firstLeading = stripBoundaryWhitespace(working[0], 'leading');
+  if (firstLeading) {
+    working.unshift({
+      from: working[0].from - firstLeading.length,
+      to: working[0].from,
+      text: firstLeading,
+      marks: new Set(),
+    });
+  }
+
+  const lastTrailing = stripBoundaryWhitespace(working[working.length - 1], 'trailing');
+  if (lastTrailing) {
+    const last = working[working.length - 1];
+    working.push({
+      from: last.to,
+      to: last.to + lastTrailing.length,
+      text: lastTrailing,
+      marks: new Set(),
+    });
+  }
+
+  for (let i = 0; i < working.length - 1; i++) {
+    const left = working[i];
+    const right = working[i + 1];
+    if (!left || !right) continue;
+    if (left.text.length === 0 || right.text.length === 0) continue;
+    if (left.marks.has('code') || right.marks.has('code')) continue;
+
+    const trailing = stripBoundaryWhitespace(left, 'trailing');
+    const leading = stripBoundaryWhitespace(right, 'leading');
+    if (!trailing && !leading) continue;
+
+    const boundaryText = trailing + leading;
+    if (!boundaryText) continue;
+    const boundaryFrom = left.to;
+    const boundaryMarks = commonMarkSet(left.marks, right.marks);
+    working.splice(i + 1, 0, {
+      from: boundaryFrom,
+      to: boundaryFrom + boundaryText.length,
+      text: boundaryText,
+      marks: boundaryMarks,
+    });
+    i++;
+  }
+
+  return mergeAdjacentSegments(working.filter((segment) => segment.text.length > 0));
+}
+
+function orderedMarks(marks) {
+  return INLINE_MARK_ORDER.filter((mark) => marks.has(mark));
+}
+
+function getLineInlineModel(lineText, lineFrom = 0) {
+  const parsed = parseInlineNodes(lineText);
+  const segments = mergeAdjacentSegments(buildTextSegments(parsed.nodes, lineFrom));
+  const spans = collectSpans(parsed.nodes, lineFrom);
+  return {
+    nodes: parsed.nodes,
+    segments,
+    spans,
+  };
+}
+
+function findInnermostSpanContaining(spans, pos, mark = null) {
+  let found = null;
+  for (const span of spans) {
+    if (mark && span.mark !== mark) continue;
+    if (pos < span.contentFrom || pos > span.contentTo) continue;
+    if (!found || ((span.contentTo - span.contentFrom) <= (found.contentTo - found.contentFrom))) {
+      found = span;
+    }
+  }
+  return found;
+}
+
+function getCaretInlineContext(state, pos) {
+  const line = state.doc.lineAt(pos);
+  const model = getLineInlineModel(line.text, line.from);
+  const marksAtCaret = new Set();
+  const spansAtCaret = [];
+  const atStartOf = [];
+  const atEndOf = [];
+  const insideEmptyOf = [];
+  const insideMiddleOf = [];
+
+  for (const span of model.spans) {
+    if (pos < span.contentFrom || pos > span.contentTo) continue;
+    marksAtCaret.add(span.mark);
+    spansAtCaret.push(span);
+    if (span.contentFrom === span.contentTo && pos === span.contentFrom) {
+      insideEmptyOf.push(span.mark);
+    } else if (pos === span.contentFrom) {
+      atStartOf.push(span.mark);
+    } else if (pos === span.contentTo) {
+      atEndOf.push(span.mark);
     } else {
-      result[key] = value;
+      insideMiddleOf.push(span.mark);
     }
   }
-  return Object.keys(result).length > 0 ? result : undefined;
-}
 
-function isPlainObject(value) {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function cloneValue(value) {
-  if (Array.isArray(value)) {
-    return value.map(cloneValue);
-  }
-  if (isPlainObject(value)) {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cloneValue(v)]));
-  }
-  return value;
-}
-
-function mergeTemplateWithExisting(templateValue, existingValue) {
-  if (existingValue === undefined || existingValue === null) {
-    return cloneValue(templateValue);
-  }
-
-  if (Array.isArray(existingValue)) {
-    return cloneValue(existingValue);
-  }
-
-  if (isPlainObject(templateValue) && isPlainObject(existingValue)) {
-    const result = {};
-    const keys = new Set([...Object.keys(templateValue), ...Object.keys(existingValue)]);
-    for (const key of keys) {
-      result[key] = mergeTemplateWithExisting(templateValue?.[key], existingValue?.[key]);
-    }
-    return result;
-  }
-
-  return cloneValue(existingValue);
-}
-
-function formatLocalDate(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function createTitleSelection(frontmatterBlock) {
-  const prefix = 'title: ';
-  const start = frontmatterBlock.indexOf(prefix);
-  if (start === -1) return null;
-  const from = start + prefix.length;
-  const lineEnd = frontmatterBlock.indexOf('\n', from);
   return {
-    from,
-    to: lineEnd === -1 ? from : lineEnd,
+    pos,
+    line,
+    model,
+    marksAtCaret,
+    spansAtCaret,
+    insideCode: marksAtCaret.has('code'),
+    boundary: { atStartOf, atEndOf, insideEmptyOf, insideMiddleOf },
+  };
+}
+
+function getSelectionInlineContext(state, from, to) {
+  const start = Math.min(from, to);
+  const end = Math.max(from, to);
+  const doc = state.doc;
+  const startLine = doc.lineAt(start).number;
+  const endLine = doc.lineAt(Math.max(start, end)).number;
+  const lineInfos = [];
+  const coverage = new Map(INLINE_MARK_ORDER.map((mark) => [mark, 0]));
+  let selectedTextLength = 0;
+  let intersectsCode = false;
+
+  for (let lineNumber = startLine; lineNumber <= endLine; lineNumber++) {
+    const line = doc.line(lineNumber);
+    const model = getLineInlineModel(line.text, line.from);
+    const lineFrom = Math.max(start, line.from);
+    const lineTo = Math.min(end, line.to);
+    lineInfos.push({ line, model, from: lineFrom, to: lineTo });
+
+    for (const segment of model.segments) {
+      const overlapFrom = Math.max(lineFrom, segment.from);
+      const overlapTo = Math.min(lineTo, segment.to);
+      if (overlapFrom >= overlapTo) continue;
+      const overlapLen = overlapTo - overlapFrom;
+      selectedTextLength += overlapLen;
+      if (segment.marks.has('code')) intersectsCode = true;
+      for (const mark of segment.marks) {
+        coverage.set(mark, (coverage.get(mark) || 0) + overlapLen);
+      }
+    }
+  }
+
+  const fullyCoveredBy = new Set();
+  const partiallyCoveredBy = new Set();
+  for (const mark of INLINE_MARK_ORDER) {
+    const len = coverage.get(mark) || 0;
+    if (selectedTextLength > 0 && len === selectedTextLength) {
+      fullyCoveredBy.add(mark);
+    } else if (len > 0) {
+      partiallyCoveredBy.add(mark);
+    }
+  }
+
+  return {
+    from: start,
+    to: end,
+    empty: start === end,
+    selectedTextLength,
+    fullyCoveredBy,
+    partiallyCoveredBy,
+    mixedMarks: new Set([...partiallyCoveredBy].filter((mark) => !fullyCoveredBy.has(mark))),
+    intersectsCode,
+    lines: lineInfos,
+  };
+}
+
+function splitSegmentsAtPositions(segments, positions) {
+  const sorted = Array.from(new Set(positions)).sort((a, b) => a - b);
+  let working = cloneSegments(segments);
+
+  for (const pos of sorted) {
+    const next = [];
+    for (const segment of working) {
+      if (pos <= segment.from || pos >= segment.to) {
+        next.push(segment);
+        continue;
+      }
+      const offset = pos - segment.from;
+      next.push({
+        from: segment.from,
+        to: pos,
+        text: segment.text.slice(0, offset),
+        marks: cloneMarkSet(segment.marks),
+      });
+      next.push({
+        from: pos,
+        to: segment.to,
+        text: segment.text.slice(offset),
+        marks: cloneMarkSet(segment.marks),
+      });
+    }
+    working = next;
+  }
+
+  return working;
+}
+
+function serializeSegments(segments, trackPositions = [], options = {}) {
+  const sortedSegments = segments.filter((segment) => segment.text.length > 0);
+
+  const wantedPositions = Array.from(new Set(trackPositions)).sort((a, b) => a - b);
+  const tracked = new Map(wantedPositions.map((pos) => [pos, null]));
+  let trackIndex = 0;
+
+  let out = '';
+  let openMarks = [];
+  let insertedCaret = null;
+
+  const closeToCommonPrefix = (desired) => {
+    let prefix = 0;
+    while (
+      prefix < openMarks.length &&
+      prefix < desired.length &&
+      openMarks[prefix] === desired[prefix]
+    ) {
+      prefix++;
+    }
+    for (let i = openMarks.length - 1; i >= prefix; i--) {
+      out += INLINE_MARK_SPECS[openMarks[i]].close;
+    }
+    openMarks = openMarks.slice(0, prefix);
+    for (let i = prefix; i < desired.length; i++) {
+      out += INLINE_MARK_SPECS[desired[i]].open;
+      openMarks.push(desired[i]);
+    }
+  };
+
+  const mapBeforeBoundary = (boundaryPos) => {
+    while (trackIndex < wantedPositions.length && wantedPositions[trackIndex] < boundaryPos) {
+      if (tracked.get(wantedPositions[trackIndex]) == null) tracked.set(wantedPositions[trackIndex], out.length);
+      trackIndex++;
+    }
+  };
+
+  const mapAtBoundary = (boundaryPos) => {
+    while (trackIndex < wantedPositions.length && wantedPositions[trackIndex] === boundaryPos) {
+      if (tracked.get(wantedPositions[trackIndex]) == null) tracked.set(wantedPositions[trackIndex], out.length);
+      trackIndex++;
+    }
+  };
+
+  for (const segment of sortedSegments) {
+    mapBeforeBoundary(segment.from);
+    closeToCommonPrefix(orderedMarks(segment.marks));
+    mapAtBoundary(segment.from);
+
+    const startOut = out.length;
+    out += segment.text;
+
+    for (let i = trackIndex; i < wantedPositions.length; i++) {
+      const pos = wantedPositions[i];
+      if (pos <= segment.from || pos >= segment.to) break;
+      if (tracked.get(pos) == null) tracked.set(pos, startOut + (pos - segment.from));
+    }
+    while (trackIndex < wantedPositions.length && wantedPositions[trackIndex] < segment.to) trackIndex++;
+    mapAtBoundary(segment.to);
+
+    if (segment.trackCaretAfter) {
+      insertedCaret = out.length;
+    }
+  }
+
+  closeToCommonPrefix([]);
+  while (trackIndex < wantedPositions.length) {
+    if (tracked.get(wantedPositions[trackIndex]) == null) tracked.set(wantedPositions[trackIndex], out.length);
+    trackIndex++;
+  }
+
+  return {
+    text: out,
+    tracked,
+    insertedCaret,
   };
 }
 
 /**
- * Create a scholarly frontmatter template.
+ * Inline editing state.
  *
- * @param {Date} [now]
- * @returns {object}
+ * Tracks pending caret splits for semantic inline formatting toggles. This lets
+ * the editor keep the caret in place when the user toggles a mark off in the
+ * middle of a span, and only materialize the split once actual text is typed.
  */
-function createArticleFrontmatterTemplate(now = new Date()) {
-  return {
-    title: 'Untitled',
-    date: formatLocalDate(now),
-    author: [
-      {
-        name: 'Your Name',
-        id: 'your-id',
-        orcid: '0000-0000-0000-0000',
-        email: 'you@example.com',
-        affiliation: [
-          {
-            name: 'Your Institution',
-            city: 'City',
-            state: 'State',
-            url: 'https://example.org',
-          },
-        ],
-      },
-    ],
-    abstract: 'Write your abstract here.\n',
-    keywords: ['Keyword 1', 'Keyword 2'],
-    license: 'CC BY',
-    copyright: {
-      holder: 'Your Name',
-      year: now.getFullYear(),
-    },
-    citation: {
-      'container-title': 'Journal or Venue',
-      volume: 1,
-      issue: 1,
-      doi: '10.0000/example',
-    },
-    funding: 'Add funding information here.',
-  };
-}
 
-/**
- * Build a document edit that inserts or augments frontmatter with a template.
- * Existing values win, while missing keys are added from the template.
- *
- * @param {string} content - Full document content
- * @param {object} [templateData] - Template frontmatter data
- * @returns {{ changes: {from: number, to: number, insert: string}, selection: {from: number, to: number}|null, data: object }|null}
- */
-function applyFrontmatterTemplate(content, templateData = createArticleFrontmatterTemplate()) {
-  const fm = parseFrontmatter(content);
 
-  if (fm.exists && !fm.yaml) {
+const setPendingInlineSplitEffect = StateEffect.define();
+const clearPendingInlineSplitEffect = StateEffect.define();
+
+const inlinePendingSplitField = StateField.define({
+  create() {
     return null;
-  }
+  },
+  update(value, tr) {
+    let next = value;
 
-  const merged = fm.exists
-    ? mergeTemplateWithExisting(templateData, fm.yaml || {})
-    : cloneValue(templateData);
-
-  const frontmatterBlock = buildFrontmatter(merged);
-  const selection = createTitleSelection(frontmatterBlock);
-
-  if (!fm.exists) {
-    return {
-      changes: {
-        from: 0,
-        to: 0,
-        insert: `${frontmatterBlock}${content.length > 0 ? '\n\n' : '\n'}`,
-      },
-      selection,
-      data: merged,
-    };
-  }
-
-  return {
-    changes: {
-      from: fm.range?.start ?? 0,
-      to: fm.range?.end ?? 0,
-      insert: frontmatterBlock,
-    },
-    selection,
-    data: merged,
-  };
-}
-
-/**
- * Read current session configuration from document frontmatter.
- *
- * @param {string} content - Full document content
- * @param {string} language - Runtime language
- * @returns {SessionConfig} Current session config (may be empty object if using defaults)
- */
-function readFrontmatterSession(content, language) {
-  const fm = parseFrontmatter(content);
-  if (!fm.yaml) return {};
-
-  // Check verbose syntax: session.python.venv
-  if (fm.yaml.session && fm.yaml.session[language]) {
-    return { ...fm.yaml.session[language] };
-  }
-
-  // Check minimal syntax: python: ".venv"
-  if (fm.yaml[language]) {
-    const value = fm.yaml[language];
-    if (typeof value === 'string') {
-      if (language === 'python') return { venv: value };
-      return { cwd: value };
+    for (const effect of tr.effects) {
+      if (effect.is(setPendingInlineSplitEffect)) next = effect.value;
+      if (effect.is(clearPendingInlineSplitEffect)) next = null;
     }
-    if (typeof value === 'object') return { ...value };
-  }
 
-  return {};
+    if (next) {
+      const sel = tr.state.selection.main;
+      if (!sel.empty || sel.head !== next.pos) {
+        next = null;
+      } else if (tr.docChanged) {
+        next = null;
+      }
+    }
+
+    return next;
+  },
+});
+
+function getPendingInlineSplit(state) {
+  return state.field(inlinePendingSplitField, false) || null;
+}
+
+function getSimpleInsertion(tr, pos) {
+  let change = null;
+  let count = 0;
+  tr.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+    count++;
+    change = { fromA, toA, fromB, toB, inserted: inserted.toString() };
+  });
+
+  if (count !== 1 || !change) return null;
+  if (change.fromA !== pos || change.toA !== pos) return null;
+  if (!change.inserted || change.inserted.includes('\n')) return null;
+  return change.inserted;
+}
+
+const inlinePendingSplitFilter = EditorState.transactionFilter.of((tr) => {
+  const pending = getPendingInlineSplit(tr.startState);
+  if (!pending || !tr.docChanged) return tr;
+
+  const startSel = tr.startState.selection.main;
+  if (!startSel.empty || startSel.head !== pending.pos) return tr;
+
+  const insertedText = getSimpleInsertion(tr, pending.pos);
+  if (!insertedText) return tr;
+
+  const line = tr.startState.doc.lineAt(pending.pos);
+  const model = getLineInlineModel(line.text, line.from);
+  const segments = splitSegmentsAtPositions(model.segments, [pending.pos]);
+  const insertAt = segments.findIndex((segment) => segment.from >= pending.pos);
+  const insertionIndex = insertAt === -1 ? segments.length : insertAt;
+  segments.splice(insertionIndex, 0, {
+    from: pending.pos,
+    to: pending.pos + insertedText.length,
+    text: insertedText,
+    marks: cloneMarkSet(pending.marks),
+    trackCaretAfter: true,
+  });
+
+  const rendered = serializeSegments(segments);
+  const caretPos = line.from + (rendered.insertedCaret ?? rendered.text.length);
+
+  return {
+    changes: { from: line.from, to: line.to, insert: rendered.text },
+    selection: { anchor: caretPos },
+    effects: clearPendingInlineSplitEffect.of(null),
+    userEvent: 'input.inline.pending-split',
+    scrollIntoView: true,
+  };
+});
+
+function createInlineEditingExtensions() {
+  return [
+    inlinePendingSplitField,
+    inlinePendingSplitFilter,
+  ];
 }
 
 /**
- * Get the effective session configuration for a document,
- * merging project defaults with document-level overrides.
- *
- * @param {string} content - Full document content
- * @param {string} language - Runtime language
- * @param {SessionConfig} projectDefaults - Defaults from mrmd.md
- * @returns {SessionConfig} Effective configuration
+ * Semantic inline formatting commands.
  */
-function getEffectiveSessionConfig(content, language, projectDefaults = {}) {
-  const docConfig = readFrontmatterSession(content, language);
+
+
+function clearPendingEffects(state) {
+  return getPendingInlineSplit(state) ? [clearPendingInlineSplitEffect.of(null)] : [];
+}
+
+function removeMarkFromSet(marks, mark) {
+  const next = cloneMarkSet(marks);
+  next.delete(mark);
+  return next;
+}
+
+function toggleMarkAtCaret(view, mark) {
+  const state = view.state;
+  const pos = state.selection.main.head;
+  const pending = getPendingInlineSplit(state);
+
+  if (pending && pending.pos === pos && pending.mark === mark) {
+    view.dispatch({
+      effects: clearPendingInlineSplitEffect.of(null),
+      userEvent: 'input.inline.pending-cancel',
+    });
+    return true;
+  }
+
+  const ctx = getCaretInlineContext(state, pos);
+  const sameSpan = findInnermostSpanContaining(ctx.model.spans, pos, mark);
+  const effects = clearPendingEffects(state);
+
+  if (ctx.insideCode && mark !== 'code') {
+    if (effects.length > 0) {
+      view.dispatch({ effects, userEvent: 'input.inline.noop' });
+    }
+    return true;
+  }
+
+  if (sameSpan) {
+    if (sameSpan.contentFrom === sameSpan.contentTo && pos === sameSpan.contentFrom) {
+      view.dispatch({
+        changes: { from: sameSpan.from, to: sameSpan.to, insert: '' },
+        selection: { anchor: sameSpan.from },
+        effects,
+        userEvent: 'input.inline.remove-empty',
+        scrollIntoView: true,
+      });
+      return true;
+    }
+
+    if (pos === sameSpan.contentFrom) {
+      view.dispatch({
+        selection: { anchor: sameSpan.from },
+        effects,
+        userEvent: 'input.inline.exit-left',
+      });
+      return true;
+    }
+
+    if (pos === sameSpan.contentTo) {
+      view.dispatch({
+        selection: { anchor: sameSpan.to },
+        effects,
+        userEvent: 'input.inline.exit-right',
+      });
+      return true;
+    }
+
+    view.dispatch({
+      selection: { anchor: pos },
+      effects: [
+        ...effects,
+        setPendingInlineSplitEffect.of({
+          pos,
+          mark,
+          marks: Array.from(removeMarkFromSet(ctx.marksAtCaret, mark)),
+        }),
+      ],
+      userEvent: 'input.inline.pending-split',
+    });
+    return true;
+  }
+
+  const syntax = markToSyntax(mark);
+  if (!syntax) return false;
+
+  view.dispatch({
+    changes: { from: pos, insert: syntax.open + syntax.close },
+    selection: { anchor: pos + syntax.open.length },
+    effects,
+    userEvent: 'input.inline.start',
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+function applyMarkToSegment(segment, mark, action) {
+  if (mark !== 'code' && segment.marks.has('code')) return segment;
+
+  const next = {
+    ...segment,
+    marks: cloneMarkSet(segment.marks),
+  };
+
+  if (action === 'add') {
+    next.marks.add(mark);
+  } else {
+    next.marks.delete(mark);
+  }
+
+  return next;
+}
+
+function toggleMarkOnSelection(view, mark) {
+  const state = view.state;
+  const selection = state.selection.main;
+  const ctx = getSelectionInlineContext(state, selection.from, selection.to);
+  if (ctx.empty || ctx.selectedTextLength === 0) {
+    return toggleMarkAtCaret(view, mark);
+  }
+
+  const action = ctx.fullyCoveredBy.has(mark) ? 'remove' : 'add';
+  const changes = [];
+  const trackedOffsets = new Map();
+  const originalAnchor = selection.anchor;
+  const originalHead = selection.head;
+
+  for (const info of ctx.lines) {
+    if (info.from === info.to) continue;
+
+    let segments = splitSegmentsAtPositions(info.model.segments, [info.from, info.to]);
+    let changed = false;
+
+    segments = segments.map((segment) => {
+      if (segment.to <= info.from || segment.from >= info.to) return segment;
+      const next = applyMarkToSegment(segment, mark, action);
+      if (next !== segment) changed = true;
+      return next;
+    });
+
+    const normalized = normalizeWhitespaceSegments(segments);
+    const trackedPositions = [];
+    if (originalAnchor >= info.line.from && originalAnchor <= info.line.to) trackedPositions.push(originalAnchor);
+    if (originalHead >= info.line.from && originalHead <= info.line.to) trackedPositions.push(originalHead);
+    const rendered = serializeSegments(normalized, trackedPositions);
+
+    for (const [oldPos, newPos] of rendered.tracked.entries()) {
+      trackedOffsets.set(oldPos, { lineFrom: info.line.from, offset: newPos });
+    }
+
+    if (changed || rendered.text !== info.line.text) {
+      changes.push({ from: info.line.from, to: info.line.to, insert: rendered.text });
+    }
+  }
+
+  if (changes.length === 0) {
+    const effects = clearPendingEffects(state);
+    if (effects.length > 0) view.dispatch({ effects, userEvent: 'input.inline.noop' });
+    return true;
+  }
+
+  const changeSet = ChangeSet.of(changes, state.doc.length);
+  const mappedAnchor = trackedOffsets.has(originalAnchor)
+    ? changeSet.mapPos(trackedOffsets.get(originalAnchor).lineFrom, 1) + trackedOffsets.get(originalAnchor).offset
+    : changeSet.mapPos(originalAnchor, -1);
+  const mappedHead = trackedOffsets.has(originalHead)
+    ? changeSet.mapPos(trackedOffsets.get(originalHead).lineFrom, 1) + trackedOffsets.get(originalHead).offset
+    : changeSet.mapPos(originalHead, 1);
+
+  view.dispatch({
+    changes,
+    selection: { anchor: mappedAnchor, head: mappedHead },
+    effects: clearPendingEffects(state),
+    userEvent: `input.inline.${action}`,
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+function toggleInlineMark(view, mark) {
+  if (!view?.state) return false;
+  const selection = view.state.selection.main;
+  if (selection.empty) return toggleMarkAtCaret(view, mark);
+  return toggleMarkOnSelection(view, mark);
+}
+
+function getActiveInlineMarks(view) {
+  const state = view.state;
+  const pending = getPendingInlineSplit(state);
+  const selection = state.selection.main;
+
+  if (selection.empty && pending && pending.pos === selection.head) {
+    return new Set(pending.marks);
+  }
+
+  if (selection.empty) {
+    return cloneMarkSet(getCaretInlineContext(state, selection.head).marksAtCaret);
+  }
+
+  return cloneMarkSet(getSelectionInlineContext(state, selection.from, selection.to).fullyCoveredBy);
+}
+
+function getSelectionFormattingState(view) {
+  const active = getActiveInlineMarks(view);
+  const selection = view.state.selection.main;
+  const mixed = selection.empty
+    ? new Set()
+    : getSelectionInlineContext(view.state, selection.from, selection.to).mixedMarks;
+
   return {
-    name: docConfig.name || projectDefaults.name || 'default',
-    venv: docConfig.venv || projectDefaults.venv || '.venv',
-    cwd: docConfig.cwd || projectDefaults.cwd || '.',
-    auto_start: docConfig.auto_start ?? projectDefaults.auto_start ?? true,
+    bold: active.has('bold'),
+    italic: active.has('italic'),
+    underline: active.has('underline'),
+    strike: active.has('strike'),
+    strikethrough: active.has('strike'),
+    code: active.has('code'),
+    mixed: {
+      bold: mixed.has('bold'),
+      italic: mixed.has('italic'),
+      underline: mixed.has('underline'),
+      strike: mixed.has('strike'),
+      strikethrough: mixed.has('strike'),
+      code: mixed.has('code'),
+    },
   };
 }
 
@@ -83443,58 +86529,48 @@ function getEffectiveSessionConfig(content, language, projectDefaults = {}) {
  */
 
 
-// ===========================================================================
-// Formatting Commands
-// ===========================================================================
+const toggleBold = (view) => toggleInlineMark(view, 'bold');
+const toggleItalic = (view) => toggleInlineMark(view, 'italic');
+const toggleUnderline = (view) => toggleInlineMark(view, 'underline');
+const toggleStrikethrough = (view) => toggleInlineMark(view, 'strike');
+const toggleInlineCode = (view) => toggleInlineMark(view, 'code');
 
-/**
- * Toggle markdown formatting around selection.
- *
- * @param {import('@codemirror/view').EditorView} view
- * @param {string} marker
- * @param {string} [endMarker]
- * @returns {boolean}
- */
-function toggleMarkdownFormat(view, marker, endMarker = marker) {
-  const sel = view.state.selection.main;
-  const { from, to } = sel;
+function toTitleCase$1(text) {
+  return String(text || '').replace(/\p{L}[\p{L}\p{M}'’\-]*/gu, (word) => {
+    const [first = '', ...rest] = Array.from(word);
+    return first.toLocaleUpperCase() + rest.join('').toLocaleLowerCase();
+  });
+}
+
+function transformSelectionCase(view, mode) {
+  const sel = view?.state?.selection?.main;
+  if (!sel || sel.empty) return false;
+
+  const from = Math.min(sel.from, sel.to);
+  const to = Math.max(sel.from, sel.to);
   const selected = view.state.doc.sliceString(from, to);
 
-  if (sel.empty) {
-    view.dispatch({
-      changes: { from, insert: marker + endMarker },
-      selection: { anchor: from + marker.length },
-      userEvent: 'input.format.add',
-    });
-    return true;
-  }
+  let next = selected;
+  if (mode === 'uppercase') next = selected.toLocaleUpperCase();
+  else if (mode === 'lowercase') next = selected.toLocaleLowerCase();
+  else if (mode === 'titlecase') next = toTitleCase$1(selected);
+  else return false;
 
-  const hasWrapper = selected.startsWith(marker) && selected.endsWith(endMarker);
-
-  if (hasWrapper) {
-    const unwrapped = selected.slice(marker.length, selected.length - endMarker.length);
-    view.dispatch({
-      changes: { from, to, insert: unwrapped },
-      selection: { anchor: from, head: from + unwrapped.length },
-      userEvent: 'input.format.remove',
-    });
-    return true;
-  }
-
+  const forward = sel.anchor <= sel.head;
   view.dispatch({
-    changes: { from, to, insert: marker + selected + endMarker },
-    selection: {
-      anchor: from + marker.length,
-      head: from + marker.length + selected.length,
-    },
-    userEvent: 'input.format.add',
+    changes: { from, to, insert: next },
+    selection: forward
+      ? { anchor: from, head: from + next.length }
+      : { anchor: from + next.length, head: from },
+    userEvent: `input.case.${mode}`,
+    scrollIntoView: true,
   });
   return true;
 }
 
-const toggleBold = (view) => toggleMarkdownFormat(view, '**');
-const toggleItalic = (view) => toggleMarkdownFormat(view, '*');
-const toggleUnderline = (view) => toggleMarkdownFormat(view, '<u>', '</u>');
+const transformSelectionUppercase = (view) => transformSelectionCase(view, 'uppercase');
+const transformSelectionLowercase = (view) => transformSelectionCase(view, 'lowercase');
+const transformSelectionTitlecase = (view) => transformSelectionCase(view, 'titlecase');
 
 function getLineRangeForSelection(view) {
   const sel = view.state.selection.main;
@@ -83601,6 +86677,45 @@ function insertHorizontalRule(view) {
   return insertTemplate(view, '---\n{{cursor}}');
 }
 
+function insertPageBreak(view) {
+  const sel = view.state.selection.main;
+  const doc = view.state.doc;
+  const before = doc.sliceString(Math.max(0, sel.from - 2), sel.from);
+  const after = doc.sliceString(sel.to, Math.min(doc.length, sel.to + 2));
+
+  const prefix = sel.from === 0
+    ? ''
+    : before.endsWith('\n\n')
+      ? ''
+      : before.endsWith('\n')
+        ? '\n'
+        : '\n\n';
+
+  const suffix = sel.to === doc.length
+    ? '\n\n'
+    : after.startsWith('\n\n')
+      ? ''
+      : after.startsWith('\n')
+        ? '\n'
+        : '\n\n';
+
+  const trailingGap = after.startsWith('\n\n')
+    ? 2
+    : after.startsWith('\n')
+      ? 1
+      : 0;
+
+  const insert = `${prefix}\\pagebreak${suffix}`;
+
+  view.dispatch({
+    changes: { from: sel.from, to: sel.to, insert },
+    selection: { anchor: sel.from + insert.length + trailingGap },
+    userEvent: 'input.format.add',
+  });
+
+  return true;
+}
+
 function insertFrontmatterTemplate$1(view) {
   const result = applyFrontmatterTemplate(view.state.doc.toString());
 
@@ -83634,6 +86749,11 @@ const FORMATTING_COMMAND_DEFINITIONS = [
   { id: 'bold', label: 'Bold', shortcut: 'Mod-B', icon: 'format' },
   { id: 'italic', label: 'Italic', shortcut: 'Mod-I', icon: 'format' },
   { id: 'underline', label: 'Underline', shortcut: 'Mod-U', icon: 'format' },
+  { id: 'strikethrough', label: 'Strikethrough', shortcut: '', icon: 'format' },
+  { id: 'inline-code', label: 'Inline Code', shortcut: 'Mod-`', icon: 'code' },
+  { id: 'uppercase', label: 'Make Uppercase', shortcut: '', icon: 'type' },
+  { id: 'lowercase', label: 'Make Lowercase', shortcut: '', icon: 'type' },
+  { id: 'titlecase', label: 'Make Title Case', shortcut: '', icon: 'type' },
   { id: 'comment', label: 'Insert Comment', shortcut: 'Mod-Shift-M', icon: 'comment' },
   { id: 'frontmatter-template', label: 'Insert Frontmatter Template', shortcut: '', icon: 'doc' },
   { id: 'blockquote', label: 'Block Quote', shortcut: '', icon: 'quote' },
@@ -83644,6 +86764,7 @@ const FORMATTING_COMMAND_DEFINITIONS = [
   { id: 'task-list', label: 'Task List', shortcut: '', icon: 'checklist' },
   { id: 'heading-2', label: 'Heading (H2)', shortcut: '', icon: 'heading' },
   { id: 'horizontal-rule', label: 'Horizontal Rule', shortcut: '', icon: 'minus' },
+  { id: 'page-break', label: 'Page Break', shortcut: 'Mod-Enter', icon: 'minus' },
 ];
 
 function executeFormattingDefinition(view, def) {
@@ -83654,6 +86775,16 @@ function executeFormattingDefinition(view, def) {
       return toggleItalic(view);
     case 'underline':
       return toggleUnderline(view);
+    case 'strikethrough':
+      return toggleStrikethrough(view);
+    case 'inline-code':
+      return toggleInlineCode(view);
+    case 'uppercase':
+      return transformSelectionUppercase(view);
+    case 'lowercase':
+      return transformSelectionLowercase(view);
+    case 'titlecase':
+      return transformSelectionTitlecase(view);
     case 'comment':
       return insertCommentCommand(view);
     case 'frontmatter-template':
@@ -83674,6 +86805,8 @@ function executeFormattingDefinition(view, def) {
       return insertHeading(view, 2);
     case 'horizontal-rule':
       return insertHorizontalRule(view);
+    case 'page-break':
+      return insertPageBreak(view);
     default:
       return false;
   }
@@ -84063,6 +87196,8 @@ function createSectionControlsDom(view, options) {
         createButton('B', `Bold (${formatShortcut('Mod-B')})`, () => toggleBold(view), 'bold'),
         createButton('I', `Italic (${formatShortcut('Mod-I')})`, () => toggleItalic(view), 'italic'),
         createButton('U', `Underline (${formatShortcut('Mod-U')})`, () => toggleUnderline(view), 'underline'),
+        createButton('S', 'Strikethrough', () => toggleStrikethrough(view), 'strikethrough'),
+        createButton('</>', 'Inline Code (' + formatShortcut('Mod-`') + ')', () => toggleInlineCode(view), 'code'),
       );
       toolbar.appendChild(group);
     }
@@ -84285,11 +87420,14 @@ function openSectionControlsMenu(view, editor, options = {}) {
   const formattingSection = document.createElement('div');
   formattingSection.className = 'cm-section-controls-menu-section';
   formattingSection.appendChild(sectionTitle('Formatting'));
+  const hasSelection = !view.state.selection.main.empty;
   for (const def of FORMATTING_COMMAND_DEFINITIONS) {
+    const requiresSelection = def.id === 'uppercase' || def.id === 'lowercase' || def.id === 'titlecase';
     formattingSection.appendChild(menuItem({
       label: def.label,
       shortcut: formatShortcut(def.shortcut || ''),
       icon: def.icon || 'format',
+      disabled: requiresSelection && !hasSelection,
       onClick: () => executeFormattingDefinition(view, def),
     }));
   }
@@ -84649,9 +87787,25 @@ const sectionControlsStyles = `
   transform: scale(1.05);
 }
 
+.cm-section-controls-btn.is-active {
+  background: color-mix(in srgb, var(--accent, #58a6ff) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #58a6ff) 45%, transparent);
+  color: var(--accent, #58a6ff);
+}
+
+.cm-section-controls-btn.is-mixed {
+  background: color-mix(in srgb, var(--accent, #58a6ff) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #58a6ff) 28%, transparent);
+}
+
 .cm-section-controls-btn.bold { font-weight: 700; }
 .cm-section-controls-btn.italic { font-style: italic; }
 .cm-section-controls-btn.underline { text-decoration: underline; }
+.cm-section-controls-btn.strikethrough { text-decoration: line-through; }
+.cm-section-controls-btn.code {
+  font-family: var(--widget-font-mono, monospace);
+  font-size: 0.82em;
+}
 
 .cm-section-controls-menu {
   position: fixed;
@@ -84878,6 +88032,20 @@ function createSectionControlsPlugin(editor) {
         });
 
         document.body.appendChild(this.dom);
+        this.updateFormattingState();
+      }
+
+      updateFormattingState() {
+        if (!this.dom) return;
+        const formatting = getSelectionFormattingState(this.view);
+        const marks = ['bold', 'italic', 'underline', 'strikethrough', 'code'];
+        for (const mark of marks) {
+          const btn = this.dom.querySelector(`.cm-section-controls-btn.${mark}`);
+          if (!btn) continue;
+          const stateKey = mark === 'strikethrough' ? 'strikethrough' : mark;
+          btn.classList.toggle('is-active', !!formatting[stateKey]);
+          btn.classList.toggle('is-mixed', !!formatting.mixed?.[stateKey]);
+        }
       }
 
       scheduleReposition() {
@@ -84934,6 +88102,10 @@ function createSectionControlsPlugin(editor) {
           this.ensureDom();
         }
 
+        if (configChanged || update.selectionSet || update.docChanged) {
+          this.updateFormattingState();
+        }
+
         if (
           configChanged ||
           update.selectionSet ||
@@ -84985,6 +88157,7 @@ function sectionControls(editor, options = {}) {
     { key: 'Mod-b', run: (view) => toggleBold(view) },
     { key: 'Mod-i', run: (view) => toggleItalic(view) },
     { key: 'Mod-u', run: (view) => toggleUnderline(view) },
+    { key: 'Mod-`', run: (view) => toggleInlineCode(view) },
     { key: 'Mod-g', run: (view) => fixGrammar(editor)(view) },
     { key: 'Mod-l', run: (view) => finishLine(editor)(view) },
     { key: 'Mod-o', run: (view) => finishSection(editor)(view) },
@@ -85781,13 +88954,131 @@ function shouldIgnoreMatch(fragment, match, dictionaryWordsLower) {
   return false;
 }
 
+const languageToolTheme = EditorView.baseTheme({
+  // Underline styles for grammar ranges
+  '.cm-lintRange-warning': {
+    backgroundImage: 'linear-gradient(to right, color-mix(in srgb, var(--widget-warning, #f59e0b) 88%, transparent) 45%, transparent 0%)',
+    backgroundPosition: 'left bottom',
+    backgroundSize: '6px 2px',
+    backgroundRepeat: 'repeat-x',
+  },
+  '.cm-lintRange-error': {
+    backgroundImage: 'linear-gradient(to right, color-mix(in srgb, var(--widget-danger, #ef4444) 88%, transparent) 45%, transparent 0%)',
+    backgroundPosition: 'left bottom',
+    backgroundSize: '6px 2px',
+    backgroundRepeat: 'repeat-x',
+  },
+  // Custom grammar hover tooltip (matches runtime hover popover style)
+  '.mrmd-grammar-hover': {
+    background: 'var(--widget-surface-elevated, var(--editor-background, #1e1e1e))',
+    border: '1px solid var(--widget-border, rgba(255, 255, 255, 0.12))',
+    borderRadius: 'var(--widget-border-radius, 6px)',
+    padding: '8px 12px',
+    maxWidth: '460px',
+    maxHeight: 'min(52vh, 440px)',
+    overflow: 'auto',
+    fontSize: '13px',
+    lineHeight: '1.45',
+    color: 'var(--widget-text, var(--editor-foreground, #e1e1e1))',
+    boxShadow: 'var(--mrmd-shadow-md, 0 6px 18px rgba(0, 0, 0, 0.3))',
+    userSelect: 'text',
+    pointerEvents: 'auto',
+  },
+  '.mrmd-grammar-hover-sticky': {
+    borderColor: 'var(--widget-border-focus, var(--mrmd-accent, #58a6ff))',
+  },
+  '.mrmd-grammar-hover-content': {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+  },
+  '.mrmd-grammar-hover-header': {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '10px',
+  },
+  '.mrmd-grammar-hover-source': {
+    fontWeight: '600',
+    fontSize: '11px',
+    color: 'var(--widget-text-muted, #9ca3af)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+  '.mrmd-grammar-hover-rule': {
+    fontSize: '10px',
+    color: 'var(--widget-text-muted, #64748b)',
+    fontFamily: 'var(--widget-font-mono, monospace)',
+  },
+  '.mrmd-grammar-hover-message': {
+    color: 'var(--widget-text, var(--editor-foreground, #e1e1e1))',
+    whiteSpace: 'pre-wrap',
+  },
+  '.mrmd-grammar-hover-matched': {
+    display: 'inline-block',
+    background: 'rgba(245, 158, 11, 0.15)',
+    color: 'var(--widget-warning, #f59e0b)',
+    borderRadius: '3px',
+    padding: '1px 5px',
+    fontFamily: 'var(--widget-font-mono, monospace)',
+    fontSize: '12px',
+  },
+  '.mrmd-grammar-hover-suggestions': {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '5px',
+    paddingTop: '4px',
+  },
+  '.mrmd-grammar-hover-suggestion-btn': {
+    appearance: 'none',
+    border: '1px solid var(--widget-border, rgba(255,255,255,0.12))',
+    background: 'var(--widget-surface, rgba(255,255,255,0.04))',
+    color: 'var(--widget-text, var(--editor-foreground, #e5e7eb))',
+    borderRadius: '6px',
+    padding: '4px 10px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    lineHeight: '1.2',
+    fontFamily: 'inherit',
+    transition: 'background 0.1s, border-color 0.1s',
+  },
+  '.mrmd-grammar-hover-suggestion-btn:hover': {
+    background: 'var(--widget-surface-hover, rgba(255,255,255,0.08))',
+    borderColor: 'var(--widget-border-focus, var(--mrmd-accent, #58a6ff))',
+  },
+  '.mrmd-grammar-hover-suggestion-btn:active': {
+    transform: 'translateY(1px)',
+  },
+  '.mrmd-grammar-hover-actions': {
+    display: 'flex',
+    gap: '8px',
+    borderTop: '1px solid var(--widget-border, rgba(255,255,255,0.08))',
+    paddingTop: '6px',
+    marginTop: '2px',
+  },
+  '.mrmd-grammar-hover-action-btn': {
+    appearance: 'none',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--widget-text-muted, #9ca3af)',
+    cursor: 'pointer',
+    fontSize: '11px',
+    padding: '2px 0',
+    fontFamily: 'inherit',
+    transition: 'color 0.1s',
+  },
+  '.mrmd-grammar-hover-action-btn:hover': {
+    color: 'var(--widget-text, #e5e7eb)',
+  },
+});
+
 function matchToDiagnostic(fragment, match) {
   const offset = Number(match?.offset || 0);
   const length = Number(match?.length || 0);
   const from = fragment.from + offset;
   const to = from + Math.max(length, 1);
   const replacements = Array.isArray(match?.replacements) ? match.replacements : [];
-  const actions = replacements.slice(0, 3).map((replacement) => ({
+  const actions = replacements.slice(0, 5).map((replacement) => ({
     name: replacement.value,
     apply(view, actionFrom, actionTo) {
       view.dispatch({
@@ -85796,8 +89087,10 @@ function matchToDiagnostic(fragment, match) {
     },
   }));
 
-  const ruleId = match?.rule?.id ? ` [${match.rule.id}]` : '';
-  const message = `${match.message || 'Grammar suggestion'}${ruleId}`;
+  const ruleId = String(match?.rule?.id || '');
+  const ruleIdLabel = ruleId ? ` [${ruleId}]` : '';
+  const message = `${match.message || 'Grammar suggestion'}${ruleIdLabel}`;
+  const matchedText = fragment.text.slice(offset, offset + length);
 
   return {
     from,
@@ -85806,11 +89099,186 @@ function matchToDiagnostic(fragment, match) {
     source: 'languagetool',
     message,
     actions,
+    // Custom fields for the grammar hover / context menu
+    ruleId,
+    matchedText,
   };
 }
 
 /**
+ * Collect LanguageTool diagnostics near a document position, sorted by
+ * proximity (intersects position > same line > visible range > document order).
+ *
+ * @param {import('@codemirror/view').EditorView} view
+ * @param {number} pos - document offset
+ * @returns {Array<{diagnostic: Object, from: number, to: number, intersectsSelection: boolean, onCurrentLine: boolean, inVisibleRange: boolean}>}
+ */
+function collectLanguageToolCandidates(view, pos) {
+  if (!view?.state || pos == null) return [];
+
+  const cursorLine = view.state.doc.lineAt(pos);
+  const candidates = [];
+  forEachDiagnostic(view.state, (diagnostic, from, to) => {
+    if (diagnostic?.source !== 'languagetool') return;
+    if (!Array.isArray(diagnostic.actions) || diagnostic.actions.length === 0) return;
+    const intersectsSelection = from <= pos && to >= pos;
+    const onCurrentLine = from < cursorLine.to && to > cursorLine.from;
+    const inVisibleRange = view.visibleRanges?.some?.((range) => from < range.to && to > range.from) ?? true;
+    candidates.push({ diagnostic, from, to, intersectsSelection, onCurrentLine, inVisibleRange });
+  });
+
+  candidates.sort((a, b) => {
+    if (a.intersectsSelection !== b.intersectsSelection) return a.intersectsSelection ? -1 : 1;
+    if (a.onCurrentLine !== b.onCurrentLine) return a.onCurrentLine ? -1 : 1;
+    if (a.inVisibleRange !== b.inVisibleRange) return a.inVisibleRange ? -1 : 1;
+    return a.from - b.from;
+  });
+
+  return candidates;
+}
+
+/**
+ * Find all LanguageTool diagnostics that overlap a document position.
+ * @param {import('@codemirror/view').EditorView} view
+ * @param {number} pos
+ * @returns {Array<{diagnostic: Object, from: number, to: number}>}
+ */
+function findLanguageToolDiagnosticsAt(view, pos) {
+  const results = [];
+  forEachDiagnostic(view.state, (diagnostic, from, to) => {
+    if (diagnostic?.source !== 'languagetool') return;
+    if (pos >= from && pos <= to) {
+      results.push({ diagnostic, from, to });
+    }
+  });
+  return results;
+}
+
+/**
+ * Build the branded grammar hover tooltip DOM.
+ * Matches the runtime hover popover style with grammar-specific content.
+ *
+ * @param {import('@codemirror/view').EditorView} view
+ * @param {Array<{diagnostic: Object, from: number, to: number}>} hits
+ * @param {Object} callbacks - { onIgnoreRule, onAddToDictionary }
+ * @param {Object} [opts] - { sticky }
+ * @returns {HTMLElement}
+ */
+function buildGrammarHoverDOM(view, hits, callbacks, opts = {}) {
+  const { sticky = false } = opts;
+
+  const dom = document.createElement('div');
+  dom.className = `mrmd-grammar-hover${sticky ? ' mrmd-grammar-hover-sticky' : ''}`;
+
+  for (const hit of hits) {
+    const d = hit.diagnostic;
+    const section = document.createElement('div');
+    section.className = 'mrmd-grammar-hover-content';
+
+    // Header: source + rule ID
+    const header = document.createElement('div');
+    header.className = 'mrmd-grammar-hover-header';
+    const sourceEl = document.createElement('span');
+    sourceEl.className = 'mrmd-grammar-hover-source';
+    sourceEl.textContent = 'Grammar';
+    header.appendChild(sourceEl);
+    if (d.ruleId) {
+      const ruleEl = document.createElement('span');
+      ruleEl.className = 'mrmd-grammar-hover-rule';
+      ruleEl.textContent = d.ruleId;
+      header.appendChild(ruleEl);
+    }
+    section.appendChild(header);
+
+    // Message
+    const msgEl = document.createElement('div');
+    msgEl.className = 'mrmd-grammar-hover-message';
+    // Strip the [RULE_ID] suffix from the displayed message (it's in the header)
+    const cleanMsg = d.ruleId
+      ? d.message.replace(` [${d.ruleId}]`, '')
+      : d.message;
+    msgEl.textContent = cleanMsg;
+    section.appendChild(msgEl);
+
+    // Matched text
+    if (d.matchedText) {
+      const matchEl = document.createElement('span');
+      matchEl.className = 'mrmd-grammar-hover-matched';
+      matchEl.textContent = d.matchedText;
+      section.appendChild(matchEl);
+    }
+
+    // Suggestion buttons
+    if (Array.isArray(d.actions) && d.actions.length > 0) {
+      const suggestionsEl = document.createElement('div');
+      suggestionsEl.className = 'mrmd-grammar-hover-suggestions';
+      for (const action of d.actions) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'mrmd-grammar-hover-suggestion-btn';
+        btn.textContent = action.name;
+        btn.addEventListener('mousedown', (e) => e.stopPropagation());
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          action.apply(view, hit.from, hit.to);
+        });
+        suggestionsEl.appendChild(btn);
+      }
+      section.appendChild(suggestionsEl);
+    }
+
+    // Action row: Ignore rule | Add to dictionary
+    const hasIgnore = d.ruleId && typeof callbacks.onIgnoreRule === 'function';
+    const hasDict = d.matchedText && typeof callbacks.onAddToDictionary === 'function';
+    if (hasIgnore || hasDict) {
+      const actionsEl = document.createElement('div');
+      actionsEl.className = 'mrmd-grammar-hover-actions';
+
+      if (hasIgnore) {
+        const ignoreBtn = document.createElement('button');
+        ignoreBtn.type = 'button';
+        ignoreBtn.className = 'mrmd-grammar-hover-action-btn';
+        ignoreBtn.textContent = 'Ignore rule';
+        ignoreBtn.title = `Disable rule ${d.ruleId}`;
+        ignoreBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+        ignoreBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          callbacks.onIgnoreRule(d.ruleId, view);
+        });
+        actionsEl.appendChild(ignoreBtn);
+      }
+
+      if (hasDict) {
+        const dictBtn = document.createElement('button');
+        dictBtn.type = 'button';
+        dictBtn.className = 'mrmd-grammar-hover-action-btn';
+        dictBtn.textContent = `Add "${d.matchedText}" to dictionary`;
+        dictBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+        dictBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          callbacks.onAddToDictionary(d.matchedText, view);
+        });
+        actionsEl.appendChild(dictBtn);
+      }
+
+      section.appendChild(actionsEl);
+    }
+
+    dom.appendChild(section);
+  }
+
+  return dom;
+}
+
+/**
  * Create a reusable LanguageTool-backed CM6 diagnostics extension.
+ *
+ * Returns an array of extensions: themed underlines, a custom branded hover
+ * tooltip (with click-to-pin, suggestions, ignore-rule, add-to-dictionary),
+ * and the CM6 linter that produces diagnostics.
  *
  * @param {Object} options
  * @param {(payload: Object) => Promise<Object>} options.check - async LT check function
@@ -85820,6 +89288,8 @@ function matchToDiagnostic(fragment, match) {
  * @param {number} [options.maxDiagnostics=50] - cap rendered diagnostics
  * @param {number} [options.maxFragments=12] - cap visible prose fragments checked
  * @param {number} [options.maxFragmentLength=4000] - skip giant fragments
+ * @param {(ruleId: string, view: EditorView) => void} [options.onIgnoreRule] - callback when user ignores a rule
+ * @param {(word: string, view: EditorView) => void} [options.onAddToDictionary] - callback when user adds a word
  * @returns {import('@codemirror/state').Extension}
  */
 function createLanguageToolDiagnosticsExtension(options = {}) {
@@ -85831,13 +89301,102 @@ function createLanguageToolDiagnosticsExtension(options = {}) {
     maxDiagnostics = 50,
     maxFragments = 12,
     maxFragmentLength = 4000,
+    onIgnoreRule,
+    onAddToDictionary,
   } = options;
 
   if (typeof check !== 'function') {
     throw new Error('createLanguageToolDiagnosticsExtension requires a check(payload) function');
   }
 
-  return linter(async (view) => {
+  const callbacks = { onIgnoreRule, onAddToDictionary };
+
+  // -- Pinned (sticky) grammar tooltip state --
+  const setPinnedTooltip = StateEffect.define();
+  const clearPinnedTooltip = StateEffect.define();
+
+  const pinnedTooltipField = StateField.define({
+    create() { return null; },
+    update(value, tr) {
+      if (tr.docChanged) return null;
+      for (const effect of tr.effects) {
+        if (effect.is(setPinnedTooltip)) return effect.value;
+        if (effect.is(clearPinnedTooltip)) return null;
+      }
+      return value;
+    },
+    provide: (f) => showTooltip.from(f),
+  });
+
+  // Close pinned tooltip on click outside
+  const pinnedClosePlugin = ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.view = view;
+        this.onMouseDownCapture = (event) => {
+          const pinned = view.state.field(pinnedTooltipField, false);
+          if (!pinned) return;
+          if (event.target instanceof Element && event.target.closest('.mrmd-grammar-hover')) return;
+          view.dispatch({ effects: clearPinnedTooltip.of(null) });
+        };
+        view.dom.ownerDocument.addEventListener('mousedown', this.onMouseDownCapture, true);
+      }
+      destroy() {
+        this.view.dom.ownerDocument.removeEventListener('mousedown', this.onMouseDownCapture, true);
+      }
+    },
+  );
+
+  // -- Custom grammar hover tooltip --
+  function createTooltipDescriptor(view, hits, pos, end, sticky = false) {
+    return {
+      pos,
+      end,
+      above: false,
+      arrow: true,
+      create() {
+        const dom = buildGrammarHoverDOM(view, hits, callbacks, { sticky });
+
+        if (!sticky) {
+          // Click to pin
+          dom.addEventListener('mousedown', (event) => {
+            if (event.button !== 0) return;
+            if (event.target instanceof Element &&
+              (event.target.closest('.mrmd-grammar-hover-suggestion-btn') ||
+               event.target.closest('.mrmd-grammar-hover-action-btn'))) return;
+
+            const stickyTooltip = createTooltipDescriptor(view, hits, pos, end, true);
+            view.dispatch({
+              effects: [
+                setPinnedTooltip.of(stickyTooltip),
+                closeHoverTooltips,
+              ],
+            });
+          });
+        }
+
+        return {
+          dom,
+          offset: { x: 0, y: -8 },
+          overlap: true,
+        };
+      },
+    };
+  }
+
+  const grammarHover = hoverTooltip((view, pos, side) => {
+    const hits = findLanguageToolDiagnosticsAt(view, pos);
+    if (hits.length === 0) return null;
+
+    const minFrom = Math.min(...hits.map(h => h.from));
+    const maxTo = Math.max(...hits.map(h => h.to));
+    return createTooltipDescriptor(view, hits, minFrom, maxTo, false);
+  }, {
+    hoverTime: 350,
+  });
+
+  // -- Linter (produces diagnostics / underlines) --
+  const grammarLinter = linter(async (view) => {
     const prefs = await Promise.resolve(getPreferences(view));
     if (prefs?.enabled === false) return [];
 
@@ -85869,12 +89428,22 @@ function createLanguageToolDiagnosticsExtension(options = {}) {
     }
   }, {
     delay: debounceMs,
+    // Suppress built-in lint tooltip for LanguageTool diagnostics (we use our own)
+    tooltipFilter: (diagnostics) => diagnostics.filter((d) => d.source !== 'languagetool'),
     needsRefresh(update) {
       return update.docChanged
         || update.viewportChanged
         || update.transactions.some((tr) => tr.annotation(forceLanguageToolRefresh));
     },
   });
+
+  return [
+    languageToolTheme,
+    pinnedTooltipField,
+    pinnedClosePlugin,
+    grammarHover,
+    grammarLinter,
+  ];
 }
 
 /**
@@ -85889,57 +89458,46 @@ function refreshLanguageToolDiagnostics(view) {
 }
 
 /**
- * Apply the first available LanguageTool quick-fix under the cursor.
- *
- * Selection strategy:
- * 1. diagnostics intersecting the current selection/cursor
- * 2. diagnostics on the current line
- * 3. first visible LanguageTool diagnostic with an action
+ * Get the best LanguageTool diagnostic near the given position and return
+ * a serialisable menu descriptor with the diagnostic message and suggested
+ * replacements.  Used by the Electron context-menu handler.
  *
  * @param {import('@codemirror/view').EditorView} view
- * @returns {boolean} true if a suggestion was applied
+ * @param {number} pos - document offset (e.g. from posAtCoords)
+ * @returns {{ from: number, to: number, message: string, source: string, suggestions: Array<{index: number, label: string}> } | null}
  */
-function applyFirstLanguageToolSuggestion(view) {
-  if (!view?.state) return false;
-
-  const selection = view.state.selection.main;
-  const cursorFrom = Math.min(selection.from, selection.to);
-  const cursorTo = Math.max(selection.from, selection.to);
-  const cursorLine = view.state.doc.lineAt(selection.head);
-  const candidates = [];
-
-  forEachDiagnostic(view.state, (diagnostic, from, to) => {
-    if (diagnostic?.source !== 'languagetool') return;
-    if (!Array.isArray(diagnostic.actions) || diagnostic.actions.length === 0) return;
-
-    const intersectsSelection = from <= cursorTo && to >= cursorFrom;
-    const onCurrentLine = from < cursorLine.to && to > cursorLine.from;
-    const inVisibleRange = view.visibleRanges?.some?.((range) => from < range.to && to > range.from) ?? true;
-
-    candidates.push({
-      diagnostic,
-      from,
-      to,
-      intersectsSelection,
-      onCurrentLine,
-      inVisibleRange,
-    });
-  });
-
-  if (candidates.length === 0) return false;
-
-  candidates.sort((a, b) => {
-    if (a.intersectsSelection !== b.intersectsSelection) return a.intersectsSelection ? -1 : 1;
-    if (a.onCurrentLine !== b.onCurrentLine) return a.onCurrentLine ? -1 : 1;
-    if (a.inVisibleRange !== b.inVisibleRange) return a.inVisibleRange ? -1 : 1;
-    return a.from - b.from;
-  });
+function getLanguageToolSuggestionMenu(view, pos) {
+  const candidates = collectLanguageToolCandidates(view, pos);
+  if (candidates.length === 0) return null;
 
   const best = candidates[0];
-  const action = best.diagnostic.actions[0];
+  return {
+    from: best.from,
+    to: best.to,
+    message: best.diagnostic.message,
+    source: best.diagnostic.source || 'languagetool',
+    ruleId: best.diagnostic.ruleId || '',
+    matchedText: best.diagnostic.matchedText || '',
+    suggestions: best.diagnostic.actions.map((action, index) => ({
+      index,
+      label: action.name,
+    })),
+  };
+}
+
+function applyLanguageToolSuggestionAt(view, pos, actionIndex = 0) {
+  const candidates = collectLanguageToolCandidates(view, pos);
+  if (candidates.length === 0) return false;
+  const best = candidates[0];
+  const action = best.diagnostic.actions[actionIndex] || best.diagnostic.actions[0];
   if (!action?.apply) return false;
   action.apply(view, best.from, best.to);
   return true;
+}
+
+function applyFirstLanguageToolSuggestion(view) {
+  if (!view?.state) return false;
+  return applyLanguageToolSuggestionAt(view, view.state.selection.main.head, 0);
 }
 
 /**
@@ -85955,7 +89513,7 @@ function applyFirstLanguageToolSuggestion(view) {
 
 /**
  * Run the current cell and stay in place.
- * Bound to Mod-Enter by default.
+ * Used by the default Mod-Enter shortcut when the cursor is in a code cell.
  *
  * @param {Object} editor - Editor API instance
  * @returns {(view: EditorView) => boolean}
@@ -85980,6 +89538,23 @@ function runCell(editor) {
       editor.runCurrentCell();
     }
     return true;
+  };
+}
+
+/**
+ * Run the current cell when the cursor is inside executable code.
+ * Otherwise insert a markdown page break token at the cursor.
+ * Bound to Mod-Enter by default.
+ *
+ * @param {Object} editor - Editor API instance
+ * @returns {(view: EditorView) => boolean}
+ */
+function runCellOrInsertPageBreak(editor) {
+  const runCellCommand = runCell(editor);
+
+  return (view) => {
+    if (runCellCommand(view)) return true;
+    return insertPageBreak(view);
   };
 }
 
@@ -86776,11 +90351,51 @@ function applyFirstGrammarSuggestion(editor) {
 }
 
 /**
+ * Toggle source mode (show all raw markdown syntax).
+ *
+ * @param {Object} editor - Editor API instance
+ * @returns {(view: EditorView) => boolean}
+ */
+function toggleSourceMode(editor) {
+  return (view) => {
+    editor.setSourceMode();
+    return true;
+  };
+}
+
+/**
+ * Toggle WYSIWYG mode.
+ *
+ * @param {Object} editor - Editor API instance
+ * @returns {(view: EditorView) => boolean}
+ */
+function toggleWysiwygMode(editor) {
+  return (view) => {
+    editor.setWysiwygMode();
+    return true;
+  };
+}
+
+/**
+ * Toggle invisible characters (spaces, tabs, newlines).
+ *
+ * @param {Object} editor - Editor API instance
+ * @returns {(view: EditorView) => boolean}
+ */
+function toggleInvisibles(editor) {
+  return (view) => {
+    editor.setShowInvisibles();
+    return true;
+  };
+}
+
+/**
  * All available commands.
  * Maps command names to factory functions.
  */
 const commandRegistry = {
   runCell,
+  runCellOrInsertPageBreak,
   runCellAndAdvance,
   runAllCells,
   runAllAbove,
@@ -86797,6 +90412,9 @@ const commandRegistry = {
   viewSource,
   insertFrontmatterTemplate,
   applyFirstGrammarSuggestion,
+  toggleSourceMode,
+  toggleWysiwygMode,
+  toggleInvisibles,
 };
 
 /**
@@ -86815,7 +90433,7 @@ const commandRegistry = {
  */
 const defaultKeybindings = {
   // Execution
-  'Mod-Enter': 'runCell',
+  'Mod-Enter': 'runCellOrInsertPageBreak',
   'Shift-Enter': 'runCellAndAdvance',
   'Mod-Shift-Enter': 'runAllCells',
 
@@ -86841,6 +90459,9 @@ const defaultKeybindings = {
 
   // Grammar
   'Alt-Enter': 'applyFirstGrammarSuggestion',
+
+  // View modes
+  'Mod-Alt-Shift-w': 'toggleWysiwygMode',
 
   // Enter accepts completion if active, otherwise inserts newline
   'Enter': 'acceptCompletionOrNewline',
@@ -86884,7 +90505,7 @@ function acceptCompletionOrNewline(editor) {
  *
  * // Custom bindings
  * createKeymap(editor, {
- *   'Mod-Enter': 'runCell',
+ *   'Mod-Enter': 'runCellOrInsertPageBreak',
  *   'Shift-Enter': 'runCellAndAdvance',
  *   'F5': 'runAllCells',
  * })
@@ -96813,6 +100434,43 @@ function isTerminalVisible() {
 }
 
 // #endregion EXTENSION
+
+/**
+ * Markdown Rendering Facets
+ *
+ * Shared facets used by both the ViewPlugin (renderer.js) and
+ * the StateField (block-decorations.js). Kept in a separate file
+ * to avoid circular dependencies between those modules.
+ *
+ * @module markdown/facets
+ */
+
+
+/**
+ * Facet to toggle "source mode" — when true, all markdown syntax is shown
+ * as if the cursor were on every line. No rendering/hiding of markers,
+ * no widget replacement of syntax.
+ *
+ * Usage:
+ *   sourceModeFacet.of(true)   // enable source mode
+ *   sourceModeFacet.of(false)  // normal rendering mode
+ *
+ * @type {Facet<boolean, boolean>}
+ */
+const sourceModeFacet = Facet.define({
+  combine: (values) => values.some(v => v),
+});
+
+/**
+ * Facet to toggle WYSIWYG mode — when true, markdown is rendered everywhere,
+ * including the active line/block, and editing is routed through a protected,
+ * syntax-safe interaction layer.
+ *
+ * @type {Facet<boolean, boolean>}
+ */
+const wysiwygModeFacet = Facet.define({
+  combine: (values) => values.some(v => v),
+});
 
 /**
  * Image Widget
@@ -118261,11 +121919,15 @@ function buildBlockDecorations(state) {
   const cursorLine = doc.lineAt(cursorPos).number;
   const decorations = [];
 
+  // Mode flags
+  const isSourceMode = state.facet(sourceModeFacet);
+  const isWysiwygMode = state.facet(wysiwygModeFacet);
+
   // Find and process tables
   const tableRanges = findTableRanges(state);
 
   for (const range of tableRanges) {
-    const cursorInTable = cursorLine >= range.startLine && cursorLine <= range.endLine;
+    const cursorInTable = isSourceMode || (!isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
 
     // Collect lines for both rendering and height calculation
     const lines = [];
@@ -118317,7 +121979,7 @@ function buildBlockDecorations(state) {
   const mathRanges = findDisplayMathRanges(state);
 
   for (const range of mathRanges) {
-    const cursorInMath = cursorLine >= range.startLine && cursorLine <= range.endLine;
+    const cursorInMath = isSourceMode || (!isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
     const contentHash = 'math-' + hashContent$1(range.content);
 
     if (!cursorInMath) {
@@ -118357,7 +122019,7 @@ function buildBlockDecorations(state) {
   const fmRange = findFrontmatterRange$1(state);
 
   if (fmRange) {
-    const cursorInFrontmatter = cursorLine >= fmRange.startLine && cursorLine <= fmRange.endLine;
+    const cursorInFrontmatter = isSourceMode || (!isWysiwygMode && cursorLine >= fmRange.startLine && cursorLine <= fmRange.endLine);
     const contentHash = 'fm-' + hashContent$1(fmRange.content);
 
     if (!cursorInFrontmatter) {
@@ -118413,7 +122075,7 @@ const blockDecorations = StateField.define({
     // Rebuild on any change that could affect block elements
     // For efficiency, we could map positions and only rebuild affected ranges,
     // but for now, full rebuild is acceptable
-    if (tr.docChanged || tr.selection) {
+    if (tr.docChanged || tr.selection || tr.reconfigured) {
       return buildBlockDecorations(tr.state);
     }
     return decorations;
@@ -118730,6 +122392,10 @@ function buildDecorations(view) {
   const cursorLine = doc.lineAt(cursorPos).number;
   const frontmatterRange = findFrontmatterRange(doc);
 
+  // Mode flags
+  const isSourceMode = view.state.facet(sourceModeFacet);
+  const isWysiwygMode = view.state.facet(wysiwygModeFacet);
+
   // Get asset resolver from facet (may be null)
   const assetResolver = view.state.facet(assetResolverFacet);
 
@@ -118770,7 +122436,7 @@ function buildDecorations(view) {
         }
       }
 
-      const isActiveLine = lineNum === cursorLine;
+      const isActiveLine = isSourceMode || (!isWysiwygMode && lineNum === cursorLine);
 
       // Marker class: hidden on blur, muted on focus
       const markerClass = isActiveLine ? 'cm-md-marker' : 'cm-md-hidden';
@@ -118864,8 +122530,9 @@ function buildDecorations(view) {
       // Code backticks (inline only, not fenced code)
       if (node.name === 'CodeMark') {
         const text = doc.sliceString(node.from, node.to);
-        // Only hide single/double backticks, not fenced code markers (```)
-        if (text.length < 3) {
+        // In normal rendered mode, only hide inline backticks.
+        // In WYSIWYG mode, also hide fenced code markers.
+        if (text.length < 3 || isWysiwygMode) {
           decorations.push(
             Decoration.mark({ class: markerClass }).range(node.from, node.to)
           );
@@ -118907,7 +122574,7 @@ function buildDecorations(view) {
         const linkUrl = linkMatch[2];
 
         const linkLine = doc.lineAt(node.from).number;
-        const isLinkActive = linkLine === cursorLine;
+        const isLinkActive = isSourceMode || (!isWysiwygMode && linkLine === cursorLine);
 
         if (isLinkActive) {
           // Show raw markdown with styling on active line
@@ -118995,7 +122662,7 @@ function buildDecorations(view) {
         }
 
         // Replace the alert marker [!TYPE] with widget when not on that line
-        if (alertType && startLine.number !== cursorLine) {
+        if (alertType && !isSourceMode && (isWysiwygMode || startLine.number !== cursorLine)) {
           const markerStart = startLine.from + firstLineText.indexOf('[!');
           const markerEnd = startLine.from + firstLineText.indexOf(']') + 1;
           if (markerStart >= startLine.from && markerEnd > markerStart) {
@@ -119021,7 +122688,7 @@ function buildDecorations(view) {
       if (node.name === 'ListMark') {
         const line = doc.lineAt(node.from);
         const listMarkText = doc.sliceString(node.from, node.to);
-        const isListActive = line.number === cursorLine;
+        const isListActive = isSourceMode || (!isWysiwygMode && line.number === cursorLine);
         const isUnordered = /^[-+*]$/.test(listMarkText);
         const textAfterMarker = doc.sliceString(node.to, Math.min(node.to + 6, line.to));
         const isTaskItem = /^\s+\[[ xX]\]/.test(textAfterMarker);
@@ -119058,7 +122725,7 @@ function buildDecorations(view) {
 
           // Don't render widget if cursor is on this line
           const itemLine = doc.lineAt(node.from);
-          if (itemLine.number !== cursorLine) {
+          if (!isSourceMode && (isWysiwygMode || itemLine.number !== cursorLine)) {
             // Replace [ ], [x], or [X] with checkbox widget
             decorations.push(
               Decoration.replace({
@@ -119080,6 +122747,27 @@ function buildDecorations(view) {
         decorations.push(
           Decoration.line({ class: 'cm-md-hr-line' }).range(line.from)
         );
+      }
+
+      // =======================================================================
+      // PAGE BREAKS (\pagebreak, \newpage)
+      // Detected as single-line paragraphs containing only the command.
+      // In WYSIWYG mode, rendered as a visual break indicator.
+      // =======================================================================
+      if (node.name === 'Paragraph' || node.name === 'HTMLBlock') {
+        const nodeText = doc.sliceString(node.from, node.to).trim();
+        if (/^\\(pagebreak|newpage)$/.test(nodeText) ||
+            /^<div\s+style\s*=\s*["']page-break-after:\s*always;?["']\s*>\s*<\/div>$/i.test(nodeText)) {
+          const line = doc.lineAt(node.from);
+          decorations.push(
+            Decoration.line({ class: 'cm-pagebreak-line' }).range(line.from)
+          );
+          if (!isActiveLine) {
+            decorations.push(
+              Decoration.mark({ class: 'cm-md-hidden' }).range(node.from, node.to)
+            );
+          }
+        }
       }
 
       // =======================================================================
@@ -119291,7 +122979,7 @@ function buildDecorations(view) {
       continue;
     }
 
-    const cursorInAdmonition = cursorLine >= admonition.startLine && cursorLine <= admonition.endLine;
+    const cursorInAdmonition = isSourceMode || (!isWysiwygMode && cursorLine >= admonition.startLine && cursorLine <= admonition.endLine);
     if (cursorInAdmonition) {
       continue;
     }
@@ -119341,7 +123029,7 @@ function buildDecorations(view) {
   // Process line by line in viewport
   for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
     const line = doc.line(i);
-    const isActiveLine = i === cursorLine;
+    const isActiveLine = isSourceMode || (!isWysiwygMode && i === cursorLine);
 
     // Skip frontmatter lines
     if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
@@ -119379,7 +123067,7 @@ function buildDecorations(view) {
   // ==========================================================================
   for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
     const line = doc.line(i);
-    const isActiveLine = i === cursorLine;
+    const isActiveLine = isSourceMode || (!isWysiwygMode && i === cursorLine);
 
     // Skip frontmatter lines
     if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
@@ -119422,7 +123110,7 @@ function buildDecorations(view) {
 
   for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
     const line = doc.line(i);
-    const isActiveLine = i === cursorLine;
+    const isActiveLine = isSourceMode || (!isWysiwygMode && i === cursorLine);
 
     // Skip frontmatter lines
     if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
@@ -119433,6 +123121,11 @@ function buildDecorations(view) {
     const htmlElements = extractHtmlElements(line.text);
 
     for (const el of htmlElements) {
+      // Underline is handled by the shared inline formatting model so it can
+      // participate in semantic toggling like bold/italic instead of being
+      // rendered as an opaque HTML widget.
+      if (el.tag === 'u') continue;
+
       const from = line.from + el.start;
       const to = line.from + el.end;
 
@@ -119482,6 +123175,1015 @@ const markdownRenderer = ViewPlugin.fromClass(
     decorations: (v) => v.decorations,
   }
 );
+
+/**
+ * WYSIWYG mode support for the markdown editor.
+ *
+ * Provides:
+ * - atomic protection around markdown syntax markers
+ * - transaction filtering to avoid accidental syntax corruption
+ * - WYSIWYG-native key layer (Backspace demotion/merge, Enter continuation, Mod-B/I/`)
+ * - code block protection (no backspace out of code, no editing fence lines)
+ * - proper bold/italic/code toggling (unwrap when already formatted)
+ *
+ * @module markdown/wysiwyg
+ */
+
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function isWysiwygActive(state) {
+  return state.facet(wysiwygModeFacet) && !state.facet(sourceModeFacet);
+}
+
+function pushRange(ranges, from, to) {
+  if (from >= to) return;
+  ranges.push({ from, to });
+}
+
+// ---------------------------------------------------------------------------
+// Protected-range collection
+// ---------------------------------------------------------------------------
+
+function collectProtectedRanges(state, from = 0, to = state.doc.length) {
+  const doc = state.doc;
+  const ranges = [];
+
+  syntaxTree(state).iterate({
+    from,
+    to,
+    enter: (node) => {
+      if (
+        node.name === 'HeaderMark' ||
+        node.name === 'EmphasisMark' ||
+        node.name === 'StrikethroughMark' ||
+        node.name === 'QuoteMark' ||
+        node.name === 'ListMark'
+      ) {
+        pushRange(ranges, node.from, node.to);
+        return;
+      }
+
+      if (node.name === 'CodeMark') {
+        const text = doc.sliceString(node.from, node.to);
+        pushRange(ranges, node.from, node.to);
+
+        // For fenced code blocks, also protect the full fence line so the user
+        // cannot accidentally edit the language/info string.
+        if (text.length >= 3) {
+          const line = doc.lineAt(node.from);
+          pushRange(ranges, line.from, line.to);
+        }
+        return;
+      }
+
+      // Links and images are rendered as widgets – protect full syntax range.
+      if (node.name === 'Link' || node.name === 'Image') {
+        pushRange(ranges, node.from, node.to);
+        return false;
+      }
+
+      if (node.name === 'FencedCode') {
+        const startLine = doc.lineAt(node.from);
+        const endLine = doc.lineAt(node.to);
+        pushRange(ranges, startLine.from, startLine.to);
+        pushRange(ranges, endLine.from, endLine.to);
+        return false;
+      }
+    },
+  });
+
+  // Protect wiki-link raw syntax when rendered as widgets.
+  const startLine = doc.lineAt(from).number;
+  const endLine = doc.lineAt(Math.max(from, to)).number;
+  const wikiRegex = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g;
+  for (let i = startLine; i <= endLine; i++) {
+    const line = doc.line(i);
+    wikiRegex.lastIndex = 0;
+    let match;
+    while ((match = wikiRegex.exec(line.text)) !== null) {
+      pushRange(ranges, line.from + match.index, line.from + match.index + match[0].length);
+    }
+  }
+
+  // Sort by from position (wiki-link ranges appended after tree ranges may be out of order)
+  ranges.sort((a, b) => a.from - b.from || a.to - b.to);
+  return ranges;
+}
+
+// ---------------------------------------------------------------------------
+// Atomic ranges plugin
+// ---------------------------------------------------------------------------
+
+const wysiwygAtomicPlugin = ViewPlugin.fromClass(
+  class {
+    constructor() {
+      this.decorations = Decoration.none;
+    }
+
+    update() {
+      this.decorations = Decoration.none;
+    }
+  },
+  {
+    decorations: (v) => v.decorations,
+  }
+);
+
+// ---------------------------------------------------------------------------
+// Code-fence header widget
+// ---------------------------------------------------------------------------
+
+/** Tiny invisible widget used to replace the closing ``` fence line. */
+class CodeFenceCloseWidget extends WidgetType {
+  eq() { return true; }
+  toDOM() {
+    const el = document.createElement('span');
+    el.className = 'cm-wysiwyg-code-fence-close';
+    el.setAttribute('aria-hidden', 'true');
+    return el;
+  }
+  ignoreEvent() { return true; }
+}
+
+class CodeFenceHeaderWidget extends WidgetType {
+  constructor(lang, blockFrom, blockTo) {
+    super();
+    this.lang = lang;
+    this.blockFrom = blockFrom;
+    this.blockTo = blockTo;
+  }
+
+  eq(other) {
+    return other.lang === this.lang && other.blockFrom === this.blockFrom && other.blockTo === this.blockTo;
+  }
+
+  toDOM(view) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'cm-wysiwyg-code-header';
+
+    // Language label (editable on click)
+    const langEl = document.createElement('span');
+    langEl.className = 'cm-wysiwyg-code-header-lang';
+    langEl.textContent = this.lang || 'plain text';
+    langEl.title = 'Click to change language';
+
+    const blockFrom = this.blockFrom;
+    const blockTo = this.blockTo;
+    const editorView = view;
+
+    langEl.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'cm-wysiwyg-code-header-lang-input';
+      input.value = langEl.textContent === 'plain text' ? '' : langEl.textContent;
+      input.placeholder = 'language';
+
+      const commit = () => {
+        const newLang = input.value.trim();
+        if (input.parentNode) {
+          input.parentNode.replaceChild(langEl, input);
+        }
+        langEl.textContent = newLang || 'plain text';
+
+        const doc = editorView.state.doc;
+        const fenceLine = doc.lineAt(blockFrom);
+        const fenceMatch = fenceLine.text.match(/^(`{3,})(.*)/);
+        if (fenceMatch) {
+          editorView.dispatch({
+            changes: { from: fenceLine.from, to: fenceLine.to, insert: fenceMatch[1] + (newLang || '') },
+            userEvent: 'input.wysiwyg.change-lang',
+          });
+        }
+      };
+
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+        if (ev.key === 'Escape') { ev.preventDefault(); input.value = ''; input.blur(); }
+      });
+
+      langEl.parentNode.replaceChild(input, langEl);
+      // Defer focus so the input is in the DOM
+      requestAnimationFrame(() => { input.focus(); input.select(); });
+    });
+
+    wrapper.appendChild(langEl);
+
+    // ⋯ menu button with dropdown
+    const menuWrap = document.createElement('span');
+    menuWrap.className = 'cm-wysiwyg-code-header-menu-wrap';
+
+    const menuBtn = document.createElement('button');
+    menuBtn.className = 'cm-wysiwyg-code-header-btn';
+    menuBtn.title = 'Code block options';
+    menuBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>';
+    menuWrap.appendChild(menuBtn);
+
+    // Dropdown menu (hidden by default)
+    const menu = document.createElement('div');
+    menu.className = 'cm-wysiwyg-code-header-dropdown';
+    menu.style.display = 'none';
+
+    const makeItem = (label, icon, action) => {
+      const item = document.createElement('button');
+      item.className = 'cm-wysiwyg-code-header-dropdown-item';
+      item.innerHTML = icon + '<span>' + label + '</span>';
+      item.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        menu.style.display = 'none';
+        action();
+      });
+      return item;
+    };
+
+    // Copy
+    menu.appendChild(makeItem('Copy code',
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+      () => {
+        const doc = editorView.state.doc;
+        const startLine = doc.lineAt(blockFrom);
+        const endLine = doc.lineAt(blockTo);
+        const codeFrom = startLine.to + 1;
+        const codeTo = endLine.from > 0 ? endLine.from - 1 : endLine.from;
+        if (codeFrom < codeTo) {
+          navigator.clipboard?.writeText(doc.sliceString(codeFrom, codeTo));
+        }
+      }));
+
+    // Delete
+    menu.appendChild(makeItem('Delete block',
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+      () => {
+        const doc = editorView.state.doc;
+        let delFrom = blockFrom;
+        let delTo = Math.min(blockTo, doc.length);
+        if (delFrom > 0 && doc.sliceString(delFrom - 1, delFrom) === '\n') delFrom--;
+        if (delTo < doc.length && doc.sliceString(delTo, delTo + 1) === '\n') delTo++;
+        editorView.dispatch({
+          changes: { from: delFrom, to: delTo, insert: '' },
+          userEvent: 'delete.wysiwyg.delete-codeblock',
+        });
+      }));
+
+    menuWrap.appendChild(menu);
+
+    // Toggle menu on button click
+    menuBtn.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const isOpen = menu.style.display !== 'none';
+      menu.style.display = isOpen ? 'none' : '';
+      if (!isOpen) {
+        // Close on outside click
+        const close = (ev) => {
+          if (!menuWrap.contains(ev.target)) {
+            menu.style.display = 'none';
+            document.removeEventListener('mousedown', close, true);
+          }
+        };
+        // Defer so this mousedown doesn't immediately close it
+        requestAnimationFrame(() => {
+          document.addEventListener('mousedown', close, true);
+        });
+      }
+    });
+
+    wrapper.appendChild(menuWrap);
+
+    return wrapper;
+  }
+
+  ignoreEvent(event) {
+    // Let mousedown through so our buttons work, but ignore everything else
+    return event.type !== 'mousedown';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fence decorations plugin
+// ---------------------------------------------------------------------------
+
+const wysiwygFencePlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = this.build(view);
+    }
+
+    update(update) {
+      const modeChanged =
+        update.startState.facet(wysiwygModeFacet) !== update.state.facet(wysiwygModeFacet) ||
+        update.startState.facet(sourceModeFacet) !== update.state.facet(sourceModeFacet);
+
+      if (update.docChanged || update.viewportChanged || modeChanged) {
+        this.decorations = this.build(update.view);
+      }
+    }
+
+    build(view) {
+      if (!isWysiwygActive(view.state)) return Decoration.none;
+
+      const decorations = [];
+      const doc = view.state.doc;
+      syntaxTree(view.state).iterate({
+        from: view.viewport.from,
+        to: view.viewport.to,
+        enter: (node) => {
+          if (node.name !== 'FencedCode') return;
+
+          const startLine = doc.lineAt(node.from);
+          const endLine = doc.lineAt(node.to);
+          const firstText = startLine.text.trim();
+          const lang = firstText.replace(/^`{3,}/, '').trim();
+
+          decorations.push(
+            Decoration.line({ class: 'cm-wysiwyg-code-fence-line cm-wysiwyg-code-fence-start' }).range(startLine.from),
+            Decoration.replace({ widget: new CodeFenceHeaderWidget(lang, node.from, node.to) }).range(startLine.from, startLine.to),
+          );
+          // Closing fence — only add decorations if the end is distinct from the start
+          if (endLine.from !== startLine.from) {
+            decorations.push(
+              Decoration.line({ class: 'cm-wysiwyg-code-fence-line cm-wysiwyg-code-fence-end' }).range(endLine.from),
+              Decoration.replace({ widget: new CodeFenceCloseWidget() }).range(endLine.from, endLine.to),
+            );
+          }
+
+          return false;
+        },
+      });
+
+      return Decoration.set(decorations, true);
+    }
+  },
+  { decorations: (v) => v.decorations }
+);
+
+// ---------------------------------------------------------------------------
+// Styles
+// ---------------------------------------------------------------------------
+
+const wysiwygStyles = EditorView.theme({
+  '.cm-md-wysiwyg-atomic': {
+    pointerEvents: 'none',
+  },
+
+  // ---- Code block styling ----
+
+  '.cm-wysiwyg-code-fence-line': {
+    backgroundColor: 'color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
+  },
+  '.cm-wysiwyg-code-fence-line.cm-wysiwyg-code-fence-end': {
+    fontSize: '0 !important',
+    lineHeight: '0 !important',
+    padding: '0 !important',
+    minHeight: '0 !important',
+    height: '4px !important',
+    borderBottom: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
+    borderRadius: '0 0 6px 6px',
+    overflow: 'hidden',
+  },
+  '.cm-wysiwyg-code-fence-close': {
+    display: 'none',
+  },
+
+  // Header bar
+  '.cm-wysiwyg-code-header': {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    fontFamily: 'var(--widget-font-ui, system-ui, sans-serif)',
+    fontSize: '12px',
+    padding: '4px 10px',
+    borderBottom: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 50%, transparent)',
+    userSelect: 'none',
+  },
+
+  // Language label
+  '.cm-wysiwyg-code-header-lang': {
+    fontSize: '11px',
+    fontWeight: '600',
+    letterSpacing: '0.03em',
+    textTransform: 'uppercase',
+    color: 'var(--widget-text-muted, #777)',
+    cursor: 'pointer',
+    padding: '2px 8px',
+    borderRadius: '4px',
+    transition: 'background 0.15s, color 0.15s',
+  },
+  '.cm-wysiwyg-code-header-lang:hover': {
+    background: 'color-mix(in srgb, var(--widget-text-muted, #777) 12%, transparent)',
+    color: 'var(--widget-text, #333)',
+  },
+
+  // Language inline input
+  '.cm-wysiwyg-code-header-lang-input': {
+    fontSize: '11px',
+    fontWeight: '600',
+    letterSpacing: '0.03em',
+    fontFamily: 'var(--widget-font-ui, system-ui, sans-serif)',
+    padding: '2px 8px',
+    border: '1px solid var(--widget-border-accent, #aaa)',
+    borderRadius: '4px',
+    background: 'var(--widget-surface, #f5f5f5)',
+    color: 'var(--widget-text, #333)',
+    outline: 'none',
+    width: '100px',
+  },
+
+  // Menu wrapper (positioned relative for dropdown)
+  '.cm-wysiwyg-code-header-menu-wrap': {
+    position: 'relative',
+    display: 'inline-flex',
+  },
+
+  // Menu trigger button
+  '.cm-wysiwyg-code-header-btn': {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '26px',
+    height: '26px',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--widget-text-muted, #999)',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    transition: 'background 0.15s, color 0.15s',
+    padding: '0',
+  },
+  '.cm-wysiwyg-code-header-btn:hover': {
+    background: 'color-mix(in srgb, var(--widget-text-muted, #777) 14%, transparent)',
+    color: 'var(--widget-text, #333)',
+  },
+
+  // Dropdown menu
+  '.cm-wysiwyg-code-header-dropdown': {
+    position: 'absolute',
+    top: '100%',
+    right: '0',
+    marginTop: '4px',
+    minWidth: '160px',
+    background: 'var(--widget-surface, #fff)',
+    border: '1px solid var(--widget-border, #ddd)',
+    borderRadius: '8px',
+    boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+    padding: '4px',
+    zIndex: '100',
+    fontFamily: 'var(--widget-font-ui, system-ui, sans-serif)',
+  },
+  '.cm-wysiwyg-code-header-dropdown-item': {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    width: '100%',
+    padding: '6px 10px',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--widget-text, #333)',
+    fontSize: '12px',
+    fontFamily: 'inherit',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    textAlign: 'left',
+    whiteSpace: 'nowrap',
+  },
+  '.cm-wysiwyg-code-header-dropdown-item:hover': {
+    background: 'color-mix(in srgb, var(--widget-text-muted, #777) 10%, transparent)',
+  },
+  '.cm-wysiwyg-code-header-dropdown-item:last-child:hover': {
+    background: 'color-mix(in srgb, #ef4444 10%, transparent)',
+    color: '#ef4444',
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Transaction filter – block edits inside protected regions
+// ---------------------------------------------------------------------------
+
+function rangeTouchesProtected(changeFrom, changeTo, protectedFrom, protectedTo) {
+  if (changeFrom === changeTo) {
+    return changeFrom > protectedFrom && changeFrom < protectedTo;
+  }
+  return changeFrom < protectedTo && changeTo > protectedFrom;
+}
+
+const wysiwygTransactionFilter = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged) return tr;
+  if (!isWysiwygActive(tr.startState)) return tr;
+  if (!tr.annotation(Transaction$1.userEvent)) return tr;
+  if (tr.isUserEvent('input.wysiwyg') || tr.isUserEvent('delete.wysiwyg')) return tr;
+
+  const protectedRanges = collectProtectedRanges(tr.startState);
+
+  let blocked = false;
+  tr.changes.iterChangedRanges((fromA, toA) => {
+    if (blocked) return;
+    for (const range of protectedRanges) {
+      if (rangeTouchesProtected(fromA, toA, range.from, range.to)) {
+        blocked = true;
+        break;
+      }
+    }
+  });
+
+  return blocked ? [] : tr;
+});
+
+function inlineClassForMarker(marker) {
+  return inlineClassForMark(syntaxToMark(marker, marker === '<u>' ? '</u>' : marker));
+}
+
+function parseInlineFormatting(lineText) {
+  const model = getLineInlineModel(lineText, 0);
+  return model.spans.map((span) => ({
+    marker: markToSyntax(span.mark)?.open || '',
+    start: span.from,
+    end: span.to,
+    contentStart: span.contentFrom,
+    contentEnd: span.contentTo,
+    openLength: span.openLength,
+    closeLength: span.closeLength,
+    children: [],
+  }));
+}
+
+function visitInlineSpans(spans, visitor) {
+  for (const span of spans) {
+    visitor(span);
+    if (span.children?.length) visitInlineSpans(span.children, visitor);
+  }
+}
+
+/**
+ * Toggle inline formatting (bold / italic / inline code).
+ *
+ * Rich-text style behavior:
+ * - empty selection outside same-format span -> start formatted typing (insert open+close, place cursor inside)
+ * - empty selection inside same-format span -> exit that typing mode by moving cursor after the closing marker
+ * - empty selection inside an empty open|close pair -> also move cursor after closing marker
+ * - selection fully inside same-format span -> no-op (guard against double nesting)
+ * - selection exactly matches the full content of same-format span -> unwrap
+ * - otherwise wrap selection
+ */
+function toggleInlineFormat(view, open, close) {
+  const mark = syntaxToMark(open, close || open);
+  if (!mark) return false;
+  return toggleInlineMark(view, mark);
+}
+
+// ---------------------------------------------------------------------------
+// Backspace handler
+// ---------------------------------------------------------------------------
+
+/**
+ * Find the FencedCode node that contains `pos`, if any.
+ */
+function findFencedCodeAt(state, pos) {
+  let found = null;
+  syntaxTree(state).iterate({
+    from: Math.max(0, pos - 1),
+    to: pos + 1,
+    enter: (node) => {
+      if (node.name === 'FencedCode' && node.from <= pos && node.to >= pos) {
+        found = { from: node.from, to: node.to };
+      }
+    },
+  });
+  return found;
+}
+
+function backspaceWysiwyg(view) {
+  const state = view.state;
+  if (!isWysiwygActive(state)) return false;
+
+  const sel = state.selection.main;
+  if (!sel.empty) return false;
+
+  const pos = sel.head;
+  const doc = state.doc;
+  const line = doc.lineAt(pos);
+  const text = line.text;
+
+  // ── Code-block protection ──
+  // If inside a fenced code block at the start of the first code line → block
+  const fence = findFencedCodeAt(state, pos);
+  if (fence) {
+    const fenceStartLine = doc.lineAt(fence.from);
+    const firstCodeLine = fenceStartLine.number + 1 <= doc.lines ? doc.line(fenceStartLine.number + 1) : null;
+    if (firstCodeLine && pos === firstCodeLine.from) {
+      // Block backspace – would escape into the fence header
+      return true;
+    }
+  }
+
+  // ── Heading backspace ──
+  const headingMatch = text.match(/^(#{1,6})\s+/);
+  if (headingMatch) {
+    const contentStart = line.from + headingMatch[0].length;
+    if (pos === contentStart) {
+      // At the beginning of heading content
+      if (line.number > 1) {
+        const prev = doc.line(line.number - 1);
+        if (prev.text.trim() === '') {
+          // Previous line is empty → delete it, keep heading intact
+          view.dispatch({
+            changes: { from: prev.from, to: prev.to + 1, insert: '' },
+            userEvent: 'delete.wysiwyg.heading-eat-blank',
+          });
+          return true;
+        }
+        // Previous line has content → merge
+        const prevIsHeading = /^#{1,6}\s+/.test(prev.text);
+        if (prevIsHeading) {
+          // Previous line is also a heading → just delete the newline between them
+          // The current heading content joins the previous heading (keeping previous heading's level)
+          const headingContent = text.slice(headingMatch[0].length);
+          view.dispatch({
+            changes: { from: prev.to, to: line.to, insert: headingContent ? ' ' + headingContent : '' },
+            selection: { anchor: prev.to },
+            userEvent: 'delete.wysiwyg.merge-heading-up',
+          });
+          return true;
+        }
+        // Previous line is a paragraph → heading becomes paragraph, joins with prev
+        const headingContent = text.slice(headingMatch[0].length);
+        view.dispatch({
+          changes: { from: prev.to, to: line.to, insert: headingContent ? ' ' + headingContent : '' },
+          selection: { anchor: prev.to },
+          userEvent: 'delete.wysiwyg.merge-heading-up',
+        });
+        return true;
+      }
+      // First line – just block, don't delete hashes
+      return true;
+    }
+  }
+
+  // ── List backspace ──
+  const listMatch = text.match(/^(\s*)(?:[-+*]|\d+\.)\s+/);
+  if (listMatch) {
+    const contentStart = line.from + listMatch[0].length;
+    if (pos === contentStart) {
+      view.dispatch({
+        changes: { from: line.from, to: contentStart, insert: '' },
+        selection: { anchor: line.from },
+        userEvent: 'delete.wysiwyg.demote-list',
+      });
+      return true;
+    }
+  }
+
+  // ── Blockquote backspace ──
+  const quoteMatch = text.match(/^(\s*>\s?)+/);
+  if (quoteMatch) {
+    const contentStart = line.from + quoteMatch[0].length;
+    if (pos === contentStart) {
+      view.dispatch({
+        changes: { from: line.from, to: contentStart, insert: '' },
+        selection: { anchor: line.from },
+        userEvent: 'delete.wysiwyg.demote-quote',
+      });
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Enter handler
+// ---------------------------------------------------------------------------
+
+function enterWysiwyg(view) {
+  const state = view.state;
+  if (!isWysiwygActive(state)) return false;
+
+  const sel = state.selection.main;
+  if (!sel.empty) return false;
+
+  const pos = sel.head;
+  const doc = state.doc;
+  const line = doc.lineAt(pos);
+  const text = line.text;
+
+  // ── Heading: Enter at end → new paragraph ──
+  const headingMatch = text.match(/^(#{1,6})\s+/);
+  if (headingMatch && pos === line.to) {
+    view.dispatch({
+      changes: { from: pos, insert: '\n' },
+      selection: { anchor: pos + 1 },
+      userEvent: 'input.wysiwyg.new-paragraph',
+    });
+    return true;
+  }
+
+  // ── List continuation ──
+  const listMatch = text.match(/^(\s*)([-+*]|\d+\.)\s+/);
+  if (listMatch) {
+    const prefix = listMatch[0];
+    const content = text.slice(prefix.length);
+    if (content.trim() === '') {
+      // Empty list item → exit list
+      view.dispatch({
+        changes: { from: line.from, to: line.from + prefix.length, insert: '' },
+        selection: { anchor: line.from },
+        userEvent: 'input.wysiwyg.exit-list',
+      });
+      return true;
+    }
+    const marker = listMatch[2];
+    const nextPrefix = /\d+\./.test(marker)
+      ? `${listMatch[1]}${Number.parseInt(marker, 10) + 1}. `
+      : prefix;
+    view.dispatch({
+      changes: { from: pos, insert: `\n${nextPrefix}` },
+      selection: { anchor: pos + 1 + nextPrefix.length },
+      userEvent: 'input.wysiwyg.continue-list',
+    });
+    return true;
+  }
+
+  // ── Blockquote continuation ──
+  const quoteMatch = text.match(/^(\s*>\s?)+/);
+  if (quoteMatch) {
+    const prefix = quoteMatch[0];
+    const content = text.slice(prefix.length);
+    if (content.trim() === '') {
+      view.dispatch({
+        changes: { from: line.from, to: line.from + prefix.length, insert: '' },
+        selection: { anchor: line.from },
+        userEvent: 'input.wysiwyg.exit-quote',
+      });
+      return true;
+    }
+    view.dispatch({
+      changes: { from: pos, insert: `\n${prefix}` },
+      selection: { anchor: pos + 1 + prefix.length },
+      userEvent: 'input.wysiwyg.continue-quote',
+    });
+    return true;
+  }
+
+  // ── Fenced code: prevent Enter on fence lines ──
+  const fencedCodeMatch = text.match(/^`{3,}/);
+  if (fencedCodeMatch && text.slice(pos - line.from).trim() === '') {
+    return true;
+  }
+
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Pending-format hider
+//
+// When typing inside **...**  or *...* or `...`, a trailing space or other
+// character may cause the markdown parser to stop recognizing the markers
+// as EmphasisMark nodes. In WYSIWYG mode we still want them hidden.
+// This ViewPlugin scans the cursor line for paired markers that the tree
+// missed and applies cm-md-hidden decorations to them.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Pending-format plugin
+//
+// The CommonMark spec says **hello ** (space before closing **) is NOT valid
+// emphasis. The Lezer parser follows this, so mid-typing the markers lose
+// their StrongEmphasis/Emphasis tree status, causing bold/italic to flicker.
+//
+// We patch this in rendered modes: scan every visible line for paired markers
+// the tree missed, and apply the formatting class while either hiding the
+// markers (rendered/WYSIWYG) or muting them (source mode).
+//
+// Also auto-cleans empty marker pairs (e.g. ****) when the cursor leaves.
+// ---------------------------------------------------------------------------
+
+/**
+ * Collect absolute positions of all inline formatting marker nodes the tree
+ * already recognises on a given line range.
+ */
+function collectTreeMarks(state, from, to) {
+  const marks = new Set();
+  syntaxTree(state).iterate({
+    from,
+    to,
+    enter: (node) => {
+      if (
+        node.name === 'EmphasisMark' ||
+        node.name === 'CodeMark' ||
+        node.name === 'StrikethroughMark'
+      ) {
+        for (let i = node.from; i < node.to; i++) marks.add(i);
+      }
+    },
+  });
+  return marks;
+}
+
+/**
+ * Check whether the syntax tree already provides inline formatting coverage
+ * for the range [from, to).
+ */
+function treeHasFormattingAt(state, from, to) {
+  let found = false;
+  syntaxTree(state).iterate({
+    from,
+    to,
+    enter: (node) => {
+      if (
+        (
+          node.name === 'StrongEmphasis' ||
+          node.name === 'Emphasis' ||
+          node.name === 'InlineCode' ||
+          node.name === 'Strikethrough'
+        ) &&
+        node.from <= from && node.to >= to
+      ) {
+        found = true;
+      }
+    },
+  });
+  return found;
+}
+
+const wysiwygPendingFormatPlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = this.build(view);
+      this.prevCursorLine = view.state.doc.lineAt(view.state.selection.main.head).number;
+    }
+
+    update(update) {
+      const modeChanged =
+        update.startState.facet(wysiwygModeFacet) !== update.state.facet(wysiwygModeFacet) ||
+        update.startState.facet(sourceModeFacet) !== update.state.facet(sourceModeFacet);
+
+      if (update.docChanged || update.selectionSet || update.viewportChanged || modeChanged) {
+        // Auto-clean empty markers when cursor leaves a line (WYSIWYG only)
+        if (isWysiwygActive(update.state) && update.selectionSet && !update.docChanged) {
+          const curLine = update.state.doc.lineAt(update.state.selection.main.head).number;
+          if (curLine !== this.prevCursorLine) {
+            this.cleanEmptyMarkers(update.view, this.prevCursorLine);
+          }
+          this.prevCursorLine = curLine;
+        } else if (update.docChanged && isWysiwygActive(update.state)) {
+          this.prevCursorLine = update.state.doc.lineAt(update.state.selection.main.head).number;
+        }
+
+        this.decorations = this.build(update.view);
+      }
+    }
+
+    /**
+     * Remove empty marker pairs on a given line number.
+     * Only removes truly empty/whitespace-only pairs where NEITHER the
+     * opening nor closing marker is an EmphasisMark in the syntax tree
+     * (which would mean it belongs to a real formatting span).
+     */
+    cleanEmptyMarkers(view, lineNumber) {
+      const doc = view.state.doc;
+      if (lineNumber < 1 || lineNumber > doc.lines) return;
+      const line = doc.line(lineNumber);
+      const text = line.text;
+
+      // Collect all tree-recognised emphasis/code mark positions on this line
+      const treeMark = collectTreeMarks(view.state, line.from, line.to);
+
+      // Patterns that match empty pairs
+      const emptyPatterns = [
+        { re: /<u>(\s*)<\/u>/g, markerLen: 3, closeMarkerLen: 4 },
+        { re: /\*\*(\s*)\*\*/g, markerLen: 2 },
+        { re: /~~(\s*)~~/g, markerLen: 2 },
+        { re: /(?<!\*)\*(\s*)\*(?!\*)/g, markerLen: 1 },
+        { re: /`(\s*)`/g, markerLen: 1 },
+      ];
+
+      const changes = [];
+      for (const { re, markerLen, closeMarkerLen = markerLen } of emptyPatterns) {
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+          // Only whitespace (or nothing) between markers
+          if (m[1].trim() !== '') continue;
+
+          const absFrom = line.from + m.index;
+          const absTo = absFrom + m[0].length;
+          const openStart = absFrom;
+          const closeStart = absTo - closeMarkerLen;
+
+          // If either marker is tree-recognised, it belongs to real formatting — skip
+          if (treeMark.has(openStart) || treeMark.has(closeStart)) continue;
+
+          changes.push({ from: absFrom, to: absTo, insert: '' });
+        }
+      }
+
+      if (changes.length > 0) {
+        view.dispatch({
+          changes,
+          userEvent: 'delete.wysiwyg.auto-clean',
+        });
+      }
+    }
+
+    build(view) {
+      const state = view.state;
+      const isSource = state.facet(sourceModeFacet);
+      const isWysiwyg = isWysiwygActive(state);
+      const cursorLine = state.doc.lineAt(state.selection.main.head).number;
+
+      const decorations = [];
+      const { from: vpFrom, to: vpTo } = view.viewport;
+
+      // Collect tree-recognised marker positions across viewport
+      const treeMarks = collectTreeMarks(state, vpFrom, vpTo);
+
+      const doc = state.doc;
+      const startLine = doc.lineAt(vpFrom).number;
+      const endLine = doc.lineAt(vpTo).number;
+
+      for (let ln = startLine; ln <= endLine; ln++) {
+        // In normal rendered mode, skip the cursor line — the renderer already
+        // shows raw markers there as cm-md-marker (standard behavior).
+        // In source mode and WYSIWYG mode, patch every visible line.
+        if (!isSource && !isWysiwyg && ln === cursorLine) continue;
+
+        const line = doc.line(ln);
+        const text = line.text;
+        const spans = parseInlineFormatting(text);
+
+        visitInlineSpans(spans, (span) => {
+          const cls = inlineClassForMarker(span.marker);
+          if (!cls) return;
+
+          const openFrom = line.from + span.start;
+          const openTo = openFrom + span.openLength;
+          const closeFrom = line.from + span.contentEnd;
+          const closeTo = closeFrom + span.closeLength;
+          const contentFrom = line.from + span.contentStart;
+          const contentTo = line.from + span.contentEnd;
+          const matchFrom = line.from + span.start;
+          const matchTo = line.from + span.end;
+
+          if (treeHasFormattingAt(state, matchFrom, matchTo)) return;
+          if (treeMarks.has(openFrom) && treeMarks.has(closeFrom)) return;
+
+          if (contentFrom < contentTo) {
+            decorations.push(
+              Decoration.mark({ class: cls }).range(contentFrom, contentTo)
+            );
+          }
+
+          const markerClass = isSource ? 'cm-md-marker' : 'cm-md-hidden';
+
+          if (!treeMarks.has(openFrom)) {
+            decorations.push(
+              Decoration.mark({ class: markerClass }).range(openFrom, openTo)
+            );
+          }
+          if (!treeMarks.has(closeFrom)) {
+            decorations.push(
+              Decoration.mark({ class: markerClass }).range(closeFrom, closeTo)
+            );
+          }
+        });
+      }
+
+      return Decoration.set(decorations, true);
+    }
+  },
+  { decorations: (v) => v.decorations }
+);
+
+// ---------------------------------------------------------------------------
+// Keymap
+// ---------------------------------------------------------------------------
+
+const wysiwygKeymap = keymap.of([
+  { key: 'Backspace', run: backspaceWysiwyg },
+  { key: 'Enter', run: enterWysiwyg },
+  { key: 'Mod-b', run: (view) => toggleInlineMark(view, 'bold') },
+  { key: 'Mod-i', run: (view) => toggleInlineMark(view, 'italic') },
+  { key: 'Mod-u', run: (view) => toggleInlineMark(view, 'underline') },
+  { key: 'Mod-`', run: (view) => toggleInlineMark(view, 'code') },
+]);
+
+function createWysiwygExtensions() {
+  return [
+    wysiwygAtomicPlugin,
+    wysiwygFencePlugin,
+    wysiwygPendingFormatPlugin,
+    wysiwygTransactionFilter,
+    wysiwygKeymap,
+    wysiwygStyles,
+  ];
+}
 
 /**
  * Markdown Rendering Styles
@@ -119585,6 +124287,12 @@ const markdownStyles = `
 
 .cm-md-italic {
   font-style: italic;
+}
+
+.cm-md-underline {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 
 .cm-md-strikethrough {
@@ -120754,11 +125462,140 @@ function markdown() {
   console.log('[Markdown] Creating extensions, blockDecorations:', blockDecorations, 'markdownRenderer:', markdownRenderer);
 
   return [
-    lineHeightTracker,   // ViewPlugin: updates line height cache (must come first!)
-    blockDecorations,    // StateField: tables, display math
-    markdownRenderer,    // ViewPlugin: everything else
+    lineHeightTracker,          // ViewPlugin: updates line height cache (must come first!)
+    ...createInlineEditingExtensions(),
+    blockDecorations,           // StateField: tables, display math
+    markdownRenderer,           // ViewPlugin: everything else
+    ...createWysiwygExtensions(),
   ];
 }
+
+/**
+ * Page View Pagination
+ *
+ * Adds per-line bottom padding so content is pushed to the next visual page.
+ * This uses Decoration.line (not block widgets), because CodeMirror does not
+ * allow block decorations from ViewPlugins.
+ *
+ * @module page-view-pagination
+ */
+
+
+const PAGE_BREAK_RE = /^\\(pagebreak|newpage)$/;
+const HTML_PAGE_BREAK_RE = /^<div\s+style\s*=\s*["']page-break-after:\s*always;?["']\s*>\s*<\/div>$/i;
+
+function getPageDimensions(view) {
+  if (!document.body.classList.contains('page-view-active')) return null;
+  if (!document.body.classList.contains('page-breaks-active')) return null;
+
+  const el = document.getElementById('editor-container');
+  if (!el) return null;
+
+  const read = (prop, fallback) => {
+    const inline = parseFloat(el.style.getPropertyValue(prop));
+    if (inline > 0) return inline;
+    const computed = parseFloat(getComputedStyle(el).getPropertyValue(prop));
+    return computed > 0 ? computed : fallback;
+  };
+
+  const pageHeight = read('--page-view-height', 0);
+  if (!pageHeight) return null;
+
+  return {
+    pageHeight,
+    gap: read('--page-view-gap', 40),
+    marginTop: read('--page-view-margin-top', 96),
+    marginBottom: read('--page-view-margin-bottom', 96),
+  };
+}
+
+function buildPageBreaks(view) {
+  const dims = getPageDimensions();
+  if (!dims) return Decoration.none;
+
+  const { pageHeight, gap, marginTop, marginBottom } = dims;
+  const contentArea = pageHeight - marginTop - marginBottom;
+  if (contentArea <= 0) return Decoration.none;
+
+  const doc = view.state.doc;
+  const decorations = [];
+  let used = 0;
+  let pos = 0;
+  let previousLineFrom = null;
+
+  while (pos <= doc.length) {
+    const block = view.lineBlockAt(pos);
+    const height = block.height;
+    const text = doc.sliceString(block.from, block.to).trim();
+    const isManualBreak = PAGE_BREAK_RE.test(text) || HTML_PAGE_BREAK_RE.test(text);
+
+    if (isManualBreak) {
+      const padding = Math.max(0, pageHeight + gap - used - height);
+      decorations.push(
+        Decoration.line({
+          attributes: {
+            class: 'cm-page-break-padding-line',
+            style: `padding-bottom: ${padding}px`,
+          },
+        }).range(block.from),
+      );
+      used = 0;
+      previousLineFrom = block.from;
+    } else if (used > 0 && used + height > contentArea && previousLineFrom != null) {
+      const padding = Math.max(0, pageHeight + gap - used);
+      decorations.push(
+        Decoration.line({
+          attributes: {
+            class: 'cm-page-break-padding-line',
+            style: `padding-bottom: ${padding}px`,
+          },
+        }).range(previousLineFrom),
+      );
+      used = height;
+      previousLineFrom = block.from;
+    } else {
+      used += height;
+      previousLineFrom = block.from;
+    }
+
+    if (block.to >= doc.length) break;
+    pos = block.to + 1;
+  }
+
+  return Decoration.set(decorations, true);
+}
+
+const pageViewPagination = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.pageBreaksEnabled = document.body.classList.contains('page-breaks-active');
+      this.pageViewEnabled = document.body.classList.contains('page-view-active');
+      this.decorations = buildPageBreaks(view);
+    }
+
+    update(update) {
+      const pageBreaksEnabled = document.body.classList.contains('page-breaks-active');
+      const pageViewEnabled = document.body.classList.contains('page-view-active');
+      const modeChanged =
+        pageBreaksEnabled !== this.pageBreaksEnabled || pageViewEnabled !== this.pageViewEnabled;
+
+      if (
+        modeChanged ||
+        update.docChanged ||
+        update.geometryChanged ||
+        update.viewportChanged ||
+        update.selectionSet
+      ) {
+        this.pageBreaksEnabled = pageBreaksEnabled;
+        this.pageViewEnabled = pageViewEnabled;
+        this.decorations = buildPageBreaks(update.view);
+      }
+    }
+  },
+  {
+    decorations: (v) => v.decorations,
+  },
+);
 
 /**
  * Awareness State Schema and Helpers
@@ -132933,6 +137770,12 @@ const codeBlockBackground = ViewPlugin.fromClass(class {
           const firstLine = view.state.doc.lineAt(from);
           const lastLine = view.state.doc.lineAt(to);
 
+          // Extract language from the opening fence line
+          const fenceText = firstLine.text;
+          const langMatch = fenceText.match(/^(\s*`{3,}|~{3,})\s*(\S*)/);
+          const rawLang = langMatch?.[2] || '';
+          const language = normalizeCodeLanguage(rawLang);
+
           // Iterate through each line in the code block
           for (let pos = from; pos < to;) {
             const line = view.state.doc.lineAt(pos);
@@ -132942,12 +137785,18 @@ const codeBlockBackground = ViewPlugin.fromClass(class {
             if (isFirstLine || isLastLine) {
               // Fence lines - subtle styling
               decorations.push(
-                Decoration.line({ class: 'cm-codeblock-fence' }).range(line.from)
+                Decoration.line({
+                  class: 'cm-codeblock-fence',
+                  attributes: language ? { 'data-lang': language } : undefined,
+                }).range(line.from)
               );
             } else {
               // Content lines - normal code block styling
               decorations.push(
-                Decoration.line({ class: 'cm-codeblock-line' }).range(line.from)
+                Decoration.line({
+                  class: 'cm-codeblock-line',
+                  attributes: language ? { 'data-lang': language } : undefined,
+                }).range(line.from)
               );
             }
             pos = line.to + 1;
@@ -133005,6 +137854,99 @@ const codeBlockStyles = EditorView.theme({
   },
 });
 // #endregion CODE_BLOCK_BACKGROUND
+
+// #region INVISIBLE_CHARACTERS
+/**
+ * Extension that shows newline markers (¶) at the end of each line.
+ * Used in combination with CM6's built-in highlightWhitespace() for
+ * spaces and tabs. Together they provide full invisible character rendering.
+ */
+class NewlineMarkerWidget extends WidgetType {
+  eq() { return true; }
+  toDOM() {
+    const span = document.createElement('span');
+    span.className = 'cm-newline-marker';
+    span.textContent = '¶';
+    span.setAttribute('aria-hidden', 'true');
+    return span;
+  }
+  ignoreEvent() { return true; }
+}
+
+const newlineMarkerPlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = this.buildDecorations(view);
+    }
+
+    update(update) {
+      if (update.docChanged || update.viewportChanged) {
+        this.decorations = this.buildDecorations(update.view);
+      }
+    }
+
+    buildDecorations(view) {
+      const decorations = [];
+      const doc = view.state.doc;
+
+      for (let i = doc.lineAt(view.viewport.from).number; i <= doc.lineAt(view.viewport.to).number; i++) {
+        const line = doc.line(i);
+        // Add newline marker at the end of each line (except the last line if it has no trailing newline)
+        if (i < doc.lines) {
+          decorations.push(
+            Decoration.widget({
+              widget: new NewlineMarkerWidget(),
+              side: 1, // After the line content
+            }).range(line.to)
+          );
+        }
+      }
+
+      return Decoration.set(decorations, true);
+    }
+  },
+  { decorations: (v) => v.decorations }
+);
+
+/**
+ * Styles for invisible character markers.
+ * Overrides CM6's default whitespace styling with more visible symbols.
+ */
+const invisibleCharStyles = EditorView.theme({
+  // Newline markers (¶)
+  '.cm-newline-marker': {
+    color: 'var(--md-marker-color, #aaa)',
+    opacity: '0.5',
+    fontSize: '0.8em',
+    userSelect: 'none',
+    pointerEvents: 'none',
+  },
+  // Override CM6's default space dots - make them subtler
+  '.cm-highlightSpace': {
+    backgroundImage: 'radial-gradient(circle at 50% 55%, var(--md-marker-color, #aaa) 20%, transparent 5%)',
+    opacity: '0.4',
+  },
+  // Override CM6's tab arrows
+  '.cm-highlightTab': {
+    backgroundImage: `url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="20"><path stroke="%23aaa" stroke-width="1" fill="none" d="M1 10H196L190 5M190 15L196 10M197 4L197 16"/></svg>')`,
+    opacity: '0.5',
+  },
+});
+
+/**
+ * Create the invisibles extension bundle.
+ * Includes whitespace highlighting + newline markers + styles.
+ *
+ * @returns {import('@codemirror/state').Extension}
+ */
+function createInvisiblesExtension() {
+  return [
+    highlightWhitespace(),
+    newlineMarkerPlugin,
+    invisibleCharStyles,
+  ];
+}
+// #endregion INVISIBLE_CHARACTERS
 
 // #region WRITER
 /**
@@ -133084,6 +138026,386 @@ function findInitialCursorPosition(content) {
   }
 
   return 0; // fallback to start
+}
+
+function currentLineStructuralPrefix(lineText) {
+  const heading = lineText.match(/^\s{0,3}(#{1,6})\s+/);
+  if (heading) return heading[0];
+  const quote = lineText.match(/^(\s*>\s?)+/);
+  if (quote) return quote[0];
+  const list = lineText.match(/^(\s*)(?:[-+*]|\d+\.)\s+/);
+  if (list) return list[0];
+  return '';
+}
+
+function getCurrentBlockTypeInfo(view) {
+  const pos = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(pos);
+  const text = line.text;
+
+  // ── Check if inside a fenced code block ──
+  const tree = syntaxTree(view.state);
+  let fencedCode = null;
+  tree.iterate({
+    from: Math.max(0, pos - 1),
+    to: pos + 1,
+    enter: (node) => {
+      if (node.name === 'FencedCode' && node.from <= pos && node.to >= pos) {
+        fencedCode = node;
+      }
+    },
+  });
+
+  if (fencedCode) {
+    // Extract language from the opening fence line (```python, ```r, etc.)
+    const fenceLine = view.state.doc.lineAt(fencedCode.from);
+    const fenceText = fenceLine.text;
+    const langMatch = fenceText.match(/^(\s*`{3,}|~{3,})\s*(\S*)/);
+    const rawLang = langMatch?.[2] || '';
+    const language = normalizeCodeLanguage(rawLang);
+
+    // Determine if cursor is on the fence line itself or inside code content
+    const isOnFence = line.number === fenceLine.number ||
+      line.number === view.state.doc.lineAt(fencedCode.to).number;
+
+    // Detect the syntax token under the cursor
+    const syntaxToken = isOnFence ? null : getSyntaxTokenAtPos(view, pos);
+
+    return {
+      type: 'codeblock',
+      level: 0,
+      label: language ? `codeblock-${language}` : 'codeblock',
+      language,
+      isOnFence,
+      syntaxToken,
+      fenceFrom: fencedCode.from,
+      fenceTo: fencedCode.to,
+    };
+  }
+
+  const heading = text.match(/^\s{0,3}(#{1,6})\s+/);
+  if (heading) {
+    return { type: 'heading', level: heading[1].length, label: `h${heading[1].length}` };
+  }
+
+  if (/^(\s*>\s?)+/.test(text)) {
+    return { type: 'blockquote', level: 1, label: 'blockquote' };
+  }
+
+  if (/^(\s*)(?:[-+*])\s+/.test(text)) {
+    return { type: 'unordered-list', level: 1, label: 'unordered-list' };
+  }
+
+  if (/^(\s*)(?:\d+\.)\s+/.test(text)) {
+    return { type: 'ordered-list', level: 1, label: 'ordered-list' };
+  }
+
+  return { type: 'paragraph', level: 0, label: 'paragraph' };
+}
+
+/**
+ * Normalize code language aliases to canonical names matching template keys.
+ */
+function normalizeCodeLanguage(raw) {
+  if (!raw) return '';
+  const lang = raw.toLowerCase().trim();
+  const map = {
+    'js': 'javascript', 'node': 'javascript', 'ecmascript': 'javascript',
+    'ts': 'typescript',
+    'py': 'python', 'python3': 'python',
+    'rb': 'ruby',
+    'rs': 'rust',
+    'sh': 'shell', 'bash': 'shell', 'zsh': 'shell', 'fish': 'shell',
+    'ps1': 'powershell', 'pwsh': 'powershell',
+    'yml': 'yaml',
+    'htm': 'html',
+    'c': 'cpp', 'c++': 'cpp', 'cxx': 'cpp', 'h': 'cpp', 'hpp': 'cpp',
+    'golang': 'go',
+    'jl': 'julia',
+    'rlang': 'r',
+    'mysql': 'sql', 'postgresql': 'sql', 'postgres': 'sql', 'sqlite': 'sql',
+    'jsonc': 'json',
+    'jsx': 'javascript', 'tsx': 'typescript',
+    'xml': 'html', 'svg': 'html',
+  };
+  return map[lang] || lang;
+}
+
+/**
+ * Get the semantic syntax token type at a position within a code block.
+ * Maps CodeMirror/Lezer highlight tags to our template token names.
+ *
+ * @param {EditorView} view
+ * @param {number} pos
+ * @returns {string|null} Token name like 'keyword', 'string', 'comment', etc.
+ */
+function getSyntaxTokenAtPos(view, pos) {
+  const tree = syntaxTree(view.state);
+  let bestNode = null;
+  let bestSize = Infinity;
+
+  // Find the most specific (smallest) node at pos
+  tree.iterate({
+    from: pos,
+    to: pos + 1,
+    enter: (node) => {
+      const size = node.to - node.from;
+      if (size < bestSize && node.from <= pos && node.to > pos) {
+        bestNode = node;
+        bestSize = size;
+      }
+    },
+  });
+
+  if (!bestNode) return null;
+  const name = bestNode.name;
+
+  // Map Lezer tree node names to our semantic token names.
+  // These are the node names from @lezer/highlight and language parsers.
+  const tokenMap = {
+    // Keywords
+    'Keyword': 'keyword',
+    'keyword': 'keyword',
+    'ControlKeyword': 'controlKeyword',
+    'controlKeyword': 'controlKeyword',
+    'for': 'controlKeyword',
+    'if': 'controlKeyword',
+    'else': 'controlKeyword',
+    'while': 'controlKeyword',
+    'return': 'keyword',
+    'def': 'keyword',
+    'class': 'keyword',
+    'import': 'keyword',
+    'from': 'keyword',
+    'as': 'keyword',
+    'in': 'keyword',
+    'not': 'keyword',
+    'and': 'keyword',
+    'or': 'keyword',
+    'is': 'keyword',
+    'with': 'keyword',
+    'try': 'controlKeyword',
+    'except': 'controlKeyword',
+    'finally': 'controlKeyword',
+    'raise': 'keyword',
+    'yield': 'keyword',
+    'lambda': 'keyword',
+    'pass': 'keyword',
+    'break': 'controlKeyword',
+    'continue': 'controlKeyword',
+    'del': 'keyword',
+    'global': 'keyword',
+    'nonlocal': 'keyword',
+    'assert': 'keyword',
+    'async': 'keyword',
+    'await': 'keyword',
+    'let': 'keyword',
+    'const': 'keyword',
+    'var': 'keyword',
+    'function': 'keyword',
+    'switch': 'controlKeyword',
+    'case': 'controlKeyword',
+    'default': 'controlKeyword',
+    'do': 'controlKeyword',
+    'throw': 'keyword',
+    'catch': 'controlKeyword',
+    'new': 'keyword',
+    'this': 'keyword',
+    'super': 'keyword',
+    'extends': 'keyword',
+    'implements': 'keyword',
+    'interface': 'keyword',
+    'enum': 'keyword',
+    'export': 'keyword',
+    'typeof': 'keyword',
+    'instanceof': 'keyword',
+    'void': 'keyword',
+    'delete': 'keyword',
+
+    // Strings
+    'String': 'string',
+    'string': 'string',
+    'TemplateString': 'string',
+    'FormatString': 'string',
+    'Character': 'string',
+
+    // Numbers
+    'Number': 'number',
+    'number': 'number',
+    'Integer': 'number',
+    'Float': 'number',
+
+    // Comments
+    'Comment': 'comment',
+    'comment': 'comment',
+    'LineComment': 'comment',
+    'BlockComment': 'comment',
+
+    // Functions
+    'FunctionDefinition': 'function',
+    'FunctionDeclaration': 'function',
+    'CallExpression': 'function',
+
+    // Variables
+    'VariableName': 'variable',
+    'VariableDefinition': 'variable',
+
+    // Types
+    'TypeName': 'type',
+    'TypeDefinition': 'type',
+    'ClassName': 'type',
+    'ClassDefinition': 'type',
+
+    // Operators
+    'ArithOp': 'operator',
+    'LogicOp': 'operator',
+    'BitOp': 'operator',
+    'CompareOp': 'operator',
+    'AssignOp': 'operator',
+    'Equals': 'operator',
+
+    // Punctuation
+    'Punctuation': 'punctuation',
+    '(': 'punctuation',
+    ')': 'punctuation',
+    '[': 'punctuation',
+    ']': 'punctuation',
+    '{': 'punctuation',
+    '}': 'punctuation',
+    '.': 'punctuation',
+    ',': 'punctuation',
+    ';': 'punctuation',
+    ':': 'punctuation',
+
+    // Properties
+    'PropertyName': 'property',
+    'PropertyDefinition': 'property',
+
+    // Constants
+    'BooleanLiteral': 'constant',
+    'Boolean': 'constant',
+    'True': 'constant',
+    'False': 'constant',
+    'None': 'constant',
+    'Null': 'constant',
+    'null': 'constant',
+    'undefined': 'constant',
+
+    // Regex
+    'RegExp': 'regexp',
+
+    // Escape
+    'Escape': 'escape',
+    'EscapeSequence': 'escape',
+
+    // Tags (HTML/XML)
+    'TagName': 'tag',
+    'StartTag': 'tag',
+    'EndTag': 'tag',
+    'SelfClosingTag': 'tag',
+
+    // Attributes
+    'AttributeName': 'attribute',
+    'AttributeValue': 'attributeValue',
+
+    // Meta / decorators
+    'Decorator': 'meta',
+    'Annotation': 'meta',
+    'Meta': 'meta',
+    'ProcessingInstruction': 'meta',
+  };
+
+  // Direct match
+  if (tokenMap[name]) return tokenMap[name];
+
+  // Try resolving from the tree directly and walking up parent nodes
+  try {
+    let node = tree.resolveInner(pos, 1);
+    let depth = 0;
+    while (node && depth < 8) {
+      if (tokenMap[node.name]) return tokenMap[node.name];
+      node = node.parent;
+      depth++;
+    }
+  } catch (e) { /* ignore tree resolution errors */ }
+
+  return null;
+}
+
+function getSelectionFormattingInfo(view) {
+  return getSelectionFormattingState(view);
+}
+
+function setCurrentBlockType(view, type, options = {}) {
+  const state = view.state;
+  const pos = state.selection.main.head;
+  const line = state.doc.lineAt(pos);
+  const prefix = currentLineStructuralPrefix(line.text);
+  const contentStart = line.from + prefix.length;
+  let newPrefix = '';
+
+  if (type === 'paragraph') {
+    newPrefix = '';
+  } else if (type === 'heading') {
+    const level = Math.max(1, Math.min(6, Number(options.level) || 1));
+    newPrefix = '#'.repeat(level) + ' ';
+  } else if (type === 'blockquote') {
+    newPrefix = '> ';
+  } else if (type === 'unordered-list') {
+    newPrefix = '- ';
+  } else if (type === 'ordered-list') {
+    newPrefix = '1. ';
+  } else {
+    return false;
+  }
+
+  view.dispatch({
+    changes: { from: line.from, to: contentStart, insert: newPrefix },
+    selection: { anchor: line.from + newPrefix.length + Math.max(0, pos - contentStart) },
+    userEvent: 'input.wysiwyg.blocktype',
+  });
+  return true;
+}
+
+function insertLinkAtSelection(view, url, text = null) {
+  const state = view.state;
+  const range = state.selection.main;
+  const selected = state.sliceDoc(range.from, range.to);
+  const label = text ?? selected ?? 'link';
+  const link = `[${label}](${url})`;
+  const insertFrom = range.from;
+  const insertTo = range.to;
+  view.dispatch({
+    changes: { from: insertFrom, to: insertTo, insert: link },
+    selection: { anchor: insertFrom + 1, head: insertFrom + 1 + label.length },
+    userEvent: 'input.wysiwyg.link',
+  });
+  return true;
+}
+
+function insertImageAtSelection(view, url, alt = 'image') {
+  const pos = view.state.selection.main.head;
+  const image = `![${alt}](${url})`;
+  view.dispatch({
+    changes: { from: pos, insert: image },
+    selection: { anchor: pos + 2, head: pos + 2 + alt.length },
+    userEvent: 'input.wysiwyg.image',
+  });
+  return true;
+}
+
+function insertCodeBlockAtCursor(view, language = '') {
+  const pos = view.state.selection.main.head;
+  const lang = language ? String(language).trim() : '';
+  const prefix = pos > 0 && view.state.sliceDoc(pos - 1, pos) !== '\n' ? '\n' : '';
+  const block = `${prefix}\`\`\`${lang}\n\n\`\`\``;
+  const cursor = pos + prefix.length + 3 + lang.length + 1;
+  view.dispatch({
+    changes: { from: pos, insert: block },
+    selection: { anchor: cursor },
+    userEvent: 'input.wysiwyg.codeblock',
+  });
+  return true;
 }
 // #endregion INITIAL_CURSOR
 
@@ -133188,11 +138510,16 @@ function create(target, options = {}) {
 
   // Always read initial content from Yjs (source of truth)
   const initialContent = yText.toString();
+  const initialDocumentTemplate = normalizeDocumentTemplate(options.documentTemplate || defaultDocumentTemplate);
   const themeCompartment = new Compartment();
+  const documentTemplateCompartment = new Compartment();
   const readonlyCompartment = new Compartment();
   const keymapCompartment = new Compartment();
   const projectFilesCompartment = new Compartment();
   const sectionControlsCompartment = new Compartment();
+  const sourceModeCompartment = new Compartment();
+  const wysiwygModeCompartment = new Compartment();
+  const invisiblesCompartment = new Compartment();
 
   // Create UndoManager for undo/redo tracking
   // We create it ourselves so we can listen to stack changes
@@ -133261,6 +138588,7 @@ function create(target, options = {}) {
     ...(spellcheck !== false ? createSpellcheckExtensions() : []),
     EditorView.lineWrapping, // Always wrap markdown text
     themeCompartment.of(initialCMTheme),
+    documentTemplateCompartment.of(createDocumentTemplateExtension(initialDocumentTemplate)),
     readonlyCompartment.of(readonly ? EditorState.readOnly.of(true) : []),
     placeholderText ? placeholder(placeholderText) : [],
     // Yjs collaboration - y-codemirror.next handles sync and undo
@@ -133272,9 +138600,12 @@ function create(target, options = {}) {
     // Initially empty, configured after api is created
     keymapCompartment.of([]),
     outputWidgetPlugin, // ANSI output rendering
+    ...createInlineEditingExtensions(),
     lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
     blockDecorations,   // StateField for tables, display math (multi-line)
     markdownRenderer,   // ViewPlugin for everything else (inline)
+    pageViewPagination, // ViewPlugin: page-view spacers at page boundaries
+    ...createWysiwygExtensions(),
     ...createCommentSyntaxExtension(),
     // Wiki-link completion - just the facet for project files
     // The actual completion is provided by runtime-lsp (via additionalSources)
@@ -133282,6 +138613,12 @@ function create(target, options = {}) {
     projectFilesCompartment.of(projectFilesFacet.of([])),
     // Section controls are configured after API creation
     sectionControlsCompartment.of([]),
+    // Source mode (show all raw markdown syntax)
+    sourceModeCompartment.of(sourceModeFacet.of(false)),
+    // WYSIWYG mode (fully rendered, syntax-protected editing)
+    wysiwygModeCompartment.of(wysiwygModeFacet.of(false)),
+    // Invisible characters (whitespace visualization)
+    invisiblesCompartment.of([]),
   ];
 
   // Inject markdown styles
@@ -133351,6 +138688,7 @@ function create(target, options = {}) {
 
   // Event handlers
   const changeHandlers = [];
+  const selectionHandlers = [];
   const saveHandlers = [];
   const frontmatterTitleCommitHandlers = [];
   const viewSourceHandlers = [];
@@ -133591,6 +138929,82 @@ function create(target, options = {}) {
     },
 
     // ===========================================================================
+    // WYSIWYG Editing Helpers
+    // ===========================================================================
+
+    toggleBold() {
+      return toggleInlineMark(view, 'bold');
+    },
+
+    toggleItalic() {
+      return toggleInlineMark(view, 'italic');
+    },
+
+    toggleUnderline() {
+      return toggleInlineMark(view, 'underline');
+    },
+
+    toggleStrikethrough() {
+      return toggleInlineMark(view, 'strike');
+    },
+
+    toggleInlineCode() {
+      return toggleInlineMark(view, 'code');
+    },
+
+    setBlockType(type, options = {}) {
+      return setCurrentBlockType(view, type, options);
+    },
+
+    insertLink(url, text = null) {
+      return insertLinkAtSelection(view, url, text);
+    },
+
+    insertCodeBlock(language = '') {
+      return insertCodeBlockAtCursor(view, language);
+    },
+
+    /**
+     * Delete the fenced code block surrounding the cursor.
+     * @returns {boolean} true if a code block was found and deleted
+     */
+    deleteCodeBlock() {
+      const pos = view.state.selection.main.head;
+      const fence = findFencedCodeAt(view.state, pos);
+      if (!fence) return false;
+      const doc = view.state.doc;
+      let delFrom = fence.from;
+      let delTo = Math.min(fence.to, doc.length);
+      if (delFrom > 0 && doc.sliceString(delFrom - 1, delFrom) === '\n') delFrom--;
+      if (delTo < doc.length && doc.sliceString(delTo, delTo + 1) === '\n') delTo++;
+      view.dispatch({
+        changes: { from: delFrom, to: delTo, insert: '' },
+        userEvent: 'delete.wysiwyg.delete-codeblock',
+      });
+      return true;
+    },
+
+    insertImage(url, alt = 'image') {
+      return insertImageAtSelection(view, url, alt);
+    },
+
+    getCurrentBlockType() {
+      return getCurrentBlockTypeInfo(view);
+    },
+
+    getSelectionFormatting() {
+      return getSelectionFormattingInfo(view);
+    },
+
+    onSelectionChange(callback) {
+      selectionHandlers.push(callback);
+      return () => {
+        const idx = selectionHandlers.indexOf(callback);
+        if (idx >= 0) selectionHandlers.splice(idx, 1);
+      };
+    },
+
+    // ===========================================================================
     // Streaming Writer
     // ===========================================================================
 
@@ -133637,6 +139051,101 @@ function create(target, options = {}) {
     },
 
     /**
+     * Apply a semantic document template to the editor content surface.
+     * This is separate from the app/editor chrome theme.
+     *
+     * @param {object} template
+     * @returns {object} normalized template
+     */
+    setDocumentTemplate(template) {
+      const next = normalizeDocumentTemplate(template || defaultDocumentTemplate);
+      this._documentTemplate = cloneDocumentTemplate(next);
+      this._documentTemplateName = next.name || 'Untitled Template';
+      view.dispatch({
+        effects: documentTemplateCompartment.reconfigure(
+          createDocumentTemplateExtension(next)
+        ),
+      });
+      return this.getDocumentTemplate();
+    },
+
+    getDocumentTemplate() {
+      return cloneDocumentTemplate(this._documentTemplate || initialDocumentTemplate);
+    },
+
+    getDocumentTemplateName() {
+      return this._documentTemplateName || this._documentTemplate?.name || initialDocumentTemplate.name;
+    },
+
+    getDocumentTemplatePresets() {
+      return documentTemplatePresets.map(cloneDocumentTemplate);
+    },
+
+    compileDocumentTemplate(template = null) {
+      return compileDocumentTemplateCSS(template || this.getDocumentTemplate());
+    },
+
+    serializeDocumentTemplate(template = null, scope = '.markdown-body') {
+      return serializeDocumentTemplateToCss(template || this.getDocumentTemplate(), scope);
+    },
+
+    /**
+     * Serialize the current document template to Pandoc YAML metadata.
+     * @param {object} [template]
+     * @returns {string} YAML string
+     */
+    serializeDocumentTemplatePandoc(template = null) {
+      return serializeDocumentTemplateToPandocYaml(template || this.getDocumentTemplate());
+    },
+
+    /**
+     * Serialize the current document template to a LaTeX preamble.
+     * @param {object} [template]
+     * @returns {string} LaTeX commands
+     */
+    serializeDocumentTemplateLatex(template = null) {
+      return serializeDocumentTemplateToLatexPreamble(template || this.getDocumentTemplate());
+    },
+
+    /**
+     * Serialize the current document template to a standalone HTML wrapper.
+     * @param {object} [template]
+     * @param {object} [options]
+     * @returns {string} HTML document string
+     */
+    serializeDocumentTemplateHtml(template = null, options = {}) {
+      return serializeDocumentTemplateToHtml(template || this.getDocumentTemplate(), options);
+    },
+
+    /**
+     * Get a Word style mapping for the current document template.
+     * @param {object} [template]
+     * @returns {object}
+     */
+    getDocumentTemplateWordStyleMap(template = null) {
+      return serializeDocumentTemplateToWordStyleMap(template || this.getDocumentTemplate());
+    },
+
+    /**
+     * Generate a recommended Pandoc command for the current document template.
+     * @param {object} options - { format, input, output, referenceDoc, preambleFile }
+     * @returns {string}
+     */
+    buildPandocCommand(options = {}) {
+      return buildPandocCommand(this.getDocumentTemplate(), options);
+    },
+
+    bindDocumentTemplate(name) {
+      const result = updateFrontmatterField(this.getContent(), 'template', name);
+      if (!result) return false;
+      view.dispatch({
+        changes: result.changes,
+        userEvent: 'input.document-template-binding',
+      });
+      return true;
+    },
+
+    /**
      * Update section controls configuration.
      * @param {{enabled?: boolean, showAi?: boolean, showFormatting?: boolean, mode?: 'full' | 'dots-hover' | 'dots-click'}} updates
      */
@@ -133653,6 +139162,104 @@ function create(target, options = {}) {
      */
     getSectionControls() {
       return { ...(this.config.sectionControls || {}) };
+    },
+
+    // ===========================================================================
+    // Source Mode, WYSIWYG Mode & Invisible Characters
+    // ===========================================================================
+
+    /** @private */
+    _sourceMode: false,
+    /** @private */
+    _wysiwygMode: false,
+    /** @private */
+    _showInvisibles: false,
+    /** @private */
+    _documentTemplate: cloneDocumentTemplate(initialDocumentTemplate),
+    /** @private */
+    _documentTemplateName: initialDocumentTemplate.name || 'Default',
+
+    /**
+     * Toggle source mode (show all raw markdown syntax).
+     * Mutually exclusive with WYSIWYG mode.
+     *
+     * @param {boolean} [value] - true=on, false=off. Omit to toggle.
+     * @returns {boolean} The new state
+     */
+    setSourceMode(value) {
+      const newValue = value !== undefined ? !!value : !this._sourceMode;
+      this._sourceMode = newValue;
+      if (newValue) this._wysiwygMode = false;
+      view.dispatch({
+        effects: [
+          sourceModeCompartment.reconfigure(sourceModeFacet.of(newValue)),
+          wysiwygModeCompartment.reconfigure(wysiwygModeFacet.of(false)),
+        ],
+      });
+      return newValue;
+    },
+
+    /**
+     * Get current source mode state.
+     * @returns {boolean}
+     */
+    getSourceMode() {
+      return this._sourceMode;
+    },
+
+    /**
+     * Toggle WYSIWYG mode (fully rendered, syntax-protected editing).
+     * Mutually exclusive with source mode.
+     *
+     * @param {boolean} [value] - true=on, false=off. Omit to toggle.
+     * @returns {boolean} The new state
+     */
+    setWysiwygMode(value) {
+      const newValue = value !== undefined ? !!value : !this._wysiwygMode;
+      this._wysiwygMode = newValue;
+      if (newValue) this._sourceMode = false;
+      view.dispatch({
+        effects: [
+          wysiwygModeCompartment.reconfigure(wysiwygModeFacet.of(newValue)),
+          sourceModeCompartment.reconfigure(sourceModeFacet.of(false)),
+        ],
+      });
+      return newValue;
+    },
+
+    /**
+     * Get current WYSIWYG mode state.
+     * @returns {boolean}
+     */
+    getWysiwygMode() {
+      return this._wysiwygMode;
+    },
+
+    /**
+     * Toggle invisible characters (spaces, tabs, newlines).
+     * When enabled, spaces are shown as dots, tabs as arrows, and
+     * newlines as ¶ symbols.
+     *
+     * @param {boolean} [value] - true=on, false=off. Omit to toggle.
+     * @returns {boolean} The new state
+     */
+    setShowInvisibles(value) {
+      const newValue = value !== undefined ? !!value : !this._showInvisibles;
+      this._showInvisibles = newValue;
+      view.dispatch({
+        effects: invisiblesCompartment.reconfigure(
+          newValue ? createInvisiblesExtension() : []
+        ),
+      });
+      return newValue;
+    },
+
+    /**
+     * Get current invisible characters state.
+     * @returns {boolean}
+     */
+    getShowInvisibles() {
+      return this._showInvisibles;
     },
 
     // ===========================================================================
@@ -134834,6 +140441,21 @@ function create(target, options = {}) {
       stateManager.setDirty(true);
       updateDocumentState();
     }
+
+    if (update.docChanged || update.selectionSet) {
+      const payload = {
+        selection: update.state.selection.main,
+        block: getCurrentBlockTypeInfo(update.view),
+        formatting: getSelectionFormattingInfo(update.view),
+      };
+      selectionHandlers.forEach(fn => {
+        try {
+          fn(payload);
+        } catch (err) {
+          console.warn('[mrmd] selection change handler failed:', err);
+        }
+      });
+    }
   });
 
   // Add update listener extension
@@ -135367,6 +140989,16 @@ const markdownExports = {
   // Asset resolver facet (for Electron/desktop apps)
   assetResolverFacet,
 
+  // Mode facets
+  sourceModeFacet,
+  wysiwygModeFacet,
+  createInlineEditingExtensions,
+  createWysiwygExtensions,
+  toggleInlineFormat,
+  toggleInlineMark,
+  getSelectionFormattingState,
+  findFencedCodeAt,
+
   // Styles
   markdownStyles,
   injectMarkdownStyles,
@@ -135382,6 +141014,28 @@ const markdownExports = {
   isTableDelimiter,
   generateTableId,
   AlertTitleWidget,
+
+  // Page view pagination
+  pageViewPagination,
+};
+
+const documentTemplateExports = {
+  defaultDocumentTemplate,
+  documentTemplatePresets,
+  normalizeDocumentTemplate,
+  cloneDocumentTemplate,
+  createDocumentTemplateExtension,
+  compileDocumentTemplateCSS,
+  serializeDocumentTemplateToCss,
+  findDocumentTemplatePreset,
+  // Multi-format export
+  resolveFontForExport,
+  serializeDocumentTemplateToPandocMeta,
+  serializeDocumentTemplateToPandocYaml,
+  serializeDocumentTemplateToLatexPreamble,
+  serializeDocumentTemplateToHtml,
+  serializeDocumentTemplateToWordStyleMap,
+  buildPandocCommand,
 };
 // #endregion MARKDOWN_EXPORTS
 
@@ -135422,6 +141076,14 @@ const mrmd = {
   wikiLink: wikiLinkExports,
   // Markdown rendering (blur→render, focus→source)
   markdown: markdownExports,
+  // Frontmatter utilities
+  frontmatter: {
+    parseFrontmatter,
+    readFrontmatterValue,
+    updateFrontmatterField,
+  },
+  // Document templates (semantic content styling)
+  documentTemplates: documentTemplateExports,
   // Shell (status bar, file management, studio layout)
   shell: shellModule,
   // AI Integration (decorations, state, widgets)
@@ -135485,13 +141147,17 @@ var index = /*#__PURE__*/Object.freeze({
   adaptMrmdJsSession: adaptMrmdJsSession,
   ansiStyles: ansiStyles,
   applyFirstLanguageToolSuggestion: applyFirstLanguageToolSuggestion,
+  applyLanguageToolSuggestionAt: applyLanguageToolSuggestionAt,
   applyTheme: applyTheme,
   assetResolverFacet: assetResolverFacet,
   awareness: awarenessExports,
+  buildPandocCommand: buildPandocCommand,
   cellControlsExports: cellControlsExports,
+  cloneDocumentTemplate: cloneDocumentTemplate,
   closeTerminal: closeTerminal,
   codemirror: codemirror,
   collectVisibleProseFragments: collectVisibleProseFragments,
+  compileDocumentTemplateCSS: compileDocumentTemplateCSS,
   configExports: configExports,
   create: create,
   createAIState: createAIState,
@@ -135501,6 +141167,7 @@ var index = /*#__PURE__*/Object.freeze({
   createCollaboratorList: createCollaboratorList,
   createConfigHandler: createConfigHandler,
   createCursorExtensions: createCursorExtensions,
+  createDocumentTemplateExtension: createDocumentTemplateExtension,
   createDrive: createDrive,
   createFloatingCollaboratorList: createFloatingCollaboratorList,
   createHumanState: createHumanState,
@@ -135526,9 +141193,13 @@ var index = /*#__PURE__*/Object.freeze({
   daylightTheme: daylightTheme,
   default: mrmd,
   defaultAwarenessConfig: defaultAwarenessConfig,
+  defaultDocumentTemplate: defaultDocumentTemplate,
   detectTheme: detectTheme,
   devPanelExtension: devPanelExtension,
+  documentTemplateExports: documentTemplateExports,
+  documentTemplatePresets: documentTemplatePresets,
   drive: drive,
+  findDocumentTemplatePreset: findDocumentTemplatePreset,
   findInitialCursorPosition: findInitialCursorPosition,
   findTerminalBlocks: findTerminalBlocks,
   forceLanguageToolRefresh: forceLanguageToolRefresh,
@@ -135537,6 +141208,7 @@ var index = /*#__PURE__*/Object.freeze({
   getDocumentLanguages: getDocumentLanguages,
   getEffectiveSessionConfig: getEffectiveSessionConfig,
   getLanguageDisplay: getLanguageDisplay,
+  getLanguageToolSuggestionMenu: getLanguageToolSuggestionMenu,
   getTheme: getTheme,
   getThemeNames: getThemeNames,
   getWikiLinkCompletionSource: getWikiLinkCompletionSource,
@@ -135564,6 +141236,7 @@ var index = /*#__PURE__*/Object.freeze({
   markdownStyles: markdownStyles,
   midnightTheme: midnightTheme,
   minimalAwarenessConfig: minimalAwarenessConfig,
+  normalizeDocumentTemplate: normalizeDocumentTemplate,
   normalizeOptions: normalizeOptions,
   parseFrontmatter: parseFrontmatter,
   parseImageMarkdown: parseImageMarkdown,
@@ -135571,11 +141244,19 @@ var index = /*#__PURE__*/Object.freeze({
   processTerminalOutput: processTerminalOutput,
   projectFilesFacet: projectFilesFacet,
   readFrontmatterSession: readFrontmatterSession,
+  readFrontmatterValue: readFrontmatterValue,
   refreshLanguageToolDiagnostics: refreshLanguageToolDiagnostics,
   registerTheme: registerTheme,
+  resolveFontForExport: resolveFontForExport,
   runtime: runtime,
   runtimeLspExports: runtimeLspExports,
   serializeConfig: serializeConfig,
+  serializeDocumentTemplateToCss: serializeDocumentTemplateToCss,
+  serializeDocumentTemplateToHtml: serializeDocumentTemplateToHtml,
+  serializeDocumentTemplateToLatexPreamble: serializeDocumentTemplateToLatexPreamble,
+  serializeDocumentTemplateToPandocMeta: serializeDocumentTemplateToPandocMeta,
+  serializeDocumentTemplateToPandocYaml: serializeDocumentTemplateToPandocYaml,
+  serializeDocumentTemplateToWordStyleMap: serializeDocumentTemplateToWordStyleMap,
   shell: shellModule,
   stateExports: stateExports,
   stripAnsi: stripAnsi,
@@ -135587,11 +141268,12 @@ var index = /*#__PURE__*/Object.freeze({
   terminalToHtml: terminalToHtml,
   terminalWidget: terminalWidget,
   toggleDevPanel: toggleDevPanel,
+  updateFrontmatterField: updateFrontmatterField,
   watchTheme: watchTheme,
   widgets: widgets,
   wikiLinkExports: wikiLinkExports,
   yjs: yjs
 });
 
-export { AlertTitleWidget, AwarenessStateManager, AwarenessSystem, CellControlsSystem, Drive, EXECUTION_STATUS, ImagePlaceholder, ImageWidget, MRPClient, MonitorCoordination, OrchestratorClient, PtyClient, RuntimeRegistry, ShellStateManager, TableWidget, TaskCheckboxWidget, TermBlock, TermBlockRegistry, TerminalBuffer, adaptMRPClient, adaptMrmdJsSession, ansiStyles, applyFirstLanguageToolSuggestion, applyTheme, assetResolverFacet, awarenessExports as awareness, cellControlsExports, closeTerminal, codemirror, collectVisibleProseFragments, configExports, create, createAIState, createAvatarRow, createAwareness, createCellControls, createCollaboratorList, createConfigHandler, createCursorExtensions, createDrive, createFloatingCollaboratorList, createHumanState, createIndicatorExtensions, createJavaScriptRuntime, createLanguageToolDiagnosticsExtension, createMonitorCoordination, createPtyClient, createReactiveConfig, createRuntimeCompletionExtension, createRuntimeHoverExtension, createRuntimeRegistry, createRuntimeState, createSpellcheckExtensions, createStateManager, createStatusBar, createStudio, createTerminalSession, createTheme, createVariableExplorer, createWikiLinkCompletionExtension, createWikiLinkCompletionSource, daylightTheme, mrmd as default, defaultAwarenessConfig, detectTheme, devPanelExtension, drive, findInitialCursorPosition, findTerminalBlocks, forceLanguageToolRefresh, generateTableId, generateThemeCSS, getDocumentLanguages, getEffectiveSessionConfig, getLanguageDisplay, getTheme, getThemeNames, getWikiLinkCompletionSource, githubTheme, hasAnsi, initTheme, injectAwarenessStyles, injectDevPanelStyles, injectMarkdownStyles, injectRuntimeLspStyles, injectShellStyles, injectTermWidgetStyles, injectWikiLinkCompletionStyles, isExecutableLanguage, isFullySerializable, isTableDelimiter, isTableLine, isTerminalLanguage, isTerminalVisible, launchTerminal, listTerminalSessions, markdown, markdownExports, markdownRenderer, markdownStyles, midnightTheme, minimalAwarenessConfig, normalizeOptions, parseFrontmatter, parseImageMarkdown, parseTable, processTerminalOutput, projectFilesFacet, readFrontmatterSession, refreshLanguageToolDiagnostics, registerTheme, runtime, runtimeLspExports, serializeConfig, shellModule as shell, stateExports, stripAnsi, termBlockRegistry, termOverlayStyles, terminal, terminalKeymap, terminalOverlay, terminalToHtml, terminalWidget, toggleDevPanel, watchTheme, widgets, wikiLinkExports, yjs };
+export { AlertTitleWidget, AwarenessStateManager, AwarenessSystem, CellControlsSystem, Drive, EXECUTION_STATUS, ImagePlaceholder, ImageWidget, MRPClient, MonitorCoordination, OrchestratorClient, PtyClient, RuntimeRegistry, ShellStateManager, TableWidget, TaskCheckboxWidget, TermBlock, TermBlockRegistry, TerminalBuffer, adaptMRPClient, adaptMrmdJsSession, ansiStyles, applyFirstLanguageToolSuggestion, applyLanguageToolSuggestionAt, applyTheme, assetResolverFacet, awarenessExports as awareness, buildPandocCommand, cellControlsExports, cloneDocumentTemplate, closeTerminal, codemirror, collectVisibleProseFragments, compileDocumentTemplateCSS, configExports, create, createAIState, createAvatarRow, createAwareness, createCellControls, createCollaboratorList, createConfigHandler, createCursorExtensions, createDocumentTemplateExtension, createDrive, createFloatingCollaboratorList, createHumanState, createIndicatorExtensions, createJavaScriptRuntime, createLanguageToolDiagnosticsExtension, createMonitorCoordination, createPtyClient, createReactiveConfig, createRuntimeCompletionExtension, createRuntimeHoverExtension, createRuntimeRegistry, createRuntimeState, createSpellcheckExtensions, createStateManager, createStatusBar, createStudio, createTerminalSession, createTheme, createVariableExplorer, createWikiLinkCompletionExtension, createWikiLinkCompletionSource, daylightTheme, mrmd as default, defaultAwarenessConfig, defaultDocumentTemplate, detectTheme, devPanelExtension, documentTemplateExports, documentTemplatePresets, drive, findDocumentTemplatePreset, findInitialCursorPosition, findTerminalBlocks, forceLanguageToolRefresh, generateTableId, generateThemeCSS, getDocumentLanguages, getEffectiveSessionConfig, getLanguageDisplay, getLanguageToolSuggestionMenu, getTheme, getThemeNames, getWikiLinkCompletionSource, githubTheme, hasAnsi, initTheme, injectAwarenessStyles, injectDevPanelStyles, injectMarkdownStyles, injectRuntimeLspStyles, injectShellStyles, injectTermWidgetStyles, injectWikiLinkCompletionStyles, isExecutableLanguage, isFullySerializable, isTableDelimiter, isTableLine, isTerminalLanguage, isTerminalVisible, launchTerminal, listTerminalSessions, markdown, markdownExports, markdownRenderer, markdownStyles, midnightTheme, minimalAwarenessConfig, normalizeDocumentTemplate, normalizeOptions, parseFrontmatter, parseImageMarkdown, parseTable, processTerminalOutput, projectFilesFacet, readFrontmatterSession, readFrontmatterValue, refreshLanguageToolDiagnostics, registerTheme, resolveFontForExport, runtime, runtimeLspExports, serializeConfig, serializeDocumentTemplateToCss, serializeDocumentTemplateToHtml, serializeDocumentTemplateToLatexPreamble, serializeDocumentTemplateToPandocMeta, serializeDocumentTemplateToPandocYaml, serializeDocumentTemplateToWordStyleMap, shellModule as shell, stateExports, stripAnsi, termBlockRegistry, termOverlayStyles, terminal, terminalKeymap, terminalOverlay, terminalToHtml, terminalWidget, toggleDevPanel, updateFrontmatterField, watchTheme, widgets, wikiLinkExports, yjs };
 //# sourceMappingURL=mrmd.esm.js.map

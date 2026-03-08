@@ -6,6 +6,7 @@
 
 import { syntaxTree } from '@codemirror/language';
 import { findCodeBlockAtPosition } from '../cells.js';
+import { toggleInlineMark, toggleInlineMarkFromSyntax } from '../markdown/inline-commands.js';
 import { executeAiOperation, getAiContext } from '../ai-integration.js';
 import { ctrlKConfigFacet } from '../ctrl-k-modal.js';
 import { applyFrontmatterTemplate } from '../frontmatter-updater.js';
@@ -28,6 +29,10 @@ import {
  * @returns {boolean}
  */
 export function toggleMarkdownFormat(view, marker, endMarker = marker) {
+  if (toggleInlineMarkFromSyntax(view, marker, endMarker)) {
+    return true;
+  }
+
   const sel = view.state.selection.main;
   const { from, to } = sel;
   const selected = view.state.doc.sliceString(from, to);
@@ -64,9 +69,48 @@ export function toggleMarkdownFormat(view, marker, endMarker = marker) {
   return true;
 }
 
-export const toggleBold = (view) => toggleMarkdownFormat(view, '**');
-export const toggleItalic = (view) => toggleMarkdownFormat(view, '*');
-export const toggleUnderline = (view) => toggleMarkdownFormat(view, '<u>', '</u>');
+export const toggleBold = (view) => toggleInlineMark(view, 'bold');
+export const toggleItalic = (view) => toggleInlineMark(view, 'italic');
+export const toggleUnderline = (view) => toggleInlineMark(view, 'underline');
+export const toggleStrikethrough = (view) => toggleInlineMark(view, 'strike');
+export const toggleInlineCode = (view) => toggleInlineMark(view, 'code');
+
+function toTitleCase(text) {
+  return String(text || '').replace(/\p{L}[\p{L}\p{M}'’\-]*/gu, (word) => {
+    const [first = '', ...rest] = Array.from(word);
+    return first.toLocaleUpperCase() + rest.join('').toLocaleLowerCase();
+  });
+}
+
+export function transformSelectionCase(view, mode) {
+  const sel = view?.state?.selection?.main;
+  if (!sel || sel.empty) return false;
+
+  const from = Math.min(sel.from, sel.to);
+  const to = Math.max(sel.from, sel.to);
+  const selected = view.state.doc.sliceString(from, to);
+
+  let next = selected;
+  if (mode === 'uppercase') next = selected.toLocaleUpperCase();
+  else if (mode === 'lowercase') next = selected.toLocaleLowerCase();
+  else if (mode === 'titlecase') next = toTitleCase(selected);
+  else return false;
+
+  const forward = sel.anchor <= sel.head;
+  view.dispatch({
+    changes: { from, to, insert: next },
+    selection: forward
+      ? { anchor: from, head: from + next.length }
+      : { anchor: from + next.length, head: from },
+    userEvent: `input.case.${mode}`,
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+export const transformSelectionUppercase = (view) => transformSelectionCase(view, 'uppercase');
+export const transformSelectionLowercase = (view) => transformSelectionCase(view, 'lowercase');
+export const transformSelectionTitlecase = (view) => transformSelectionCase(view, 'titlecase');
 
 function getLineRangeForSelection(view) {
   const sel = view.state.selection.main;
@@ -173,6 +217,45 @@ export function insertHorizontalRule(view) {
   return insertTemplate(view, '---\n{{cursor}}');
 }
 
+export function insertPageBreak(view) {
+  const sel = view.state.selection.main;
+  const doc = view.state.doc;
+  const before = doc.sliceString(Math.max(0, sel.from - 2), sel.from);
+  const after = doc.sliceString(sel.to, Math.min(doc.length, sel.to + 2));
+
+  const prefix = sel.from === 0
+    ? ''
+    : before.endsWith('\n\n')
+      ? ''
+      : before.endsWith('\n')
+        ? '\n'
+        : '\n\n';
+
+  const suffix = sel.to === doc.length
+    ? '\n\n'
+    : after.startsWith('\n\n')
+      ? ''
+      : after.startsWith('\n')
+        ? '\n'
+        : '\n\n';
+
+  const trailingGap = after.startsWith('\n\n')
+    ? 2
+    : after.startsWith('\n')
+      ? 1
+      : 0;
+
+  const insert = `${prefix}\\pagebreak${suffix}`;
+
+  view.dispatch({
+    changes: { from: sel.from, to: sel.to, insert },
+    selection: { anchor: sel.from + insert.length + trailingGap },
+    userEvent: 'input.format.add',
+  });
+
+  return true;
+}
+
 export function insertFrontmatterTemplate(view) {
   const result = applyFrontmatterTemplate(view.state.doc.toString());
 
@@ -206,6 +289,11 @@ export const FORMATTING_COMMAND_DEFINITIONS = [
   { id: 'bold', label: 'Bold', shortcut: 'Mod-B', icon: 'format' },
   { id: 'italic', label: 'Italic', shortcut: 'Mod-I', icon: 'format' },
   { id: 'underline', label: 'Underline', shortcut: 'Mod-U', icon: 'format' },
+  { id: 'strikethrough', label: 'Strikethrough', shortcut: '', icon: 'format' },
+  { id: 'inline-code', label: 'Inline Code', shortcut: 'Mod-`', icon: 'code' },
+  { id: 'uppercase', label: 'Make Uppercase', shortcut: '', icon: 'type' },
+  { id: 'lowercase', label: 'Make Lowercase', shortcut: '', icon: 'type' },
+  { id: 'titlecase', label: 'Make Title Case', shortcut: '', icon: 'type' },
   { id: 'comment', label: 'Insert Comment', shortcut: 'Mod-Shift-M', icon: 'comment' },
   { id: 'frontmatter-template', label: 'Insert Frontmatter Template', shortcut: '', icon: 'doc' },
   { id: 'blockquote', label: 'Block Quote', shortcut: '', icon: 'quote' },
@@ -216,6 +304,7 @@ export const FORMATTING_COMMAND_DEFINITIONS = [
   { id: 'task-list', label: 'Task List', shortcut: '', icon: 'checklist' },
   { id: 'heading-2', label: 'Heading (H2)', shortcut: '', icon: 'heading' },
   { id: 'horizontal-rule', label: 'Horizontal Rule', shortcut: '', icon: 'minus' },
+  { id: 'page-break', label: 'Page Break', shortcut: 'Mod-Enter', icon: 'minus' },
 ];
 
 export function executeFormattingDefinition(view, def) {
@@ -226,6 +315,16 @@ export function executeFormattingDefinition(view, def) {
       return toggleItalic(view);
     case 'underline':
       return toggleUnderline(view);
+    case 'strikethrough':
+      return toggleStrikethrough(view);
+    case 'inline-code':
+      return toggleInlineCode(view);
+    case 'uppercase':
+      return transformSelectionUppercase(view);
+    case 'lowercase':
+      return transformSelectionLowercase(view);
+    case 'titlecase':
+      return transformSelectionTitlecase(view);
     case 'comment':
       return insertCommentCommand(view);
     case 'frontmatter-template':
@@ -246,6 +345,8 @@ export function executeFormattingDefinition(view, def) {
       return insertHeading(view, 2);
     case 'horizontal-rule':
       return insertHorizontalRule(view);
+    case 'page-break':
+      return insertPageBreak(view);
     default:
       return false;
   }
