@@ -55,6 +55,25 @@ mrmd-editor/src/tables/
   styles.js
 ```
 
+## Current phase
+
+The first editor-side shell is now wired through the first real sort/import/source/workspace paths for:
+- linked-table block detection from markdown/spec headers
+- small embedded linked-table widget rendering
+- linked badge/chrome row
+- header-sort event dispatch
+- explicit `Open grid` / `Open source` / `Reveal source` / `Open markdown` / `Refresh` action dispatch
+- browser-side `tableJobs` client + wait/status helpers
+- Yjs block-anchor creation for linked-table jobs
+- controller wiring from header-sort widget actions to real `tableJobs` requests
+- host-backed linked-table import insertion helpers in the editor layer
+- first studio/status-bar UI command path for linked-table import
+- block-local markdown-source reveal with a visible `Return to linked view` path
+- first widget job-status badge updates for linked tables
+- basic source-mtime stale detection for visible linked tables
+- first real `Open grid` workspace panel hook (implemented in the Electron app for now)
+- no reveal-on-click for linked tables in the markdown block-decoration path
+
 ## First slice here
 
 Phase 1 editor work should only prove:
@@ -64,6 +83,11 @@ Phase 1 editor work should only prove:
 - header-sort action
 - `Open grid` shell
 - no reveal-on-click for linked tables
+
+Known gaps after the first manual app test:
+- latency is visible because the first materialization path is still simple and mostly unoptimized
+- widget chrome status is still only a first-pass badge layer, not the full stale/progress/error design yet
+- the new workspace is still an MVP inspection shell, not yet the full editing/data-workbench experience
 
 ## Non-goals for the first slice
 

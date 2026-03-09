@@ -68,6 +68,20 @@ import {
 import {
   FrontmatterWidget,
 } from './widgets/frontmatter.js';
+import {
+  LinkedTableWidget,
+} from '../tables/widgets/linked-table-widget.js';
+import {
+  LinkedTableSourceBannerWidget,
+} from '../tables/widgets/linked-table-source-banner.js';
+import {
+  findLinkedTableBlocksInState,
+  getLinkedTableBlockRange,
+  isRangeInsideLinkedTable,
+} from '../tables/parsing/linked-table-blocks.js';
+import {
+  linkedTableMarkdownState,
+} from '../tables/state/linked-table-state.js';
 
 // =============================================================================
 // Height Cache for Stable Layout
@@ -185,6 +199,35 @@ class TableWidgetWithHeightCache extends TableWidget {
     // The line includes widget buffers and other CM overhead
     requestAnimationFrame(() => {
       // Find the parent .cm-line element
+      const line = dom.closest('.cm-line');
+      const height = line ? line.offsetHeight : dom.offsetHeight;
+      if (height > 0) {
+        cacheWidgetHeight(contentHash, height);
+      }
+    });
+
+    return dom;
+  }
+}
+
+/**
+ * LinkedTableWidget wrapper that caches its rendered height for stable layout.
+ */
+class LinkedTableWidgetWithHeightCache extends LinkedTableWidget {
+  constructor(block, parsedTable, contentHash, options = {}) {
+    super(block, parsedTable, contentHash, options);
+    this.contentHash = contentHash;
+  }
+
+  eq(other) {
+    return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  toDOM(view) {
+    const dom = super.toDOM(view);
+    const contentHash = this.contentHash;
+
+    requestAnimationFrame(() => {
       const line = dom.closest('.cm-line');
       const height = line ? line.offsetHeight : dom.offsetHeight;
       if (height > 0) {
@@ -444,11 +487,66 @@ function buildBlockDecorations(state) {
   // Mode flags
   const isSourceMode = state.facet(sourceModeFacet);
   const isWysiwygMode = state.facet(wysiwygModeFacet);
+  const revealedLinkedTables = state.field(linkedTableMarkdownState, false) || new Set();
 
-  // Find and process tables
+  // Find and process linked tables first
+  const linkedTableBlocks = findLinkedTableBlocksInState(state);
+
+  for (const block of linkedTableBlocks) {
+    const blockRange = getLinkedTableBlockRange(block);
+    const contentHash = 'linked-table-' + hashContent(doc.sliceString(blockRange.from, blockRange.to));
+    const showLinkedSource = isSourceMode || revealedLinkedTables.has(block.spec.id);
+
+    if (!showLinkedSource) {
+      const parsed = parseTable(block.tableLines || []);
+      if (parsed && parsed.rows.length > 0) {
+        decorations.push(
+          Decoration.replace({
+            widget: new LinkedTableWidgetWithHeightCache(block, parsed, contentHash),
+          }).range(blockRange.from, blockRange.to)
+        );
+      }
+    } else {
+      if (!isSourceMode && revealedLinkedTables.has(block.spec.id)) {
+        decorations.push(
+          Decoration.widget({
+            widget: new LinkedTableSourceBannerWidget(block),
+            side: -1,
+            block: true,
+          }).range(block.headerFrom)
+        );
+      }
+
+      const cachedHeight = getCachedHeight(contentHash);
+      if (cachedHeight) {
+        const lineCount = block.endLine - block.startLine + 1;
+        const lineHeight = getLineHeight();
+        const rawHeight = lineCount * lineHeight;
+        const padding = cachedHeight - rawHeight;
+
+        if (padding > 0) {
+          const lastLine = doc.line(block.endLine);
+          decorations.push(
+            Decoration.line({
+              attributes: {
+                class: 'cm-block-spacer-line',
+                style: `padding-bottom: ${padding}px`
+              }
+            }).range(lastLine.from)
+          );
+        }
+      }
+    }
+  }
+
+  // Find and process plain tables
   const tableRanges = findTableRanges(state);
 
   for (const range of tableRanges) {
+    if (isRangeInsideLinkedTable(range, linkedTableBlocks)) {
+      continue;
+    }
+
     const cursorInTable = isSourceMode || (!isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
 
     // Collect lines for both rendering and height calculation

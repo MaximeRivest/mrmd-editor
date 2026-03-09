@@ -14,12 +14,14 @@
 import { OrchestratorClient } from '../orchestrator-client.js';
 import { ShellStateManager } from '../state.js';
 import { createStatusBar } from '../components/status-bar.js';
+import { createContextPanel } from '../components/context-panel.js';
 import { injectShellStyles } from '../styles.js';
 import { showFilePicker, showFolderPicker } from '../dialogs/file-picker.js';
 import { prompt, confirm } from '../dialogs/base-dialog.js';
 import { Drive } from '../drive.js';
 import { AiClient } from '../ai-client.js';
 import { showAiMenu, AI_COMMANDS, injectAiMenuStyles } from '../ai-menu.js';
+import { canImportLinkedTableFromHost } from '../../tables/index.js';
 
 // =============================================================================
 // STUDIO
@@ -92,6 +94,16 @@ export async function createStudio(target, options = {}) {
     overflow: hidden;
   `;
 
+  // Create main row container (editor + context rail)
+  const mainContainer = document.createElement('div');
+  mainContainer.className = 'mrmd-studio__main';
+  mainContainer.style.cssText = `
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  `;
+
   // Create editor container
   const editorContainer = document.createElement('div');
   editorContainer.className = 'mrmd-studio__editor';
@@ -99,7 +111,18 @@ export async function createStudio(target, options = {}) {
     flex: 1;
     overflow: hidden;
     position: relative;
+    min-width: 0;
   `;
+
+  const contextPanelContainer = document.createElement('div');
+  contextPanelContainer.className = 'mrmd-studio__context';
+  contextPanelContainer.style.cssText = `
+    display: flex;
+    min-height: 0;
+  `;
+
+  mainContainer.appendChild(editorContainer);
+  mainContainer.appendChild(contextPanelContainer);
 
   // Create status bar container
   const statusBarContainer = document.createElement('div');
@@ -108,9 +131,9 @@ export async function createStudio(target, options = {}) {
   // Assemble layout
   if (statusBarConfig.position === 'top') {
     studioEl.appendChild(statusBarContainer);
-    studioEl.appendChild(editorContainer);
+    studioEl.appendChild(mainContainer);
   } else {
-    studioEl.appendChild(editorContainer);
+    studioEl.appendChild(mainContainer);
     studioEl.appendChild(statusBarContainer);
   }
 
@@ -140,6 +163,16 @@ export async function createStudio(target, options = {}) {
     }
     eventHandlers.get(event).add(handler);
     return () => eventHandlers.get(event).delete(handler);
+  }
+
+  function getCurrentDocumentMarkdownPath(docName = currentDocName) {
+    if (!docName) return null;
+    if (docName.startsWith('/')) return null;
+    return docName.endsWith('.md') ? docName : `${docName}.md`;
+  }
+
+  function supportsLinkedTableImport() {
+    return canImportLinkedTableFromHost();
   }
 
   /**
@@ -266,6 +299,7 @@ export async function createStudio(target, options = {}) {
   // Track current editor instance and preserved state
   let editor = null;
   let currentDocName = null;
+  let contextPanelComponent = null;
   let preservedEditorState = {
     theme: editorOptions.theme || null,
     dark: editorOptions.dark ?? null,
@@ -288,6 +322,9 @@ export async function createStudio(target, options = {}) {
       // Preserve theme across switches
       theme: preservedEditorState.theme,
       dark: preservedEditorState.dark,
+      // Linked-table host context
+      projectRoot: shellState.get('projectRoot') || editorOptions.projectRoot || null,
+      documentPath: getCurrentDocumentMarkdownPath(docName) || editorOptions.documentPath || null,
     };
 
     // Remove any sync options since we're providing ydoc directly
@@ -423,6 +460,25 @@ export async function createStudio(target, options = {}) {
     // Detect language from code block, or fall back to python
     const detectedLanguage = codeBlock?.language || 'python';
 
+    // Resolve richer context from _assets/context/*.md when available
+    let resolvedContextText = context.documentContext;
+    try {
+      if (currentDocName) {
+        const resolved = await orchestratorClient.resolveContext({
+          doc: currentDocName,
+          content: context.documentContext,
+          cursorPos: context.cursorPos,
+          selection: { from: context.selectionFrom, to: context.selectionTo },
+          ensureExists: true,
+        });
+        if (resolved?.contextText) {
+          resolvedContextText = resolved.contextText;
+        }
+      }
+    } catch (error) {
+      console.warn('[Studio] Failed to resolve AI context, falling back to document only:', error);
+    }
+
     // Mark AI as active
     shellState._set('ai.active', true);
 
@@ -435,20 +491,20 @@ export async function createStudio(target, options = {}) {
         params = {
           text_before_cursor: context.textBeforeCursor,
           local_context: context.localContext,
-          document_context: context.documentContext,
+          document_context: resolvedContextText,
         };
       } else if (cmd.program.includes('Fix') || cmd.program.includes('Correct')) {
         params = {
           text_to_fix: context.selectedText,
           local_context: context.localContext,
-          document_context: context.documentContext,
+          document_context: resolvedContextText,
         };
       } else if (cmd.program.includes('Code')) {
         params = {
           code: context.selectedText,
           language: detectedLanguage,
           local_context: context.localContext,
-          document_context: context.documentContext,
+          document_context: resolvedContextText,
         };
       } else if (cmd.program.includes('Synonym')) {
         params = {
@@ -456,7 +512,7 @@ export async function createStudio(target, options = {}) {
           local_context: context.localContext,
         };
       } else if (cmd.program.includes('Document')) {
-        params = { document: context.documentContext };
+        params = { document: resolvedContextText };
       }
 
       await mrmd.default.ai.executeAiOperation(view, aiClient, {
@@ -560,10 +616,22 @@ export async function createStudio(target, options = {}) {
         path: normalizedName.endsWith('.md') ? normalizedName : `${normalizedName}.md`,
         root: filesResult.root,
       });
+      editor?.setLinkedTableHostContext?.({
+        projectRoot: shellState.get('projectRoot') || null,
+        documentPath: normalizedName.endsWith('.md') ? normalizedName : `${normalizedName}.md`,
+      });
 
       // Update status bar with new editor
       if (statusBarComponent) {
         statusBarComponent.setEditor(editor);
+      }
+
+      if (contextPanelComponent) {
+        contextPanelComponent.setEditor(editor);
+        contextPanelComponent.setDocument(normalizedName);
+        contextPanelComponent.refresh().catch((e) => {
+          console.warn('[Studio] Failed to refresh context panel:', e);
+        });
       }
 
       emit('fileOpened', { doc: normalizedName });
@@ -609,6 +677,8 @@ export async function createStudio(target, options = {}) {
 
   // Shell action handlers
   const handlers = {
+    supportsLinkedTableImport,
+
     async onRename() {
       const file = shellState.get('file');
       if (!file) return;
@@ -682,6 +752,65 @@ export async function createStudio(target, options = {}) {
           }
 
           await switchDocument(docName);
+        },
+      });
+    },
+
+    async onImportLinkedTable() {
+      const file = shellState.get('file');
+      const projectRoot = shellState.get('projectRoot');
+
+      if (!supportsLinkedTableImport()) {
+        await confirm({
+          title: 'Linked table import unavailable',
+          message: 'This build does not expose the Electron linked-table host API yet.',
+          confirmLabel: 'OK',
+          cancelLabel: '',
+        });
+        return;
+      }
+
+      if (!file || !editor) {
+        return;
+      }
+
+      if (!projectRoot || file.isOutsideProject || !file.path || file.path.startsWith('/')) {
+        await confirm({
+          title: 'Linked table import requires a project file',
+          message: 'Open a markdown document inside a project before importing a linked table.',
+          confirmLabel: 'OK',
+          cancelLabel: '',
+        });
+        return;
+      }
+
+      showFilePicker({
+        mode: 'open',
+        title: 'Import Linked Table',
+        orchestratorClient,
+        initialPath: projectRoot || '~',
+        allowOutsideProject: true,
+        onSelect: async (sourceFilePath) => {
+          try {
+            const result = await editor.importLinkedTableFromHost(sourceFilePath, {
+              projectRoot,
+              documentPath: file.path,
+              cacheFormat: 'csv',
+            });
+            emit('linkedTableImported', {
+              sourceFilePath,
+              tableId: result.tableId,
+              spec: result.spec,
+            });
+          } catch (error) {
+            console.error('[Studio] Linked table import failed:', error);
+            await confirm({
+              title: 'Linked table import failed',
+              message: error.message || String(error),
+              confirmLabel: 'OK',
+              cancelLabel: '',
+            });
+          }
         },
       });
     },
@@ -912,9 +1041,32 @@ export async function createStudio(target, options = {}) {
       path: currentDocName.endsWith('.md') ? currentDocName : `${currentDocName}.md`,
       root: result.root,
     });
+    editor?.setLinkedTableHostContext?.({
+      projectRoot: shellState.get('projectRoot') || null,
+      documentPath: currentDocName.endsWith('.md') ? currentDocName : `${currentDocName}.md`,
+    });
   } catch (e) {
     console.warn('Could not set initial file context:', e);
   }
+
+  // Create context panel
+  contextPanelComponent = createContextPanel({
+    container: contextPanelContainer,
+    orchestratorClient,
+    shellState,
+    getCurrentDocument: () => currentDocName,
+    getEditor: () => editor,
+    getAiContext: mrmd.default.ai?.getAiContext,
+    onOpenRaw: async (contextPath) => {
+      const rawDoc = contextPath.replace(/\.md$/, '');
+      await switchDocument(rawDoc);
+    },
+  });
+  contextPanelComponent.setDocument(currentDocName);
+  contextPanelComponent.setEditor(editor);
+  contextPanelComponent.refresh().catch((e) => {
+    console.warn('[Studio] Failed to initialize context panel:', e);
+  });
 
   // Create studio object
   const studio = {
@@ -952,6 +1104,29 @@ export async function createStudio(target, options = {}) {
      */
     async openFile(docName) {
       await switchDocument(docName);
+    },
+
+    /**
+     * Import a linked table into the current document.
+     * If no source path is provided, opens the file picker flow.
+     *
+     * @param {string} [sourceFilePath]
+     */
+    async importLinkedTable(sourceFilePath) {
+      if (sourceFilePath) {
+        const file = shellState.get('file');
+        const projectRoot = shellState.get('projectRoot');
+        if (!editor || !file?.path || !projectRoot) {
+          throw new Error('Linked table import requires an open project document');
+        }
+        return editor.importLinkedTableFromHost(sourceFilePath, {
+          projectRoot,
+          documentPath: file.path,
+          cacheFormat: 'csv',
+        });
+      }
+
+      return handlers.onImportLinkedTable();
     },
 
     /**
@@ -1034,6 +1209,7 @@ export async function createStudio(target, options = {}) {
 
       // Destroy status bar
       statusBarComponent?.destroy();
+      contextPanelComponent?.destroy();
 
       // Destroy current editor
       if (editor) {

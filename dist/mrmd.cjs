@@ -54675,6 +54675,9 @@ const defaultDocumentTemplate = {
       outputBackground: '',   // output area background
       outputColor: '',        // output area text color
       outputBorderColor: '',  // border above output area
+      outputFontFamily: '',   // output area font family
+      outputFontSize: '',     // output area font size (e.g. '0.85em')
+      outputLineHeight: '',   // output area line height
     },
     // --- Syntax highlighting tokens ---
     // Base token colors apply to all code blocks/languages.
@@ -54741,6 +54744,21 @@ const defaultDocumentTemplate = {
   table: {
     borderColor: '',
     headerBackground: '',
+    headerColor: '',       // header text color
+    headerFontWeight: '',  // '' | '400' | '600' | '700' | '800'
+    fontFamily: '',        // table body font (falls back to body font)
+    fontSize: '',          // e.g. '0.9em' — relative to body
+    color: '',             // table body text color
+    cellPadding: '',       // e.g. '8px 12px'
+    stripedRows: '',       // '' | 'even' | 'odd' — alternating row background
+    stripedColor: '',      // background color for striped rows
+  },
+  math: {
+    color: '',                // math text color
+    fontSize: '',             // e.g. '1.1em' — relative size for math
+    displayBackground: '',    // background behind display math blocks
+    displayPadding: '',       // padding for display math blocks
+    displayBorderRadius: '',  // border radius for display math blocks
   },
   hr: {
     color: '',
@@ -55399,9 +55417,46 @@ function compileDocumentTemplateCSS(template, scope = '&') {
     [s('.cm-table-widget table') + ', ' + s('.cm-table-widget th') + ', ' + s('.cm-table-widget td')]: {
       ...(t.table?.borderColor ? { borderColor: t.table.borderColor } : {}),
     },
+    [s('.cm-table-widget table')]: {
+      ...(t.table?.fontFamily ? { fontFamily: t.table.fontFamily } : bodyFont ? { fontFamily: bodyFont } : {}),
+      ...(t.table?.fontSize ? { fontSize: t.table.fontSize } : {}),
+    },
     [s('.cm-table-widget th')]: {
       ...(t.table?.headerBackground ? { backgroundColor: t.table.headerBackground } : {}),
+      ...(t.table?.headerColor ? { color: t.table.headerColor } : {}),
+      ...(t.table?.headerFontWeight ? { fontWeight: t.table.headerFontWeight } : {}),
     },
+    [s('.cm-table-widget td')]: {
+      ...(t.table?.color ? { color: t.table.color } : {}),
+      ...(t.table?.cellPadding ? { padding: t.table.cellPadding } : {}),
+    },
+    // Striped rows
+    ...(t.table?.stripedRows && t.table?.stripedColor ? {
+      [s(`.cm-table-widget tbody tr:nth-child(${t.table.stripedRows}) td`)]: {
+        backgroundColor: t.table.stripedColor,
+      },
+    } : {}),
+    // --- Math ---
+    // KaTeX renders its own elements inside .cm-math-* containers.
+    // We must target .katex and internal spans to override KaTeX's own color.
+    ...(t.math?.color || t.math?.fontSize ? {
+      [s('.cm-math-inline') + ', ' + s('.cm-math-display')]: {
+        ...(t.math.color ? { color: t.math.color } : {}),
+        ...(t.math.fontSize ? { fontSize: t.math.fontSize } : {}),
+      },
+      // KaTeX internal elements need explicit override
+      [s('.cm-math-inline .katex') + ', ' + s('.cm-math-display .katex')]: {
+        ...(t.math.color ? { color: `${t.math.color} !important` } : {}),
+        ...(t.math.fontSize ? { fontSize: t.math.fontSize } : {}),
+      },
+    } : {}),
+    ...(t.math?.displayBackground || t.math?.displayPadding || t.math?.displayBorderRadius ? {
+      [s('.cm-math-display')]: {
+        ...(t.math.displayBackground ? { backgroundColor: t.math.displayBackground } : {}),
+        ...(t.math.displayPadding ? { padding: t.math.displayPadding } : {}),
+        ...(t.math.displayBorderRadius ? { borderRadius: t.math.displayBorderRadius } : {}),
+      },
+    } : {}),
     // --- Horizontal rules ---
     ...(t.hr?.color || t.hr?.thickness ? {
       [s('.cm-md-hr-line::after')]: {
@@ -55415,38 +55470,21 @@ function compileDocumentTemplateCSS(template, scope = '&') {
         content: ({ disc: '"•"', circle: '"○"', square: '"■"', dash: '"—"' })[t.list.bulletStyle] || undefined,
       },
     } : {}),
-    // --- Neutralize syntax-theme token colors inside code surfaces when
-    // document styles own preview. When the template defines highlight tokens
-    // (code.highlight.*), we only neutralize non-code-block token spans and
-    // let the template's HighlightStyle provide code block colors.
-    // When no highlight tokens are defined, neutralize everything to inherit.
-    ...(() => {
-      const hasHighlightTokens = ['keyword', 'controlKeyword', 'string', 'number', 'comment',
-        'function', 'variable', 'type', 'operator', 'punctuation', 'property', 'constant',
-        'regexp', 'escape', 'tag', 'attribute', 'attributeValue', 'meta',
-      ].some((k) => t.code?.highlight?.[k]);
-      if (hasHighlightTokens) {
-        // Only neutralize inline code token spans (let code blocks keep template HighlightStyle)
-        return {
-          [s('.cm-md-inline-code span[class^="ͼ"], .cm-md-inline-code span[class*=" ͼ"], .cm-md-inline-code span[class*="ͼ"]')]: {
-            color: 'inherit !important',
-            backgroundColor: 'transparent !important',
-            fontStyle: 'inherit !important',
-            fontWeight: 'inherit !important',
-            textDecorationColor: 'inherit !important',
-          },
-        };
-      }
-      return {
-        [s('.cm-codeblock-line span[class^="ͼ"], .cm-codeblock-line span[class*=" ͼ"], .cm-codeblock-line span[class*="ͼ"], .cm-codeblock-fence span[class^="ͼ"], .cm-codeblock-fence span[class*=" ͼ"], .cm-codeblock-fence span[class*="ͼ"], .cm-wysiwyg-code-fence-line span[class^="ͼ"], .cm-wysiwyg-code-fence-line span[class*=" ͼ"], .cm-wysiwyg-code-fence-line span[class*="ͼ"], .cm-md-inline-code span[class^="ͼ"], .cm-md-inline-code span[class*=" ͼ"], .cm-md-inline-code span[class*="ͼ"]')]: {
-          color: 'inherit !important',
-          backgroundColor: 'transparent !important',
-          fontStyle: 'inherit !important',
-          fontWeight: 'inherit !important',
-          textDecorationColor: 'inherit !important',
-        },
-      };
-    })(),
+    // --- Neutralize syntax-theme token colors inside ALL code surfaces ---
+    // ALWAYS neutralize ͼN (CodeMirror HighlightStyle) classes so the
+    // app theme's syntax colors don't leak through.  Document-template-owned
+    // token colors are applied via deterministic .cm-dt-* classes stamped by
+    // our tagHighlighter extension; those rules use higher specificity and
+    // !important in the override <style> element, so they win here.
+    // When no highlight tokens are set, code blocks simply inherit
+    // code.block.color (or body.color) — clean, theme-neutral look.
+    [s('.cm-codeblock-line span[class^="ͼ"], .cm-codeblock-line span[class*=" ͼ"], .cm-codeblock-line span[class*="ͼ"], .cm-codeblock-fence span[class^="ͼ"], .cm-codeblock-fence span[class*=" ͼ"], .cm-codeblock-fence span[class*="ͼ"], .cm-wysiwyg-code-fence-line span[class^="ͼ"], .cm-wysiwyg-code-fence-line span[class*=" ͼ"], .cm-wysiwyg-code-fence-line span[class*="ͼ"], .cm-md-inline-code span[class^="ͼ"], .cm-md-inline-code span[class*=" ͼ"], .cm-md-inline-code span[class*="ͼ"]')]: {
+      color: 'inherit !important',
+      backgroundColor: 'transparent !important',
+      fontStyle: 'inherit !important',
+      fontWeight: 'inherit !important',
+      textDecorationColor: 'inherit !important',
+    },
     // --- Code block additional properties ---
     ...(t.code?.block?.lineHeight ? {
       [s('.cm-codeblock-line')]: {
@@ -55490,11 +55528,29 @@ function compileDocumentTemplateCSS(template, scope = '&') {
         ...(t.code.cell.headerBorderColor ? { borderBottomColor: `${t.code.cell.headerBorderColor} !important` } : {}),
       },
     } : {}),
-    ...(t.code?.cell?.outputBackground || t.code?.cell?.outputColor || t.code?.cell?.outputBorderColor ? {
+    ...(t.code?.cell?.outputBackground || t.code?.cell?.outputColor || t.code?.cell?.outputBorderColor ||
+        t.code?.cell?.outputFontFamily || t.code?.cell?.outputFontSize || t.code?.cell?.outputLineHeight ? {
       [s('.cm-output-widget') + ', ' + s('.cm-html-output-widget') + ', ' + s('.cm-css-output-widget') + ', ' + s('.cm-scroll-output-widget') + ', ' + s('.cm-json-output-widget')]: {
         ...(t.code.cell.outputBackground ? { backgroundColor: `${t.code.cell.outputBackground} !important` } : {}),
         ...(t.code.cell.outputColor ? { color: `${t.code.cell.outputColor} !important` } : {}),
         ...(t.code.cell.outputBorderColor ? { borderTopColor: `${t.code.cell.outputBorderColor} !important` } : {}),
+        ...(t.code.cell.outputFontFamily ? { fontFamily: `${t.code.cell.outputFontFamily} !important` } : {}),
+        ...(t.code.cell.outputFontSize ? { fontSize: `${t.code.cell.outputFontSize} !important` } : {}),
+        ...(t.code.cell.outputLineHeight ? { lineHeight: `${t.code.cell.outputLineHeight} !important` } : {}),
+      },
+    } : {}),
+    // Output content (pre blocks inside output widgets)
+    ...(t.code?.cell?.outputFontFamily || t.code?.cell?.outputFontSize ? {
+      [s('.cm-output-content') + ', ' + s('.cm-scroll-output-content')]: {
+        ...(t.code.cell.outputFontFamily ? { fontFamily: `${t.code.cell.outputFontFamily} !important` } : {}),
+        ...(t.code.cell.outputFontSize ? { fontSize: `${t.code.cell.outputFontSize} !important` } : {}),
+      },
+    } : {}),
+    // Scroll output header bar
+    ...(t.code?.cell?.headerBackground || t.code?.cell?.headerColor ? {
+      [s('.cm-scroll-output-header')]: {
+        ...(t.code.cell.headerBackground ? { backgroundColor: `${t.code.cell.headerBackground} !important` } : {}),
+        ...(t.code.cell.headerColor ? { color: `${t.code.cell.headerColor} !important` } : {}),
       },
     } : {}),
     // --- Images ---
@@ -55601,8 +55657,33 @@ function serializeDocumentTemplateToCss(template, scope = '.markdown-body') {
       color: t.link?.color || undefined,
       textDecoration: t.link?.underline === false ? 'none' : undefined,
     })}\n}`,
+    `${scope} table {\n${cssDecls({
+      borderCollapse: 'collapse',
+      width: '100%',
+      fontFamily: t.table?.fontFamily || bodyFont || undefined,
+      fontSize: t.table?.fontSize || undefined,
+    })}\n}`,
     `${scope} table, ${scope} th, ${scope} td {\n${cssDecls({ borderColor: t.table?.borderColor || undefined })}\n}`,
-    `${scope} th {\n${cssDecls({ backgroundColor: t.table?.headerBackground || undefined })}\n}`,
+    `${scope} th {\n${cssDecls({
+      backgroundColor: t.table?.headerBackground || undefined,
+      color: t.table?.headerColor || undefined,
+      fontWeight: t.table?.headerFontWeight || undefined,
+    })}\n}`,
+    `${scope} td {\n${cssDecls({
+      color: t.table?.color || undefined,
+      padding: t.table?.cellPadding || undefined,
+    })}\n}`,
+    ...(t.table?.stripedRows && t.table?.stripedColor ? [
+      `${scope} tbody tr:nth-child(${t.table.stripedRows}) td {\n${cssDecls({
+        backgroundColor: t.table.stripedColor,
+      })}\n}`,
+    ] : []),
+    ...(t.math?.color || t.math?.fontSize ? [
+      `${scope} .math, ${scope} .MathJax, ${scope} .katex {\n${cssDecls({
+        color: t.math?.color || undefined,
+        fontSize: t.math?.fontSize || undefined,
+      })}\n}`,
+    ] : []),
     // Syntax highlighting token classes for code blocks (used by highlight.js / Pandoc)
     ...(() => {
       const hl = t.code?.highlight;
@@ -56370,157 +56451,144 @@ function buildDocumentTemplateOverrideCSS(template, scopeSelector) {
   rules.push(`${scopeSelector} .cm-line:not(.cm-codeblock-line):not(.cm-codeblock-fence) ${tokenSel} { color: inherit !important; }`);
 
   // --- Syntax highlighting: document-template-owned token colors ---
-  // When the template defines code.highlight tokens, we apply them to code
-  // blocks via data-attributes set by our ViewPlugin. The cascade is:
-  //   code.block.color (base) → code.highlight.{token} (base token) →
-  //   code.highlight.languages.{lang}.{token} (per-language override)
+  //
+  // The tagHighlighter extension stamps deterministic .cm-dt-* classes on
+  // syntax token spans.  The ͼN classes from the app theme are neutralised
+  // above (color: inherit !important).  Here we output rules that give
+  // our .cm-dt-* classes the template's colors.
+  //
+  // Scoped inside code-block lines so they don't affect prose.  The selector
+  // uses the data-attribute on the editor root for maximum specificity.
+  //
+  // Cascade:
+  //   code.block.color (inherited base)
+  //     → code.highlight.{token}  (base token – all code blocks)
+  //       → code.highlight.languages.{lang}.{token}  (per-language)
+  //
   const hl = t.code?.highlight;
   if (hl) {
-    pushSyntaxHighlightRules(rules, scopeSelector, hl);
+    pushSyntaxTokenRules(rules, scopeSelector, hl);
+  }
+
+  // --- Code block font overrides (guaranteed precedence) ---
+  // The built-in codeBlockStyles uses EditorView.theme() which may have
+  // equal specificity to our template theme.  Repeat here with !important.
+  if (t.code?.block?.fontSize) {
+    rule(['.cm-codeblock-line', '.cm-codeblock-fence', '.cm-wysiwyg-code-fence-line'], 'font-size', t.code.block.fontSize);
+  }
+  if (t.code?.block?.fontFamily) {
+    rule(['.cm-codeblock-line', '.cm-codeblock-fence', '.cm-wysiwyg-code-fence-line'], 'font-family', t.code.block.fontFamily);
+  }
+  if (t.code?.block?.lineHeight) {
+    rule(['.cm-codeblock-line', '.cm-wysiwyg-code-fence-line'], 'line-height', t.code.block.lineHeight);
+  }
+
+  // --- Output widget font overrides ---
+  if (t.code?.cell?.outputFontFamily) {
+    rule(['.cm-output-widget', '.cm-output-content', '.cm-scroll-output-widget', '.cm-scroll-output-content'], 'font-family', t.code.cell.outputFontFamily);
+  }
+  if (t.code?.cell?.outputFontSize) {
+    rule(['.cm-output-widget', '.cm-output-content', '.cm-scroll-output-widget', '.cm-scroll-output-content'], 'font-size', t.code.cell.outputFontSize);
+  }
+  if (t.code?.cell?.outputLineHeight) {
+    rule(['.cm-output-widget', '.cm-scroll-output-widget'], 'line-height', t.code.cell.outputLineHeight);
+  }
+
+  // --- Table overrides ---
+  if (t.table?.color) {
+    rule('.cm-table-widget td', 'color', t.table.color);
+  }
+  if (t.table?.headerColor) {
+    rule('.cm-table-widget th', 'color', t.table.headerColor);
+  }
+  if (t.table?.headerFontWeight) {
+    rule('.cm-table-widget th', 'font-weight', t.table.headerFontWeight);
+  }
+  if (t.table?.fontSize) {
+    rule('.cm-table-widget table', 'font-size', t.table.fontSize);
+  }
+  if (t.table?.fontFamily) {
+    rule('.cm-table-widget table', 'font-family', t.table.fontFamily);
+  }
+
+  // --- Math overrides ---
+  // KaTeX generates its own elements that set color directly.
+  // Must target .katex inside our containers to override.
+  if (t.math?.color) {
+    rule(['.cm-math-inline', '.cm-math-display'], 'color', t.math.color);
+    rule(['.cm-math-inline .katex', '.cm-math-display .katex'], 'color', t.math.color);
+    rule(['.cm-math-inline .katex *', '.cm-math-display .katex *'], 'color', t.math.color);
+  }
+  if (t.math?.fontSize) {
+    rule(['.cm-math-inline', '.cm-math-display'], 'font-size', t.math.fontSize);
+  }
+  if (t.math?.displayBorderRadius) {
+    rule('.cm-math-display', 'border-radius', t.math.displayBorderRadius);
   }
 
   return rules.join('\n');
 }
 
 /**
- * Map from our semantic token names to the CSS custom properties / tag-based
- * selectors that CodeMirror's HighlightStyle generates.
+ * Generate CSS rules targeting the deterministic .cm-dt-* token classes
+ * inside code block lines.  Uses !important to win over the neutralised
+ * ͼN classes.
  *
- * CodeMirror generates classes like `ͼN` (where N varies), so we can't target
- * those directly. Instead we use `[data-mrmd-token="keyword"]` attributes that
- * our ViewPlugin stamps onto code block lines, OR we target the Lezer tag
- * CSS classes via the HighlightStyle we generate ourselves.
+ * For base tokens the selector is:
+ *   ${scope} .cm-codeblock-line .cm-dt-keyword { color: #xxx !important; }
  *
- * The approach: we build a secondary HighlightStyle-like system using
- * CSS custom properties on the code block scope. The override extension
- * sets CSS vars like `--dt-keyword`, `--dt-string`, etc. on the editor root,
- * and a companion HighlightStyle consumes them.
- *
- * Actually, the simplest approach that works with CodeMirror's existing
- * highlighting is: since we already neutralize all ͼN class colors to
- * `inherit`, we set the base color on `.cm-codeblock-line` from code.block.color.
- * Then we generate a NEW HighlightStyle that uses our template colors.
- * But HighlightStyle is static and baked into the extension pipeline...
- *
- * Best pragmatic approach: CSS custom properties + a theme override.
- * We set `--dt-keyword: #xxx` etc. on the editor scope, then our
- * secondary HighlightStyle references `var(--dt-keyword)`.
- *
- * HOWEVER: HighlightStyle doesn't support CSS vars. So the cleanest approach
- * is to NOT neutralize token colors when highlight tokens are defined, and
- * instead output override rules targeting the known HighlightStyle class
- * mappings. Since HighlightStyle classes are generated and vary, we'll use
- * the data-attribute approach: stamp `data-lang="python"` on code block lines
- * and use our own `.cm-dt-token-keyword` class system.
- *
- * FINAL APPROACH (simplest & most robust):
- * We output CSS rules using CSS custom properties on the code block container.
- * The existing codemirror-theme.js HighlightStyle already maps tags. When
- * document styles are active, we:
- * 1. Keep the "neutralize" rule that resets ͼN colors to inherit
- * 2. Override the CSS custom properties that codemirror-theme.js reads
- *    (--syntax-keyword, --syntax-string, etc.)
- * 3. For per-language overrides, use data-lang attributes on code blocks
+ * For per-language overrides the selector adds [data-lang]:
+ *   ${scope} .cm-codeblock-line[data-lang="python"] .cm-dt-keyword { … }
  */
-function pushSyntaxHighlightRules(rules, scopeSelector, hl) {
-  // Map our template token names to CSS custom property names used by
-  // codemirror-theme.js (--syntax-*)
-  const TOKEN_TO_CSS_VAR = {
-    keyword:        '--syntax-keyword',
-    controlKeyword: '--syntax-control',
-    string:         '--syntax-string',
-    number:         '--syntax-number',
-    comment:        '--syntax-comment',
-    function:       '--syntax-function',
-    variable:       '--syntax-variable',
-    type:           '--syntax-type',
-    operator:       '--syntax-operator',
-    punctuation:    '--syntax-punctuation',
-    property:       '--syntax-property',
-    constant:       '--syntax-constant',
-    regexp:         '--syntax-regexp',
-    escape:         '--syntax-escape',
-    tag:            '--syntax-tag',
-    attribute:      '--syntax-attribute',
-    attributeValue: '--syntax-attribute-value',
-    meta:           '--syntax-meta',
-    inserted:       '--syntax-inserted',
-    deleted:        '--syntax-deleted',
-    changed:        '--syntax-changed',
+function pushSyntaxTokenRules(rules, scopeSelector, hl) {
+  const CODE_LINE_SCOPES = ['.cm-codeblock-line', '.cm-wysiwyg-code-fence-line'];
+
+  const pushTokenColor = (tokenName, color, styleModifier, langAttr) => {
+    if (!color && !styleModifier) return;
+    const cls = DT_TOKEN_CLASS_MAP[tokenName];
+    if (!cls) return;
+
+    const decls = [];
+    if (color) decls.push(`color: ${color} !important`);
+    if (styleModifier) {
+      const { fontWeight, fontStyle } = parseStyleModifier(styleModifier);
+      if (fontWeight) decls.push(`font-weight: ${fontWeight} !important`);
+      if (fontStyle) decls.push(`font-style: ${fontStyle} !important`);
+    }
+    if (!decls.length) return;
+
+    const body = decls.join('; ');
+    const selectors = CODE_LINE_SCOPES.map((scope) => {
+      const lineScope = langAttr ? `${scope}[data-lang="${langAttr}"]` : scope;
+      return `${scopeSelector} ${lineScope} .${cls}`;
+    });
+    rules.push(`${selectors.join(', ')} { ${body}; }`);
   };
 
-  // --- Base token CSS vars (all code blocks) ---
-  const baseVars = [];
-  for (const [token, cssVar] of Object.entries(TOKEN_TO_CSS_VAR)) {
-    if (hl[token]) {
-      baseVars.push(`${cssVar}: ${hl[token]}`);
-    }
-  }
-  if (baseVars.length) {
-    rules.push(`${scopeSelector} { ${baseVars.join('; ')} }`);
-  }
+  // Style modifier lookup: token → style modifier key
+  const STYLE_KEYS = {
+    keyword: 'keywordStyle', controlKeyword: 'keywordStyle',
+    comment: 'commentStyle', function: 'functionStyle', type: 'typeStyle',
+  };
 
-  // --- Style modifiers (font-weight, font-style for specific tokens) ---
-  // These map to CodeMirror tag-based selectors. Since we can't easily
-  // target ͼN classes, we use the approach of overriding via a regenerated
-  // HighlightStyle. For now, we store them as CSS vars too.
-  if (hl.keywordStyle) {
-    const { fontWeight, fontStyle } = parseStyleModifier(hl.keywordStyle);
-    if (fontWeight) baseVars.push(`--syntax-keyword-weight: ${fontWeight}`);
-    if (fontStyle) baseVars.push(`--syntax-keyword-style: ${fontStyle}`);
-  }
-  if (hl.commentStyle) {
-    const { fontWeight, fontStyle } = parseStyleModifier(hl.commentStyle);
-    if (fontWeight) baseVars.push(`--syntax-comment-weight: ${fontWeight}`);
-    if (fontStyle) baseVars.push(`--syntax-comment-style: ${fontStyle}`);
-  }
-  if (hl.functionStyle) {
-    const { fontWeight, fontStyle } = parseStyleModifier(hl.functionStyle);
-    if (fontWeight) baseVars.push(`--syntax-function-weight: ${fontWeight}`);
-    if (fontStyle) baseVars.push(`--syntax-function-style: ${fontStyle}`);
-  }
-  if (hl.typeStyle) {
-    const { fontWeight, fontStyle } = parseStyleModifier(hl.typeStyle);
-    if (fontWeight) baseVars.push(`--syntax-type-weight: ${fontWeight}`);
-    if (fontStyle) baseVars.push(`--syntax-type-style: ${fontStyle}`);
+  // --- Base token rules (all code blocks) ---
+  for (const tokenName of Object.keys(DT_TOKEN_CLASS_MAP)) {
+    const color = hl[tokenName] || '';
+    const styleMod = hl[STYLE_KEYS[tokenName]] || '';
+    pushTokenColor(tokenName, color, styleMod, null);
   }
 
   // --- Per-language overrides ---
-  // Uses data-lang attribute that our code block decoration plugin sets.
   const languages = hl.languages;
   if (languages) {
     for (const [lang, langTokens] of Object.entries(languages)) {
       if (!langTokens || typeof langTokens !== 'object') continue;
-      const langVars = [];
-      for (const [token, cssVar] of Object.entries(TOKEN_TO_CSS_VAR)) {
-        if (langTokens[token]) {
-          langVars.push(`${cssVar}: ${langTokens[token]}`);
+      for (const tokenName of Object.keys(DT_TOKEN_CLASS_MAP)) {
+        const color = langTokens[tokenName] || '';
+        const styleMod = langTokens[STYLE_KEYS[tokenName]] || '';
+        if (color || styleMod) {
+          pushTokenColor(tokenName, color, styleMod, lang);
         }
-      }
-      // Style modifiers per language
-      if (langTokens.keywordStyle) {
-        const { fontWeight, fontStyle } = parseStyleModifier(langTokens.keywordStyle);
-        if (fontWeight) langVars.push(`--syntax-keyword-weight: ${fontWeight}`);
-        if (fontStyle) langVars.push(`--syntax-keyword-style: ${fontStyle}`);
-      }
-      if (langTokens.commentStyle) {
-        const { fontWeight, fontStyle } = parseStyleModifier(langTokens.commentStyle);
-        if (fontWeight) langVars.push(`--syntax-comment-weight: ${fontWeight}`);
-        if (fontStyle) langVars.push(`--syntax-comment-style: ${fontStyle}`);
-      }
-      if (langTokens.functionStyle) {
-        const { fontWeight, fontStyle } = parseStyleModifier(langTokens.functionStyle);
-        if (fontWeight) langVars.push(`--syntax-function-weight: ${fontWeight}`);
-        if (fontStyle) langVars.push(`--syntax-function-style: ${fontStyle}`);
-      }
-      if (langTokens.typeStyle) {
-        const { fontWeight, fontStyle } = parseStyleModifier(langTokens.typeStyle);
-        if (fontWeight) langVars.push(`--syntax-type-weight: ${fontWeight}`);
-        if (fontStyle) langVars.push(`--syntax-type-style: ${fontStyle}`);
-      }
-      if (langVars.length) {
-        // Scope per-language overrides to code blocks with data-lang attribute
-        rules.push(`${scopeSelector} .cm-codeblock-line[data-lang="${lang}"], ${scopeSelector} .cm-codeblock-fence[data-lang="${lang}"] { ${langVars.join('; ')} }`);
       }
     }
   }
@@ -56562,79 +56630,123 @@ function createDocumentTemplateOverrideExtension(template) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Document-template-owned syntax token classes.
+//
+// We use @lezer/highlight's tagHighlighter to stamp deterministic CSS class
+// names (cm-dt-keyword, cm-dt-string, …) on syntax token spans.  These
+// classes coexist with CodeMirror's generated ͼN classes.  The ͼN classes
+// are neutralised (color: inherit !important) by the theme rules above.
+// Our cm-dt-* classes are then coloured in the override <style> element
+// with even higher specificity + !important, so they always win.
+//
+// This is the same pattern used for heading colors and inline mark colors.
+// ---------------------------------------------------------------------------
+
 /**
- * Build a HighlightStyle from the template's code.highlight tokens.
- * This applies syntax highlighting colors owned by the document template,
- * overriding the application theme's HighlightStyle within code blocks.
- *
- * Uses higher specificity via the `scope` option to win over the app theme.
+ * Mapping from our template token names to their deterministic CSS class.
  */
-function createDocumentTemplateHighlightStyle(template) {
+const DT_TOKEN_CLASS_MAP = {
+  keyword:        'cm-dt-keyword',
+  controlKeyword: 'cm-dt-control-keyword',
+  string:         'cm-dt-string',
+  number:         'cm-dt-number',
+  comment:        'cm-dt-comment',
+  function:       'cm-dt-function',
+  variable:       'cm-dt-variable',
+  type:           'cm-dt-type',
+  operator:       'cm-dt-operator',
+  punctuation:    'cm-dt-punctuation',
+  property:       'cm-dt-property',
+  constant:       'cm-dt-constant',
+  regexp:         'cm-dt-regexp',
+  escape:         'cm-dt-escape',
+  tag:            'cm-dt-tag',
+  attribute:      'cm-dt-attribute',
+  attributeValue: 'cm-dt-attribute-value',
+  meta:           'cm-dt-meta',
+  inserted:       'cm-dt-inserted',
+  deleted:        'cm-dt-deleted',
+  changed:        'cm-dt-changed',
+};
+
+/**
+ * Build the tagHighlighter extension that stamps cm-dt-* classes on
+ * syntax token spans.  This is always active when document styles own
+ * the preview — the classes are harmless when no highlight tokens are
+ * set (they just exist on the spans without any matching CSS rule).
+ */
+function createDocumentTemplateTokenClasses(template) {
   const t = normalizeDocumentTemplate(template);
   if (t.editor?.applyDocumentStyles === false) return [];
-  const hl = t.code?.highlight;
-  if (!hl) return [];
 
-  // Check if any base token color is set
-  const hasAnyToken = [
-    'keyword', 'controlKeyword', 'string', 'number', 'comment',
-    'function', 'variable', 'type', 'operator', 'punctuation',
-    'property', 'constant', 'regexp', 'escape', 'tag',
-    'attribute', 'attributeValue', 'meta', 'inserted', 'deleted', 'changed',
-  ].some((k) => hl[k]);
+  const th = tagHighlighter([
+    // Keywords
+    { tag: [tags$1.keyword, tags$1.operatorKeyword, tags$1.definitionKeyword, tags$1.moduleKeyword],
+      class: DT_TOKEN_CLASS_MAP.keyword },
+    { tag: tags$1.controlKeyword,
+      class: DT_TOKEN_CLASS_MAP.controlKeyword },
+    // Strings
+    { tag: [tags$1.string, tags$1.docString, tags$1.character, tags$1.special(tags$1.string)],
+      class: DT_TOKEN_CLASS_MAP.string },
+    // Numbers
+    { tag: [tags$1.number, tags$1.integer, tags$1.float],
+      class: DT_TOKEN_CLASS_MAP.number },
+    // Comments
+    { tag: [tags$1.comment, tags$1.lineComment, tags$1.blockComment, tags$1.docComment],
+      class: DT_TOKEN_CLASS_MAP.comment },
+    // Functions
+    { tag: [tags$1.function(tags$1.variableName), tags$1.definition(tags$1.function(tags$1.variableName))],
+      class: DT_TOKEN_CLASS_MAP.function },
+    // Variables
+    { tag: [tags$1.variableName, tags$1.definition(tags$1.variableName), tags$1.local(tags$1.variableName)],
+      class: DT_TOKEN_CLASS_MAP.variable },
+    // Types & classes
+    { tag: [tags$1.typeName, tags$1.className, tags$1.namespace, tags$1.macroName],
+      class: DT_TOKEN_CLASS_MAP.type },
+    // Operators
+    { tag: tags$1.operator,
+      class: DT_TOKEN_CLASS_MAP.operator },
+    // Punctuation
+    { tag: [tags$1.punctuation, tags$1.separator, tags$1.bracket, tags$1.paren, tags$1.brace, tags$1.squareBracket, tags$1.angleBracket],
+      class: DT_TOKEN_CLASS_MAP.punctuation },
+    // Properties
+    { tag: [tags$1.propertyName, tags$1.definition(tags$1.propertyName), tags$1.special(tags$1.propertyName)],
+      class: DT_TOKEN_CLASS_MAP.property },
+    // Constants / booleans / null
+    { tag: [tags$1.constant(tags$1.variableName), tags$1.standard(tags$1.variableName), tags$1.bool, tags$1.null, tags$1.atom],
+      class: DT_TOKEN_CLASS_MAP.constant },
+    // Regexp
+    { tag: tags$1.regexp,
+      class: DT_TOKEN_CLASS_MAP.regexp },
+    // Escape sequences
+    { tag: tags$1.escape,
+      class: DT_TOKEN_CLASS_MAP.escape },
+    // HTML/XML tags
+    { tag: tags$1.tagName,
+      class: DT_TOKEN_CLASS_MAP.tag },
+    // HTML/XML attributes
+    { tag: tags$1.attributeName,
+      class: DT_TOKEN_CLASS_MAP.attribute },
+    { tag: tags$1.attributeValue,
+      class: DT_TOKEN_CLASS_MAP.attributeValue },
+    // Meta / decorators / annotations
+    { tag: [tags$1.meta, tags$1.processingInstruction, tags$1.annotation],
+      class: DT_TOKEN_CLASS_MAP.meta },
+    // Diff
+    { tag: tags$1.inserted, class: DT_TOKEN_CLASS_MAP.inserted },
+    { tag: tags$1.deleted,  class: DT_TOKEN_CLASS_MAP.deleted },
+    { tag: tags$1.changed,  class: DT_TOKEN_CLASS_MAP.changed },
+  ]);
 
-  if (!hasAnyToken) return [];
-
-  const styles = [];
-  const addStyle = (tags, color, styleStr) => {
-    if (!color && !styleStr) return;
-    const spec = {};
-    if (color) spec.color = color;
-    if (styleStr) {
-      const { fontWeight, fontStyle } = parseStyleModifier(styleStr);
-      if (fontWeight) spec.fontWeight = fontWeight;
-      if (fontStyle) spec.fontStyle = fontStyle;
-    }
-    if (Object.keys(spec).length === 0) return;
-    const tagList = Array.isArray(tags) ? tags : [tags];
-    for (const tag of tagList) {
-      styles.push({ tag, ...spec });
-    }
-  };
-
-  addStyle([tags$1.keyword, tags$1.operatorKeyword, tags$1.definitionKeyword, tags$1.moduleKeyword], hl.keyword, hl.keywordStyle);
-  addStyle([tags$1.controlKeyword], hl.controlKeyword || hl.keyword, hl.keywordStyle);
-  addStyle([tags$1.string, tags$1.docString, tags$1.character, tags$1.special(tags$1.string)], hl.string);
-  addStyle([tags$1.number, tags$1.integer, tags$1.float], hl.number);
-  addStyle([tags$1.comment, tags$1.lineComment, tags$1.blockComment, tags$1.docComment], hl.comment, hl.commentStyle);
-  addStyle([tags$1.function(tags$1.variableName), tags$1.definition(tags$1.function(tags$1.variableName))], hl.function, hl.functionStyle);
-  addStyle([tags$1.variableName, tags$1.definition(tags$1.variableName), tags$1.local(tags$1.variableName)], hl.variable);
-  addStyle([tags$1.typeName, tags$1.className, tags$1.namespace], hl.type, hl.typeStyle);
-  addStyle([tags$1.operator], hl.operator);
-  addStyle([tags$1.punctuation, tags$1.separator, tags$1.bracket, tags$1.paren, tags$1.brace, tags$1.squareBracket, tags$1.angleBracket], hl.punctuation);
-  addStyle([tags$1.propertyName, tags$1.definition(tags$1.propertyName)], hl.property);
-  addStyle([tags$1.constant(tags$1.variableName), tags$1.standard(tags$1.variableName), tags$1.bool, tags$1.null, tags$1.atom], hl.constant);
-  addStyle([tags$1.regexp], hl.regexp);
-  addStyle([tags$1.escape], hl.escape);
-  addStyle([tags$1.tagName], hl.tag);
-  addStyle([tags$1.attributeName], hl.attribute);
-  addStyle([tags$1.attributeValue], hl.attributeValue);
-  addStyle([tags$1.meta, tags$1.processingInstruction, tags$1.annotation], hl.meta);
-  addStyle([tags$1.inserted], hl.inserted);
-  addStyle([tags$1.deleted], hl.deleted);
-  addStyle([tags$1.changed], hl.changed);
-
-  if (!styles.length) return [];
-
-  const hlStyle = HighlightStyle.define(styles);
-  return [syntaxHighlighting(hlStyle)];
+  return [syntaxHighlighting(th)];
 }
 
 function createDocumentTemplateExtension(template) {
   return [
     EditorView.theme(compileDocumentTemplateCSS(template)),
     createDocumentTemplateOverrideExtension(template),
-    ...createDocumentTemplateHighlightStyle(template),
+    ...createDocumentTemplateTokenClasses(template),
   ];
 }
 
@@ -60911,7 +61023,7 @@ function resolveBlockScalar(ctx, scalar, onError) {
     if (!header)
         return { value: '', type: null, comment: '', range: [start, start, start] };
     const type = header.mode === '>' ? Scalar.BLOCK_FOLDED : Scalar.BLOCK_LITERAL;
-    const lines = scalar.source ? splitLines(scalar.source) : [];
+    const lines = scalar.source ? splitLines$1(scalar.source) : [];
     // determine the end of content & start of chomping
     let chompStart = lines.length;
     for (let i = lines.length - 1; i >= 0; --i) {
@@ -61087,7 +61199,7 @@ function parseBlockScalarHeader({ offset, props }, strict, onError) {
     return { mode, indent, chomp, comment, length };
 }
 /** @returns Array of lines split up as `[indent, content]` */
-function splitLines(source) {
+function splitLines$1(source) {
     const split = source.split(/\n( *)/);
     const first = split[0];
     const m = first.match(/^( *)/);
@@ -64158,7 +64270,7 @@ function buildFrontmatter(data) {
  */
 function cleanObject(obj) {
   if (obj === null || obj === undefined) return undefined;
-  if (Array.isArray(obj)) return obj.map(cloneValue).filter(v => v !== undefined);
+  if (Array.isArray(obj)) return obj.map(cloneValue$4).filter(v => v !== undefined);
   if (typeof obj !== 'object') return obj;
 
   const result = {};
@@ -64170,7 +64282,7 @@ function cleanObject(obj) {
         result[key] = cleaned;
       }
     } else if (Array.isArray(value)) {
-      const cleanedArray = value.map(cloneValue).filter(v => v !== undefined);
+      const cleanedArray = value.map(cloneValue$4).filter(v => v !== undefined);
       if (cleanedArray.length > 0) {
         result[key] = cleanedArray;
       }
@@ -64181,30 +64293,30 @@ function cleanObject(obj) {
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
-function isPlainObject(value) {
+function isPlainObject$1(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function cloneValue(value) {
+function cloneValue$4(value) {
   if (Array.isArray(value)) {
-    return value.map(cloneValue);
+    return value.map(cloneValue$4);
   }
-  if (isPlainObject(value)) {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cloneValue(v)]));
+  if (isPlainObject$1(value)) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cloneValue$4(v)]));
   }
   return value;
 }
 
 function mergeTemplateWithExisting(templateValue, existingValue) {
   if (existingValue === undefined || existingValue === null) {
-    return cloneValue(templateValue);
+    return cloneValue$4(templateValue);
   }
 
   if (Array.isArray(existingValue)) {
-    return cloneValue(existingValue);
+    return cloneValue$4(existingValue);
   }
 
-  if (isPlainObject(templateValue) && isPlainObject(existingValue)) {
+  if (isPlainObject$1(templateValue) && isPlainObject$1(existingValue)) {
     const result = {};
     const keys = new Set([...Object.keys(templateValue), ...Object.keys(existingValue)]);
     for (const key of keys) {
@@ -64213,7 +64325,7 @@ function mergeTemplateWithExisting(templateValue, existingValue) {
     return result;
   }
 
-  return cloneValue(existingValue);
+  return cloneValue$4(existingValue);
 }
 
 function formatLocalDate(date = new Date()) {
@@ -64295,7 +64407,7 @@ function applyFrontmatterTemplate(content, templateData = createArticleFrontmatt
 
   const merged = fm.exists
     ? mergeTemplateWithExisting(templateData, fm.yaml || {})
-    : cloneValue(templateData);
+    : cloneValue$4(templateData);
 
   const frontmatterBlock = buildFrontmatter(merged);
   const selection = createTitleSelection(frontmatterBlock);
@@ -64408,7 +64520,7 @@ function updateFrontmatterField(content, path, value) {
   const fm = parseFrontmatter(content);
   if (fm.exists && !fm.yaml) return null;
 
-  const data = fm.exists ? cloneValue(fm.yaml || {}) : {};
+  const data = fm.exists ? cloneValue$4(fm.yaml || {}) : {};
   setPathValue(data, path, value);
   const frontmatterBlock = buildFrontmatter(data);
 
@@ -65601,7 +65713,7 @@ class HiddenWidget extends WidgetType {
   }
 }
 
-function escapeHtml$1(text) {
+function escapeHtml$2(text) {
   return String(text ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -66331,7 +66443,7 @@ class CssOutputWidget extends WidgetType {
     sourceDetails.className = 'cm-css-source';
     sourceDetails.innerHTML = `
       <summary>Show CSS</summary>
-      <pre class="cm-css-source-code">${escapeHtml$1(this.content)}</pre>
+      <pre class="cm-css-source-code">${escapeHtml$2(this.content)}</pre>
     `;
     container.appendChild(sourceDetails);
 
@@ -66357,7 +66469,7 @@ class CssOutputWidget extends WidgetType {
             ? `${item.count} match${item.count === 1 ? '' : 'es'} in document/artifact`
             : 'Invalid selector';
           chip.innerHTML = `
-            <code class="cm-css-chip-selector">${escapeHtml$1(item.selector)}</code>
+            <code class="cm-css-chip-selector">${escapeHtml$2(item.selector)}</code>
             <span class="cm-css-chip-count">${item.valid ? item.count : '!'}</span>
           `;
           selectorList.appendChild(chip);
@@ -66504,7 +66616,7 @@ class ScrollableOutputWidget extends WidgetType {
     header.className = 'cm-scroll-output-header';
     header.innerHTML = `
       <span class="cm-scroll-output-badge">Output</span>
-      <span class="cm-scroll-output-lines">${escapeHtml$1(String(this.lineCount))} lines</span>
+      <span class="cm-scroll-output-lines">${escapeHtml$2(String(this.lineCount))} lines</span>
       <div class="cm-scroll-output-actions">
         <button type="button" class="cm-scroll-output-action" data-action="expand">Expand</button>
         <button type="button" class="cm-scroll-output-action" data-action="collapse">Collapse</button>
@@ -66589,7 +66701,7 @@ class JsonOutputWidget extends WidgetType {
 
     const parsedResult = tryParseJsonOutput(this.content);
     if (parsedResult === null) {
-      container.innerHTML = `<pre class="cm-json-fallback">${escapeHtml$1(this.content)}</pre>`;
+      container.innerHTML = `<pre class="cm-json-fallback">${escapeHtml$2(this.content)}</pre>`;
       return container;
     }
 
@@ -66602,8 +66714,8 @@ class JsonOutputWidget extends WidgetType {
     header.className = 'cm-json-header';
     header.innerHTML = `
       <span class="cm-json-badge">JSON</span>
-      ${originLabel ? `<span class="cm-json-origin">${escapeHtml$1(originLabel)}</span>` : ''}
-      <span class="cm-json-summary">${escapeHtml$1(summarizeJson(parsedValue))}</span>
+      ${originLabel ? `<span class="cm-json-origin">${escapeHtml$2(originLabel)}</span>` : ''}
+      <span class="cm-json-summary">${escapeHtml$2(summarizeJson(parsedValue))}</span>
       <div class="cm-json-actions">
         <button type="button" class="cm-json-action" data-action="expand">Expand</button>
         <button type="button" class="cm-json-action" data-action="collapse">Collapse</button>
@@ -70249,6 +70361,3439 @@ function createExecutionManager(editor, registry) {
 }
 
 /**
+ * mrmd-table-spec
+ *
+ * Pure linked-table metadata parsing, normalization, serialization, and
+ * markdown block discovery.
+ */
+
+const HEADER_START = '<!--mrmd:table';
+const HEADER_END = '-->';
+
+const TOP_LEVEL_ORDER = [
+  'version',
+  'id',
+  'label',
+  'engine',
+  'sources',
+  'transform',
+  'cache',
+  'key',
+  'view',
+  'snapshot',
+];
+
+const SOURCE_ORDER = [
+  'name',
+  'role',
+  'kind',
+  'path',
+  'format',
+  'editable',
+  'connection',
+  'object',
+  'options',
+];
+
+const TRANSFORM_ORDER = ['path', 'output', 'managedBlock'];
+const CACHE_ORDER = ['path', 'format'];
+const KEY_ORDER = ['columns'];
+const VIEW_ORDER = ['document', 'grid'];
+const VIEW_DOCUMENT_ORDER = ['visibleColumns', 'maxRows', 'overflow', 'defaultState'];
+const VIEW_GRID_ORDER = ['showTechnicalColumns', 'allowRawSourceEdits'];
+const SNAPSHOT_ORDER = ['rowCount', 'materializedAt'];
+
+const SOURCE_ROLES = new Set(['primary', 'secondary', 'lookup', 'append']);
+const SOURCE_KINDS = new Set(['file', 'database', 'remote', 'generated']);
+const DOCUMENT_OVERFLOW = new Set(['paginate', 'truncate', 'scroll']);
+const DOCUMENT_STATES = new Set(['frozen', 'active-inline']);
+
+function diagnostic(level, code, message, path = []) {
+  return { level, code, message, path };
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cloneValue$3(value) {
+  if (Array.isArray(value)) return value.map(cloneValue$3);
+  if (isPlainObject(value)) {
+    const out = {};
+    for (const key of Object.keys(value)) out[key] = cloneValue$3(value[key]);
+    return out;
+  }
+  return value;
+}
+
+function addUnknownFieldWarnings(input, allowedKeys, warnings, path) {
+  for (const key of Object.keys(input)) {
+    if (!allowedKeys.has(key)) {
+      warnings.push(diagnostic('warning', 'unknown-field', `Unknown field \`${key}\``, [...path, key]));
+    }
+  }
+}
+
+function parseNonEmptyString(value, errors, path, label) {
+  if (typeof value !== 'string' || value.trim() === '') {
+    errors.push(diagnostic('error', 'invalid-type', `${label} must be a non-empty string`, path));
+    return null;
+  }
+  return value.trim();
+}
+
+function parseOptionalString(value, errors, path, label) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    errors.push(diagnostic('error', 'invalid-type', `${label} must be a string`, path));
+    return undefined;
+  }
+  return value;
+}
+
+function parseBoolean(value, errors, path, label) {
+  if (typeof value !== 'boolean') {
+    errors.push(diagnostic('error', 'invalid-type', `${label} must be a boolean`, path));
+    return null;
+  }
+  return value;
+}
+
+function parsePositiveInteger(value, errors, path, label, { allowZero = false } = {}) {
+  if (!Number.isInteger(value) || (allowZero ? value < 0 : value <= 0)) {
+    errors.push(diagnostic('error', 'invalid-type', `${label} must be ${allowZero ? 'a non-negative' : 'a positive'} integer`, path));
+    return null;
+  }
+  return value;
+}
+
+function inferFormatFromPath(value) {
+  if (typeof value !== 'string' || value.trim() === '') return undefined;
+  const match = value.trim().toLowerCase().match(/\.([a-z0-9]+)$/);
+  if (!match) return undefined;
+  const ext = match[1];
+  const aliases = {
+    feather: 'arrow',
+  };
+  return aliases[ext] || ext;
+}
+
+function orderKnownAndUnknownKeys(object, knownOrder) {
+  const keys = Object.keys(object).filter(key => object[key] !== undefined);
+  const known = knownOrder.filter(key => keys.includes(key));
+  const unknown = keys.filter(key => !knownOrder.includes(key)).sort();
+  return [...known, ...unknown];
+}
+
+function canonicalizeObject(object, knownOrder, childCanonicalizers = {}) {
+  const out = {};
+  for (const key of orderKnownAndUnknownKeys(object, knownOrder)) {
+    const value = object[key];
+    if (value === undefined) continue;
+    const canonicalizer = childCanonicalizers[key];
+    out[key] = canonicalizer ? canonicalizer(value) : cloneValue$3(value);
+  }
+  return out;
+}
+
+function canonicalizeSource(source) {
+  return canonicalizeObject(source, SOURCE_ORDER, {
+    options: cloneValue$3,
+  });
+}
+
+function canonicalizeTransform(transform) {
+  return canonicalizeObject(transform, TRANSFORM_ORDER);
+}
+
+function canonicalizeCache(cache) {
+  return canonicalizeObject(cache, CACHE_ORDER);
+}
+
+function canonicalizeKey(key) {
+  return canonicalizeObject(key, KEY_ORDER);
+}
+
+function canonicalizeViewDocument(document) {
+  return canonicalizeObject(document, VIEW_DOCUMENT_ORDER);
+}
+
+function canonicalizeViewGrid(grid) {
+  return canonicalizeObject(grid, VIEW_GRID_ORDER);
+}
+
+function canonicalizeView(view) {
+  return canonicalizeObject(view, VIEW_ORDER, {
+    document: canonicalizeViewDocument,
+    grid: canonicalizeViewGrid,
+  });
+}
+
+function canonicalizeSnapshot(snapshot) {
+  return canonicalizeObject(snapshot, SNAPSHOT_ORDER);
+}
+
+function canonicalizeSpec(spec) {
+  return canonicalizeObject(spec, TOP_LEVEL_ORDER, {
+    sources: (sources) => sources.map(canonicalizeSource),
+    transform: canonicalizeTransform,
+    cache: canonicalizeCache,
+    key: canonicalizeKey,
+    view: canonicalizeView,
+    snapshot: canonicalizeSnapshot,
+  });
+}
+
+function normalizeSource(input, index, errors, warnings, path) {
+  if (!isPlainObject(input)) {
+    errors.push(diagnostic('error', 'invalid-type', 'Source must be an object', path));
+    return null;
+  }
+
+  addUnknownFieldWarnings(input, new Set(SOURCE_ORDER), warnings, path);
+
+  const out = {};
+  out.name = parseNonEmptyString(input.name, errors, [...path, 'name'], 'Source name');
+
+  const role = input.role === undefined ? (index === 0 ? 'primary' : 'secondary') : input.role;
+  if (typeof role !== 'string' || !SOURCE_ROLES.has(role)) {
+    errors.push(diagnostic('error', 'invalid-value', `Source role must be one of: ${Array.from(SOURCE_ROLES).join(', ')}`, [...path, 'role']));
+  } else {
+    out.role = role;
+  }
+
+  let kind = input.kind;
+  if (kind === undefined) {
+    if (typeof input.path === 'string' && input.path.trim() !== '') kind = 'file';
+    else if (typeof input.object === 'string' && input.object.trim() !== '') kind = 'database';
+    else kind = 'file';
+  }
+
+  if (typeof kind !== 'string' || !SOURCE_KINDS.has(kind)) {
+    errors.push(diagnostic('error', 'invalid-value', `Source kind must be one of: ${Array.from(SOURCE_KINDS).join(', ')}`, [...path, 'kind']));
+  } else {
+    out.kind = kind;
+  }
+
+  if (kind === 'file') {
+    out.path = parseNonEmptyString(input.path, errors, [...path, 'path'], 'File source path');
+  } else if (input.path !== undefined) {
+    const parsedPath = parseOptionalString(input.path, errors, [...path, 'path'], 'Source path');
+    if (parsedPath !== undefined) out.path = parsedPath;
+  }
+
+  if (kind === 'database') {
+    const objectName = parseOptionalString(input.object, errors, [...path, 'object'], 'Database source object');
+    if (objectName !== undefined) {
+      out.object = objectName;
+    } else {
+      errors.push(diagnostic('error', 'missing-field', 'Database source must define `object`', [...path, 'object']));
+    }
+
+    const connection = parseOptionalString(input.connection, errors, [...path, 'connection'], 'Database source connection');
+    if (connection !== undefined) out.connection = connection;
+  } else {
+    const connection = parseOptionalString(input.connection, errors, [...path, 'connection'], 'Source connection');
+    if (connection !== undefined) out.connection = connection;
+
+    const objectName = parseOptionalString(input.object, errors, [...path, 'object'], 'Source object');
+    if (objectName !== undefined) out.object = objectName;
+  }
+
+  if (input.format === undefined) {
+    const inferred = inferFormatFromPath(input.path);
+    if (inferred) out.format = inferred;
+  } else {
+    const format = parseNonEmptyString(input.format, errors, [...path, 'format'], 'Source format');
+    if (format !== null) out.format = format.toLowerCase();
+  }
+
+  if (input.editable === undefined) {
+    out.editable = kind === 'file';
+  } else {
+    const editable = parseBoolean(input.editable, errors, [...path, 'editable'], 'Source editable');
+    if (editable !== null) out.editable = editable;
+  }
+
+  if (input.options !== undefined) {
+    out.options = cloneValue$3(input.options);
+  }
+
+  for (const key of Object.keys(input)) {
+    if (!SOURCE_ORDER.includes(key)) out[key] = cloneValue$3(input[key]);
+  }
+
+  return canonicalizeSource(out);
+}
+
+function normalizeTransform(input, errors, warnings, path) {
+  if (!isPlainObject(input)) {
+    errors.push(diagnostic('error', 'invalid-type', 'Transform must be an object', path));
+    return null;
+  }
+
+  addUnknownFieldWarnings(input, new Set(TRANSFORM_ORDER), warnings, path);
+
+  const out = {};
+  out.path = parseNonEmptyString(input.path, errors, [...path, 'path'], 'Transform path');
+  out.output = input.output === undefined
+    ? 'view_tbl'
+    : parseNonEmptyString(input.output, errors, [...path, 'output'], 'Transform output');
+  out.managedBlock = input.managedBlock === undefined
+    ? 'mrmd-ops-v1'
+    : parseNonEmptyString(input.managedBlock, errors, [...path, 'managedBlock'], 'Transform managedBlock');
+
+  for (const key of Object.keys(input)) {
+    if (!TRANSFORM_ORDER.includes(key)) out[key] = cloneValue$3(input[key]);
+  }
+
+  return canonicalizeTransform(out);
+}
+
+function normalizeCache(input, errors, warnings, path) {
+  if (!isPlainObject(input)) {
+    errors.push(diagnostic('error', 'invalid-type', 'Cache must be an object', path));
+    return null;
+  }
+
+  addUnknownFieldWarnings(input, new Set(CACHE_ORDER), warnings, path);
+
+  const out = {};
+  out.path = parseNonEmptyString(input.path, errors, [...path, 'path'], 'Cache path');
+
+  if (input.format === undefined) {
+    out.format = inferFormatFromPath(input.path) || 'arrow';
+  } else {
+    const format = parseNonEmptyString(input.format, errors, [...path, 'format'], 'Cache format');
+    if (format !== null) out.format = format.toLowerCase();
+  }
+
+  for (const key of Object.keys(input)) {
+    if (!CACHE_ORDER.includes(key)) out[key] = cloneValue$3(input[key]);
+  }
+
+  return canonicalizeCache(out);
+}
+
+function normalizeKey(input, errors, warnings, path) {
+  if (!isPlainObject(input)) {
+    errors.push(diagnostic('error', 'invalid-type', 'Key must be an object', path));
+    return null;
+  }
+
+  addUnknownFieldWarnings(input, new Set(KEY_ORDER), warnings, path);
+
+  const out = {};
+  if (!Array.isArray(input.columns) || input.columns.length === 0) {
+    errors.push(diagnostic('error', 'missing-field', 'Key must define a non-empty `columns` array', [...path, 'columns']));
+  } else {
+    const columns = [];
+    input.columns.forEach((column, index) => {
+      if (typeof column !== 'string' || column.trim() === '') {
+        errors.push(diagnostic('error', 'invalid-type', 'Key columns must be non-empty strings', [...path, 'columns', index]));
+      } else {
+        columns.push(column.trim());
+      }
+    });
+    out.columns = columns;
+  }
+
+  for (const key of Object.keys(input)) {
+    if (!KEY_ORDER.includes(key)) out[key] = cloneValue$3(input[key]);
+  }
+
+  return canonicalizeKey(out);
+}
+
+function normalizeViewDocument(input, errors, warnings, path) {
+  if (!isPlainObject(input)) {
+    errors.push(diagnostic('error', 'invalid-type', 'view.document must be an object', path));
+    return null;
+  }
+
+  addUnknownFieldWarnings(input, new Set(VIEW_DOCUMENT_ORDER), warnings, path);
+
+  const out = {};
+
+  if (input.visibleColumns !== undefined) {
+    if (!Array.isArray(input.visibleColumns)) {
+      errors.push(diagnostic('error', 'invalid-type', 'view.document.visibleColumns must be an array', [...path, 'visibleColumns']));
+    } else {
+      out.visibleColumns = [];
+      input.visibleColumns.forEach((value, index) => {
+        if (typeof value !== 'string' || value.trim() === '') {
+          errors.push(diagnostic('error', 'invalid-type', 'view.document.visibleColumns entries must be non-empty strings', [...path, 'visibleColumns', index]));
+        } else {
+          out.visibleColumns.push(value.trim());
+        }
+      });
+    }
+  }
+
+  if (input.maxRows !== undefined) {
+    const maxRows = parsePositiveInteger(input.maxRows, errors, [...path, 'maxRows'], 'view.document.maxRows');
+    if (maxRows !== null) out.maxRows = maxRows;
+  }
+
+  const overflow = input.overflow === undefined ? 'paginate' : input.overflow;
+  if (typeof overflow !== 'string' || !DOCUMENT_OVERFLOW.has(overflow)) {
+    errors.push(diagnostic('error', 'invalid-value', `view.document.overflow must be one of: ${Array.from(DOCUMENT_OVERFLOW).join(', ')}`, [...path, 'overflow']));
+  } else {
+    out.overflow = overflow;
+  }
+
+  const defaultState = input.defaultState === undefined ? 'frozen' : input.defaultState;
+  if (typeof defaultState !== 'string' || !DOCUMENT_STATES.has(defaultState)) {
+    errors.push(diagnostic('error', 'invalid-value', `view.document.defaultState must be one of: ${Array.from(DOCUMENT_STATES).join(', ')}`, [...path, 'defaultState']));
+  } else {
+    out.defaultState = defaultState;
+  }
+
+  for (const key of Object.keys(input)) {
+    if (!VIEW_DOCUMENT_ORDER.includes(key)) out[key] = cloneValue$3(input[key]);
+  }
+
+  return canonicalizeViewDocument(out);
+}
+
+function normalizeViewGrid(input, errors, warnings, path) {
+  if (!isPlainObject(input)) {
+    errors.push(diagnostic('error', 'invalid-type', 'view.grid must be an object', path));
+    return null;
+  }
+
+  addUnknownFieldWarnings(input, new Set(VIEW_GRID_ORDER), warnings, path);
+
+  const out = {};
+
+  const showTechnicalColumns = input.showTechnicalColumns === undefined ? false : input.showTechnicalColumns;
+  const parsedShow = parseBoolean(showTechnicalColumns, errors, [...path, 'showTechnicalColumns'], 'view.grid.showTechnicalColumns');
+  if (parsedShow !== null) out.showTechnicalColumns = parsedShow;
+
+  const allowRawSourceEdits = input.allowRawSourceEdits === undefined ? true : input.allowRawSourceEdits;
+  const parsedAllow = parseBoolean(allowRawSourceEdits, errors, [...path, 'allowRawSourceEdits'], 'view.grid.allowRawSourceEdits');
+  if (parsedAllow !== null) out.allowRawSourceEdits = parsedAllow;
+
+  for (const key of Object.keys(input)) {
+    if (!VIEW_GRID_ORDER.includes(key)) out[key] = cloneValue$3(input[key]);
+  }
+
+  return canonicalizeViewGrid(out);
+}
+
+function normalizeView(input, errors, warnings, path) {
+  if (!isPlainObject(input)) {
+    errors.push(diagnostic('error', 'invalid-type', 'View must be an object', path));
+    return null;
+  }
+
+  addUnknownFieldWarnings(input, new Set(VIEW_ORDER), warnings, path);
+
+  const out = {};
+  if (input.document !== undefined) {
+    const document = normalizeViewDocument(input.document, errors, warnings, [...path, 'document']);
+    if (document !== null) out.document = document;
+  }
+
+  if (input.grid !== undefined) {
+    const grid = normalizeViewGrid(input.grid, errors, warnings, [...path, 'grid']);
+    if (grid !== null) out.grid = grid;
+  }
+
+  for (const key of Object.keys(input)) {
+    if (!VIEW_ORDER.includes(key)) out[key] = cloneValue$3(input[key]);
+  }
+
+  return canonicalizeView(out);
+}
+
+function normalizeSnapshot(input, errors, warnings, path) {
+  if (!isPlainObject(input)) {
+    errors.push(diagnostic('error', 'invalid-type', 'Snapshot must be an object', path));
+    return null;
+  }
+
+  addUnknownFieldWarnings(input, new Set(SNAPSHOT_ORDER), warnings, path);
+
+  const out = {};
+  if (input.rowCount !== undefined) {
+    const rowCount = parsePositiveInteger(input.rowCount, errors, [...path, 'rowCount'], 'snapshot.rowCount', { allowZero: true });
+    if (rowCount !== null) out.rowCount = rowCount;
+  }
+
+  if (input.materializedAt !== undefined) {
+    const materializedAt = parseOptionalString(input.materializedAt, errors, [...path, 'materializedAt'], 'snapshot.materializedAt');
+    if (materializedAt !== undefined) out.materializedAt = materializedAt;
+  }
+
+  for (const key of Object.keys(input)) {
+    if (!SNAPSHOT_ORDER.includes(key)) out[key] = cloneValue$3(input[key]);
+  }
+
+  return canonicalizeSnapshot(out);
+}
+
+function normalizeLinkedTableSpec(input) {
+  const errors = [];
+  const warnings = [];
+
+  if (!isPlainObject(input)) {
+    errors.push(diagnostic('error', 'invalid-type', 'Linked table spec must be an object', []));
+    return { ok: false, errors, warnings };
+  }
+
+  addUnknownFieldWarnings(input, new Set(TOP_LEVEL_ORDER), warnings, []);
+
+  const out = {};
+
+  if (input.version === undefined) {
+    warnings.push(diagnostic('warning', 'missing-field', 'Missing `version`; defaulting to 1', ['version']));
+    out.version = 1;
+  } else if (input.version === 1 || input.version === '1') {
+    out.version = 1;
+  } else {
+    errors.push(diagnostic('error', 'invalid-value', 'Only linked-table spec version 1 is currently supported', ['version']));
+  }
+
+  out.id = parseNonEmptyString(input.id, errors, ['id'], 'Spec id');
+  out.engine = parseNonEmptyString(input.engine, errors, ['engine'], 'Engine id');
+
+  if (input.label !== undefined) {
+    const label = parseOptionalString(input.label, errors, ['label'], 'Spec label');
+    if (label !== undefined) out.label = label;
+  }
+
+  if (!Array.isArray(input.sources) || input.sources.length === 0) {
+    errors.push(diagnostic('error', 'missing-field', 'Spec must define a non-empty `sources` array', ['sources']));
+  } else {
+    const sources = input.sources
+      .map((source, index) => normalizeSource(source, index, errors, warnings, ['sources', index]))
+      .filter(Boolean);
+    out.sources = sources;
+  }
+
+  if (input.transform === undefined) {
+    errors.push(diagnostic('error', 'missing-field', 'Spec must define `transform`', ['transform']));
+  } else {
+    const transform = normalizeTransform(input.transform, errors, warnings, ['transform']);
+    if (transform !== null) out.transform = transform;
+  }
+
+  if (input.cache === undefined) {
+    errors.push(diagnostic('error', 'missing-field', 'Spec must define `cache`', ['cache']));
+  } else {
+    const cache = normalizeCache(input.cache, errors, warnings, ['cache']);
+    if (cache !== null) out.cache = cache;
+  }
+
+  if (input.key !== undefined) {
+    const key = normalizeKey(input.key, errors, warnings, ['key']);
+    if (key !== null) out.key = key;
+  }
+
+  if (input.view !== undefined) {
+    const view = normalizeView(input.view, errors, warnings, ['view']);
+    if (view !== null) out.view = view;
+  }
+
+  if (input.snapshot !== undefined) {
+    const snapshot = normalizeSnapshot(input.snapshot, errors, warnings, ['snapshot']);
+    if (snapshot !== null) out.snapshot = snapshot;
+  }
+
+  for (const key of Object.keys(input)) {
+    if (!TOP_LEVEL_ORDER.includes(key)) out[key] = cloneValue$3(input[key]);
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors, warnings };
+  }
+
+  return { ok: true, value: canonicalizeSpec(out), warnings };
+}
+
+function splitInlineArray(text) {
+  const inner = text.slice(1, -1).trim();
+  if (inner === '') return [];
+
+  const parts = [];
+  let current = '';
+  let quote = null;
+
+  for (let i = 0; i < inner.length; i++) {
+    const char = inner[i];
+    const prev = i > 0 ? inner[i - 1] : '';
+
+    if (quote) {
+      current += char;
+      if (char === quote && prev !== '\\') quote = null;
+      continue;
+    }
+
+    if (char === '"' || char === '\'') {
+      quote = char;
+      current += char;
+      continue;
+    }
+
+    if (char === ',') {
+      parts.push(current.trim());
+      current = '';
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (quote) throw new Error('Unterminated quoted string in inline array');
+  if (current.trim() !== '') parts.push(current.trim());
+  return parts;
+}
+
+function parseInlineScalar(text) {
+  const value = text.trim();
+  if (value === '') return '';
+
+  if (value.startsWith('[') && value.endsWith(']')) {
+    return splitInlineArray(value).map(parseInlineScalar);
+  }
+
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (value === 'null' || value === '~') return null;
+  if (/^-?\d+$/.test(value)) return Number.parseInt(value, 10);
+  if (/^-?\d+\.\d+$/.test(value)) return Number.parseFloat(value);
+
+  if (value.startsWith('"') && value.endsWith('"')) {
+    return JSON.parse(value);
+  }
+
+  if (value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1).replace(/''/g, "'");
+  }
+
+  return value;
+}
+
+function tokenizeYaml(body) {
+  const errors = [];
+  const lines = [];
+  const rawLines = String(body || '').replace(/^\uFEFF/, '').split(/\r?\n/);
+
+  rawLines.forEach((raw, index) => {
+    if (raw.trim() === '') return;
+
+    let indent = 0;
+    while (indent < raw.length && raw[indent] === ' ') indent++;
+
+    if (/^\s*\t/.test(raw)) {
+      errors.push(diagnostic('error', 'invalid-value', 'Tabs are not supported in linked-table YAML indentation', ['line', index + 1]));
+      return;
+    }
+
+    if (indent % 2 !== 0) {
+      errors.push(diagnostic('error', 'invalid-value', 'YAML indentation must use multiples of two spaces', ['line', index + 1]));
+      return;
+    }
+
+    lines.push({
+      lineNo: index + 1,
+      indent,
+      trimmed: raw.trim(),
+      raw,
+    });
+  });
+
+  return { lines, errors };
+}
+
+function parseYamlMapLine(text) {
+  const separator = text.indexOf(':');
+  if (separator === -1) return null;
+  const key = text.slice(0, separator).trim();
+  const rest = text.slice(separator + 1).trim();
+  if (!key) return null;
+  return { key, rest };
+}
+
+function parseYamlBlock(lines, startIndex, indent, errors) {
+  if (startIndex >= lines.length) return { value: null, nextIndex: startIndex };
+
+  const first = lines[startIndex];
+  if (first.indent < indent) return { value: null, nextIndex: startIndex };
+  if (first.indent > indent) {
+    errors.push(diagnostic('error', 'invalid-value', `Unexpected indentation on line ${first.lineNo}`, ['line', first.lineNo]));
+    return { value: null, nextIndex: startIndex };
+  }
+
+  if (first.trimmed === '-' || first.trimmed.startsWith('- ')) {
+    return parseYamlSequence(lines, startIndex, indent, errors);
+  }
+
+  return parseYamlMapping(lines, startIndex, indent, errors);
+}
+
+function parseYamlMapping(lines, startIndex, indent, errors) {
+  const out = {};
+  let index = startIndex;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    if (line.indent < indent) break;
+
+    if (line.indent > indent) {
+      errors.push(diagnostic('error', 'invalid-value', `Unexpected indentation on line ${line.lineNo}`, ['line', line.lineNo]));
+      index++;
+      continue;
+    }
+
+    if (line.trimmed === '-' || line.trimmed.startsWith('- ')) break;
+
+    const entry = parseYamlMapLine(line.trimmed);
+    if (!entry) {
+      errors.push(diagnostic('error', 'invalid-value', `Invalid YAML mapping line on line ${line.lineNo}`, ['line', line.lineNo]));
+      index++;
+      continue;
+    }
+
+    const { key, rest } = entry;
+    index++;
+
+    if (rest === '') {
+      if (index < lines.length && lines[index].indent > line.indent) {
+        const nested = parseYamlBlock(lines, index, lines[index].indent, errors);
+        out[key] = nested.value;
+        index = nested.nextIndex;
+      } else {
+        out[key] = null;
+      }
+    } else {
+      try {
+        out[key] = parseInlineScalar(rest);
+      } catch (error) {
+        errors.push(diagnostic('error', 'invalid-value', error.message, ['line', line.lineNo]));
+      }
+    }
+  }
+
+  return { value: out, nextIndex: index };
+}
+
+function parseYamlSequence(lines, startIndex, indent, errors) {
+  const out = [];
+  let index = startIndex;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    if (line.indent < indent) break;
+
+    if (line.indent > indent) {
+      errors.push(diagnostic('error', 'invalid-value', `Unexpected indentation on line ${line.lineNo}`, ['line', line.lineNo]));
+      index++;
+      continue;
+    }
+
+    if (!(line.trimmed === '-' || line.trimmed.startsWith('- '))) break;
+
+    const rest = line.trimmed === '-' ? '' : line.trimmed.slice(1).trimStart();
+    index++;
+
+    if (rest === '') {
+      if (index < lines.length && lines[index].indent > line.indent) {
+        const nested = parseYamlBlock(lines, index, lines[index].indent, errors);
+        out.push(nested.value);
+        index = nested.nextIndex;
+      } else {
+        out.push(null);
+      }
+      continue;
+    }
+
+    const inlineEntry = parseYamlMapLine(rest);
+    if (inlineEntry) {
+      const item = {};
+      try {
+        item[inlineEntry.key] = inlineEntry.rest === '' ? null : parseInlineScalar(inlineEntry.rest);
+      } catch (error) {
+        errors.push(diagnostic('error', 'invalid-value', error.message, ['line', line.lineNo]));
+      }
+
+      if (index < lines.length && lines[index].indent > line.indent) {
+        const nested = parseYamlBlock(lines, index, lines[index].indent, errors);
+        if (isPlainObject(nested.value)) {
+          Object.assign(item, nested.value);
+        } else {
+          errors.push(diagnostic('error', 'invalid-type', `Sequence item continuation on line ${lines[index].lineNo} must be a mapping`, ['line', lines[index].lineNo]));
+        }
+        index = nested.nextIndex;
+      }
+
+      out.push(item);
+      continue;
+    }
+
+    try {
+      out.push(parseInlineScalar(rest));
+    } catch (error) {
+      errors.push(diagnostic('error', 'invalid-value', error.message, ['line', line.lineNo]));
+    }
+  }
+
+  return { value: out, nextIndex: index };
+}
+
+function parseYamlLike(body) {
+  const tokenized = tokenizeYaml(body);
+  const errors = [...tokenized.errors];
+  const warnings = [];
+
+  if (tokenized.lines.length === 0) {
+    errors.push(diagnostic('error', 'missing-field', 'Linked-table header body is empty', []));
+    return { ok: false, errors, warnings };
+  }
+
+  const parsed = parseYamlBlock(tokenized.lines, 0, tokenized.lines[0].indent, errors);
+  if (!isPlainObject(parsed.value)) {
+    errors.push(diagnostic('error', 'invalid-type', 'Linked-table YAML root must be a mapping/object', []));
+  }
+
+  if (parsed.nextIndex < tokenized.lines.length) {
+    const next = tokenized.lines[parsed.nextIndex];
+    errors.push(diagnostic('error', 'invalid-value', `Unexpected trailing YAML content on line ${next.lineNo}`, ['line', next.lineNo]));
+  }
+
+  if (errors.length > 0) return { ok: false, errors, warnings };
+  return { ok: true, value: parsed.value, errors, warnings };
+}
+
+function extractHeaderBody(commentText) {
+  const text = String(commentText || '');
+  if (!text.startsWith(HEADER_START)) return null;
+  if (!text.endsWith(HEADER_END)) return null;
+
+  let body = text.slice(HEADER_START.length, text.length - HEADER_END.length);
+  body = body.replace(/^\r?\n/, '');
+  body = body.replace(/\r?\n$/, '');
+  return body;
+}
+
+function parseLinkedTableHeader(commentText) {
+  const errors = [];
+  const warnings = [];
+
+  if (typeof commentText !== 'string' || commentText.trim() === '') {
+    errors.push(diagnostic('error', 'invalid-type', 'Linked-table header must be a non-empty string', []));
+    return { ok: false, errors, warnings };
+  }
+
+  const body = extractHeaderBody(commentText);
+  if (body === null) {
+    errors.push(diagnostic('error', 'invalid-value', `Linked-table header must start with ${HEADER_START} and end with ${HEADER_END}`, []));
+    return { ok: false, errors, warnings };
+  }
+
+  const parsed = parseYamlLike(body);
+  warnings.push(...(parsed.warnings || []));
+  if (!parsed.ok) {
+    errors.push(...parsed.errors);
+    return { ok: false, errors, warnings };
+  }
+
+  const normalized = normalizeLinkedTableSpec(parsed.value);
+  warnings.push(...(normalized.warnings || []));
+  if (!normalized.ok) {
+    errors.push(...normalized.errors);
+    return { ok: false, errors, warnings };
+  }
+
+  return { ok: true, value: normalized.value, warnings };
+}
+
+function buildLineTable(text) {
+  const lines = [];
+  let from = 0;
+  let number = 1;
+
+  for (let i = 0; i <= text.length; i++) {
+    if (i === text.length || text[i] === '\n') {
+      const raw = text.slice(from, i);
+      lines.push({ number, from, to: i, text: raw.replace(/\r$/, '') });
+      from = i + 1;
+      number++;
+    }
+  }
+
+  return lines;
+}
+
+function lineIndexAtOffset(lines, offset) {
+  let low = 0;
+  let high = lines.length - 1;
+
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const line = lines[mid];
+
+    if (offset < line.from) {
+      high = mid - 1;
+    } else if (offset > line.to) {
+      low = mid + 1;
+    } else {
+      return mid;
+    }
+  }
+
+  return Math.max(0, Math.min(lines.length - 1, low));
+}
+
+function isBlankLine(text) {
+  return text.trim() === '';
+}
+
+function isCaptionLine(text) {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.includes('|')) return false;
+  if (trimmed.startsWith('__') || trimmed.startsWith('**')) return false;
+  if ((trimmed.startsWith('_') && trimmed.endsWith('_')) || (trimmed.startsWith('*') && trimmed.endsWith('*'))) {
+    return trimmed.length > 2;
+  }
+  return false;
+}
+
+function splitTableRow$1(line) {
+  const cells = [];
+  let current = '';
+  const trimmed = line.trim();
+  let i = trimmed.startsWith('|') ? 1 : 0;
+
+  while (i < trimmed.length) {
+    const char = trimmed[i];
+    if (char === '\\' && i + 1 < trimmed.length && trimmed[i + 1] === '|') {
+      current += '|';
+      i += 2;
+    } else if (char === '|') {
+      cells.push(current);
+      current = '';
+      i++;
+    } else {
+      current += char;
+      i++;
+    }
+  }
+
+  if (current.trim() !== '') cells.push(current);
+  return cells;
+}
+
+function isTableLine$1(line) {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) return false;
+  return trimmed.includes('|');
+}
+
+function isTableDelimiter$1(line) {
+  const trimmed = line.trim();
+  if (!trimmed.includes('|')) return false;
+  const cells = splitTableRow$1(trimmed);
+  if (cells.length === 0) return false;
+  const delimiterPattern = /^:?-+(?:\{[^}]+\})?\.?:?$|^:?-+\.?(?:\{[^}]+\})?:?$/;
+  return cells.every(cell => delimiterPattern.test(cell.trim()));
+}
+
+function findTableRange(lines, startIndex) {
+  if (startIndex < 0 || startIndex >= lines.length) return null;
+  if (!isTableLine$1(lines[startIndex].text)) return null;
+
+  let endIndex = startIndex;
+  while (endIndex < lines.length && isTableLine$1(lines[endIndex].text)) endIndex++;
+  endIndex--;
+
+  const count = endIndex - startIndex + 1;
+  if (count < 2) return null;
+
+  let delimiterIndex = -1;
+  for (let i = 0; i < Math.min(count, 3); i++) {
+    if (isTableDelimiter$1(lines[startIndex + i].text)) {
+      delimiterIndex = startIndex + i;
+      break;
+    }
+  }
+
+  if (delimiterIndex <= startIndex) return null;
+  return { startIndex, endIndex, delimiterIndex };
+}
+
+function findLinkedTableBlocks(markdownText) {
+  const text = String(markdownText || '');
+  if (!text) return [];
+
+  const lines = buildLineTable(text);
+  const blocks = [];
+  const headerPattern = /<!--mrmd:table[\s\S]*?-->/g;
+  let match;
+
+  while ((match = headerPattern.exec(text)) !== null) {
+    const rawHeaderText = match[0];
+    const headerFrom = match.index;
+    const headerTo = match.index + rawHeaderText.length;
+    const parsed = parseLinkedTableHeader(rawHeaderText);
+    if (!parsed.ok) continue;
+
+    let lineIndex = lineIndexAtOffset(lines, Math.max(headerTo - 1, 0)) + 1;
+    while (lineIndex < lines.length && isBlankLine(lines[lineIndex].text)) lineIndex++;
+    if (lineIndex >= lines.length) continue;
+
+    let captionAboveIndex = null;
+    let tableStartIndex = lineIndex;
+
+    if (isCaptionLine(lines[lineIndex].text)) {
+      let nextIndex = lineIndex + 1;
+      while (nextIndex < lines.length && isBlankLine(lines[nextIndex].text)) nextIndex++;
+      const tableAfterCaption = findTableRange(lines, nextIndex);
+      if (tableAfterCaption) {
+        captionAboveIndex = lineIndex;
+        tableStartIndex = nextIndex;
+      }
+    }
+
+    const tableRange = findTableRange(lines, tableStartIndex);
+    if (!tableRange) continue;
+
+    let captionBelowIndex = null;
+    let afterTable = tableRange.endIndex + 1;
+    while (afterTable < lines.length && isBlankLine(lines[afterTable].text)) afterTable++;
+    if (afterTable < lines.length && isCaptionLine(lines[afterTable].text)) {
+      captionBelowIndex = afterTable;
+    }
+
+    const snapshotStartIndex = captionAboveIndex ?? tableRange.startIndex;
+    const snapshotEndIndex = captionBelowIndex ?? tableRange.endIndex;
+    const snapshotFrom = lines[snapshotStartIndex].from;
+    const snapshotTo = lines[snapshotEndIndex].to;
+
+    blocks.push({
+      spec: parsed.value,
+      warnings: parsed.warnings || [],
+      headerFrom,
+      headerTo,
+      snapshotFrom,
+      snapshotTo,
+      tableFrom: lines[tableRange.startIndex].from,
+      tableTo: lines[tableRange.endIndex].to,
+      startLine: lines[snapshotStartIndex].number,
+      endLine: lines[snapshotEndIndex].number,
+      snapshotText: text.slice(snapshotFrom, snapshotTo),
+      rawHeaderText,
+      captionAboveText: captionAboveIndex !== null ? lines[captionAboveIndex].text : null,
+      captionBelowText: captionBelowIndex !== null ? lines[captionBelowIndex].text : null,
+    });
+  }
+
+  return blocks;
+}
+
+/**
+ * Linked-table block parsing helpers for the editor.
+ *
+ * Bridges CodeMirror editor state/doc text to the pure `mrmd-table-spec`
+ * block-discovery layer.
+ */
+
+
+function splitLines(text) {
+  return String(text || '').split(/\r?\n/);
+}
+
+/**
+ * Find linked-table blocks in the current editor state.
+ * Enriches pure spec blocks with table text/lines for widget rendering.
+ *
+ * @param {import('@codemirror/state').EditorState} state
+ * @returns {Array<Object>}
+ */
+function findLinkedTableBlocksInState(state) {
+  const text = state.doc.toString();
+  return findLinkedTableBlocks(text).map((block) => ({
+    ...block,
+    headerText: text.slice(block.headerFrom, block.headerTo),
+    tableText: text.slice(block.tableFrom, block.tableTo),
+    tableLines: splitLines(text.slice(block.tableFrom, block.tableTo)),
+  }));
+}
+
+/**
+ * Get the full replacement range for a linked table block.
+ * Includes hidden metadata header + visible snapshot region.
+ *
+ * @param {Object} block
+ * @returns {{from:number,to:number}}
+ */
+function getLinkedTableBlockRange(block) {
+  return {
+    from: block.headerFrom,
+    to: block.snapshotTo,
+  };
+}
+
+/**
+ * Whether a normal markdown table range is covered by a linked-table block.
+ * Used to suppress the legacy plain-table renderer for linked snapshots.
+ *
+ * @param {{from:number,to:number}} range
+ * @param {Array<Object>} linkedBlocks
+ * @returns {boolean}
+ */
+function isRangeInsideLinkedTable(range, linkedBlocks) {
+  return linkedBlocks.some((block) => range.from >= block.tableFrom && range.to <= block.tableTo);
+}
+
+/**
+ * Linked-table Yjs anchor helpers.
+ *
+ * These anchors let table jobs survive surrounding document edits.
+ */
+
+
+function assertRange(range) {
+  const from = range?.headerFrom ?? range?.from;
+  const to = range?.snapshotTo ?? range?.to;
+
+  if (!Number.isInteger(from) || from < 0) {
+    throw new TypeError('Linked-table anchor range must include a non-negative `from`/`headerFrom`');
+  }
+  if (!Number.isInteger(to) || to < from) {
+    throw new TypeError('Linked-table anchor range must include a `to`/`snapshotTo` >= `from`');
+  }
+
+  return { from, to };
+}
+
+function toRelativePositionJson(yText, index, assoc) {
+  const relPos = createRelativePositionFromTypeIndex(yText, index, assoc);
+  return relativePositionToJSON(relPos);
+}
+
+function toAbsoluteIndex(ydoc, relPosJson) {
+  if (!relPosJson) return null;
+
+  try {
+    const relPos = createRelativePositionFromJSON(relPosJson);
+    const absPos = createAbsolutePositionFromRelativePosition(relPos, ydoc);
+    return absPos?.index ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Create a Yjs-stable anchor for one linked-table block.
+ *
+ * Start uses right association so inserts at the exact start stay outside the block.
+ * End uses left association so inserts at the exact end stay outside the block.
+ */
+function createLinkedTableBlockAnchor(yText, range, options = {}) {
+  if (!yText?.doc) {
+    throw new TypeError('createLinkedTableBlockAnchor requires a Y.Text attached to a Y.Doc');
+  }
+
+  const resolved = assertRange(range);
+
+  return {
+    type: 'linked-table-block-anchor-v1',
+    tableId: options.tableId || range?.tableId || range?.spec?.id || null,
+    from: toRelativePositionJson(yText, resolved.from, 1),
+    to: toRelativePositionJson(yText, resolved.to, -1),
+    createdAt: Date.now(),
+  };
+}
+
+/**
+ * Resolve a linked-table anchor back to absolute document offsets.
+ */
+function resolveLinkedTableBlockAnchor(ydoc, anchor) {
+  if (!ydoc || !anchor) return null;
+
+  const from = toAbsoluteIndex(ydoc, anchor.from);
+  const to = toAbsoluteIndex(ydoc, anchor.to);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || to < from) return null;
+
+  return {
+    from,
+    to,
+    tableId: anchor.tableId || null,
+  };
+}
+
+/**
+ * Linked-table local editor state.
+ *
+ * Phase 1 uses this to reveal one linked table's raw markdown without forcing
+ * the whole editor into global source mode.
+ */
+
+
+const revealLinkedTableMarkdownEffect = StateEffect.define();
+const hideLinkedTableMarkdownEffect = StateEffect.define();
+const clearLinkedTableMarkdownEffect = StateEffect.define();
+
+function normalizeTableId(value) {
+  const tableId = String(value || '').trim();
+  return tableId || null;
+}
+
+const linkedTableMarkdownState = StateField.define({
+  create() {
+    return new Set();
+  },
+
+  update(value, tr) {
+    let next = value;
+
+    for (const effect of tr.effects) {
+      if (effect.is(clearLinkedTableMarkdownEffect)) {
+        if (next.size > 0) next = new Set();
+        continue;
+      }
+
+      if (effect.is(revealLinkedTableMarkdownEffect)) {
+        const tableId = normalizeTableId(effect.value?.tableId ?? effect.value);
+        if (tableId && !next.has(tableId)) {
+          next = new Set(next);
+          next.add(tableId);
+        }
+        continue;
+      }
+
+      if (effect.is(hideLinkedTableMarkdownEffect)) {
+        const tableId = normalizeTableId(effect.value?.tableId ?? effect.value);
+        if (tableId && next.has(tableId)) {
+          next = new Set(next);
+          next.delete(tableId);
+        }
+      }
+    }
+
+    return next;
+  },
+});
+
+function isLinkedTableMarkdownOpen(state, tableId) {
+  const normalized = normalizeTableId(tableId);
+  if (!normalized) return false;
+  const revealed = state.field(linkedTableMarkdownState, false);
+  return !!(revealed && revealed.has(normalized));
+}
+
+/**
+ * Linked-table workspace command/event helpers.
+ */
+
+const LINKED_TABLE_EVENT = 'mrmd-linked-table-action';
+
+/**
+ * Dispatch a linked-table UI action from the editor surface.
+ * Host/app code can listen on `view.dom` or `window`.
+ *
+ * @param {import('@codemirror/view').EditorView} view
+ * @param {Object} detail
+ * @returns {boolean}
+ */
+function dispatchLinkedTableAction(view, detail) {
+  if (!view?.dom) return false;
+  const event = new CustomEvent(LINKED_TABLE_EVENT, {
+    bubbles: true,
+    detail,
+  });
+  view.dom.dispatchEvent(event);
+  return true;
+}
+
+/**
+ * Convenience helper for opening the full linked-table workspace.
+ *
+ * @param {import('@codemirror/view').EditorView} view
+ * @param {Object} detail
+ * @returns {boolean}
+ */
+function openLinkedTableWorkspace(view, detail) {
+  return dispatchLinkedTableAction(view, {
+    action: 'open-grid',
+    ...detail,
+  });
+}
+
+/**
+ * Linked-table import/insert helpers.
+ */
+
+function getHostApi(hostApi) {
+  if (hostApi) return hostApi;
+  if (typeof window !== 'undefined') return window.electronAPI || null;
+  return null;
+}
+
+function ensureTrailingNewlinePair(text, side) {
+  const value = String(text || '');
+  if (!value) return '';
+
+  if (side === 'before') {
+    if (value.endsWith('\n\n')) return '';
+    if (value.endsWith('\n')) return '\n';
+    return '\n\n';
+  }
+
+  if (value.startsWith('\n\n')) return '';
+  if (value.startsWith('\n')) return '\n';
+  return '\n\n';
+}
+
+function canImportLinkedTableFromHost(hostApi) {
+  const host = getHostApi(hostApi);
+  return typeof host?.table?.importDelimited === 'function';
+}
+
+function normalizeLinkedTableBlockInsertion(docText, from, to, blockMarkdown) {
+  const fullText = String(docText || '');
+  const safeFrom = Math.max(0, Math.min(fullText.length, Number.isInteger(from) ? from : 0));
+  const safeTo = Math.max(safeFrom, Math.min(fullText.length, Number.isInteger(to) ? to : safeFrom));
+  const before = fullText.slice(0, safeFrom);
+  const after = fullText.slice(safeTo);
+  const block = String(blockMarkdown || '').trim();
+
+  if (!block) {
+    return {
+      from: safeFrom,
+      to: safeTo,
+      insert: '',
+      selectionAnchor: safeFrom,
+    };
+  }
+
+  const prefix = before.length > 0 ? ensureTrailingNewlinePair(before, 'before') : '';
+  const suffix = after.length > 0 ? ensureTrailingNewlinePair(after, 'after') : '';
+  const insert = `${prefix}${block}${suffix}`;
+
+  return {
+    from: safeFrom,
+    to: safeTo,
+    insert,
+    selectionAnchor: safeFrom + insert.length,
+  };
+}
+
+function insertLinkedTableBlock(editor, blockMarkdown, options = {}) {
+  const view = editor?.view || options.view;
+  if (!view?.state || typeof view.dispatch !== 'function') {
+    throw new Error('insertLinkedTableBlock requires an editor/view with dispatch support');
+  }
+
+  const selection = options.selection || view.state.selection?.main || { from: 0, to: 0 };
+  const docText = view.state.doc?.toString?.() || '';
+  const normalized = normalizeLinkedTableBlockInsertion(docText, selection.from, selection.to, blockMarkdown);
+
+  view.dispatch({
+    changes: {
+      from: normalized.from,
+      to: normalized.to,
+      insert: normalized.insert,
+    },
+    selection: {
+      anchor: normalized.selectionAnchor,
+    },
+    scrollIntoView: true,
+  });
+
+  return normalized;
+}
+
+async function importLinkedTableFromHost(editor, options = {}) {
+  const host = getHostApi(options.hostApi);
+  if (!canImportLinkedTableFromHost(host)) {
+    throw new Error('Linked-table import requires an Electron host exposing `electronAPI.table.importDelimited()`');
+  }
+
+  const projectRoot = options.projectRoot || editor?.getLinkedTableHostContext?.()?.projectRoot || null;
+  const documentPath = options.documentPath || editor?.getLinkedTableHostContext?.()?.documentPath || null;
+  const sourceFilePath = options.sourceFilePath;
+
+  if (!projectRoot) throw new Error('Linked-table import requires a project root');
+  if (!documentPath) throw new Error('Linked-table import requires a document path');
+  if (!sourceFilePath) throw new Error('Linked-table import requires a source file path');
+
+  const result = await host.table.importDelimited({
+    projectRoot,
+    documentPath,
+    sourceFilePath,
+    tableId: options.tableId,
+    label: options.label,
+    cacheFormat: options.cacheFormat,
+    maxRows: options.maxRows,
+    overflow: options.overflow,
+  });
+
+  insertLinkedTableBlock(editor, result.blockMarkdown, {
+    selection: options.selection,
+  });
+
+  return result;
+}
+
+/**
+ * Browser-side linked-table job coordination.
+ *
+ * Mirrors the monitor execution coordination pattern but for `tableJobs`.
+ */
+
+
+const TABLE_JOB_STATUS = {
+  REQUESTED: 'requested',
+  CLAIMED: 'claimed',
+  RUNNING: 'running',
+  WRITING: 'writing',
+  COMPLETED: 'completed',
+  ERROR: 'error',
+  CANCELLED: 'cancelled',
+};
+
+class TableJobsClient {
+  constructor(ydoc, clientId = ydoc?.clientID) {
+    this.ydoc = ydoc;
+    this.clientId = clientId;
+    this.jobs = ydoc.getMap('tableJobs');
+    this._statusCallbacks = new Map();
+    this._observers = new Set();
+    this._setupObserver();
+  }
+
+  static generateJobId() {
+    return `tablejob-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  _setupObserver() {
+    const observer = (event) => {
+      event.changes.keys.forEach((change, jobId) => {
+        const job = this.jobs.get(jobId);
+        const callback = this._statusCallbacks.get(jobId);
+        if (callback && job) {
+          callback(job.status, job);
+        }
+      });
+    };
+
+    this.jobs.observe(observer);
+    this._observers.add(observer);
+  }
+
+  requestJob({ tableId, blockAnchor = null, spec = null, jobType = 'applyOps', opList = [], metadata = {} }) {
+    const jobId = TableJobsClient.generateJobId();
+    this.jobs.set(jobId, {
+      id: jobId,
+      tableId,
+      jobType,
+      status: TABLE_JOB_STATUS.REQUESTED,
+      requestedBy: this.clientId,
+      requestedAt: Date.now(),
+      claimedBy: null,
+      claimedAt: null,
+      completedAt: null,
+      blockAnchor,
+      spec,
+      opList,
+      metadata,
+      result: null,
+      error: null,
+    });
+    return jobId;
+  }
+
+  requestSort({ tableId, blockAnchor = null, spec = null, column, direction = 'asc', metadata = {} }) {
+    return this.requestJob({
+      tableId,
+      blockAnchor,
+      spec,
+      jobType: 'applyOps',
+      opList: [{ type: 'sort', column, direction }],
+      metadata,
+    });
+  }
+
+  requestRefresh({ tableId, blockAnchor = null, spec = null, metadata = {} }) {
+    return this.requestJob({
+      tableId,
+      blockAnchor,
+      spec,
+      jobType: 'refresh',
+      opList: [],
+      metadata,
+    });
+  }
+
+  getJob(jobId) {
+    return this.jobs.get(jobId);
+  }
+
+  cancelJob(jobId) {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+    if ([TABLE_JOB_STATUS.COMPLETED, TABLE_JOB_STATUS.ERROR, TABLE_JOB_STATUS.CANCELLED].includes(job.status)) {
+      return;
+    }
+    this.jobs.set(jobId, {
+      ...job,
+      status: TABLE_JOB_STATUS.CANCELLED,
+      completedAt: Date.now(),
+    });
+  }
+
+  onStatusChange(jobId, callback) {
+    this._statusCallbacks.set(jobId, callback);
+    return () => {
+      this._statusCallbacks.delete(jobId);
+    };
+  }
+
+  waitForStatus(jobId, targetStatus, timeout = 30000) {
+    const statuses = Array.isArray(targetStatus) ? targetStatus : [targetStatus];
+
+    return new Promise((resolve, reject) => {
+      const current = this.getJob(jobId);
+      if (current && statuses.includes(current.status)) {
+        resolve(current);
+        return;
+      }
+
+      let timeoutId = null;
+      const unsubscribe = this.onStatusChange(jobId, (status, job) => {
+        if (!statuses.includes(status)) return;
+        if (timeoutId) clearTimeout(timeoutId);
+        unsubscribe();
+        resolve(job);
+      });
+
+      timeoutId = setTimeout(() => {
+        unsubscribe();
+        reject(new Error(`Timeout waiting for table job status ${statuses.join('/')} on ${jobId}`));
+      }, timeout);
+    });
+  }
+
+  destroy() {
+    for (const observer of this._observers) {
+      this.jobs.unobserve(observer);
+    }
+    this._observers.clear();
+    this._statusCallbacks.clear();
+  }
+}
+
+function createTableJobsClient(ydoc) {
+  return new TableJobsClient(ydoc, ydoc.clientID);
+}
+
+/**
+ * Linked-table document/workspace controller.
+ *
+ * The first implementation keeps the embedded widget actions and `tableJobs`
+ * map in sync.
+ */
+
+
+function cloneValue$2(value) {
+  if (Array.isArray(value)) return value.map(cloneValue$2);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value)) out[key] = cloneValue$2(value[key]);
+    return out;
+  }
+  return value;
+}
+
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'error', 'cancelled']);
+const ACTIVE_JOB_STATUSES = new Set(['requested', 'claimed', 'running', 'writing']);
+const STALE_CHECK_TTL_MS = 5000;
+
+function createActionMetadata(detail) {
+  return {
+    action: detail.action || null,
+    label: detail.label || detail.tableId || null,
+    source: 'linked-table-widget',
+  };
+}
+
+function summarizeStatusLabel(status) {
+  switch (status) {
+    case 'requested':
+    case 'claimed':
+      return 'Pending';
+    case 'running':
+      return 'Running';
+    case 'writing':
+      return 'Writing';
+    case 'error':
+      return 'Error';
+    case 'cancelled':
+      return 'Cancelled';
+    case 'completed':
+      return 'Fresh';
+    default:
+      return status || 'Fresh';
+  }
+}
+
+function isTextLikePath(filePath) {
+  const textLikeExtensions = new Set([
+    'md', 'qmd', 'txt', 'csv', 'tsv', 'json', 'yaml', 'yml', 'r', 'py', 'js', 'ts', 'sql', 'html', 'css', 'xml', 'toml'
+  ]);
+  const match = String(filePath || '').match(/\.([^.]+)$/);
+  return !!(match && textLikeExtensions.has(match[1].toLowerCase()));
+}
+
+function isEditorDocumentPath(filePath) {
+  const match = String(filePath || '').match(/\.([^.]+)$/);
+  if (!match) return false;
+  return new Set(['md', 'qmd']).has(match[1].toLowerCase());
+}
+
+function toTimestamp(value) {
+  const date = new Date(value || '');
+  const time = date.getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function formatTimestamp(value) {
+  const time = toTimestamp(value);
+  return time === null ? '' : new Date(time).toLocaleString();
+}
+
+function latestJobTimestamp(job) {
+  if (!job) return 0;
+  return job.completedAt || job.startedAt || job.claimedAt || job.requestedAt || 0;
+}
+
+class LinkedTableController {
+  constructor(options = {}) {
+    this.editor = options.editor || null;
+    this.view = options.view || this.editor?.view || null;
+    this.ydoc = options.ydoc || this.editor?.ydoc || null;
+    this.yText = options.yText || this.editor?.getYText?.() || this.editor?.yText || null;
+    this.jobsClient = options.jobsClient || (this.ydoc ? new TableJobsClient(this.ydoc, this.ydoc.clientID) : null);
+    this.ownsJobsClient = !options.jobsClient;
+    this.hostApi = options.hostApi || null;
+    this.hostContext = {
+      projectRoot: options.projectRoot || null,
+      documentPath: options.documentPath || null,
+    };
+    this.onAction = typeof options.onAction === 'function' ? options.onAction : null;
+    this.onJobRequested = typeof options.onJobRequested === 'function' ? options.onJobRequested : null;
+    this.onJobStatusChange = typeof options.onJobStatusChange === 'function' ? options.onJobStatusChange : null;
+    this.handleSortJobs = options.handleSortJobs !== false;
+    this.handleRefreshJobs = options.handleRefreshJobs !== false;
+    this.handleOpenMarkdown = options.handleOpenMarkdown !== false;
+    this._staleInfoCache = new Map();
+    this._staleRefreshScheduled = false;
+    this._stalePollingTimer = null;
+    this._boundHandleAction = this._handleAction.bind(this);
+    this._boundJobsObserver = this._handleJobsMapChange.bind(this);
+
+    if (this.view?.dom?.addEventListener) {
+      this.view.dom.addEventListener(LINKED_TABLE_EVENT, this._boundHandleAction);
+    }
+
+    if (this.jobsClient?.jobs?.observe) {
+      this.jobsClient.jobs.observe(this._boundJobsObserver);
+    }
+
+    const host = this.getHostApi();
+    if (host?.table?.resolvePaths && host?.getFileInfo && typeof setInterval === 'function') {
+      this._stalePollingTimer = setInterval(() => {
+        this.refreshVisibleTableStaleness().catch((error) => {
+          console.warn('[mrmd-editor/tables] stale polling failed:', error);
+        });
+      }, STALE_CHECK_TTL_MS);
+    }
+
+    this.syncWidgetStatuses();
+  }
+
+  _notifyAction(detail, event) {
+    if (!this.onAction) return;
+    try {
+      this.onAction(detail, event, this);
+    } catch (error) {
+      console.warn('[mrmd-editor/tables] linked-table action callback failed:', error);
+    }
+  }
+
+  _notifyRequested(jobId, detail) {
+    if (!this.onJobRequested) return;
+    try {
+      this.onJobRequested(jobId, detail, this.jobsClient?.getJob(jobId) || null, this);
+    } catch (error) {
+      console.warn('[mrmd-editor/tables] linked-table job request callback failed:', error);
+    }
+  }
+
+  _watchJob(jobId, detail) {
+    if (!this.jobsClient || !this.onJobStatusChange) return;
+
+    const unsubscribe = this.jobsClient.onStatusChange(jobId, (status, job) => {
+      try {
+        this.onJobStatusChange(status, job, detail, this);
+      } catch (error) {
+        console.warn('[mrmd-editor/tables] linked-table job status callback failed:', error);
+      }
+
+      if (detail?.tableId && status === 'completed') {
+        this._staleInfoCache.delete(detail.tableId);
+      }
+
+      this.syncWidgetStatuses();
+
+      if (TERMINAL_JOB_STATUSES.has(status)) {
+        unsubscribe();
+      }
+    });
+  }
+
+  _handleJobsMapChange() {
+    this.syncWidgetStatuses();
+  }
+
+  _listVisibleTableIds() {
+    if (!this.view?.dom?.querySelectorAll) return [];
+    return Array.from(this.view.dom.querySelectorAll('.cm-linked-table-widget[data-table-id]'))
+      .map((element) => element.dataset.tableId)
+      .filter(Boolean);
+  }
+
+  _findBlockByTableId(tableId) {
+    if (!tableId || !this.view?.state) return null;
+    return findLinkedTableBlocksInState(this.view.state).find((block) => block?.spec?.id === tableId) || null;
+  }
+
+  _scheduleStalenessRefresh() {
+    if (this._staleRefreshScheduled) return;
+    const host = this.getHostApi();
+    if (!host?.table?.resolvePaths || !host?.getFileInfo) return;
+
+    this._staleRefreshScheduled = true;
+    queueMicrotask(() => {
+      this._staleRefreshScheduled = false;
+      this.refreshVisibleTableStaleness().catch((error) => {
+        console.warn('[mrmd-editor/tables] stale refresh failed:', error);
+      });
+    });
+  }
+
+  _listJobsForTable(tableId) {
+    if (!this.jobsClient?.jobs || !tableId) return [];
+    return Array.from(this.jobsClient.jobs.values())
+      .filter((job) => job?.tableId === tableId)
+      .sort((left, right) => latestJobTimestamp(right) - latestJobTimestamp(left));
+  }
+
+  findActiveJobForTable(tableId) {
+    return this._listJobsForTable(tableId).find((job) => ACTIVE_JOB_STATUSES.has(job.status)) || null;
+  }
+
+  summarizeTableStatus(tableId, fallbackMaterializedAt = '') {
+    const jobs = this._listJobsForTable(tableId);
+    const activeJob = jobs.find((job) => ACTIVE_JOB_STATUSES.has(job.status));
+    if (activeJob) {
+      const phaseTitle = activeJob.status === 'writing'
+        ? 'Writing updated markdown snapshot'
+        : activeJob.status === 'running'
+          ? 'Materializing linked-table result'
+          : 'Queued linked-table job';
+      return {
+        status: activeJob.status,
+        label: summarizeStatusLabel(activeJob.status),
+        title: activeJob.error?.message || phaseTitle,
+        busy: true,
+      };
+    }
+
+    const latest = jobs[0] || null;
+    if (latest?.status === 'error') {
+      return {
+        status: 'error',
+        label: 'Error',
+        title: latest.error?.message || 'Linked-table job failed',
+        busy: false,
+      };
+    }
+
+    if (latest?.status === 'cancelled') {
+      return {
+        status: 'cancelled',
+        label: 'Cancelled',
+        title: 'Linked-table job cancelled',
+        busy: false,
+      };
+    }
+
+    const materializedAt = latest?.result?.updatedSpec?.snapshot?.materializedAt || fallbackMaterializedAt || '';
+    const staleInfo = this._staleInfoCache.get(tableId);
+    if (staleInfo?.status === 'stale') {
+      return {
+        status: 'stale',
+        label: 'Stale',
+        title: staleInfo.title || 'Linked-table source changed after the last materialization',
+        busy: false,
+      };
+    }
+
+    const rowCount = latest?.result?.snapshot?.rowCount ?? latest?.result?.materialized?.rowCount ?? null;
+    return {
+      status: 'fresh',
+      label: 'Fresh',
+      title: materializedAt
+        ? `Last materialized ${formatTimestamp(materializedAt)}${Number.isInteger(rowCount) ? ` • ${rowCount} rows` : ''}`
+        : 'Linked-table snapshot is current',
+      busy: false,
+    };
+  }
+
+  async refreshTableStaleness(tableIdOrBlock) {
+    const block = typeof tableIdOrBlock === 'string'
+      ? this._findBlockByTableId(tableIdOrBlock)
+      : tableIdOrBlock;
+    if (!block?.spec?.id) return null;
+
+    const tableId = block.spec.id;
+    if (this.findActiveJobForTable(tableId)) return null;
+
+    const host = this.getHostApi();
+    if (!host?.table?.resolvePaths || !host?.getFileInfo) return null;
+
+    const materializedAt = block.spec?.snapshot?.materializedAt || '';
+    const materializedTime = toTimestamp(materializedAt);
+    if (materializedTime === null) {
+      this._staleInfoCache.delete(tableId);
+      return null;
+    }
+
+    const cached = this._staleInfoCache.get(tableId);
+    if (cached && cached.materializedAt === materializedAt && (Date.now() - cached.checkedAt) < STALE_CHECK_TTL_MS) {
+      return cached;
+    }
+
+    const resolved = await this.resolveHostPaths({ tableId, spec: block.spec });
+    const sourcePaths = resolved?.sourcePaths || [];
+    if (sourcePaths.length === 0) {
+      this._staleInfoCache.set(tableId, {
+        status: 'fresh',
+        checkedAt: Date.now(),
+        materializedAt,
+      });
+      return this._staleInfoCache.get(tableId);
+    }
+
+    let latestModified = null;
+    let latestPath = null;
+    for (const source of sourcePaths) {
+      const info = await host.getFileInfo(source.path);
+      if (!info?.success || !info.modified) continue;
+      const modifiedTime = toTimestamp(info.modified);
+      if (modifiedTime === null) continue;
+      if (latestModified === null || modifiedTime > latestModified) {
+        latestModified = modifiedTime;
+        latestPath = source.path;
+      }
+    }
+
+    const stale = latestModified !== null && latestModified > materializedTime;
+    const entry = stale
+      ? {
+          status: 'stale',
+          checkedAt: Date.now(),
+          materializedAt,
+          title: `Source changed ${formatTimestamp(latestModified)}${latestPath ? ` • ${latestPath.split('/').pop()}` : ''}`,
+        }
+      : {
+          status: 'fresh',
+          checkedAt: Date.now(),
+          materializedAt,
+        };
+
+    this._staleInfoCache.set(tableId, entry);
+    return entry;
+  }
+
+  async refreshVisibleTableStaleness() {
+    const visibleTableIds = this._listVisibleTableIds();
+    await Promise.all(visibleTableIds.map((tableId) => this.refreshTableStaleness(tableId)));
+    this.syncWidgetStatuses({ scheduleStalenessCheck: false });
+  }
+
+  syncWidgetStatuses(options = {}) {
+    if (!this.view?.dom?.querySelectorAll) return;
+
+    const widgets = this.view.dom.querySelectorAll('.cm-linked-table-widget[data-table-id]');
+    for (const widget of widgets) {
+      const tableId = widget.dataset.tableId;
+      if (!tableId) continue;
+
+      const statusInfo = this.summarizeTableStatus(tableId, widget.dataset.materializedAt || '');
+      widget.dataset.jobStatus = statusInfo.status;
+      widget.setAttribute('aria-busy', statusInfo.busy ? 'true' : 'false');
+      widget.title = statusInfo.title || '';
+
+      const badges = widget.querySelector('.cm-linked-table-badges');
+      if (badges) {
+        badges.querySelectorAll('.cm-linked-table-status-badge').forEach((badge) => badge.remove());
+        const badge = document.createElement('span');
+        badge.className = `cm-linked-table-badge cm-linked-table-status-badge cm-linked-table-status-${statusInfo.status}${statusInfo.busy ? ' cm-linked-table-status-active' : ''}`;
+        badge.textContent = statusInfo.busy ? `${statusInfo.label}…` : statusInfo.label;
+        if (statusInfo.title) badge.title = statusInfo.title;
+        badges.appendChild(badge);
+      }
+
+      const refreshButton = widget.querySelector('.cm-linked-table-action[data-linked-table-action="refresh"]');
+      if (refreshButton) {
+        refreshButton.textContent = statusInfo.busy ? 'Working…' : 'Refresh';
+      }
+
+      const actions = widget.querySelectorAll('.cm-linked-table-action, .cm-linked-table-sortable');
+      actions.forEach((actionEl) => {
+        if (actionEl.matches('.cm-linked-table-action[data-linked-table-action="open-markdown"], .cm-linked-table-action[data-linked-table-action="open-grid"], .cm-linked-table-action[data-linked-table-action="open-source"], .cm-linked-table-action[data-linked-table-action="reveal-source"]')) {
+          return;
+        }
+        if ('disabled' in actionEl) {
+          actionEl.disabled = !!statusInfo.busy;
+        }
+        if (statusInfo.busy) {
+          actionEl.setAttribute('aria-disabled', 'true');
+        } else {
+          actionEl.removeAttribute('aria-disabled');
+        }
+      });
+    }
+
+    if (options.scheduleStalenessCheck !== false) {
+      this._scheduleStalenessRefresh();
+    }
+  }
+
+  getHostApi() {
+    if (this.hostApi) return this.hostApi;
+    if (typeof window !== 'undefined' && window?.electronAPI) return window.electronAPI;
+    return null;
+  }
+
+  setHostContext(context = {}) {
+    this.hostContext = {
+      ...this.hostContext,
+      ...context,
+    };
+    return this.getHostContext();
+  }
+
+  getHostContext() {
+    return { ...this.hostContext };
+  }
+
+  createBlockAnchor(detail) {
+    if (!this.yText) {
+      throw new Error('LinkedTableController requires a Y.Text to create block anchors');
+    }
+
+    return createLinkedTableBlockAnchor(this.yText, {
+      tableId: detail.tableId,
+      headerFrom: detail.headerFrom,
+      snapshotTo: detail.snapshotTo,
+    });
+  }
+
+  async resolveHostPaths(detail) {
+    const host = this.getHostApi();
+    const projectRoot = this.hostContext.projectRoot;
+    const documentPath = this.hostContext.documentPath;
+    if (!host?.table?.resolvePaths) return null;
+    if (!projectRoot || !documentPath || !detail?.spec) return null;
+
+    return host.table.resolvePaths({
+      projectRoot,
+      documentPath,
+      spec: cloneValue$2(detail.spec),
+    });
+  }
+
+  requestSort(detail) {
+    if (!this.jobsClient) {
+      throw new Error('LinkedTableController requires a TableJobsClient to request sort jobs');
+    }
+
+    const activeJob = this.findActiveJobForTable(detail.tableId);
+    if (activeJob) {
+      return activeJob.id;
+    }
+
+    this._staleInfoCache.delete(detail.tableId);
+
+    const blockAnchor = this.createBlockAnchor(detail);
+    const jobId = this.jobsClient.requestSort({
+      tableId: detail.tableId,
+      blockAnchor,
+      spec: cloneValue$2(detail.spec),
+      column: detail.column,
+      direction: detail.direction || 'asc',
+      metadata: createActionMetadata(detail),
+    });
+
+    this._notifyRequested(jobId, detail);
+    this._watchJob(jobId, detail);
+    this.syncWidgetStatuses();
+    return jobId;
+  }
+
+  requestRefresh(detail) {
+    if (!this.jobsClient) {
+      throw new Error('LinkedTableController requires a TableJobsClient to request refresh jobs');
+    }
+
+    const activeJob = this.findActiveJobForTable(detail.tableId);
+    if (activeJob) {
+      return activeJob.id;
+    }
+
+    this._staleInfoCache.delete(detail.tableId);
+
+    const blockAnchor = this.createBlockAnchor(detail);
+    const jobId = this.jobsClient.requestRefresh({
+      tableId: detail.tableId,
+      blockAnchor,
+      spec: cloneValue$2(detail.spec),
+      metadata: createActionMetadata(detail),
+    });
+
+    this._notifyRequested(jobId, detail);
+    this._watchJob(jobId, detail);
+    this.syncWidgetStatuses();
+    return jobId;
+  }
+
+  openMarkdown(detail) {
+    if (!this.handleOpenMarkdown) return false;
+
+    if (this.view?.dispatch && detail.tableId) {
+      this.view.dispatch({
+        effects: [revealLinkedTableMarkdownEffect.of({ tableId: detail.tableId })],
+        selection: {
+          anchor: Number.isInteger(detail.headerFrom) ? detail.headerFrom : (detail.snapshotFrom || 0),
+          head: Number.isInteger(detail.snapshotTo) ? detail.snapshotTo : (detail.headerFrom || 0),
+        },
+        scrollIntoView: true,
+      });
+      return true;
+    }
+
+    return false;
+  }
+
+  async openSource(detail) {
+    const host = this.getHostApi();
+    if (!host) return false;
+
+    const resolved = await this.resolveHostPaths(detail);
+    const primarySourcePath = resolved?.sourcePaths?.[0]?.path || null;
+    if (!primarySourcePath) return false;
+
+    if (host.openFile && isEditorDocumentPath(primarySourcePath)) {
+      await host.openFile(primarySourcePath);
+      return true;
+    }
+
+    if (host.shell?.openPath && isTextLikePath(primarySourcePath)) {
+      await host.shell.openPath(primarySourcePath);
+      return true;
+    }
+
+    if (host.shell?.showItemInFolder) {
+      await host.shell.showItemInFolder(primarySourcePath);
+      return true;
+    }
+
+    return false;
+  }
+
+  async revealSource(detail) {
+    const host = this.getHostApi();
+    if (!host?.shell?.showItemInFolder) return false;
+
+    const resolved = await this.resolveHostPaths(detail);
+    const primarySourcePath = resolved?.sourcePaths?.[0]?.path || null;
+    if (!primarySourcePath) return false;
+
+    await host.shell.showItemInFolder(primarySourcePath);
+    return true;
+  }
+
+  closeMarkdown(detail) {
+    if (!this.view?.dispatch || !detail?.tableId) return false;
+    this.view.dispatch({
+      effects: [hideLinkedTableMarkdownEffect.of({ tableId: detail.tableId })],
+      selection: {
+        anchor: Number.isInteger(detail.tableFrom) ? detail.tableFrom : (detail.headerFrom || 0),
+      },
+      scrollIntoView: true,
+    });
+    return true;
+  }
+
+  _handleAction(event) {
+    const detail = event?.detail || {};
+    if (!detail?.action) return;
+
+    let jobId = null;
+
+    if (detail.action === 'sort' && this.handleSortJobs && detail.tableId && detail.spec && detail.column) {
+      jobId = this.requestSort(detail);
+      detail.jobId = jobId;
+    } else if (detail.action === 'refresh' && this.handleRefreshJobs && detail.tableId && detail.spec) {
+      jobId = this.requestRefresh(detail);
+      detail.jobId = jobId;
+    } else if (detail.action === 'open-markdown') {
+      this.openMarkdown(detail);
+    } else if (detail.action === 'close-markdown') {
+      this.closeMarkdown(detail);
+    } else if (detail.action === 'open-source') {
+      Promise.resolve(this.openSource(detail)).catch((error) => {
+        console.warn('[mrmd-editor/tables] open-source action failed:', error);
+      });
+    } else if (detail.action === 'reveal-source') {
+      Promise.resolve(this.revealSource(detail)).catch((error) => {
+        console.warn('[mrmd-editor/tables] reveal-source action failed:', error);
+      });
+    }
+
+    this._notifyAction(detail, event);
+  }
+
+  destroy() {
+    if (this.view?.dom?.removeEventListener) {
+      this.view.dom.removeEventListener(LINKED_TABLE_EVENT, this._boundHandleAction);
+    }
+
+    if (this.jobsClient?.jobs?.unobserve && this._boundJobsObserver) {
+      this.jobsClient.jobs.unobserve(this._boundJobsObserver);
+    }
+
+    if (this._stalePollingTimer) {
+      clearInterval(this._stalePollingTimer);
+      this._stalePollingTimer = null;
+    }
+
+    if (this.ownsJobsClient && this.jobsClient?.destroy) {
+      this.jobsClient.destroy();
+    }
+  }
+}
+
+function createLinkedTableController(options = {}) {
+  return new LinkedTableController(options);
+}
+
+/**
+ * Inline HTML Rendering
+ *
+ * Renders inline HTML elements in markdown content.
+ * Supports all HTML tags with full power - no sanitization.
+ *
+ * @module markdown/html-inline
+ */
+
+
+/**
+ * Extract HTML elements and entities from text with their positions
+ *
+ * @param {string} text - Text to scan
+ * @returns {Array<{start: number, end: number, html: string, tag: string}>}
+ */
+function extractHtmlElements(text) {
+  const results = [];
+  const seen = new Set(); // Avoid duplicates from overlapping patterns
+  let match;
+
+  // Match HTML entities: &name; or &#123; or &#x1F600;
+  // Named entities: &copy; &mdash; &hearts; &nbsp; etc.
+  // Numeric entities: &#123; &#8212;
+  // Hex entities: &#x1F600; &#xA9;
+  const entityPattern = /&(?:#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g;
+  while ((match = entityPattern.exec(text)) !== null) {
+    const key = `${match.index}-${match.index + match[0].length}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      results.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        html: match[0],
+        tag: 'entity',
+      });
+    }
+  }
+
+  // Match self-closing and void elements
+  const voidTags = /<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)(?:\s+[^>]*)?\/?\s*>/gi;
+
+  while ((match = voidTags.exec(text)) !== null) {
+    const key = `${match.index}-${match.index + match[0].length}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      results.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        html: match[0],
+        tag: match[1].toLowerCase(),
+      });
+    }
+  }
+
+  // Match HTML comments, but leave MRMD special comments to comment-syntax
+  const comments = /<!--(?!\!)[\s\S]*?-->/g;
+  while ((match = comments.exec(text)) !== null) {
+    const key = `${match.index}-${match.index + match[0].length}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      results.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        html: match[0],
+        tag: 'comment',
+      });
+    }
+  }
+
+  // Match paired tags - use a more robust approach
+  const pairedTagPattern = /<([a-zA-Z][a-zA-Z0-9]*)(?:\s+[^>]*)?>[\s\S]*?<\/\1>/g;
+  while ((match = pairedTagPattern.exec(text)) !== null) {
+    const key = `${match.index}-${match.index + match[0].length}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      results.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        html: match[0],
+        tag: match[1].toLowerCase(),
+      });
+    }
+  }
+
+  // Sort by position
+  results.sort((a, b) => a.start - b.start);
+
+  return results;
+}
+
+// =============================================================================
+// Widget for Inline HTML
+// =============================================================================
+
+/**
+ * Widget that renders inline HTML content
+ */
+class InlineHtmlWidget extends WidgetType {
+  /**
+   * @param {string} html - Raw HTML string to render
+   */
+  constructor(html) {
+    super();
+    this.html = html;
+  }
+
+  eq(other) {
+    return this.html === other.html;
+  }
+
+  toDOM() {
+    const container = document.createElement('span');
+    container.className = 'cm-inline-html';
+    container.innerHTML = this.html;
+    return container;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+// =============================================================================
+// HTML Rendering Utility
+// =============================================================================
+
+/**
+ * Render text content that may contain HTML.
+ * Returns an HTML string with HTML elements preserved and text escaped.
+ *
+ * @param {string} text - Text that may contain HTML
+ * @returns {string} - HTML string safe for innerHTML
+ */
+function renderTextWithHtml(text) {
+  if (!text) return '';
+
+  const elements = extractHtmlElements(text);
+
+  if (elements.length === 0) {
+    // No HTML found, just escape the text
+    return escapeHtmlText(text);
+  }
+
+  // Build output by interleaving escaped text and raw HTML
+  let result = '';
+  let lastEnd = 0;
+
+  for (const el of elements) {
+    // Escape text before this element
+    if (el.start > lastEnd) {
+      result += escapeHtmlText(text.slice(lastEnd, el.start));
+    }
+    // Add raw HTML (not escaped)
+    result += el.html;
+    lastEnd = el.end;
+  }
+
+  // Escape any remaining text
+  if (lastEnd < text.length) {
+    result += escapeHtmlText(text.slice(lastEnd));
+  }
+
+  return result;
+}
+
+/**
+ * Escape text for safe HTML insertion (but not HTML tags themselves)
+ * Only escapes &, <, >, " when they're not part of HTML tags
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function escapeHtmlText(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Render inline markdown AND HTML together.
+ * Processes markdown formatting (bold, italic, code, strikethrough)
+ * while preserving HTML elements.
+ *
+ * @param {string} content - Text with potential markdown and HTML
+ * @returns {string} - HTML string
+ */
+function renderInlineMarkdownWithHtml(content) {
+  if (!content) return '';
+
+  // First, extract and protect HTML elements
+  const elements = extractHtmlElements(content);
+  const placeholders = new Map();
+  let protected_content = content;
+
+  // Replace HTML with placeholders
+  // Process in reverse order to maintain positions
+  for (let i = elements.length - 1; i >= 0; i--) {
+    const el = elements[i];
+    const placeholder = `__HTML_${i}__`;
+    placeholders.set(placeholder, el.html);
+    protected_content =
+      protected_content.slice(0, el.start) +
+      placeholder +
+      protected_content.slice(el.end);
+  }
+
+  // Process images BEFORE escaping HTML (they contain special chars)
+  // Match: ![alt](url) or ![alt](url "title")
+  let html = protected_content.replace(
+    /!\[([^\]]*)\]\(([^)"]+)(?:\s+"([^"]*)")?\)/g,
+    (match, alt, url, title) => {
+      const escapedAlt = escapeHtmlText(alt);
+      const escapedUrl = escapeHtmlText(url);
+      const titleAttr = title ? ` title="${escapeHtmlText(title)}"` : '';
+      return `<img src="${escapedUrl}" alt="${escapedAlt}"${titleAttr} class="cm-inline-img">`;
+    }
+  );
+
+  // Extract and protect our generated img tags
+  const imgTags = [];
+  html = html.replace(/<img [^>]+>/g, (match) => {
+    imgTags.push(match);
+    return `__IMG_${imgTags.length - 1}__`;
+  });
+
+  // Now escape remaining text (but not placeholders)
+  html = escapeHtmlText(html);
+
+  // Restore img tags
+  html = html.replace(/__IMG_(\d+)__/g, (_, index) => imgTags[parseInt(index)]);
+
+  // Process markdown formatting
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  html = html.replace(/`(.+?)`/g, '<code>$1</code>');
+  html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
+
+  // Restore HTML elements from placeholders
+  for (const [placeholder, originalHtml] of placeholders) {
+    html = html.replace(placeholder, originalHtml);
+  }
+
+  return html;
+}
+
+/**
+ * Table Widget and Parser
+ *
+ * Renders markdown tables as HTML tables with Tufte Markdown extensions.
+ * Uses the stable layout pattern to avoid jitter.
+ *
+ * Tufte Markdown Extensions:
+ * - Column widths: |:--{30%}| in delimiter row
+ * - Colspan: | > | merges with cell to left
+ * - Rowspan: | ^ | merges with cell above
+ * - Decimal alignment: |---.| in delimiter row
+ *
+ * @module markdown/widgets/table
+ */
+
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+/** Marker for colspan (merge with cell to left) */
+const COLSPAN_MARKER = '>';
+
+/** Marker for rowspan (merge with cell above) */
+const ROWSPAN_MARKER = '^';
+
+// =============================================================================
+// Detection Functions
+// =============================================================================
+
+/**
+ * Check if a line looks like a table row (contains pipes)
+ *
+ * @param {string} line
+ * @returns {boolean}
+ */
+function isTableLine(line) {
+  if (line.startsWith('```') || line.startsWith('~~~')) {
+    return false;
+  }
+  return line.includes('|');
+}
+
+/**
+ * Check if a line is a table delimiter row.
+ * Enhanced to support Tufte extensions: |:--{30%}| and |---.|
+ *
+ * @param {string} line
+ * @returns {boolean}
+ */
+function isTableDelimiter(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') && !trimmed.includes('|')) {
+    return false;
+  }
+
+  const cells = splitTableRow(trimmed);
+  if (cells.length === 0) {
+    return false;
+  }
+
+  // Each cell must match the delimiter pattern
+  // Extended pattern allows: colons, dashes, dots, and width specs
+  const delimiterPattern = /^:?-+(?:\{[^}]+\})?\.?:?$|^:?-+\.?(?:\{[^}]+\})?:?$/;
+  return cells.every(cell => delimiterPattern.test(cell.trim()));
+}
+
+// =============================================================================
+// Parsing Functions
+// =============================================================================
+
+/**
+ * Split a table row into cells, handling escaped pipes
+ *
+ * @param {string} line
+ * @returns {string[]}
+ */
+function splitTableRow(line) {
+  const cells = [];
+  let current = '';
+  let i = 0;
+
+  const trimmed = line.trim();
+  if (trimmed.startsWith('|')) {
+    i = trimmed.indexOf('|') + 1;
+  } else {
+    i = 0;
+  }
+
+  while (i < trimmed.length) {
+    const char = trimmed[i];
+
+    if (char === '\\' && i + 1 < trimmed.length && trimmed[i + 1] === '|') {
+      // Escaped pipe - include the pipe in content
+      current += '|';
+      i += 2;
+    } else if (char === '|') {
+      // Cell boundary
+      cells.push(current);
+      current = '';
+      i++;
+    } else {
+      current += char;
+      i++;
+    }
+  }
+
+  // Don't add the last segment if it's empty (trailing pipe case)
+  if (current.trim() !== '') {
+    cells.push(current);
+  }
+
+  return cells;
+}
+
+/**
+ * Parse column alignments and widths from a delimiter row
+ *
+ * @param {string} delimiterLine
+ * @returns {{ alignments: (string|null)[], widths: (Object|null)[], decimalColumns: Set<number> }}
+ */
+function parseDelimiterRow(delimiterLine) {
+  const cells = splitTableRow(delimiterLine);
+  const alignments = [];
+  const widths = [];
+  const decimalColumns = new Set();
+
+  cells.forEach((cell, index) => {
+    const trimmed = cell.trim();
+
+    // Extract width if present: {30%}, {100px}, {2fr}, {1.5em}
+    let width = null;
+    const widthMatch = trimmed.match(/\{(\d+(?:\.\d+)?)(px|%|fr|em)\}/);
+    if (widthMatch) {
+      width = {
+        value: parseFloat(widthMatch[1]),
+        unit: widthMatch[2],
+      };
+    }
+    widths.push(width);
+
+    // Remove width specification for alignment parsing
+    const alignPart = trimmed.replace(/\{[^}]+\}/, '');
+
+    // Check for decimal alignment marker (.)
+    const hasDecimal = alignPart.includes('.');
+    if (hasDecimal) {
+      decimalColumns.add(index);
+    }
+
+    // Parse alignment from colons
+    const leftColon = alignPart.startsWith(':');
+    const rightColon = alignPart.endsWith(':');
+
+    if (hasDecimal) {
+      alignments.push('decimal');
+    } else if (leftColon && rightColon) {
+      alignments.push('center');
+    } else if (rightColon) {
+      alignments.push('right');
+    } else if (leftColon) {
+      alignments.push('left');
+    } else {
+      alignments.push(null);
+    }
+  });
+
+  return { alignments, widths, decimalColumns };
+}
+
+/**
+ * Check if cell content is a colspan marker
+ */
+function isColspanMarker(content) {
+  return content.trim() === COLSPAN_MARKER;
+}
+
+/**
+ * Check if cell content is a rowspan marker
+ */
+function isRowspanMarker(content) {
+  return content.trim() === ROWSPAN_MARKER;
+}
+
+/**
+ * Parse a table row into structured cells
+ */
+function parseTableRow(line, isHeader = false, isDelimiter = false) {
+  const rawCells = splitTableRow(line);
+
+  const cells = rawCells.map(raw => {
+    const content = raw.trim();
+    return {
+      content,
+      raw,
+      colspan: 1,
+      rowspan: 1,
+      hidden: false,
+      isColspanMarker: isColspanMarker(content),
+      isRowspanMarker: isRowspanMarker(content),
+    };
+  });
+
+  return {
+    cells,
+    isHeader,
+    isDelimiter,
+  };
+}
+
+/**
+ * Process colspan markers in a table
+ */
+function processColspans(rows) {
+  for (const row of rows) {
+    if (row.isDelimiter) continue;
+
+    for (let col = row.cells.length - 1; col >= 0; col--) {
+      const cell = row.cells[col];
+
+      if (cell.isColspanMarker && col > 0) {
+        let targetCol = col - 1;
+        while (targetCol >= 0 && row.cells[targetCol].isColspanMarker) {
+          targetCol--;
+        }
+
+        if (targetCol >= 0) {
+          row.cells[targetCol].colspan++;
+          cell.hidden = true;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Process rowspan markers in a table
+ */
+function processRowspans(rows) {
+  const dataStartIndex = rows.findIndex(r => !r.isHeader && !r.isDelimiter);
+  if (dataStartIndex === -1) return;
+
+  for (let rowIdx = rows.length - 1; rowIdx >= 0; rowIdx--) {
+    const row = rows[rowIdx];
+    if (row.isDelimiter) continue;
+
+    for (let col = 0; col < row.cells.length; col++) {
+      const cell = row.cells[col];
+
+      if (cell.isRowspanMarker) {
+        let targetRow = rowIdx - 1;
+        while (targetRow >= 0) {
+          const aboveRow = rows[targetRow];
+          if (aboveRow.isDelimiter) {
+            targetRow--;
+            continue;
+          }
+
+          if (col < aboveRow.cells.length) {
+            const aboveCell = aboveRow.cells[col];
+            if (aboveCell.isRowspanMarker) {
+              targetRow--;
+              continue;
+            }
+            aboveCell.rowspan++;
+            cell.hidden = true;
+            break;
+          }
+          break;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Parse a complete markdown table from text lines
+ *
+ * @param {string[]} lines - Array of line strings making up the table
+ * @returns {Object|null} Parsed table structure
+ */
+function parseTable(lines) {
+  if (lines.length < 2) {
+    return null;
+  }
+
+  // Find the delimiter row
+  let delimiterIndex = -1;
+  for (let i = 0; i < lines.length && i < 3; i++) {
+    if (isTableDelimiter(lines[i])) {
+      delimiterIndex = i;
+      break;
+    }
+  }
+
+  if (delimiterIndex === -1 || delimiterIndex === 0) {
+    return null;
+  }
+
+  // Parse delimiter row
+  const { alignments, widths, decimalColumns } = parseDelimiterRow(lines[delimiterIndex]);
+  const columnCount = alignments.length;
+
+  // Parse all rows
+  const rows = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (i === delimiterIndex) {
+      rows.push(parseTableRow(lines[i], false, true));
+    } else if (i < delimiterIndex) {
+      rows.push(parseTableRow(lines[i], true, false));
+    } else {
+      rows.push(parseTableRow(lines[i], false, false));
+    }
+  }
+
+  // Process colspan and rowspan markers
+  processColspans(rows);
+  processRowspans(rows);
+
+  return {
+    rows,
+    alignments,
+    columnWidths: widths,
+    columnCount,
+    decimalColumns,
+  };
+}
+
+/**
+ * Check if cell content looks like a number
+ *
+ * @param {string} content
+ * @returns {boolean}
+ */
+function isNumericContent(content) {
+  const trimmed = content.trim();
+  if (trimmed === '') return false;
+
+  const numericPattern = /^[$€£¥]?\s*-?[\d,]+(?:\.\d+)?\s*[%MKBkmb]?$/;
+  return numericPattern.test(trimmed);
+}
+
+/**
+ * Generate a stable table ID from position
+ *
+ * @param {number} from - Start position
+ * @returns {string}
+ */
+function generateTableId(from) {
+  return `table-${from}`;
+}
+
+// =============================================================================
+// Widget
+// =============================================================================
+
+/**
+ * Widget for rendering markdown tables.
+ */
+class TableWidget extends WidgetType {
+  /**
+   * @param {Object} table - Parsed table data
+   * @param {string} tableId - Unique table identifier
+   * @param {Object} options - Rendering options
+   */
+  constructor(table, tableId, options = {}) {
+    super();
+    this.table = table;
+    this.tableId = tableId;
+    this.options = options;
+  }
+
+  eq(other) {
+    if (this.tableId !== other.tableId) return false;
+    if (this.table.columnCount !== other.table.columnCount) return false;
+    if (this.table.rows.length !== other.table.rows.length) return false;
+
+    for (let i = 0; i < this.table.rows.length; i++) {
+      const a = this.table.rows[i];
+      const b = other.table.rows[i];
+
+      if (a.cells.length !== b.cells.length) return false;
+      if (a.isHeader !== b.isHeader) return false;
+      if (a.isDelimiter !== b.isDelimiter) return false;
+
+      for (let j = 0; j < a.cells.length; j++) {
+        if (a.cells[j].content !== b.cells[j].content) return false;
+        if (a.cells[j].colspan !== b.cells[j].colspan) return false;
+        if (a.cells[j].rowspan !== b.cells[j].rowspan) return false;
+        if (a.cells[j].hidden !== b.cells[j].hidden) return false;
+      }
+    }
+
+    for (let i = 0; i < this.table.alignments.length; i++) {
+      if (this.table.alignments[i] !== other.table.alignments[i]) {
+        return false;
+      }
+    }
+
+    if (this.options.caption !== other.options.caption) return false;
+    if (this.options.captionPosition !== other.options.captionPosition) return false;
+
+    return true;
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = 'cm-table-widget';
+    container.dataset.tableId = this.tableId;
+
+    const tableEl = document.createElement('table');
+    tableEl.className = 'cm-table';
+
+    // Add column widths via colgroup if specified
+    this.applyColumnWidths(tableEl);
+
+    // Add caption if present
+    if (this.options.caption) {
+      const caption = document.createElement('caption');
+      caption.className = 'cm-table-caption';
+      if (this.options.captionPosition === 'below') {
+        caption.classList.add('cm-table-caption-below');
+      }
+      caption.textContent = this.options.caption;
+      tableEl.appendChild(caption);
+    }
+
+    // Detect numeric columns for alignment
+    const numericColumns = this.detectNumericColumns();
+
+    // Compute decimal alignment info (Tufte's requirement)
+    const decimalInfo = this.computeDecimalAlignment(numericColumns);
+
+    // Render rows
+    let thead = null;
+    const tbody = document.createElement('tbody');
+
+    for (const row of this.table.rows) {
+      if (row.isDelimiter) continue;
+
+      const tr = document.createElement('tr');
+
+      for (let i = 0; i < row.cells.length; i++) {
+        const cell = row.cells[i];
+
+        // Skip hidden cells
+        if (cell.hidden) continue;
+
+        const cellEl = document.createElement(row.isHeader ? 'th' : 'td');
+
+        // Apply colspan/rowspan
+        if (cell.colspan > 1) {
+          cellEl.colSpan = cell.colspan;
+        }
+        if (cell.rowspan > 1) {
+          cellEl.rowSpan = cell.rowspan;
+        }
+
+        // Apply alignment
+        const alignment = this.getEffectiveAlignment(i, numericColumns);
+        if (alignment) {
+          cellEl.classList.add(`cm-table-align-${alignment}`);
+        }
+
+        // Render cell content
+        const isNumeric = !row.isHeader && isNumericContent(cell.content);
+        if (isNumeric) {
+          cellEl.classList.add('cm-table-cell-numeric');
+        }
+
+        // Use decimal alignment for numeric columns
+        if (isNumeric && decimalInfo.has(i)) {
+          this.renderDecimalAligned(cellEl, cell.content, decimalInfo.get(i));
+        } else {
+          cellEl.innerHTML = this.renderInlineMarkdown(cell.content);
+        }
+
+        tr.appendChild(cellEl);
+      }
+
+      if (row.isHeader) {
+        if (!thead) {
+          thead = document.createElement('thead');
+        }
+        thead.appendChild(tr);
+      } else {
+        tbody.appendChild(tr);
+      }
+    }
+
+    if (thead) {
+      tableEl.appendChild(thead);
+    }
+    tableEl.appendChild(tbody);
+
+    container.appendChild(tableEl);
+    return container;
+  }
+
+  /**
+   * Detect which columns should use decimal alignment
+   */
+  detectNumericColumns() {
+    const numericColumns = new Set();
+
+    // Include explicitly marked decimal columns
+    if (this.table.decimalColumns) {
+      for (const col of this.table.decimalColumns) {
+        numericColumns.add(col);
+      }
+    }
+
+    // Auto-detect numeric columns (>70% numeric content)
+    for (let col = 0; col < this.table.columnCount; col++) {
+      if (numericColumns.has(col)) continue;
+
+      let numericCount = 0;
+      let totalCount = 0;
+
+      for (const row of this.table.rows) {
+        if (row.isHeader || row.isDelimiter) continue;
+        const cell = row.cells[col];
+        if (cell && cell.content.trim() !== '' && !cell.hidden) {
+          totalCount++;
+          if (isNumericContent(cell.content)) {
+            numericCount++;
+          }
+        }
+      }
+
+      if (totalCount > 0 && numericCount / totalCount > 0.7) {
+        numericColumns.add(col);
+      }
+    }
+
+    return numericColumns;
+  }
+
+  /**
+   * Compute decimal alignment info for numeric columns
+   */
+  computeDecimalAlignment(numericColumns) {
+    const info = new Map();
+
+    for (const col of numericColumns) {
+      let maxIntWidth = 0;
+      let maxDecWidth = 0;
+
+      for (const row of this.table.rows) {
+        if (row.isHeader || row.isDelimiter) continue;
+        const cell = row.cells[col];
+        if (!cell || cell.hidden) continue;
+
+        const parts = this.splitDecimal(cell.content);
+        if (parts) {
+          maxIntWidth = Math.max(maxIntWidth, parts.integer.length);
+          maxDecWidth = Math.max(maxDecWidth, parts.decimal.length);
+        }
+      }
+
+      if (maxIntWidth > 0 || maxDecWidth > 0) {
+        info.set(col, { maxIntWidth, maxDecWidth });
+      }
+    }
+
+    return info;
+  }
+
+  /**
+   * Parse numeric string into parts for decimal alignment
+   * Handles: $1,234.56M, -12.5%, €100, 1.2M, 78,000, etc.
+   */
+  parseNumericParts(content) {
+    const trimmed = content.trim();
+    if (!trimmed) return null;
+
+    // Match: [currency][-][digits,digits][.digits][suffix]
+    const match = trimmed.match(/^([$€£¥]?)\s*(-?[\d,]+(?:\.\d+)?)\s*([%MKBkmb]?)$/);
+    if (!match) return null;
+
+    const [, prefix, number, suffix] = match;
+    const dotIndex = number.indexOf('.');
+
+    if (dotIndex === -1) {
+      return {
+        prefix: prefix || '',
+        integer: number,
+        decimal: '',
+        suffix: suffix || '',
+      };
+    }
+
+    return {
+      prefix: prefix || '',
+      integer: number.slice(0, dotIndex),
+      decimal: number.slice(dotIndex),
+      suffix: suffix || '',
+    };
+  }
+
+  /**
+   * Split numeric string into integer and decimal parts
+   */
+  splitDecimal(content) {
+    const parts = this.parseNumericParts(content);
+    if (!parts) return null;
+
+    return {
+      integer: parts.prefix + parts.integer,
+      decimal: parts.decimal + parts.suffix,
+    };
+  }
+
+  /**
+   * Render a number with decimal alignment (Tufte's requirement)
+   */
+  renderDecimalAligned(cellEl, content, info) {
+    const parts = this.splitDecimal(content);
+
+    if (!parts) {
+      cellEl.textContent = content;
+      return;
+    }
+
+    cellEl.classList.add('cm-table-cell-decimal-aligned');
+
+    const intSpan = document.createElement('span');
+    intSpan.className = 'cm-table-decimal-int';
+    intSpan.textContent = parts.integer;
+    intSpan.style.minWidth = `${info.maxIntWidth}ch`;
+
+    const decSpan = document.createElement('span');
+    decSpan.className = 'cm-table-decimal-frac';
+    decSpan.textContent = parts.decimal;
+    decSpan.style.minWidth = `${info.maxDecWidth}ch`;
+
+    cellEl.appendChild(intSpan);
+    cellEl.appendChild(decSpan);
+  }
+
+  /**
+   * Apply column widths using colgroup
+   */
+  applyColumnWidths(tableEl) {
+    const widths = this.table.columnWidths;
+    const hasWidths = widths && widths.some(w => w !== null);
+
+    if (!hasWidths) return;
+
+    const colgroup = document.createElement('colgroup');
+
+    for (let i = 0; i < this.table.columnCount; i++) {
+      const col = document.createElement('col');
+      const width = widths[i];
+
+      if (width) {
+        col.style.width = `${width.value}${width.unit}`;
+      }
+
+      colgroup.appendChild(col);
+    }
+
+    tableEl.appendChild(colgroup);
+  }
+
+  /**
+   * Get effective alignment for a column
+   * Priority: explicit decimal > explicit alignment > auto-detect > default
+   */
+  getEffectiveAlignment(columnIndex, numericColumns) {
+    // Check explicit decimal columns first
+    if (this.table.decimalColumns && this.table.decimalColumns.has(columnIndex)) {
+      return 'decimal';
+    }
+
+    // Check explicit alignment from delimiter row
+    const explicit = this.table.alignments[columnIndex];
+    if (explicit && explicit !== 'decimal') {
+      return explicit;
+    }
+
+    // Auto-align numeric columns to right
+    if (numericColumns && numericColumns.has(columnIndex)) {
+      return 'right';
+    }
+
+    return null;
+  }
+
+  /**
+   * Render inline markdown with full HTML support.
+   * Processes markdown formatting while preserving HTML elements.
+   */
+  renderInlineMarkdown(content) {
+    return renderInlineMarkdownWithHtml(content);
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+/**
+ * Linked-table widget for the embedded document view.
+ */
+
+
+function stripCaptionMarkers(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return '';
+  if ((trimmed.startsWith('_') && trimmed.endsWith('_')) || (trimmed.startsWith('*') && trimmed.endsWith('*'))) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function cloneValue$1(value) {
+  if (Array.isArray(value)) return value.map(cloneValue$1);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value)) out[key] = cloneValue$1(value[key]);
+    return out;
+  }
+  return value;
+}
+
+function getSortableHeaderCells(table) {
+  const headerRow = table?.rows?.find((row) => row.isHeader && !row.isDelimiter);
+  if (!headerRow) return [];
+  return headerRow.cells.filter((cell) => !cell.hidden && cell.content.trim() !== '' && cell.content.trim() !== '>' && cell.content.trim() !== '^');
+}
+
+function inferFormats(spec) {
+  return Array.from(new Set((spec?.sources || []).map((source) => String(source.format || source.kind || '').trim()).filter(Boolean)));
+}
+
+function buildActionDetail$1(baseDetail, action, extra = {}) {
+  return {
+    ...baseDetail,
+    action,
+    ...extra,
+  };
+}
+
+function formatMaterializedAt(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString();
+}
+
+class LinkedTableWidget extends WidgetType {
+  constructor(block, parsedTable, contentHash, options = {}) {
+    super();
+    this.block = block;
+    this.parsedTable = parsedTable;
+    this.contentHash = contentHash;
+    this.options = options;
+  }
+
+  eq(other) {
+    return other?.contentHash === this.contentHash;
+  }
+
+  _baseDetail() {
+    return {
+      tableId: this.block.spec.id,
+      label: this.block.spec.label || this.block.spec.id,
+      spec: cloneValue$1(this.block.spec),
+      headerFrom: this.block.headerFrom,
+      headerTo: this.block.headerTo,
+      snapshotFrom: this.block.snapshotFrom,
+      snapshotTo: this.block.snapshotTo,
+      tableFrom: this.block.tableFrom,
+      tableTo: this.block.tableTo,
+      startLine: this.block.startLine,
+      endLine: this.block.endLine,
+    };
+  }
+
+  _dispatch(view, action, extra = {}) {
+    return dispatchLinkedTableAction(view, buildActionDetail$1(this._baseDetail(), action, extra));
+  }
+
+  _buildChrome(view) {
+    const chrome = document.createElement('div');
+    chrome.className = 'cm-linked-table-chrome';
+
+    const left = document.createElement('div');
+    left.className = 'cm-linked-table-chrome-left';
+
+    const title = document.createElement('div');
+    title.className = 'cm-linked-table-title';
+    title.textContent = this.block.spec.label || this.block.spec.id || 'Linked table';
+    left.appendChild(title);
+
+    const badges = document.createElement('div');
+    badges.className = 'cm-linked-table-badges';
+
+    const linkedBadge = document.createElement('span');
+    linkedBadge.className = 'cm-linked-table-badge cm-linked-table-badge-linked';
+    linkedBadge.textContent = 'Linked';
+    badges.appendChild(linkedBadge);
+
+    const engineBadge = document.createElement('span');
+    engineBadge.className = 'cm-linked-table-badge';
+    engineBadge.textContent = this.block.spec.engine || 'engine';
+    badges.appendChild(engineBadge);
+
+    const sourceCountBadge = document.createElement('span');
+    sourceCountBadge.className = 'cm-linked-table-badge';
+    sourceCountBadge.textContent = `${(this.block.spec.sources || []).length} source${(this.block.spec.sources || []).length === 1 ? '' : 's'}`;
+    badges.appendChild(sourceCountBadge);
+
+    for (const format of inferFormats(this.block.spec)) {
+      const badge = document.createElement('span');
+      badge.className = 'cm-linked-table-badge';
+      badge.textContent = format;
+      badges.appendChild(badge);
+    }
+
+    const statusBadge = document.createElement('span');
+    statusBadge.className = 'cm-linked-table-badge cm-linked-table-status-badge cm-linked-table-status-fresh';
+    statusBadge.textContent = 'Fresh';
+    const materializedAt = this.block.spec?.snapshot?.materializedAt;
+    if (materializedAt) {
+      statusBadge.title = `Last materialized ${formatMaterializedAt(materializedAt)}`;
+    }
+    badges.appendChild(statusBadge);
+
+    left.appendChild(badges);
+    chrome.appendChild(left);
+
+    const right = document.createElement('div');
+    right.className = 'cm-linked-table-actions';
+
+    const makeButton = (label, action, title, extra = {}) => {
+      const button = document.createElement('button');
+      button.className = 'cm-linked-table-action';
+      button.type = 'button';
+      button.textContent = label;
+      button.dataset.linkedTableAction = action;
+      if (title) button.title = title;
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._dispatch(view, action, extra);
+      });
+      return button;
+    };
+
+    right.appendChild(makeButton('Open grid', 'open-grid', 'Open full linked-table workspace'));
+    right.appendChild(makeButton('Open source', 'open-source', 'Open the primary linked-table source file'));
+    right.appendChild(makeButton('Reveal source', 'reveal-source', 'Reveal the primary linked-table source in the host file manager'));
+    right.appendChild(makeButton('Open markdown', 'open-markdown', 'Open raw markdown for this linked table'));
+    right.appendChild(makeButton('Refresh', 'refresh', 'Refresh linked table materialization'));
+
+    chrome.appendChild(right);
+    return chrome;
+  }
+
+  _buildCaption(text, position) {
+    const captionText = stripCaptionMarkers(text);
+    if (!captionText) return null;
+    const el = document.createElement('div');
+    el.className = `cm-linked-table-caption cm-linked-table-caption-${position}`;
+    el.textContent = captionText;
+    return el;
+  }
+
+  _decorateSortableHeaders(view, tableContainer) {
+    const sortableHeaders = getSortableHeaderCells(this.parsedTable);
+    if (sortableHeaders.length === 0) return;
+
+    const headerRow = tableContainer.querySelector('thead tr');
+    if (!headerRow) return;
+
+    const domHeaders = Array.from(headerRow.querySelectorAll('th'));
+    const count = Math.min(domHeaders.length, sortableHeaders.length);
+
+    for (let index = 0; index < count; index++) {
+      const th = domHeaders[index];
+      const headerCell = sortableHeaders[index];
+      const column = headerCell.content.trim();
+      if (!column) continue;
+
+      th.classList.add('cm-linked-table-sortable');
+      th.title = `Sort by ${column}`;
+      th.dataset.linkedTableColumn = column;
+      th.dataset.linkedTableSortDirection = th.dataset.linkedTableSortDirection || 'none';
+
+      th.addEventListener('click', (event) => {
+        if (th.getAttribute('aria-disabled') === 'true') {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const current = th.dataset.linkedTableSortDirection || 'none';
+        const next = current === 'asc' ? 'desc' : 'asc';
+        th.dataset.linkedTableSortDirection = next;
+        this._dispatch(view, 'sort', { column, direction: next });
+      });
+    }
+  }
+
+  toDOM(view) {
+    const container = document.createElement('div');
+    container.className = 'cm-linked-table-widget';
+    container.dataset.tableId = this.block.spec.id;
+    container.dataset.engine = this.block.spec.engine || '';
+    container.dataset.materializedAt = this.block.spec?.snapshot?.materializedAt || '';
+
+    container.appendChild(this._buildChrome(view));
+
+    const aboveCaption = this._buildCaption(this.block.captionAboveText, 'above');
+    if (aboveCaption) container.appendChild(aboveCaption);
+
+    const body = document.createElement('div');
+    body.className = 'cm-linked-table-body';
+
+    const renderedTable = new TableWidget(this.parsedTable, `linked-${this.block.spec.id}`).toDOM(view);
+    body.appendChild(renderedTable);
+    this._decorateSortableHeaders(view, renderedTable);
+
+    container.appendChild(body);
+
+    const belowCaption = this._buildCaption(this.block.captionBelowText, 'below');
+    if (belowCaption) container.appendChild(belowCaption);
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+
+  get estimatedHeight() {
+    return this.options.estimatedHeight || -1;
+  }
+}
+
+/**
+ * Banner shown when one linked table is in local markdown/source view.
+ */
+
+
+function cloneValue(value) {
+  if (Array.isArray(value)) return value.map(cloneValue);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value)) out[key] = cloneValue(value[key]);
+    return out;
+  }
+  return value;
+}
+
+function buildActionDetail(block, action, extra = {}) {
+  return {
+    action,
+    tableId: block.spec.id,
+    label: block.spec.label || block.spec.id,
+    spec: cloneValue(block.spec),
+    headerFrom: block.headerFrom,
+    headerTo: block.headerTo,
+    snapshotFrom: block.snapshotFrom,
+    snapshotTo: block.snapshotTo,
+    tableFrom: block.tableFrom,
+    tableTo: block.tableTo,
+    startLine: block.startLine,
+    endLine: block.endLine,
+    ...extra,
+  };
+}
+
+class LinkedTableSourceBannerWidget extends WidgetType {
+  constructor(block) {
+    super();
+    this.block = block;
+  }
+
+  eq(other) {
+    return other?.block?.spec?.id === this.block.spec.id;
+  }
+
+  toDOM(view) {
+    const container = document.createElement('div');
+    container.className = 'cm-linked-table-source-banner';
+    container.dataset.tableId = this.block.spec.id;
+
+    const text = document.createElement('div');
+    text.className = 'cm-linked-table-source-banner-text';
+    text.textContent = `${this.block.spec.label || this.block.spec.id}: markdown source view`;
+    container.appendChild(text);
+
+    const button = document.createElement('button');
+    button.className = 'cm-linked-table-source-banner-action';
+    button.type = 'button';
+    button.textContent = 'Return to linked view';
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      dispatchLinkedTableAction(view, buildActionDetail(this.block, 'close-markdown'));
+    });
+    container.appendChild(button);
+
+    return container;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+/**
+ * Linked-table editor integration exports.
+ */
+
+var linkedTables = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  LINKED_TABLE_EVENT: LINKED_TABLE_EVENT,
+  LinkedTableController: LinkedTableController,
+  LinkedTableSourceBannerWidget: LinkedTableSourceBannerWidget,
+  LinkedTableWidget: LinkedTableWidget,
+  TABLE_JOB_STATUS: TABLE_JOB_STATUS,
+  TableJobsClient: TableJobsClient,
+  canImportLinkedTableFromHost: canImportLinkedTableFromHost,
+  clearLinkedTableMarkdownEffect: clearLinkedTableMarkdownEffect,
+  createLinkedTableBlockAnchor: createLinkedTableBlockAnchor,
+  createLinkedTableController: createLinkedTableController,
+  createTableJobsClient: createTableJobsClient,
+  dispatchLinkedTableAction: dispatchLinkedTableAction,
+  findLinkedTableBlocksInState: findLinkedTableBlocksInState,
+  getLinkedTableBlockRange: getLinkedTableBlockRange,
+  hideLinkedTableMarkdownEffect: hideLinkedTableMarkdownEffect,
+  importLinkedTableFromHost: importLinkedTableFromHost,
+  insertLinkedTableBlock: insertLinkedTableBlock,
+  isLinkedTableMarkdownOpen: isLinkedTableMarkdownOpen,
+  isRangeInsideLinkedTable: isRangeInsideLinkedTable,
+  linkedTableMarkdownState: linkedTableMarkdownState,
+  normalizeLinkedTableBlockInsertion: normalizeLinkedTableBlockInsertion,
+  openLinkedTableWorkspace: openLinkedTableWorkspace,
+  resolveLinkedTableBlockAnchor: resolveLinkedTableBlockAnchor,
+  revealLinkedTableMarkdownEffect: revealLinkedTableMarkdownEffect
+});
+
+/**
  * MRP Client
  *
  * Connects mrmd-editor to any MRMD Runtime Protocol server.
@@ -71285,6 +74830,75 @@ let OrchestratorClient$1 = class OrchestratorClient {
 
   async listSessions() {
     return this.listRuntimeAttachments();
+  }
+
+  // ===========================================================================
+  // Context Management
+  // ===========================================================================
+
+  /**
+   * Resolve markdown-managed AI context for a document.
+   * @param {Object} request
+   * @param {string} request.doc
+   * @param {string} [request.content]
+   * @param {number} [request.cursorPos]
+   * @param {{from: number, to: number}} [request.selection]
+   * @param {string[]} [request.codeSymbols]
+   * @param {boolean} [request.ensureExists=false]
+   */
+  async resolveContext(request) {
+    return this._fetch('/api/context/resolve', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  /**
+   * Get context markdown for a document.
+   * @param {string} doc
+   */
+  async getContext(doc) {
+    return this._fetch(`/api/context/${encodeURIComponent(doc)}`);
+  }
+
+  /**
+   * Save context markdown for a document.
+   * @param {string} doc
+   * @param {string} content
+   */
+  async saveContext(doc, content) {
+    return this._fetch(`/api/context/${encodeURIComponent(doc)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  /**
+   * Initialize context markdown for a document if missing.
+   * @param {string} doc
+   */
+  async initContext(doc) {
+    return this._fetch(`/api/context/init/${encodeURIComponent(doc)}`, {
+      method: 'POST',
+    });
+  }
+
+  /**
+   * Get project default context markdown.
+   */
+  async getDefaultContext() {
+    return this._fetch('/api/context');
+  }
+
+  /**
+   * Save project default context markdown.
+   * @param {string} content
+   */
+  async saveDefaultContext(content) {
+    return this._fetch('/api/context', {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    });
   }
 
   // ===========================================================================
@@ -73775,6 +77389,14 @@ function createFilesSegment({ shellState, orchestratorClient, handlers, onCleanu
       onClick: () => handlers.onOpenFilePicker?.(),
     });
 
+    if (handlers.onImportLinkedTable && handlers.supportsLinkedTableImport?.() !== false) {
+      items.push({
+        icon: '▦',
+        label: 'Import Linked Table...',
+        onClick: () => handlers.onImportLinkedTable?.(),
+      });
+    }
+
     items.push({
       icon: '➕',
       label: 'New File...',
@@ -75709,6 +79331,579 @@ function shortenPath(path, maxLength = 25) {
   if (!path) return '';
   if (path.length <= maxLength) return path;
   return '...' + path.slice(-(maxLength - 3));
+}
+
+/**
+ * @fileoverview Context side panel for markdown-managed AI context.
+ */
+
+const CONTEXT_PANEL_STYLES = `
+.mrmd-context-panel {
+  width: 320px;
+  min-width: 240px;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--mrmd-border, #333);
+  background: var(--mrmd-panel-bg, #161b22);
+  color: var(--mrmd-fg, #c9d1d9);
+  font-family: var(--mrmd-ui-font, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.mrmd-context-panel--collapsed {
+  width: 38px;
+  min-width: 38px;
+}
+
+.mrmd-context-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--mrmd-border, #333);
+  background: var(--mrmd-panel-header-bg, rgba(255,255,255,0.02));
+}
+
+.mrmd-context-panel__title {
+  flex: 1;
+  font-weight: 600;
+  color: var(--mrmd-fg, #c9d1d9);
+}
+
+.mrmd-context-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mrmd-context-panel__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--mrmd-border, #333);
+  border-radius: 6px;
+  background: var(--mrmd-bg, #0d1117);
+  color: var(--mrmd-fg, #c9d1d9);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.mrmd-context-panel__btn:hover {
+  border-color: var(--mrmd-accent, #58a6ff);
+  color: var(--mrmd-accent, #58a6ff);
+}
+
+.mrmd-context-panel__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.mrmd-context-panel__body {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+}
+
+.mrmd-context-panel--collapsed .mrmd-context-panel__body,
+.mrmd-context-panel--collapsed .mrmd-context-panel__title,
+.mrmd-context-panel--collapsed .mrmd-context-panel__actions > :not(.mrmd-context-panel__toggle) {
+  display: none;
+}
+
+.mrmd-context-panel--collapsed .mrmd-context-panel__header {
+  justify-content: center;
+  padding: 10px 6px;
+}
+
+.mrmd-context-panel__section {
+  margin-bottom: 14px;
+}
+
+.mrmd-context-panel__section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--mrmd-fg-muted, #8b949e);
+  margin-bottom: 6px;
+}
+
+.mrmd-context-panel__meta,
+.mrmd-context-panel__message {
+  line-height: 1.45;
+  color: var(--mrmd-fg-muted, #8b949e);
+}
+
+.mrmd-context-panel__message {
+  padding: 12px;
+  border: 1px dashed var(--mrmd-border, #333);
+  border-radius: 8px;
+}
+
+.mrmd-context-panel__path {
+  font-family: var(--mrmd-code-font, 'SF Mono', Consolas, monospace);
+  font-size: 11px;
+  color: var(--mrmd-accent, #58a6ff);
+  word-break: break-all;
+}
+
+.mrmd-context-panel__source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mrmd-context-panel__source {
+  border: 1px solid var(--mrmd-border, #333);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--mrmd-bg-secondary, rgba(255,255,255,0.02));
+}
+
+.mrmd-context-panel__source-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mrmd-context-panel__source-name {
+  font-weight: 500;
+  color: var(--mrmd-fg, #c9d1d9);
+}
+
+.mrmd-context-panel__source-sub {
+  margin-top: 4px;
+  color: var(--mrmd-fg-muted, #8b949e);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.mrmd-context-panel__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--mrmd-border, #333);
+  color: var(--mrmd-fg-muted, #8b949e);
+  font-size: 10px;
+}
+
+.mrmd-context-panel__footer {
+  padding-top: 6px;
+  border-top: 1px solid var(--mrmd-border, #333);
+}
+
+.mrmd-context-panel__tokenbar {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--mrmd-hover-bg, rgba(255,255,255,0.06));
+  margin: 8px 0 6px;
+}
+
+.mrmd-context-panel__tokenfill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, var(--mrmd-accent, #58a6ff), var(--mrmd-success, #2ea043));
+}
+
+.mrmd-context-panel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mrmd-context-panel__small {
+  font-size: 11px;
+  color: var(--mrmd-fg-muted, #8b949e);
+}
+
+@media (max-width: 960px) {
+  .mrmd-context-panel {
+    display: none;
+  }
+}
+`;
+
+let stylesInjected$8 = false;
+
+function injectContextPanelStyles() {
+  if (stylesInjected$8) return;
+  const style = document.createElement('style');
+  style.id = 'mrmd-context-panel-styles';
+  style.textContent = CONTEXT_PANEL_STYLES;
+  document.head.appendChild(style);
+  stylesInjected$8 = true;
+}
+
+function formatTokens(count) {
+  const value = Number(count || 0);
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+  return String(value);
+}
+
+function escapeHtml$1(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function titleForSource(source) {
+  const type = source?.type || 'source';
+  switch (type) {
+    case 'document': return `📄 Document`;
+    case 'linked-page': return `🔗 ${source.name || 'Linked Page'}`;
+    case 'images': return `🖼️ Images`;
+    case 'runtime': return `🐍 Runtime`;
+    case 'runtime-variables': return `🐍 Variables`;
+    case 'runtime-docstrings': return `📚 Docstrings`;
+    case 'runtime-paths': return `📍 Source Paths`;
+    case 'runtime-source': return `💾 Source Code`;
+    case 'file': return `📎 ${source.path || 'File'}`;
+    case 'url': return `🌐 ${source.url || 'URL'}`;
+    case 'notes': return `📝 Notes`;
+    default: return type;
+  }
+}
+
+function describeSource(source) {
+  if (!source) return '';
+  if (source.type === 'document') {
+    return `mode=${source.mode || 'full'}`;
+  }
+  if (source.type === 'linked-page') {
+    return [source.path, source.depth != null ? `depth ${source.depth}` : null].filter(Boolean).join(' · ');
+  }
+  if (source.type === 'runtime') {
+    return source.available ? [source.runtimeUrl, source.runtimePort ? `port ${source.runtimePort}` : null].filter(Boolean).join(' · ') : 'No runtime attached';
+  }
+  if (source.type === 'images') {
+    return source.count != null ? `${source.count} image${source.count === 1 ? '' : 's'}` : '';
+  }
+  if (source.type === 'file') {
+    return source.path || '';
+  }
+  if (source.type === 'url') {
+    return source.url || '';
+  }
+  if (source.count != null) {
+    return `${source.count} item${source.count === 1 ? '' : 's'}`;
+  }
+  return '';
+}
+
+function createContextPanel(options) {
+  const {
+    container,
+    orchestratorClient,
+    shellState,
+    getCurrentDocument,
+    getEditor,
+    getAiContext,
+    onOpenRaw,
+  } = options;
+
+  injectContextPanelStyles();
+
+  const state = {
+    collapsed: false,
+    loading: false,
+    doc: null,
+    data: null,
+  };
+
+  const panel = document.createElement('aside');
+  panel.className = 'mrmd-context-panel';
+
+  const header = document.createElement('div');
+  header.className = 'mrmd-context-panel__header';
+
+  const title = document.createElement('div');
+  title.className = 'mrmd-context-panel__title';
+  title.textContent = 'Context';
+
+  const actions = document.createElement('div');
+  actions.className = 'mrmd-context-panel__actions';
+
+  const refreshBtn = document.createElement('button');
+  refreshBtn.className = 'mrmd-context-panel__btn';
+  refreshBtn.title = 'Refresh resolved context';
+  refreshBtn.textContent = '⟳';
+
+  const rawBtn = document.createElement('button');
+  rawBtn.className = 'mrmd-context-panel__btn';
+  rawBtn.title = 'Open raw context markdown';
+  rawBtn.textContent = '✏';
+
+  const materializeBtn = document.createElement('button');
+  materializeBtn.className = 'mrmd-context-panel__btn';
+  materializeBtn.title = 'Create a document-specific context from the current effective context';
+  materializeBtn.textContent = '⎘';
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'mrmd-context-panel__btn mrmd-context-panel__toggle';
+  toggleBtn.title = 'Collapse context panel';
+  toggleBtn.textContent = '›';
+
+  actions.append(refreshBtn, rawBtn, materializeBtn, toggleBtn);
+  header.append(title, actions);
+
+  const body = document.createElement('div');
+  body.className = 'mrmd-context-panel__body';
+
+  panel.append(header, body);
+  container.appendChild(panel);
+
+  function setCollapsed(collapsed) {
+    state.collapsed = collapsed;
+    panel.classList.toggle('mrmd-context-panel--collapsed', collapsed);
+    toggleBtn.textContent = collapsed ? '‹' : '›';
+    toggleBtn.title = collapsed ? 'Expand context panel' : 'Collapse context panel';
+  }
+
+  function currentContextRequest() {
+    const doc = getCurrentDocument?.();
+    const editor = getEditor?.();
+    let content = null;
+    let cursorPos = null;
+    let selection = null;
+
+    try {
+      if (editor?.view) {
+        const view = editor.view;
+        content = view.state.doc.toString();
+        if (getAiContext) {
+          const aiContext = getAiContext(view);
+          cursorPos = aiContext.cursorPos;
+          selection = { from: aiContext.selectionFrom, to: aiContext.selectionTo };
+        }
+      }
+    } catch {
+      // Ignore and fall back to document-only resolve.
+    }
+
+    return { doc, content, cursorPos, selection, ensureExists: true };
+  }
+
+  function render() {
+    const doc = state.doc;
+    const data = state.data;
+    const hiddenDoc = !doc || doc.startsWith('_');
+    body.innerHTML = '';
+
+    refreshBtn.disabled = !doc || state.loading || hiddenDoc;
+    rawBtn.disabled = !doc;
+    materializeBtn.disabled = !doc || state.loading || hiddenDoc;
+
+    if (!doc) {
+      const message = document.createElement('div');
+      message.className = 'mrmd-context-panel__message';
+      message.textContent = 'No document open.';
+      body.appendChild(message);
+      return;
+    }
+
+    if (hiddenDoc) {
+      const message = document.createElement('div');
+      message.className = 'mrmd-context-panel__message';
+      message.innerHTML = 'Context panel is disabled for infrastructure documents like <code>_assets/context/*.md</code>. Use the raw editor to edit this file directly.';
+      body.appendChild(message);
+      return;
+    }
+
+    if (state.loading && !data) {
+      const message = document.createElement('div');
+      message.className = 'mrmd-context-panel__message';
+      message.textContent = 'Resolving context…';
+      body.appendChild(message);
+      return;
+    }
+
+    if (!data) {
+      const message = document.createElement('div');
+      message.className = 'mrmd-context-panel__message';
+      message.textContent = 'No resolved context yet.';
+      body.appendChild(message);
+      return;
+    }
+
+    const overview = document.createElement('section');
+    overview.className = 'mrmd-context-panel__section';
+    overview.innerHTML = `
+      <div class="mrmd-context-panel__section-title">
+        <span>Active Context</span>
+        <span class="mrmd-context-panel__badge">${data.contextFileSource || 'document'}</span>
+      </div>
+      <div class="mrmd-context-panel__meta">
+        <div class="mrmd-context-panel__path">${escapeHtml$1(data.contextFilePath || '')}</div>
+        <div class="mrmd-context-panel__small">${data.usingDefault ? 'Using project default context' : 'Using document-specific context'}</div>
+      </div>
+    `;
+    body.appendChild(overview);
+
+    const sourcesSection = document.createElement('section');
+    sourcesSection.className = 'mrmd-context-panel__section';
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'mrmd-context-panel__section-title';
+    titleRow.innerHTML = `<span>Resolved Sources</span><span>${(data.sources || []).length}</span>`;
+    sourcesSection.appendChild(titleRow);
+
+    const list = document.createElement('div');
+    list.className = 'mrmd-context-panel__source-list';
+
+    for (const source of data.sources || []) {
+      const item = document.createElement('div');
+      item.className = 'mrmd-context-panel__source';
+      const sub = describeSource(source);
+      item.innerHTML = `
+        <div class="mrmd-context-panel__source-main">
+          <div class="mrmd-context-panel__source-name">${escapeHtml$1(titleForSource(source))}</div>
+          <div class="mrmd-context-panel__badge">${formatTokens(source.tokens || 0)} tok</div>
+        </div>
+        ${sub ? `<div class="mrmd-context-panel__source-sub">${escapeHtml$1(sub)}</div>` : ''}
+      `;
+      list.appendChild(item);
+    }
+
+    if (!list.childElementCount) {
+      const empty = document.createElement('div');
+      empty.className = 'mrmd-context-panel__message';
+      empty.textContent = 'No context sources resolved. Edit the context markdown to add sources.';
+      sourcesSection.appendChild(empty);
+    } else {
+      sourcesSection.appendChild(list);
+    }
+
+    body.appendChild(sourcesSection);
+
+    const footer = document.createElement('section');
+    footer.className = 'mrmd-context-panel__section mrmd-context-panel__footer';
+    const percent = Math.max(0, Math.min(100, ((data.tokenEstimate || 0) / 8000) * 100));
+    footer.innerHTML = `
+      <div class="mrmd-context-panel__row">
+        <span>Total</span>
+        <strong>${formatTokens(data.tokenEstimate || 0)} tokens</strong>
+      </div>
+      <div class="mrmd-context-panel__tokenbar">
+        <div class="mrmd-context-panel__tokenfill" style="width: ${percent}%;"></div>
+      </div>
+      <div class="mrmd-context-panel__row mrmd-context-panel__small">
+        <span>Budget reference</span>
+        <span>8k tokens</span>
+      </div>
+      ${(data.images || []).length ? `<div class="mrmd-context-panel__small" style="margin-top:8px;">${data.images.length} image reference${data.images.length === 1 ? '' : 's'} resolved</div>` : ''}
+    `;
+    body.appendChild(footer);
+  }
+
+  async function refresh() {
+    const request = currentContextRequest();
+    state.doc = request.doc;
+    render();
+    if (!request.doc || request.doc.startsWith('_')) return;
+
+    state.loading = true;
+    render();
+    try {
+      state.data = await orchestratorClient.resolveContext(request);
+    } catch (error) {
+      state.data = {
+        contextFileSource: 'error',
+        contextFilePath: '_assets/context',
+        usingDefault: false,
+        tokenEstimate: 0,
+        sources: [],
+        images: [],
+      };
+      const message = document.createElement('div');
+      message.className = 'mrmd-context-panel__message';
+      message.textContent = `Failed to resolve context: ${error.message}`;
+      body.innerHTML = '';
+      body.appendChild(message);
+      state.loading = false;
+      return;
+    }
+    state.loading = false;
+    render();
+  }
+
+  async function openRaw() {
+    const doc = getCurrentDocument?.();
+    if (!doc) return;
+    if (doc.startsWith('_')) return;
+
+    try {
+      const current = await orchestratorClient.getContext(doc);
+      if (current.source === 'default' || current.source === 'builtin') {
+        await orchestratorClient.saveContext(doc, current.content);
+      } else if (!current.exists) {
+        await orchestratorClient.initContext(doc);
+      }
+      const rawPath = `_assets/context/${doc.endsWith('.md') ? doc : `${doc}.md`}`;
+      await onOpenRaw?.(rawPath);
+    } catch (error) {
+      console.error('[ContextPanel] Failed to open raw context:', error);
+    }
+  }
+
+  async function materialize() {
+    const doc = getCurrentDocument?.();
+    if (!doc) return;
+    try {
+      const current = await orchestratorClient.getContext(doc);
+      await orchestratorClient.saveContext(doc, current.content);
+      await refresh();
+    } catch (error) {
+      console.error('[ContextPanel] Failed to materialize context:', error);
+    }
+  }
+
+  refreshBtn.addEventListener('click', () => refresh());
+  rawBtn.addEventListener('click', () => openRaw());
+  materializeBtn.addEventListener('click', () => materialize());
+  toggleBtn.addEventListener('click', () => setCollapsed(!state.collapsed));
+
+  const unsubFile = shellState.onPath('file.path', () => {
+    state.doc = getCurrentDocument?.();
+    refresh();
+  });
+
+  render();
+
+  return {
+    element: panel,
+    async refresh() {
+      await refresh();
+    },
+    setDocument(doc) {
+      state.doc = doc;
+      render();
+    },
+    setEditor() {
+      render();
+    },
+    destroy() {
+      unsubFile?.();
+      panel.remove();
+    },
+  };
 }
 
 /**
@@ -78167,6 +82362,16 @@ async function createStudio$1(target, options = {}) {
     overflow: hidden;
   `;
 
+  // Create main row container (editor + context rail)
+  const mainContainer = document.createElement('div');
+  mainContainer.className = 'mrmd-studio__main';
+  mainContainer.style.cssText = `
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  `;
+
   // Create editor container
   const editorContainer = document.createElement('div');
   editorContainer.className = 'mrmd-studio__editor';
@@ -78174,7 +82379,18 @@ async function createStudio$1(target, options = {}) {
     flex: 1;
     overflow: hidden;
     position: relative;
+    min-width: 0;
   `;
+
+  const contextPanelContainer = document.createElement('div');
+  contextPanelContainer.className = 'mrmd-studio__context';
+  contextPanelContainer.style.cssText = `
+    display: flex;
+    min-height: 0;
+  `;
+
+  mainContainer.appendChild(editorContainer);
+  mainContainer.appendChild(contextPanelContainer);
 
   // Create status bar container
   const statusBarContainer = document.createElement('div');
@@ -78183,9 +82399,9 @@ async function createStudio$1(target, options = {}) {
   // Assemble layout
   if (statusBarConfig.position === 'top') {
     studioEl.appendChild(statusBarContainer);
-    studioEl.appendChild(editorContainer);
+    studioEl.appendChild(mainContainer);
   } else {
-    studioEl.appendChild(editorContainer);
+    studioEl.appendChild(mainContainer);
     studioEl.appendChild(statusBarContainer);
   }
 
@@ -78215,6 +82431,16 @@ async function createStudio$1(target, options = {}) {
     }
     eventHandlers.get(event).add(handler);
     return () => eventHandlers.get(event).delete(handler);
+  }
+
+  function getCurrentDocumentMarkdownPath(docName = currentDocName) {
+    if (!docName) return null;
+    if (docName.startsWith('/')) return null;
+    return docName.endsWith('.md') ? docName : `${docName}.md`;
+  }
+
+  function supportsLinkedTableImport() {
+    return canImportLinkedTableFromHost();
   }
 
   /**
@@ -78341,6 +82567,7 @@ async function createStudio$1(target, options = {}) {
   // Track current editor instance and preserved state
   let editor = null;
   let currentDocName = null;
+  let contextPanelComponent = null;
   let preservedEditorState = {
     theme: editorOptions.theme || null,
     dark: editorOptions.dark ?? null,
@@ -78363,6 +82590,9 @@ async function createStudio$1(target, options = {}) {
       // Preserve theme across switches
       theme: preservedEditorState.theme,
       dark: preservedEditorState.dark,
+      // Linked-table host context
+      projectRoot: shellState.get('projectRoot') || editorOptions.projectRoot || null,
+      documentPath: getCurrentDocumentMarkdownPath(docName) || editorOptions.documentPath || null,
     };
 
     // Remove any sync options since we're providing ydoc directly
@@ -78498,6 +82728,25 @@ async function createStudio$1(target, options = {}) {
     // Detect language from code block, or fall back to python
     const detectedLanguage = codeBlock?.language || 'python';
 
+    // Resolve richer context from _assets/context/*.md when available
+    let resolvedContextText = context.documentContext;
+    try {
+      if (currentDocName) {
+        const resolved = await orchestratorClient.resolveContext({
+          doc: currentDocName,
+          content: context.documentContext,
+          cursorPos: context.cursorPos,
+          selection: { from: context.selectionFrom, to: context.selectionTo },
+          ensureExists: true,
+        });
+        if (resolved?.contextText) {
+          resolvedContextText = resolved.contextText;
+        }
+      }
+    } catch (error) {
+      console.warn('[Studio] Failed to resolve AI context, falling back to document only:', error);
+    }
+
     // Mark AI as active
     shellState._set('ai.active', true);
 
@@ -78510,20 +82759,20 @@ async function createStudio$1(target, options = {}) {
         params = {
           text_before_cursor: context.textBeforeCursor,
           local_context: context.localContext,
-          document_context: context.documentContext,
+          document_context: resolvedContextText,
         };
       } else if (cmd.program.includes('Fix') || cmd.program.includes('Correct')) {
         params = {
           text_to_fix: context.selectedText,
           local_context: context.localContext,
-          document_context: context.documentContext,
+          document_context: resolvedContextText,
         };
       } else if (cmd.program.includes('Code')) {
         params = {
           code: context.selectedText,
           language: detectedLanguage,
           local_context: context.localContext,
-          document_context: context.documentContext,
+          document_context: resolvedContextText,
         };
       } else if (cmd.program.includes('Synonym')) {
         params = {
@@ -78531,7 +82780,7 @@ async function createStudio$1(target, options = {}) {
           local_context: context.localContext,
         };
       } else if (cmd.program.includes('Document')) {
-        params = { document: context.documentContext };
+        params = { document: resolvedContextText };
       }
 
       await mrmd.default.ai.executeAiOperation(view, aiClient, {
@@ -78635,10 +82884,22 @@ async function createStudio$1(target, options = {}) {
         path: normalizedName.endsWith('.md') ? normalizedName : `${normalizedName}.md`,
         root: filesResult.root,
       });
+      editor?.setLinkedTableHostContext?.({
+        projectRoot: shellState.get('projectRoot') || null,
+        documentPath: normalizedName.endsWith('.md') ? normalizedName : `${normalizedName}.md`,
+      });
 
       // Update status bar with new editor
       if (statusBarComponent) {
         statusBarComponent.setEditor(editor);
+      }
+
+      if (contextPanelComponent) {
+        contextPanelComponent.setEditor(editor);
+        contextPanelComponent.setDocument(normalizedName);
+        contextPanelComponent.refresh().catch((e) => {
+          console.warn('[Studio] Failed to refresh context panel:', e);
+        });
       }
 
       emit('fileOpened', { doc: normalizedName });
@@ -78684,6 +82945,8 @@ async function createStudio$1(target, options = {}) {
 
   // Shell action handlers
   const handlers = {
+    supportsLinkedTableImport,
+
     async onRename() {
       const file = shellState.get('file');
       if (!file) return;
@@ -78757,6 +83020,65 @@ async function createStudio$1(target, options = {}) {
           }
 
           await switchDocument(docName);
+        },
+      });
+    },
+
+    async onImportLinkedTable() {
+      const file = shellState.get('file');
+      const projectRoot = shellState.get('projectRoot');
+
+      if (!supportsLinkedTableImport()) {
+        await confirm$1({
+          title: 'Linked table import unavailable',
+          message: 'This build does not expose the Electron linked-table host API yet.',
+          confirmLabel: 'OK',
+          cancelLabel: '',
+        });
+        return;
+      }
+
+      if (!file || !editor) {
+        return;
+      }
+
+      if (!projectRoot || file.isOutsideProject || !file.path || file.path.startsWith('/')) {
+        await confirm$1({
+          title: 'Linked table import requires a project file',
+          message: 'Open a markdown document inside a project before importing a linked table.',
+          confirmLabel: 'OK',
+          cancelLabel: '',
+        });
+        return;
+      }
+
+      showFilePicker({
+        mode: 'open',
+        title: 'Import Linked Table',
+        orchestratorClient,
+        initialPath: projectRoot || '~',
+        allowOutsideProject: true,
+        onSelect: async (sourceFilePath) => {
+          try {
+            const result = await editor.importLinkedTableFromHost(sourceFilePath, {
+              projectRoot,
+              documentPath: file.path,
+              cacheFormat: 'csv',
+            });
+            emit('linkedTableImported', {
+              sourceFilePath,
+              tableId: result.tableId,
+              spec: result.spec,
+            });
+          } catch (error) {
+            console.error('[Studio] Linked table import failed:', error);
+            await confirm$1({
+              title: 'Linked table import failed',
+              message: error.message || String(error),
+              confirmLabel: 'OK',
+              cancelLabel: '',
+            });
+          }
         },
       });
     },
@@ -78987,9 +83309,32 @@ async function createStudio$1(target, options = {}) {
       path: currentDocName.endsWith('.md') ? currentDocName : `${currentDocName}.md`,
       root: result.root,
     });
+    editor?.setLinkedTableHostContext?.({
+      projectRoot: shellState.get('projectRoot') || null,
+      documentPath: currentDocName.endsWith('.md') ? currentDocName : `${currentDocName}.md`,
+    });
   } catch (e) {
     console.warn('Could not set initial file context:', e);
   }
+
+  // Create context panel
+  contextPanelComponent = createContextPanel({
+    container: contextPanelContainer,
+    orchestratorClient,
+    shellState,
+    getCurrentDocument: () => currentDocName,
+    getEditor: () => editor,
+    getAiContext: mrmd.default.ai?.getAiContext,
+    onOpenRaw: async (contextPath) => {
+      const rawDoc = contextPath.replace(/\.md$/, '');
+      await switchDocument(rawDoc);
+    },
+  });
+  contextPanelComponent.setDocument(currentDocName);
+  contextPanelComponent.setEditor(editor);
+  contextPanelComponent.refresh().catch((e) => {
+    console.warn('[Studio] Failed to initialize context panel:', e);
+  });
 
   // Create studio object
   const studio = {
@@ -79027,6 +83372,29 @@ async function createStudio$1(target, options = {}) {
      */
     async openFile(docName) {
       await switchDocument(docName);
+    },
+
+    /**
+     * Import a linked table into the current document.
+     * If no source path is provided, opens the file picker flow.
+     *
+     * @param {string} [sourceFilePath]
+     */
+    async importLinkedTable(sourceFilePath) {
+      if (sourceFilePath) {
+        const file = shellState.get('file');
+        const projectRoot = shellState.get('projectRoot');
+        if (!editor || !file?.path || !projectRoot) {
+          throw new Error('Linked table import requires an open project document');
+        }
+        return editor.importLinkedTableFromHost(sourceFilePath, {
+          projectRoot,
+          documentPath: file.path,
+          cacheFormat: 'csv',
+        });
+      }
+
+      return handlers.onImportLinkedTable();
     },
 
     /**
@@ -79109,6 +83477,7 @@ async function createStudio$1(target, options = {}) {
 
       // Destroy status bar
       statusBarComponent?.destroy();
+      contextPanelComponent?.destroy();
 
       // Destroy current editor
       if (editor) {
@@ -119931,254 +124300,6 @@ class DisplayMathWidget extends WidgetType {
 }
 
 /**
- * Inline HTML Rendering
- *
- * Renders inline HTML elements in markdown content.
- * Supports all HTML tags with full power - no sanitization.
- *
- * @module markdown/html-inline
- */
-
-
-/**
- * Extract HTML elements and entities from text with their positions
- *
- * @param {string} text - Text to scan
- * @returns {Array<{start: number, end: number, html: string, tag: string}>}
- */
-function extractHtmlElements(text) {
-  const results = [];
-  const seen = new Set(); // Avoid duplicates from overlapping patterns
-  let match;
-
-  // Match HTML entities: &name; or &#123; or &#x1F600;
-  // Named entities: &copy; &mdash; &hearts; &nbsp; etc.
-  // Numeric entities: &#123; &#8212;
-  // Hex entities: &#x1F600; &#xA9;
-  const entityPattern = /&(?:#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g;
-  while ((match = entityPattern.exec(text)) !== null) {
-    const key = `${match.index}-${match.index + match[0].length}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      results.push({
-        start: match.index,
-        end: match.index + match[0].length,
-        html: match[0],
-        tag: 'entity',
-      });
-    }
-  }
-
-  // Match self-closing and void elements
-  const voidTags = /<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)(?:\s+[^>]*)?\/?\s*>/gi;
-
-  while ((match = voidTags.exec(text)) !== null) {
-    const key = `${match.index}-${match.index + match[0].length}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      results.push({
-        start: match.index,
-        end: match.index + match[0].length,
-        html: match[0],
-        tag: match[1].toLowerCase(),
-      });
-    }
-  }
-
-  // Match HTML comments, but leave MRMD special comments to comment-syntax
-  const comments = /<!--(?!\!)[\s\S]*?-->/g;
-  while ((match = comments.exec(text)) !== null) {
-    const key = `${match.index}-${match.index + match[0].length}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      results.push({
-        start: match.index,
-        end: match.index + match[0].length,
-        html: match[0],
-        tag: 'comment',
-      });
-    }
-  }
-
-  // Match paired tags - use a more robust approach
-  const pairedTagPattern = /<([a-zA-Z][a-zA-Z0-9]*)(?:\s+[^>]*)?>[\s\S]*?<\/\1>/g;
-  while ((match = pairedTagPattern.exec(text)) !== null) {
-    const key = `${match.index}-${match.index + match[0].length}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      results.push({
-        start: match.index,
-        end: match.index + match[0].length,
-        html: match[0],
-        tag: match[1].toLowerCase(),
-      });
-    }
-  }
-
-  // Sort by position
-  results.sort((a, b) => a.start - b.start);
-
-  return results;
-}
-
-// =============================================================================
-// Widget for Inline HTML
-// =============================================================================
-
-/**
- * Widget that renders inline HTML content
- */
-class InlineHtmlWidget extends WidgetType {
-  /**
-   * @param {string} html - Raw HTML string to render
-   */
-  constructor(html) {
-    super();
-    this.html = html;
-  }
-
-  eq(other) {
-    return this.html === other.html;
-  }
-
-  toDOM() {
-    const container = document.createElement('span');
-    container.className = 'cm-inline-html';
-    container.innerHTML = this.html;
-    return container;
-  }
-
-  ignoreEvent() {
-    return true;
-  }
-}
-
-// =============================================================================
-// HTML Rendering Utility
-// =============================================================================
-
-/**
- * Render text content that may contain HTML.
- * Returns an HTML string with HTML elements preserved and text escaped.
- *
- * @param {string} text - Text that may contain HTML
- * @returns {string} - HTML string safe for innerHTML
- */
-function renderTextWithHtml(text) {
-  if (!text) return '';
-
-  const elements = extractHtmlElements(text);
-
-  if (elements.length === 0) {
-    // No HTML found, just escape the text
-    return escapeHtmlText(text);
-  }
-
-  // Build output by interleaving escaped text and raw HTML
-  let result = '';
-  let lastEnd = 0;
-
-  for (const el of elements) {
-    // Escape text before this element
-    if (el.start > lastEnd) {
-      result += escapeHtmlText(text.slice(lastEnd, el.start));
-    }
-    // Add raw HTML (not escaped)
-    result += el.html;
-    lastEnd = el.end;
-  }
-
-  // Escape any remaining text
-  if (lastEnd < text.length) {
-    result += escapeHtmlText(text.slice(lastEnd));
-  }
-
-  return result;
-}
-
-/**
- * Escape text for safe HTML insertion (but not HTML tags themselves)
- * Only escapes &, <, >, " when they're not part of HTML tags
- *
- * @param {string} text
- * @returns {string}
- */
-function escapeHtmlText(text) {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-/**
- * Render inline markdown AND HTML together.
- * Processes markdown formatting (bold, italic, code, strikethrough)
- * while preserving HTML elements.
- *
- * @param {string} content - Text with potential markdown and HTML
- * @returns {string} - HTML string
- */
-function renderInlineMarkdownWithHtml(content) {
-  if (!content) return '';
-
-  // First, extract and protect HTML elements
-  const elements = extractHtmlElements(content);
-  const placeholders = new Map();
-  let protected_content = content;
-
-  // Replace HTML with placeholders
-  // Process in reverse order to maintain positions
-  for (let i = elements.length - 1; i >= 0; i--) {
-    const el = elements[i];
-    const placeholder = `__HTML_${i}__`;
-    placeholders.set(placeholder, el.html);
-    protected_content =
-      protected_content.slice(0, el.start) +
-      placeholder +
-      protected_content.slice(el.end);
-  }
-
-  // Process images BEFORE escaping HTML (they contain special chars)
-  // Match: ![alt](url) or ![alt](url "title")
-  let html = protected_content.replace(
-    /!\[([^\]]*)\]\(([^)"]+)(?:\s+"([^"]*)")?\)/g,
-    (match, alt, url, title) => {
-      const escapedAlt = escapeHtmlText(alt);
-      const escapedUrl = escapeHtmlText(url);
-      const titleAttr = title ? ` title="${escapeHtmlText(title)}"` : '';
-      return `<img src="${escapedUrl}" alt="${escapedAlt}"${titleAttr} class="cm-inline-img">`;
-    }
-  );
-
-  // Extract and protect our generated img tags
-  const imgTags = [];
-  html = html.replace(/<img [^>]+>/g, (match) => {
-    imgTags.push(match);
-    return `__IMG_${imgTags.length - 1}__`;
-  });
-
-  // Now escape remaining text (but not placeholders)
-  html = escapeHtmlText(html);
-
-  // Restore img tags
-  html = html.replace(/__IMG_(\d+)__/g, (_, index) => imgTags[parseInt(index)]);
-
-  // Process markdown formatting
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  html = html.replace(/`(.+?)`/g, '<code>$1</code>');
-  html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
-
-  // Restore HTML elements from placeholders
-  for (const [placeholder, originalHtml] of placeholders) {
-    html = html.replace(placeholder, originalHtml);
-  }
-
-  return html;
-}
-
-/**
  * Link widgets for rendering clickable links in markdown.
  *
  * Includes:
@@ -120408,709 +124529,6 @@ function wikiLinkDisplayText(target) {
 }
 
 // #endregion HELPERS
-
-/**
- * Table Widget and Parser
- *
- * Renders markdown tables as HTML tables with Tufte Markdown extensions.
- * Uses the stable layout pattern to avoid jitter.
- *
- * Tufte Markdown Extensions:
- * - Column widths: |:--{30%}| in delimiter row
- * - Colspan: | > | merges with cell to left
- * - Rowspan: | ^ | merges with cell above
- * - Decimal alignment: |---.| in delimiter row
- *
- * @module markdown/widgets/table
- */
-
-
-// =============================================================================
-// Constants
-// =============================================================================
-
-/** Marker for colspan (merge with cell to left) */
-const COLSPAN_MARKER = '>';
-
-/** Marker for rowspan (merge with cell above) */
-const ROWSPAN_MARKER = '^';
-
-// =============================================================================
-// Detection Functions
-// =============================================================================
-
-/**
- * Check if a line looks like a table row (contains pipes)
- *
- * @param {string} line
- * @returns {boolean}
- */
-function isTableLine(line) {
-  if (line.startsWith('```') || line.startsWith('~~~')) {
-    return false;
-  }
-  return line.includes('|');
-}
-
-/**
- * Check if a line is a table delimiter row.
- * Enhanced to support Tufte extensions: |:--{30%}| and |---.|
- *
- * @param {string} line
- * @returns {boolean}
- */
-function isTableDelimiter(line) {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith('|') && !trimmed.includes('|')) {
-    return false;
-  }
-
-  const cells = splitTableRow(trimmed);
-  if (cells.length === 0) {
-    return false;
-  }
-
-  // Each cell must match the delimiter pattern
-  // Extended pattern allows: colons, dashes, dots, and width specs
-  const delimiterPattern = /^:?-+(?:\{[^}]+\})?\.?:?$|^:?-+\.?(?:\{[^}]+\})?:?$/;
-  return cells.every(cell => delimiterPattern.test(cell.trim()));
-}
-
-// =============================================================================
-// Parsing Functions
-// =============================================================================
-
-/**
- * Split a table row into cells, handling escaped pipes
- *
- * @param {string} line
- * @returns {string[]}
- */
-function splitTableRow(line) {
-  const cells = [];
-  let current = '';
-  let i = 0;
-
-  const trimmed = line.trim();
-  if (trimmed.startsWith('|')) {
-    i = trimmed.indexOf('|') + 1;
-  } else {
-    i = 0;
-  }
-
-  while (i < trimmed.length) {
-    const char = trimmed[i];
-
-    if (char === '\\' && i + 1 < trimmed.length && trimmed[i + 1] === '|') {
-      // Escaped pipe - include the pipe in content
-      current += '|';
-      i += 2;
-    } else if (char === '|') {
-      // Cell boundary
-      cells.push(current);
-      current = '';
-      i++;
-    } else {
-      current += char;
-      i++;
-    }
-  }
-
-  // Don't add the last segment if it's empty (trailing pipe case)
-  if (current.trim() !== '') {
-    cells.push(current);
-  }
-
-  return cells;
-}
-
-/**
- * Parse column alignments and widths from a delimiter row
- *
- * @param {string} delimiterLine
- * @returns {{ alignments: (string|null)[], widths: (Object|null)[], decimalColumns: Set<number> }}
- */
-function parseDelimiterRow(delimiterLine) {
-  const cells = splitTableRow(delimiterLine);
-  const alignments = [];
-  const widths = [];
-  const decimalColumns = new Set();
-
-  cells.forEach((cell, index) => {
-    const trimmed = cell.trim();
-
-    // Extract width if present: {30%}, {100px}, {2fr}, {1.5em}
-    let width = null;
-    const widthMatch = trimmed.match(/\{(\d+(?:\.\d+)?)(px|%|fr|em)\}/);
-    if (widthMatch) {
-      width = {
-        value: parseFloat(widthMatch[1]),
-        unit: widthMatch[2],
-      };
-    }
-    widths.push(width);
-
-    // Remove width specification for alignment parsing
-    const alignPart = trimmed.replace(/\{[^}]+\}/, '');
-
-    // Check for decimal alignment marker (.)
-    const hasDecimal = alignPart.includes('.');
-    if (hasDecimal) {
-      decimalColumns.add(index);
-    }
-
-    // Parse alignment from colons
-    const leftColon = alignPart.startsWith(':');
-    const rightColon = alignPart.endsWith(':');
-
-    if (hasDecimal) {
-      alignments.push('decimal');
-    } else if (leftColon && rightColon) {
-      alignments.push('center');
-    } else if (rightColon) {
-      alignments.push('right');
-    } else if (leftColon) {
-      alignments.push('left');
-    } else {
-      alignments.push(null);
-    }
-  });
-
-  return { alignments, widths, decimalColumns };
-}
-
-/**
- * Check if cell content is a colspan marker
- */
-function isColspanMarker(content) {
-  return content.trim() === COLSPAN_MARKER;
-}
-
-/**
- * Check if cell content is a rowspan marker
- */
-function isRowspanMarker(content) {
-  return content.trim() === ROWSPAN_MARKER;
-}
-
-/**
- * Parse a table row into structured cells
- */
-function parseTableRow(line, isHeader = false, isDelimiter = false) {
-  const rawCells = splitTableRow(line);
-
-  const cells = rawCells.map(raw => {
-    const content = raw.trim();
-    return {
-      content,
-      raw,
-      colspan: 1,
-      rowspan: 1,
-      hidden: false,
-      isColspanMarker: isColspanMarker(content),
-      isRowspanMarker: isRowspanMarker(content),
-    };
-  });
-
-  return {
-    cells,
-    isHeader,
-    isDelimiter,
-  };
-}
-
-/**
- * Process colspan markers in a table
- */
-function processColspans(rows) {
-  for (const row of rows) {
-    if (row.isDelimiter) continue;
-
-    for (let col = row.cells.length - 1; col >= 0; col--) {
-      const cell = row.cells[col];
-
-      if (cell.isColspanMarker && col > 0) {
-        let targetCol = col - 1;
-        while (targetCol >= 0 && row.cells[targetCol].isColspanMarker) {
-          targetCol--;
-        }
-
-        if (targetCol >= 0) {
-          row.cells[targetCol].colspan++;
-          cell.hidden = true;
-        }
-      }
-    }
-  }
-}
-
-/**
- * Process rowspan markers in a table
- */
-function processRowspans(rows) {
-  const dataStartIndex = rows.findIndex(r => !r.isHeader && !r.isDelimiter);
-  if (dataStartIndex === -1) return;
-
-  for (let rowIdx = rows.length - 1; rowIdx >= 0; rowIdx--) {
-    const row = rows[rowIdx];
-    if (row.isDelimiter) continue;
-
-    for (let col = 0; col < row.cells.length; col++) {
-      const cell = row.cells[col];
-
-      if (cell.isRowspanMarker) {
-        let targetRow = rowIdx - 1;
-        while (targetRow >= 0) {
-          const aboveRow = rows[targetRow];
-          if (aboveRow.isDelimiter) {
-            targetRow--;
-            continue;
-          }
-
-          if (col < aboveRow.cells.length) {
-            const aboveCell = aboveRow.cells[col];
-            if (aboveCell.isRowspanMarker) {
-              targetRow--;
-              continue;
-            }
-            aboveCell.rowspan++;
-            cell.hidden = true;
-            break;
-          }
-          break;
-        }
-      }
-    }
-  }
-}
-
-/**
- * Parse a complete markdown table from text lines
- *
- * @param {string[]} lines - Array of line strings making up the table
- * @returns {Object|null} Parsed table structure
- */
-function parseTable(lines) {
-  if (lines.length < 2) {
-    return null;
-  }
-
-  // Find the delimiter row
-  let delimiterIndex = -1;
-  for (let i = 0; i < lines.length && i < 3; i++) {
-    if (isTableDelimiter(lines[i])) {
-      delimiterIndex = i;
-      break;
-    }
-  }
-
-  if (delimiterIndex === -1 || delimiterIndex === 0) {
-    return null;
-  }
-
-  // Parse delimiter row
-  const { alignments, widths, decimalColumns } = parseDelimiterRow(lines[delimiterIndex]);
-  const columnCount = alignments.length;
-
-  // Parse all rows
-  const rows = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    if (i === delimiterIndex) {
-      rows.push(parseTableRow(lines[i], false, true));
-    } else if (i < delimiterIndex) {
-      rows.push(parseTableRow(lines[i], true, false));
-    } else {
-      rows.push(parseTableRow(lines[i], false, false));
-    }
-  }
-
-  // Process colspan and rowspan markers
-  processColspans(rows);
-  processRowspans(rows);
-
-  return {
-    rows,
-    alignments,
-    columnWidths: widths,
-    columnCount,
-    decimalColumns,
-  };
-}
-
-/**
- * Check if cell content looks like a number
- *
- * @param {string} content
- * @returns {boolean}
- */
-function isNumericContent(content) {
-  const trimmed = content.trim();
-  if (trimmed === '') return false;
-
-  const numericPattern = /^[$€£¥]?\s*-?[\d,]+(?:\.\d+)?\s*[%MKBkmb]?$/;
-  return numericPattern.test(trimmed);
-}
-
-/**
- * Generate a stable table ID from position
- *
- * @param {number} from - Start position
- * @returns {string}
- */
-function generateTableId(from) {
-  return `table-${from}`;
-}
-
-// =============================================================================
-// Widget
-// =============================================================================
-
-/**
- * Widget for rendering markdown tables.
- */
-class TableWidget extends WidgetType {
-  /**
-   * @param {Object} table - Parsed table data
-   * @param {string} tableId - Unique table identifier
-   * @param {Object} options - Rendering options
-   */
-  constructor(table, tableId, options = {}) {
-    super();
-    this.table = table;
-    this.tableId = tableId;
-    this.options = options;
-  }
-
-  eq(other) {
-    if (this.tableId !== other.tableId) return false;
-    if (this.table.columnCount !== other.table.columnCount) return false;
-    if (this.table.rows.length !== other.table.rows.length) return false;
-
-    for (let i = 0; i < this.table.rows.length; i++) {
-      const a = this.table.rows[i];
-      const b = other.table.rows[i];
-
-      if (a.cells.length !== b.cells.length) return false;
-      if (a.isHeader !== b.isHeader) return false;
-      if (a.isDelimiter !== b.isDelimiter) return false;
-
-      for (let j = 0; j < a.cells.length; j++) {
-        if (a.cells[j].content !== b.cells[j].content) return false;
-        if (a.cells[j].colspan !== b.cells[j].colspan) return false;
-        if (a.cells[j].rowspan !== b.cells[j].rowspan) return false;
-        if (a.cells[j].hidden !== b.cells[j].hidden) return false;
-      }
-    }
-
-    for (let i = 0; i < this.table.alignments.length; i++) {
-      if (this.table.alignments[i] !== other.table.alignments[i]) {
-        return false;
-      }
-    }
-
-    if (this.options.caption !== other.options.caption) return false;
-    if (this.options.captionPosition !== other.options.captionPosition) return false;
-
-    return true;
-  }
-
-  toDOM() {
-    const container = document.createElement('div');
-    container.className = 'cm-table-widget';
-    container.dataset.tableId = this.tableId;
-
-    const tableEl = document.createElement('table');
-    tableEl.className = 'cm-table';
-
-    // Add column widths via colgroup if specified
-    this.applyColumnWidths(tableEl);
-
-    // Add caption if present
-    if (this.options.caption) {
-      const caption = document.createElement('caption');
-      caption.className = 'cm-table-caption';
-      if (this.options.captionPosition === 'below') {
-        caption.classList.add('cm-table-caption-below');
-      }
-      caption.textContent = this.options.caption;
-      tableEl.appendChild(caption);
-    }
-
-    // Detect numeric columns for alignment
-    const numericColumns = this.detectNumericColumns();
-
-    // Compute decimal alignment info (Tufte's requirement)
-    const decimalInfo = this.computeDecimalAlignment(numericColumns);
-
-    // Render rows
-    let thead = null;
-    const tbody = document.createElement('tbody');
-
-    for (const row of this.table.rows) {
-      if (row.isDelimiter) continue;
-
-      const tr = document.createElement('tr');
-
-      for (let i = 0; i < row.cells.length; i++) {
-        const cell = row.cells[i];
-
-        // Skip hidden cells
-        if (cell.hidden) continue;
-
-        const cellEl = document.createElement(row.isHeader ? 'th' : 'td');
-
-        // Apply colspan/rowspan
-        if (cell.colspan > 1) {
-          cellEl.colSpan = cell.colspan;
-        }
-        if (cell.rowspan > 1) {
-          cellEl.rowSpan = cell.rowspan;
-        }
-
-        // Apply alignment
-        const alignment = this.getEffectiveAlignment(i, numericColumns);
-        if (alignment) {
-          cellEl.classList.add(`cm-table-align-${alignment}`);
-        }
-
-        // Render cell content
-        const isNumeric = !row.isHeader && isNumericContent(cell.content);
-        if (isNumeric) {
-          cellEl.classList.add('cm-table-cell-numeric');
-        }
-
-        // Use decimal alignment for numeric columns
-        if (isNumeric && decimalInfo.has(i)) {
-          this.renderDecimalAligned(cellEl, cell.content, decimalInfo.get(i));
-        } else {
-          cellEl.innerHTML = this.renderInlineMarkdown(cell.content);
-        }
-
-        tr.appendChild(cellEl);
-      }
-
-      if (row.isHeader) {
-        if (!thead) {
-          thead = document.createElement('thead');
-        }
-        thead.appendChild(tr);
-      } else {
-        tbody.appendChild(tr);
-      }
-    }
-
-    if (thead) {
-      tableEl.appendChild(thead);
-    }
-    tableEl.appendChild(tbody);
-
-    container.appendChild(tableEl);
-    return container;
-  }
-
-  /**
-   * Detect which columns should use decimal alignment
-   */
-  detectNumericColumns() {
-    const numericColumns = new Set();
-
-    // Include explicitly marked decimal columns
-    if (this.table.decimalColumns) {
-      for (const col of this.table.decimalColumns) {
-        numericColumns.add(col);
-      }
-    }
-
-    // Auto-detect numeric columns (>70% numeric content)
-    for (let col = 0; col < this.table.columnCount; col++) {
-      if (numericColumns.has(col)) continue;
-
-      let numericCount = 0;
-      let totalCount = 0;
-
-      for (const row of this.table.rows) {
-        if (row.isHeader || row.isDelimiter) continue;
-        const cell = row.cells[col];
-        if (cell && cell.content.trim() !== '' && !cell.hidden) {
-          totalCount++;
-          if (isNumericContent(cell.content)) {
-            numericCount++;
-          }
-        }
-      }
-
-      if (totalCount > 0 && numericCount / totalCount > 0.7) {
-        numericColumns.add(col);
-      }
-    }
-
-    return numericColumns;
-  }
-
-  /**
-   * Compute decimal alignment info for numeric columns
-   */
-  computeDecimalAlignment(numericColumns) {
-    const info = new Map();
-
-    for (const col of numericColumns) {
-      let maxIntWidth = 0;
-      let maxDecWidth = 0;
-
-      for (const row of this.table.rows) {
-        if (row.isHeader || row.isDelimiter) continue;
-        const cell = row.cells[col];
-        if (!cell || cell.hidden) continue;
-
-        const parts = this.splitDecimal(cell.content);
-        if (parts) {
-          maxIntWidth = Math.max(maxIntWidth, parts.integer.length);
-          maxDecWidth = Math.max(maxDecWidth, parts.decimal.length);
-        }
-      }
-
-      if (maxIntWidth > 0 || maxDecWidth > 0) {
-        info.set(col, { maxIntWidth, maxDecWidth });
-      }
-    }
-
-    return info;
-  }
-
-  /**
-   * Parse numeric string into parts for decimal alignment
-   * Handles: $1,234.56M, -12.5%, €100, 1.2M, 78,000, etc.
-   */
-  parseNumericParts(content) {
-    const trimmed = content.trim();
-    if (!trimmed) return null;
-
-    // Match: [currency][-][digits,digits][.digits][suffix]
-    const match = trimmed.match(/^([$€£¥]?)\s*(-?[\d,]+(?:\.\d+)?)\s*([%MKBkmb]?)$/);
-    if (!match) return null;
-
-    const [, prefix, number, suffix] = match;
-    const dotIndex = number.indexOf('.');
-
-    if (dotIndex === -1) {
-      return {
-        prefix: prefix || '',
-        integer: number,
-        decimal: '',
-        suffix: suffix || '',
-      };
-    }
-
-    return {
-      prefix: prefix || '',
-      integer: number.slice(0, dotIndex),
-      decimal: number.slice(dotIndex),
-      suffix: suffix || '',
-    };
-  }
-
-  /**
-   * Split numeric string into integer and decimal parts
-   */
-  splitDecimal(content) {
-    const parts = this.parseNumericParts(content);
-    if (!parts) return null;
-
-    return {
-      integer: parts.prefix + parts.integer,
-      decimal: parts.decimal + parts.suffix,
-    };
-  }
-
-  /**
-   * Render a number with decimal alignment (Tufte's requirement)
-   */
-  renderDecimalAligned(cellEl, content, info) {
-    const parts = this.splitDecimal(content);
-
-    if (!parts) {
-      cellEl.textContent = content;
-      return;
-    }
-
-    cellEl.classList.add('cm-table-cell-decimal-aligned');
-
-    const intSpan = document.createElement('span');
-    intSpan.className = 'cm-table-decimal-int';
-    intSpan.textContent = parts.integer;
-    intSpan.style.minWidth = `${info.maxIntWidth}ch`;
-
-    const decSpan = document.createElement('span');
-    decSpan.className = 'cm-table-decimal-frac';
-    decSpan.textContent = parts.decimal;
-    decSpan.style.minWidth = `${info.maxDecWidth}ch`;
-
-    cellEl.appendChild(intSpan);
-    cellEl.appendChild(decSpan);
-  }
-
-  /**
-   * Apply column widths using colgroup
-   */
-  applyColumnWidths(tableEl) {
-    const widths = this.table.columnWidths;
-    const hasWidths = widths && widths.some(w => w !== null);
-
-    if (!hasWidths) return;
-
-    const colgroup = document.createElement('colgroup');
-
-    for (let i = 0; i < this.table.columnCount; i++) {
-      const col = document.createElement('col');
-      const width = widths[i];
-
-      if (width) {
-        col.style.width = `${width.value}${width.unit}`;
-      }
-
-      colgroup.appendChild(col);
-    }
-
-    tableEl.appendChild(colgroup);
-  }
-
-  /**
-   * Get effective alignment for a column
-   * Priority: explicit decimal > explicit alignment > auto-detect > default
-   */
-  getEffectiveAlignment(columnIndex, numericColumns) {
-    // Check explicit decimal columns first
-    if (this.table.decimalColumns && this.table.decimalColumns.has(columnIndex)) {
-      return 'decimal';
-    }
-
-    // Check explicit alignment from delimiter row
-    const explicit = this.table.alignments[columnIndex];
-    if (explicit && explicit !== 'decimal') {
-      return explicit;
-    }
-
-    // Auto-align numeric columns to right
-    if (numericColumns && numericColumns.has(columnIndex)) {
-      return 'right';
-    }
-
-    return null;
-  }
-
-  /**
-   * Render inline markdown with full HTML support.
-   * Processes markdown formatting while preserving HTML elements.
-   */
-  renderInlineMarkdown(content) {
-    return renderInlineMarkdownWithHtml(content);
-  }
-
-  ignoreEvent() {
-    return true;
-  }
-}
 
 /**
  * Frontmatter Widget
@@ -121679,6 +125097,35 @@ class TableWidgetWithHeightCache extends TableWidget {
 }
 
 /**
+ * LinkedTableWidget wrapper that caches its rendered height for stable layout.
+ */
+class LinkedTableWidgetWithHeightCache extends LinkedTableWidget {
+  constructor(block, parsedTable, contentHash, options = {}) {
+    super(block, parsedTable, contentHash, options);
+    this.contentHash = contentHash;
+  }
+
+  eq(other) {
+    return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  toDOM(view) {
+    const dom = super.toDOM(view);
+    const contentHash = this.contentHash;
+
+    requestAnimationFrame(() => {
+      const line = dom.closest('.cm-line');
+      const height = line ? line.offsetHeight : dom.offsetHeight;
+      if (height > 0) {
+        cacheWidgetHeight(contentHash, height);
+      }
+    });
+
+    return dom;
+  }
+}
+
+/**
  * DisplayMathWidget wrapper that caches its rendered height for stable layout.
  */
 class DisplayMathWidgetWithHeightCache extends DisplayMathWidget {
@@ -121926,11 +125373,66 @@ function buildBlockDecorations(state) {
   // Mode flags
   const isSourceMode = state.facet(sourceModeFacet);
   const isWysiwygMode = state.facet(wysiwygModeFacet);
+  const revealedLinkedTables = state.field(linkedTableMarkdownState, false) || new Set();
 
-  // Find and process tables
+  // Find and process linked tables first
+  const linkedTableBlocks = findLinkedTableBlocksInState(state);
+
+  for (const block of linkedTableBlocks) {
+    const blockRange = getLinkedTableBlockRange(block);
+    const contentHash = 'linked-table-' + hashContent$1(doc.sliceString(blockRange.from, blockRange.to));
+    const showLinkedSource = isSourceMode || revealedLinkedTables.has(block.spec.id);
+
+    if (!showLinkedSource) {
+      const parsed = parseTable(block.tableLines || []);
+      if (parsed && parsed.rows.length > 0) {
+        decorations.push(
+          Decoration.replace({
+            widget: new LinkedTableWidgetWithHeightCache(block, parsed, contentHash),
+          }).range(blockRange.from, blockRange.to)
+        );
+      }
+    } else {
+      if (!isSourceMode && revealedLinkedTables.has(block.spec.id)) {
+        decorations.push(
+          Decoration.widget({
+            widget: new LinkedTableSourceBannerWidget(block),
+            side: -1,
+            block: true,
+          }).range(block.headerFrom)
+        );
+      }
+
+      const cachedHeight = getCachedHeight(contentHash);
+      if (cachedHeight) {
+        const lineCount = block.endLine - block.startLine + 1;
+        const lineHeight = getLineHeight();
+        const rawHeight = lineCount * lineHeight;
+        const padding = cachedHeight - rawHeight;
+
+        if (padding > 0) {
+          const lastLine = doc.line(block.endLine);
+          decorations.push(
+            Decoration.line({
+              attributes: {
+                class: 'cm-block-spacer-line',
+                style: `padding-bottom: ${padding}px`
+              }
+            }).range(lastLine.from)
+          );
+        }
+      }
+    }
+  }
+
+  // Find and process plain tables
   const tableRanges = findTableRanges(state);
 
   for (const range of tableRanges) {
+    if (isRangeInsideLinkedTable(range, linkedTableBlocks)) {
+      continue;
+    }
+
     const cursorInTable = isSourceMode || (!isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
 
     // Collect lines for both rendering and height calculation
@@ -124566,6 +128068,222 @@ const markdownStyles = `
   display: block;
   background: var(--md-table-bg, var(--editor-background));
   padding: 0.5em 0;
+}
+
+/* Linked-table wrapper (header chrome + table snapshot) */
+.cm-linked-table-widget {
+  display: block;
+  margin: 0.35em 0;
+  padding: 0.45em 0.6em 0.55em;
+  border: 1px solid var(--widget-border, rgba(128, 128, 128, 0.2));
+  border-radius: var(--widget-border-radius, 8px);
+  background: color-mix(in srgb, var(--md-table-bg, var(--editor-background)) 92%, var(--widget-surface, transparent) 8%);
+}
+
+.cm-linked-table-widget .cm-table-widget {
+  padding: 0;
+  background: transparent;
+}
+
+.cm-linked-table-chrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75em;
+  margin-bottom: 0.45em;
+}
+
+.cm-linked-table-chrome-left {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55em;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.cm-linked-table-title {
+  font-size: 0.95em;
+  font-weight: 600;
+  color: var(--widget-text);
+}
+
+.cm-linked-table-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  flex-wrap: wrap;
+}
+
+.cm-linked-table-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1em 0.45em;
+  border-radius: 999px;
+  background: var(--widget-surface, rgba(128, 128, 128, 0.12));
+  color: var(--widget-text-muted, inherit);
+  font-size: 0.75em;
+  line-height: 1.25;
+}
+
+.cm-linked-table-badge-linked {
+  color: var(--md-link-color, var(--widget-text));
+}
+
+.cm-linked-table-status-badge {
+  border: 1px solid transparent;
+}
+
+.cm-linked-table-status-pending,
+.cm-linked-table-status-claimed,
+.cm-linked-table-status-requested {
+  background: color-mix(in srgb, var(--widget-surface, rgba(128, 128, 128, 0.12)) 60%, var(--md-link-color, #64748b) 40%);
+  color: var(--widget-text);
+}
+
+.cm-linked-table-status-running,
+.cm-linked-table-status-writing {
+  background: color-mix(in srgb, var(--widget-surface, rgba(128, 128, 128, 0.12)) 45%, var(--mrmd-accent, #2563eb) 55%);
+  color: white;
+}
+
+.cm-linked-table-status-stale {
+  background: color-mix(in srgb, var(--widget-surface, rgba(128, 128, 128, 0.12)) 35%, var(--mrmd-warning, #d97706) 65%);
+  color: white;
+}
+
+.cm-linked-table-status-error {
+  background: color-mix(in srgb, var(--widget-surface, rgba(128, 128, 128, 0.12)) 35%, var(--mrmd-error, #dc2626) 65%);
+  color: white;
+}
+
+.cm-linked-table-status-fresh {
+  border-color: var(--widget-border, rgba(128, 128, 128, 0.2));
+}
+
+.cm-linked-table-status-active {
+  position: relative;
+}
+
+.cm-linked-table-status-active::after {
+  content: '';
+  width: 0.45em;
+  height: 0.45em;
+  margin-left: 0.4em;
+  border-radius: 999px;
+  background: currentColor;
+  display: inline-block;
+  opacity: 0.75;
+  animation: cm-linked-table-pulse 1s ease-in-out infinite;
+}
+
+@keyframes cm-linked-table-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 0.95; transform: scale(1); }
+}
+
+.cm-linked-table-widget[data-job-status="running"],
+.cm-linked-table-widget[data-job-status="writing"],
+.cm-linked-table-widget[data-job-status="requested"],
+.cm-linked-table-widget[data-job-status="claimed"] {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--mrmd-accent, #2563eb) 35%, transparent 65%);
+}
+
+.cm-linked-table-widget[data-job-status="stale"] {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--mrmd-warning, #d97706) 35%, transparent 65%);
+}
+
+.cm-linked-table-widget[data-job-status="error"] {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--mrmd-error, #dc2626) 35%, transparent 65%);
+}
+
+.cm-linked-table-widget[aria-busy="true"] .cm-linked-table-sortable {
+  opacity: 0.7;
+}
+
+.cm-linked-table-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  flex-wrap: wrap;
+}
+
+.cm-linked-table-action {
+  appearance: none;
+  border: 1px solid var(--widget-border, rgba(128, 128, 128, 0.2));
+  background: var(--widget-surface, transparent);
+  color: var(--widget-text);
+  border-radius: 6px;
+  padding: 0.18em 0.5em;
+  font: inherit;
+  font-size: 0.78em;
+  cursor: pointer;
+}
+
+.cm-linked-table-action:hover {
+  background: var(--widget-surface-hover, rgba(128, 128, 128, 0.08));
+}
+
+.cm-linked-table-caption {
+  font-size: 0.85em;
+  color: var(--widget-text-muted);
+  font-style: italic;
+  line-height: 1.35;
+}
+
+.cm-linked-table-caption-above {
+  margin: 0 0 0.35em;
+}
+
+.cm-linked-table-caption-below {
+  margin: 0.45em 0 0;
+}
+
+.cm-linked-table-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.cm-linked-table-sortable::after {
+  content: ' ↕';
+  opacity: 0.35;
+  font-size: 0.8em;
+}
+
+.cm-linked-table-sortable:hover::after {
+  opacity: 0.65;
+}
+
+.cm-linked-table-source-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75em;
+  margin: 0.25em 0 0.4em;
+  padding: 0.35em 0.5em;
+  border: 1px dashed var(--widget-border, rgba(128, 128, 128, 0.24));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--widget-surface, transparent) 30%, var(--editor-background, transparent) 70%);
+}
+
+.cm-linked-table-source-banner-text {
+  font-size: 0.82em;
+  color: var(--widget-text-muted, inherit);
+}
+
+.cm-linked-table-source-banner-action {
+  appearance: none;
+  border: 1px solid var(--widget-border, rgba(128, 128, 128, 0.24));
+  background: var(--widget-surface, transparent);
+  color: var(--widget-text, inherit);
+  border-radius: 6px;
+  padding: 0.16em 0.5em;
+  font: inherit;
+  font-size: 0.78em;
+  cursor: pointer;
+}
+
+.cm-linked-table-source-banner-action:hover {
+  background: var(--widget-surface-hover, rgba(128, 128, 128, 0.08));
 }
 
 /* The table element */
@@ -138462,6 +142180,11 @@ function create(target, options = {}) {
     awarenessUI = true,
   } = options;
 
+  const linkedTableHostContext = {
+    projectRoot: options.projectRoot || null,
+    documentPath: options.documentPath || null,
+  };
+
   // Runtimes from normalized config
   const runtimes = {};
   for (const [name, rtConfig] of Object.entries(config.runtimes)) {
@@ -138606,6 +142329,7 @@ function create(target, options = {}) {
     outputWidgetPlugin, // ANSI output rendering
     ...createInlineEditingExtensions(),
     lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
+    linkedTableMarkdownState,
     blockDecorations,   // StateField for tables, display math (multi-line)
     markdownRenderer,   // ViewPlugin for everything else (inline)
     pageViewPagination, // ViewPlugin: page-view spacers at page boundaries
@@ -138882,6 +142606,7 @@ function create(target, options = {}) {
     // Runtime
     registry,
     execution: null, // Set below
+    linkedTables: null, // Set below
 
     // Runtime LSP (hover, completions, variables)
     runtimeLspProviders,
@@ -138905,6 +142630,36 @@ function create(target, options = {}) {
      */
     getYText() {
       return yText;
+    },
+
+    getLinkedTableHostContext() {
+      return {
+        ...linkedTableHostContext,
+        ...(this.linkedTables?.getHostContext?.() || {}),
+      };
+    },
+
+    setLinkedTableHostContext(context = {}) {
+      if (context.projectRoot !== undefined) linkedTableHostContext.projectRoot = context.projectRoot;
+      if (context.documentPath !== undefined) linkedTableHostContext.documentPath = context.documentPath;
+      this.linkedTables?.setHostContext?.(linkedTableHostContext);
+      return this.getLinkedTableHostContext();
+    },
+
+    canImportLinkedTableFromHost(hostApi) {
+      return canImportLinkedTableFromHost(hostApi);
+    },
+
+    insertLinkedTableBlock(blockMarkdown, options = {}) {
+      return insertLinkedTableBlock(this, blockMarkdown, options);
+    },
+
+    async importLinkedTableFromHost(sourceFilePath, options = {}) {
+      return importLinkedTableFromHost(this, {
+        ...this.getLinkedTableHostContext(),
+        ...options,
+        sourceFilePath,
+      });
     },
 
     setContent(text) {
@@ -140144,6 +143899,9 @@ function create(target, options = {}) {
 
     destroy() {
       this.execution.cancelAll();
+      if (this.linkedTables?.destroy) {
+        this.linkedTables.destroy();
+      }
       if (cellControls) {
         cellControls.destroy();
       }
@@ -140207,6 +143965,13 @@ function create(target, options = {}) {
 
   // Create execution manager
   api.execution = createExecutionManager(api, registry);
+
+  // Create linked-table action/job controller
+  api.linkedTables = createLinkedTableController({
+    editor: api,
+    projectRoot: linkedTableHostContext.projectRoot,
+    documentPath: linkedTableHostContext.documentPath,
+  });
 
   // Configure keymap now that api is ready
   // Merge user keybindings with defaults
@@ -141078,6 +144843,8 @@ const mrmd = {
   runtimeLsp: runtimeLspExports,
   // Wiki-link completion ([[internal-links]])
   wikiLink: wikiLinkExports,
+  // Linked tables
+  linkedTables,
   // Markdown rendering (blur→render, focus→source)
   markdown: markdownExports,
   // Frontmatter utilities
@@ -141136,12 +144903,16 @@ var index = /*#__PURE__*/Object.freeze({
   EXECUTION_STATUS: EXECUTION_STATUS,
   ImagePlaceholder: ImagePlaceholder,
   ImageWidget: ImageWidget,
+  LINKED_TABLE_EVENT: LINKED_TABLE_EVENT,
+  LinkedTableController: LinkedTableController,
   MRPClient: MRPClient,
   MonitorCoordination: MonitorCoordination,
   OrchestratorClient: OrchestratorClient,
   PtyClient: PtyClient,
   RuntimeRegistry: RuntimeRegistry,
   ShellStateManager: ShellStateManager,
+  TABLE_JOB_STATUS: TABLE_JOB_STATUS,
+  TableJobsClient: TableJobsClient,
   TableWidget: TableWidget,
   TaskCheckboxWidget: TaskCheckboxWidget,
   TermBlock: TermBlock,
@@ -141156,6 +144927,7 @@ var index = /*#__PURE__*/Object.freeze({
   assetResolverFacet: assetResolverFacet,
   awareness: awarenessExports,
   buildPandocCommand: buildPandocCommand,
+  canImportLinkedTableFromHost: canImportLinkedTableFromHost,
   cellControlsExports: cellControlsExports,
   cloneDocumentTemplate: cloneDocumentTemplate,
   closeTerminal: closeTerminal,
@@ -141178,6 +144950,8 @@ var index = /*#__PURE__*/Object.freeze({
   createIndicatorExtensions: createIndicatorExtensions,
   createJavaScriptRuntime: createJavaScriptRuntime,
   createLanguageToolDiagnosticsExtension: createLanguageToolDiagnosticsExtension,
+  createLinkedTableBlockAnchor: createLinkedTableBlockAnchor,
+  createLinkedTableController: createLinkedTableController,
   createMonitorCoordination: createMonitorCoordination,
   createPtyClient: createPtyClient,
   createReactiveConfig: createReactiveConfig,
@@ -141189,6 +144963,7 @@ var index = /*#__PURE__*/Object.freeze({
   createStateManager: createStateManager,
   createStatusBar: createStatusBar,
   createStudio: createStudio,
+  createTableJobsClient: createTableJobsClient,
   createTerminalSession: createTerminalSession,
   createTheme: createTheme,
   createVariableExplorer: createVariableExplorer,
@@ -141200,6 +144975,7 @@ var index = /*#__PURE__*/Object.freeze({
   defaultDocumentTemplate: defaultDocumentTemplate,
   detectTheme: detectTheme,
   devPanelExtension: devPanelExtension,
+  dispatchLinkedTableAction: dispatchLinkedTableAction,
   documentTemplateExports: documentTemplateExports,
   documentTemplatePresets: documentTemplatePresets,
   drive: drive,
@@ -141218,6 +144994,7 @@ var index = /*#__PURE__*/Object.freeze({
   getWikiLinkCompletionSource: getWikiLinkCompletionSource,
   githubTheme: githubTheme,
   hasAnsi: hasAnsi,
+  importLinkedTableFromHost: importLinkedTableFromHost,
   initTheme: initTheme,
   injectAwarenessStyles: injectAwarenessStyles,
   injectDevPanelStyles: injectDevPanelStyles,
@@ -141226,6 +145003,7 @@ var index = /*#__PURE__*/Object.freeze({
   injectShellStyles: injectShellStyles,
   injectTermWidgetStyles: injectTermWidgetStyles,
   injectWikiLinkCompletionStyles: injectWikiLinkCompletionStyles,
+  insertLinkedTableBlock: insertLinkedTableBlock,
   isExecutableLanguage: isExecutableLanguage,
   isFullySerializable: isFullySerializable,
   isTableDelimiter: isTableDelimiter,
@@ -141233,6 +145011,7 @@ var index = /*#__PURE__*/Object.freeze({
   isTerminalLanguage: isTerminalLanguage,
   isTerminalVisible: isTerminalVisible,
   launchTerminal: launchTerminal,
+  linkedTablesModule: linkedTables,
   listTerminalSessions: listTerminalSessions,
   markdown: markdown,
   markdownExports: markdownExports,
@@ -141241,7 +145020,9 @@ var index = /*#__PURE__*/Object.freeze({
   midnightTheme: midnightTheme,
   minimalAwarenessConfig: minimalAwarenessConfig,
   normalizeDocumentTemplate: normalizeDocumentTemplate,
+  normalizeLinkedTableBlockInsertion: normalizeLinkedTableBlockInsertion,
   normalizeOptions: normalizeOptions,
+  openLinkedTableWorkspace: openLinkedTableWorkspace,
   parseFrontmatter: parseFrontmatter,
   parseImageMarkdown: parseImageMarkdown,
   parseTable: parseTable,
@@ -141252,6 +145033,7 @@ var index = /*#__PURE__*/Object.freeze({
   refreshLanguageToolDiagnostics: refreshLanguageToolDiagnostics,
   registerTheme: registerTheme,
   resolveFontForExport: resolveFontForExport,
+  resolveLinkedTableBlockAnchor: resolveLinkedTableBlockAnchor,
   runtime: runtime,
   runtimeLspExports: runtimeLspExports,
   serializeConfig: serializeConfig,
@@ -141287,12 +145069,16 @@ exports.Drive = Drive;
 exports.EXECUTION_STATUS = EXECUTION_STATUS;
 exports.ImagePlaceholder = ImagePlaceholder;
 exports.ImageWidget = ImageWidget;
+exports.LINKED_TABLE_EVENT = LINKED_TABLE_EVENT;
+exports.LinkedTableController = LinkedTableController;
 exports.MRPClient = MRPClient;
 exports.MonitorCoordination = MonitorCoordination;
 exports.OrchestratorClient = OrchestratorClient;
 exports.PtyClient = PtyClient;
 exports.RuntimeRegistry = RuntimeRegistry;
 exports.ShellStateManager = ShellStateManager;
+exports.TABLE_JOB_STATUS = TABLE_JOB_STATUS;
+exports.TableJobsClient = TableJobsClient;
 exports.TableWidget = TableWidget;
 exports.TaskCheckboxWidget = TaskCheckboxWidget;
 exports.TermBlock = TermBlock;
@@ -141307,6 +145093,7 @@ exports.applyTheme = applyTheme;
 exports.assetResolverFacet = assetResolverFacet;
 exports.awareness = awarenessExports;
 exports.buildPandocCommand = buildPandocCommand;
+exports.canImportLinkedTableFromHost = canImportLinkedTableFromHost;
 exports.cellControlsExports = cellControlsExports;
 exports.cloneDocumentTemplate = cloneDocumentTemplate;
 exports.closeTerminal = closeTerminal;
@@ -141329,6 +145116,8 @@ exports.createHumanState = createHumanState;
 exports.createIndicatorExtensions = createIndicatorExtensions;
 exports.createJavaScriptRuntime = createJavaScriptRuntime;
 exports.createLanguageToolDiagnosticsExtension = createLanguageToolDiagnosticsExtension;
+exports.createLinkedTableBlockAnchor = createLinkedTableBlockAnchor;
+exports.createLinkedTableController = createLinkedTableController;
 exports.createMonitorCoordination = createMonitorCoordination;
 exports.createPtyClient = createPtyClient;
 exports.createReactiveConfig = createReactiveConfig;
@@ -141340,6 +145129,7 @@ exports.createSpellcheckExtensions = createSpellcheckExtensions;
 exports.createStateManager = createStateManager;
 exports.createStatusBar = createStatusBar;
 exports.createStudio = createStudio;
+exports.createTableJobsClient = createTableJobsClient;
 exports.createTerminalSession = createTerminalSession;
 exports.createTheme = createTheme;
 exports.createVariableExplorer = createVariableExplorer;
@@ -141351,6 +145141,7 @@ exports.defaultAwarenessConfig = defaultAwarenessConfig;
 exports.defaultDocumentTemplate = defaultDocumentTemplate;
 exports.detectTheme = detectTheme;
 exports.devPanelExtension = devPanelExtension;
+exports.dispatchLinkedTableAction = dispatchLinkedTableAction;
 exports.documentTemplateExports = documentTemplateExports;
 exports.documentTemplatePresets = documentTemplatePresets;
 exports.drive = drive;
@@ -141369,6 +145160,7 @@ exports.getThemeNames = getThemeNames;
 exports.getWikiLinkCompletionSource = getWikiLinkCompletionSource;
 exports.githubTheme = githubTheme;
 exports.hasAnsi = hasAnsi;
+exports.importLinkedTableFromHost = importLinkedTableFromHost;
 exports.initTheme = initTheme;
 exports.injectAwarenessStyles = injectAwarenessStyles;
 exports.injectDevPanelStyles = injectDevPanelStyles;
@@ -141377,6 +145169,7 @@ exports.injectRuntimeLspStyles = injectRuntimeLspStyles;
 exports.injectShellStyles = injectShellStyles;
 exports.injectTermWidgetStyles = injectTermWidgetStyles;
 exports.injectWikiLinkCompletionStyles = injectWikiLinkCompletionStyles;
+exports.insertLinkedTableBlock = insertLinkedTableBlock;
 exports.isExecutableLanguage = isExecutableLanguage;
 exports.isFullySerializable = isFullySerializable;
 exports.isTableDelimiter = isTableDelimiter;
@@ -141384,6 +145177,7 @@ exports.isTableLine = isTableLine;
 exports.isTerminalLanguage = isTerminalLanguage;
 exports.isTerminalVisible = isTerminalVisible;
 exports.launchTerminal = launchTerminal;
+exports.linkedTablesModule = linkedTables;
 exports.listTerminalSessions = listTerminalSessions;
 exports.markdown = markdown;
 exports.markdownExports = markdownExports;
@@ -141392,7 +145186,9 @@ exports.markdownStyles = markdownStyles;
 exports.midnightTheme = midnightTheme;
 exports.minimalAwarenessConfig = minimalAwarenessConfig;
 exports.normalizeDocumentTemplate = normalizeDocumentTemplate;
+exports.normalizeLinkedTableBlockInsertion = normalizeLinkedTableBlockInsertion;
 exports.normalizeOptions = normalizeOptions;
+exports.openLinkedTableWorkspace = openLinkedTableWorkspace;
 exports.parseFrontmatter = parseFrontmatter;
 exports.parseImageMarkdown = parseImageMarkdown;
 exports.parseTable = parseTable;
@@ -141403,6 +145199,7 @@ exports.readFrontmatterValue = readFrontmatterValue;
 exports.refreshLanguageToolDiagnostics = refreshLanguageToolDiagnostics;
 exports.registerTheme = registerTheme;
 exports.resolveFontForExport = resolveFontForExport;
+exports.resolveLinkedTableBlockAnchor = resolveLinkedTableBlockAnchor;
 exports.runtime = runtime;
 exports.runtimeLspExports = runtimeLspExports;
 exports.serializeConfig = serializeConfig;

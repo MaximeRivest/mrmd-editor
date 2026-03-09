@@ -84,6 +84,24 @@ import {
 import { parseFrontmatter, readFrontmatterValue, updateFrontmatterField } from './frontmatter-updater.js';
 import { ExecutionManager, createExecutionManager } from './execution.js';
 import { MonitorCoordination, EXECUTION_STATUS, createMonitorCoordination } from './monitor-coordination.js';
+import * as linkedTables from './tables/index.js';
+import {
+  LINKED_TABLE_EVENT,
+  dispatchLinkedTableAction,
+  openLinkedTableWorkspace,
+  canImportLinkedTableFromHost,
+  normalizeLinkedTableBlockInsertion,
+  insertLinkedTableBlock,
+  importLinkedTableFromHost,
+  TableJobsClient,
+  TABLE_JOB_STATUS,
+  createTableJobsClient,
+  createLinkedTableController,
+  LinkedTableController,
+  createLinkedTableBlockAnchor,
+  resolveLinkedTableBlockAnchor,
+  linkedTableMarkdownState,
+} from './tables/index.js';
 import { MRPClient } from './mrp-client.js';
 
 // Shell (status bar, file management, studio layout)
@@ -1426,6 +1444,11 @@ function create(target, options = {}) {
     awarenessUI = true,
   } = options;
 
+  const linkedTableHostContext = {
+    projectRoot: options.projectRoot || null,
+    documentPath: options.documentPath || null,
+  };
+
   // Runtimes from normalized config
   const runtimes = {};
   for (const [name, rtConfig] of Object.entries(config.runtimes)) {
@@ -1570,6 +1593,7 @@ function create(target, options = {}) {
     outputWidgetPlugin, // ANSI output rendering
     ...createInlineEditingExtensions(),
     lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
+    linkedTableMarkdownState,
     blockDecorations,   // StateField for tables, display math (multi-line)
     markdownRenderer,   // ViewPlugin for everything else (inline)
     pageViewPagination, // ViewPlugin: page-view spacers at page boundaries
@@ -1850,6 +1874,7 @@ function create(target, options = {}) {
     // Runtime
     registry,
     execution: null, // Set below
+    linkedTables: null, // Set below
 
     // Runtime LSP (hover, completions, variables)
     runtimeLspProviders,
@@ -1873,6 +1898,36 @@ function create(target, options = {}) {
      */
     getYText() {
       return yText;
+    },
+
+    getLinkedTableHostContext() {
+      return {
+        ...linkedTableHostContext,
+        ...(this.linkedTables?.getHostContext?.() || {}),
+      };
+    },
+
+    setLinkedTableHostContext(context = {}) {
+      if (context.projectRoot !== undefined) linkedTableHostContext.projectRoot = context.projectRoot;
+      if (context.documentPath !== undefined) linkedTableHostContext.documentPath = context.documentPath;
+      this.linkedTables?.setHostContext?.(linkedTableHostContext);
+      return this.getLinkedTableHostContext();
+    },
+
+    canImportLinkedTableFromHost(hostApi) {
+      return canImportLinkedTableFromHost(hostApi);
+    },
+
+    insertLinkedTableBlock(blockMarkdown, options = {}) {
+      return insertLinkedTableBlock(this, blockMarkdown, options);
+    },
+
+    async importLinkedTableFromHost(sourceFilePath, options = {}) {
+      return importLinkedTableFromHost(this, {
+        ...this.getLinkedTableHostContext(),
+        ...options,
+        sourceFilePath,
+      });
     },
 
     setContent(text) {
@@ -3112,6 +3167,9 @@ function create(target, options = {}) {
 
     destroy() {
       this.execution.cancelAll();
+      if (this.linkedTables?.destroy) {
+        this.linkedTables.destroy();
+      }
       if (cellControls) {
         cellControls.destroy();
       }
@@ -3175,6 +3233,13 @@ function create(target, options = {}) {
 
   // Create execution manager
   api.execution = createExecutionManager(api, registry);
+
+  // Create linked-table action/job controller
+  api.linkedTables = createLinkedTableController({
+    editor: api,
+    projectRoot: linkedTableHostContext.projectRoot,
+    documentPath: linkedTableHostContext.documentPath,
+  });
 
   // Configure keymap now that api is ready
   // Merge user keybindings with defaults
@@ -4046,6 +4111,8 @@ const mrmd = {
   runtimeLsp: runtimeLspExports,
   // Wiki-link completion ([[internal-links]])
   wikiLink: wikiLinkExports,
+  // Linked tables
+  linkedTables,
   // Markdown rendering (blur→render, focus→source)
   markdown: markdownExports,
   // Frontmatter utilities
@@ -4187,6 +4254,22 @@ export {
   MonitorCoordination,
   EXECUTION_STATUS,
   createMonitorCoordination,
+  // Linked table exports
+  linkedTables as linkedTablesModule,
+  LINKED_TABLE_EVENT,
+  dispatchLinkedTableAction,
+  openLinkedTableWorkspace,
+  canImportLinkedTableFromHost,
+  normalizeLinkedTableBlockInsertion,
+  insertLinkedTableBlock,
+  importLinkedTableFromHost,
+  TableJobsClient,
+  TABLE_JOB_STATUS,
+  createTableJobsClient,
+  LinkedTableController,
+  createLinkedTableController,
+  createLinkedTableBlockAnchor,
+  resolveLinkedTableBlockAnchor,
   // Markdown rendering exports
   markdownExports,
   markdownRendering as markdown,

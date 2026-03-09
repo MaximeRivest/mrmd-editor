@@ -8,8 +8,8 @@
  */
 
 import { EditorView, ViewPlugin } from '@codemirror/view';
-import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
-import { tags as lezerTags } from '@lezer/highlight';
+import { syntaxHighlighting } from '@codemirror/language';
+import { tags as lezerTags, tagHighlighter } from '@lezer/highlight';
 
 export const defaultDocumentTemplate = {
   name: 'Default',
@@ -157,6 +157,9 @@ export const defaultDocumentTemplate = {
       outputBackground: '',   // output area background
       outputColor: '',        // output area text color
       outputBorderColor: '',  // border above output area
+      outputFontFamily: '',   // output area font family
+      outputFontSize: '',     // output area font size (e.g. '0.85em')
+      outputLineHeight: '',   // output area line height
     },
     // --- Syntax highlighting tokens ---
     // Base token colors apply to all code blocks/languages.
@@ -223,6 +226,21 @@ export const defaultDocumentTemplate = {
   table: {
     borderColor: '',
     headerBackground: '',
+    headerColor: '',       // header text color
+    headerFontWeight: '',  // '' | '400' | '600' | '700' | '800'
+    fontFamily: '',        // table body font (falls back to body font)
+    fontSize: '',          // e.g. '0.9em' — relative to body
+    color: '',             // table body text color
+    cellPadding: '',       // e.g. '8px 12px'
+    stripedRows: '',       // '' | 'even' | 'odd' — alternating row background
+    stripedColor: '',      // background color for striped rows
+  },
+  math: {
+    color: '',                // math text color
+    fontSize: '',             // e.g. '1.1em' — relative size for math
+    displayBackground: '',    // background behind display math blocks
+    displayPadding: '',       // padding for display math blocks
+    displayBorderRadius: '',  // border radius for display math blocks
   },
   hr: {
     color: '',
@@ -881,9 +899,46 @@ export function compileDocumentTemplateCSS(template, scope = '&') {
     [s('.cm-table-widget table') + ', ' + s('.cm-table-widget th') + ', ' + s('.cm-table-widget td')]: {
       ...(t.table?.borderColor ? { borderColor: t.table.borderColor } : {}),
     },
+    [s('.cm-table-widget table')]: {
+      ...(t.table?.fontFamily ? { fontFamily: t.table.fontFamily } : bodyFont ? { fontFamily: bodyFont } : {}),
+      ...(t.table?.fontSize ? { fontSize: t.table.fontSize } : {}),
+    },
     [s('.cm-table-widget th')]: {
       ...(t.table?.headerBackground ? { backgroundColor: t.table.headerBackground } : {}),
+      ...(t.table?.headerColor ? { color: t.table.headerColor } : {}),
+      ...(t.table?.headerFontWeight ? { fontWeight: t.table.headerFontWeight } : {}),
     },
+    [s('.cm-table-widget td')]: {
+      ...(t.table?.color ? { color: t.table.color } : {}),
+      ...(t.table?.cellPadding ? { padding: t.table.cellPadding } : {}),
+    },
+    // Striped rows
+    ...(t.table?.stripedRows && t.table?.stripedColor ? {
+      [s(`.cm-table-widget tbody tr:nth-child(${t.table.stripedRows}) td`)]: {
+        backgroundColor: t.table.stripedColor,
+      },
+    } : {}),
+    // --- Math ---
+    // KaTeX renders its own elements inside .cm-math-* containers.
+    // We must target .katex and internal spans to override KaTeX's own color.
+    ...(t.math?.color || t.math?.fontSize ? {
+      [s('.cm-math-inline') + ', ' + s('.cm-math-display')]: {
+        ...(t.math.color ? { color: t.math.color } : {}),
+        ...(t.math.fontSize ? { fontSize: t.math.fontSize } : {}),
+      },
+      // KaTeX internal elements need explicit override
+      [s('.cm-math-inline .katex') + ', ' + s('.cm-math-display .katex')]: {
+        ...(t.math.color ? { color: `${t.math.color} !important` } : {}),
+        ...(t.math.fontSize ? { fontSize: t.math.fontSize } : {}),
+      },
+    } : {}),
+    ...(t.math?.displayBackground || t.math?.displayPadding || t.math?.displayBorderRadius ? {
+      [s('.cm-math-display')]: {
+        ...(t.math.displayBackground ? { backgroundColor: t.math.displayBackground } : {}),
+        ...(t.math.displayPadding ? { padding: t.math.displayPadding } : {}),
+        ...(t.math.displayBorderRadius ? { borderRadius: t.math.displayBorderRadius } : {}),
+      },
+    } : {}),
     // --- Horizontal rules ---
     ...(t.hr?.color || t.hr?.thickness ? {
       [s('.cm-md-hr-line::after')]: {
@@ -897,38 +952,21 @@ export function compileDocumentTemplateCSS(template, scope = '&') {
         content: ({ disc: '"•"', circle: '"○"', square: '"■"', dash: '"—"' })[t.list.bulletStyle] || undefined,
       },
     } : {}),
-    // --- Neutralize syntax-theme token colors inside code surfaces when
-    // document styles own preview. When the template defines highlight tokens
-    // (code.highlight.*), we only neutralize non-code-block token spans and
-    // let the template's HighlightStyle provide code block colors.
-    // When no highlight tokens are defined, neutralize everything to inherit.
-    ...(() => {
-      const hasHighlightTokens = ['keyword', 'controlKeyword', 'string', 'number', 'comment',
-        'function', 'variable', 'type', 'operator', 'punctuation', 'property', 'constant',
-        'regexp', 'escape', 'tag', 'attribute', 'attributeValue', 'meta',
-      ].some((k) => t.code?.highlight?.[k]);
-      if (hasHighlightTokens) {
-        // Only neutralize inline code token spans (let code blocks keep template HighlightStyle)
-        return {
-          [s('.cm-md-inline-code span[class^="ͼ"], .cm-md-inline-code span[class*=" ͼ"], .cm-md-inline-code span[class*="ͼ"]')]: {
-            color: 'inherit !important',
-            backgroundColor: 'transparent !important',
-            fontStyle: 'inherit !important',
-            fontWeight: 'inherit !important',
-            textDecorationColor: 'inherit !important',
-          },
-        };
-      }
-      return {
-        [s('.cm-codeblock-line span[class^="ͼ"], .cm-codeblock-line span[class*=" ͼ"], .cm-codeblock-line span[class*="ͼ"], .cm-codeblock-fence span[class^="ͼ"], .cm-codeblock-fence span[class*=" ͼ"], .cm-codeblock-fence span[class*="ͼ"], .cm-wysiwyg-code-fence-line span[class^="ͼ"], .cm-wysiwyg-code-fence-line span[class*=" ͼ"], .cm-wysiwyg-code-fence-line span[class*="ͼ"], .cm-md-inline-code span[class^="ͼ"], .cm-md-inline-code span[class*=" ͼ"], .cm-md-inline-code span[class*="ͼ"]')]: {
-          color: 'inherit !important',
-          backgroundColor: 'transparent !important',
-          fontStyle: 'inherit !important',
-          fontWeight: 'inherit !important',
-          textDecorationColor: 'inherit !important',
-        },
-      };
-    })(),
+    // --- Neutralize syntax-theme token colors inside ALL code surfaces ---
+    // ALWAYS neutralize ͼN (CodeMirror HighlightStyle) classes so the
+    // app theme's syntax colors don't leak through.  Document-template-owned
+    // token colors are applied via deterministic .cm-dt-* classes stamped by
+    // our tagHighlighter extension; those rules use higher specificity and
+    // !important in the override <style> element, so they win here.
+    // When no highlight tokens are set, code blocks simply inherit
+    // code.block.color (or body.color) — clean, theme-neutral look.
+    [s('.cm-codeblock-line span[class^="ͼ"], .cm-codeblock-line span[class*=" ͼ"], .cm-codeblock-line span[class*="ͼ"], .cm-codeblock-fence span[class^="ͼ"], .cm-codeblock-fence span[class*=" ͼ"], .cm-codeblock-fence span[class*="ͼ"], .cm-wysiwyg-code-fence-line span[class^="ͼ"], .cm-wysiwyg-code-fence-line span[class*=" ͼ"], .cm-wysiwyg-code-fence-line span[class*="ͼ"], .cm-md-inline-code span[class^="ͼ"], .cm-md-inline-code span[class*=" ͼ"], .cm-md-inline-code span[class*="ͼ"]')]: {
+      color: 'inherit !important',
+      backgroundColor: 'transparent !important',
+      fontStyle: 'inherit !important',
+      fontWeight: 'inherit !important',
+      textDecorationColor: 'inherit !important',
+    },
     // --- Code block additional properties ---
     ...(t.code?.block?.lineHeight ? {
       [s('.cm-codeblock-line')]: {
@@ -972,11 +1010,29 @@ export function compileDocumentTemplateCSS(template, scope = '&') {
         ...(t.code.cell.headerBorderColor ? { borderBottomColor: `${t.code.cell.headerBorderColor} !important` } : {}),
       },
     } : {}),
-    ...(t.code?.cell?.outputBackground || t.code?.cell?.outputColor || t.code?.cell?.outputBorderColor ? {
+    ...(t.code?.cell?.outputBackground || t.code?.cell?.outputColor || t.code?.cell?.outputBorderColor ||
+        t.code?.cell?.outputFontFamily || t.code?.cell?.outputFontSize || t.code?.cell?.outputLineHeight ? {
       [s('.cm-output-widget') + ', ' + s('.cm-html-output-widget') + ', ' + s('.cm-css-output-widget') + ', ' + s('.cm-scroll-output-widget') + ', ' + s('.cm-json-output-widget')]: {
         ...(t.code.cell.outputBackground ? { backgroundColor: `${t.code.cell.outputBackground} !important` } : {}),
         ...(t.code.cell.outputColor ? { color: `${t.code.cell.outputColor} !important` } : {}),
         ...(t.code.cell.outputBorderColor ? { borderTopColor: `${t.code.cell.outputBorderColor} !important` } : {}),
+        ...(t.code.cell.outputFontFamily ? { fontFamily: `${t.code.cell.outputFontFamily} !important` } : {}),
+        ...(t.code.cell.outputFontSize ? { fontSize: `${t.code.cell.outputFontSize} !important` } : {}),
+        ...(t.code.cell.outputLineHeight ? { lineHeight: `${t.code.cell.outputLineHeight} !important` } : {}),
+      },
+    } : {}),
+    // Output content (pre blocks inside output widgets)
+    ...(t.code?.cell?.outputFontFamily || t.code?.cell?.outputFontSize ? {
+      [s('.cm-output-content') + ', ' + s('.cm-scroll-output-content')]: {
+        ...(t.code.cell.outputFontFamily ? { fontFamily: `${t.code.cell.outputFontFamily} !important` } : {}),
+        ...(t.code.cell.outputFontSize ? { fontSize: `${t.code.cell.outputFontSize} !important` } : {}),
+      },
+    } : {}),
+    // Scroll output header bar
+    ...(t.code?.cell?.headerBackground || t.code?.cell?.headerColor ? {
+      [s('.cm-scroll-output-header')]: {
+        ...(t.code.cell.headerBackground ? { backgroundColor: `${t.code.cell.headerBackground} !important` } : {}),
+        ...(t.code.cell.headerColor ? { color: `${t.code.cell.headerColor} !important` } : {}),
       },
     } : {}),
     // --- Images ---
@@ -1083,8 +1139,33 @@ export function serializeDocumentTemplateToCss(template, scope = '.markdown-body
       color: t.link?.color || undefined,
       textDecoration: t.link?.underline === false ? 'none' : undefined,
     })}\n}`,
+    `${scope} table {\n${cssDecls({
+      borderCollapse: 'collapse',
+      width: '100%',
+      fontFamily: t.table?.fontFamily || bodyFont || undefined,
+      fontSize: t.table?.fontSize || undefined,
+    })}\n}`,
     `${scope} table, ${scope} th, ${scope} td {\n${cssDecls({ borderColor: t.table?.borderColor || undefined })}\n}`,
-    `${scope} th {\n${cssDecls({ backgroundColor: t.table?.headerBackground || undefined })}\n}`,
+    `${scope} th {\n${cssDecls({
+      backgroundColor: t.table?.headerBackground || undefined,
+      color: t.table?.headerColor || undefined,
+      fontWeight: t.table?.headerFontWeight || undefined,
+    })}\n}`,
+    `${scope} td {\n${cssDecls({
+      color: t.table?.color || undefined,
+      padding: t.table?.cellPadding || undefined,
+    })}\n}`,
+    ...(t.table?.stripedRows && t.table?.stripedColor ? [
+      `${scope} tbody tr:nth-child(${t.table.stripedRows}) td {\n${cssDecls({
+        backgroundColor: t.table.stripedColor,
+      })}\n}`,
+    ] : []),
+    ...(t.math?.color || t.math?.fontSize ? [
+      `${scope} .math, ${scope} .MathJax, ${scope} .katex {\n${cssDecls({
+        color: t.math?.color || undefined,
+        fontSize: t.math?.fontSize || undefined,
+      })}\n}`,
+    ] : []),
     // Syntax highlighting token classes for code blocks (used by highlight.js / Pandoc)
     ...(() => {
       const hl = t.code?.highlight;
@@ -1852,157 +1933,144 @@ function buildDocumentTemplateOverrideCSS(template, scopeSelector) {
   rules.push(`${scopeSelector} .cm-line:not(.cm-codeblock-line):not(.cm-codeblock-fence) ${tokenSel} { color: inherit !important; }`);
 
   // --- Syntax highlighting: document-template-owned token colors ---
-  // When the template defines code.highlight tokens, we apply them to code
-  // blocks via data-attributes set by our ViewPlugin. The cascade is:
-  //   code.block.color (base) → code.highlight.{token} (base token) →
-  //   code.highlight.languages.{lang}.{token} (per-language override)
+  //
+  // The tagHighlighter extension stamps deterministic .cm-dt-* classes on
+  // syntax token spans.  The ͼN classes from the app theme are neutralised
+  // above (color: inherit !important).  Here we output rules that give
+  // our .cm-dt-* classes the template's colors.
+  //
+  // Scoped inside code-block lines so they don't affect prose.  The selector
+  // uses the data-attribute on the editor root for maximum specificity.
+  //
+  // Cascade:
+  //   code.block.color (inherited base)
+  //     → code.highlight.{token}  (base token – all code blocks)
+  //       → code.highlight.languages.{lang}.{token}  (per-language)
+  //
   const hl = t.code?.highlight;
   if (hl) {
-    pushSyntaxHighlightRules(rules, scopeSelector, hl);
+    pushSyntaxTokenRules(rules, scopeSelector, hl);
+  }
+
+  // --- Code block font overrides (guaranteed precedence) ---
+  // The built-in codeBlockStyles uses EditorView.theme() which may have
+  // equal specificity to our template theme.  Repeat here with !important.
+  if (t.code?.block?.fontSize) {
+    rule(['.cm-codeblock-line', '.cm-codeblock-fence', '.cm-wysiwyg-code-fence-line'], 'font-size', t.code.block.fontSize);
+  }
+  if (t.code?.block?.fontFamily) {
+    rule(['.cm-codeblock-line', '.cm-codeblock-fence', '.cm-wysiwyg-code-fence-line'], 'font-family', t.code.block.fontFamily);
+  }
+  if (t.code?.block?.lineHeight) {
+    rule(['.cm-codeblock-line', '.cm-wysiwyg-code-fence-line'], 'line-height', t.code.block.lineHeight);
+  }
+
+  // --- Output widget font overrides ---
+  if (t.code?.cell?.outputFontFamily) {
+    rule(['.cm-output-widget', '.cm-output-content', '.cm-scroll-output-widget', '.cm-scroll-output-content'], 'font-family', t.code.cell.outputFontFamily);
+  }
+  if (t.code?.cell?.outputFontSize) {
+    rule(['.cm-output-widget', '.cm-output-content', '.cm-scroll-output-widget', '.cm-scroll-output-content'], 'font-size', t.code.cell.outputFontSize);
+  }
+  if (t.code?.cell?.outputLineHeight) {
+    rule(['.cm-output-widget', '.cm-scroll-output-widget'], 'line-height', t.code.cell.outputLineHeight);
+  }
+
+  // --- Table overrides ---
+  if (t.table?.color) {
+    rule('.cm-table-widget td', 'color', t.table.color);
+  }
+  if (t.table?.headerColor) {
+    rule('.cm-table-widget th', 'color', t.table.headerColor);
+  }
+  if (t.table?.headerFontWeight) {
+    rule('.cm-table-widget th', 'font-weight', t.table.headerFontWeight);
+  }
+  if (t.table?.fontSize) {
+    rule('.cm-table-widget table', 'font-size', t.table.fontSize);
+  }
+  if (t.table?.fontFamily) {
+    rule('.cm-table-widget table', 'font-family', t.table.fontFamily);
+  }
+
+  // --- Math overrides ---
+  // KaTeX generates its own elements that set color directly.
+  // Must target .katex inside our containers to override.
+  if (t.math?.color) {
+    rule(['.cm-math-inline', '.cm-math-display'], 'color', t.math.color);
+    rule(['.cm-math-inline .katex', '.cm-math-display .katex'], 'color', t.math.color);
+    rule(['.cm-math-inline .katex *', '.cm-math-display .katex *'], 'color', t.math.color);
+  }
+  if (t.math?.fontSize) {
+    rule(['.cm-math-inline', '.cm-math-display'], 'font-size', t.math.fontSize);
+  }
+  if (t.math?.displayBorderRadius) {
+    rule('.cm-math-display', 'border-radius', t.math.displayBorderRadius);
   }
 
   return rules.join('\n');
 }
 
 /**
- * Map from our semantic token names to the CSS custom properties / tag-based
- * selectors that CodeMirror's HighlightStyle generates.
+ * Generate CSS rules targeting the deterministic .cm-dt-* token classes
+ * inside code block lines.  Uses !important to win over the neutralised
+ * ͼN classes.
  *
- * CodeMirror generates classes like `ͼN` (where N varies), so we can't target
- * those directly. Instead we use `[data-mrmd-token="keyword"]` attributes that
- * our ViewPlugin stamps onto code block lines, OR we target the Lezer tag
- * CSS classes via the HighlightStyle we generate ourselves.
+ * For base tokens the selector is:
+ *   ${scope} .cm-codeblock-line .cm-dt-keyword { color: #xxx !important; }
  *
- * The approach: we build a secondary HighlightStyle-like system using
- * CSS custom properties on the code block scope. The override extension
- * sets CSS vars like `--dt-keyword`, `--dt-string`, etc. on the editor root,
- * and a companion HighlightStyle consumes them.
- *
- * Actually, the simplest approach that works with CodeMirror's existing
- * highlighting is: since we already neutralize all ͼN class colors to
- * `inherit`, we set the base color on `.cm-codeblock-line` from code.block.color.
- * Then we generate a NEW HighlightStyle that uses our template colors.
- * But HighlightStyle is static and baked into the extension pipeline...
- *
- * Best pragmatic approach: CSS custom properties + a theme override.
- * We set `--dt-keyword: #xxx` etc. on the editor scope, then our
- * secondary HighlightStyle references `var(--dt-keyword)`.
- *
- * HOWEVER: HighlightStyle doesn't support CSS vars. So the cleanest approach
- * is to NOT neutralize token colors when highlight tokens are defined, and
- * instead output override rules targeting the known HighlightStyle class
- * mappings. Since HighlightStyle classes are generated and vary, we'll use
- * the data-attribute approach: stamp `data-lang="python"` on code block lines
- * and use our own `.cm-dt-token-keyword` class system.
- *
- * FINAL APPROACH (simplest & most robust):
- * We output CSS rules using CSS custom properties on the code block container.
- * The existing codemirror-theme.js HighlightStyle already maps tags. When
- * document styles are active, we:
- * 1. Keep the "neutralize" rule that resets ͼN colors to inherit
- * 2. Override the CSS custom properties that codemirror-theme.js reads
- *    (--syntax-keyword, --syntax-string, etc.)
- * 3. For per-language overrides, use data-lang attributes on code blocks
+ * For per-language overrides the selector adds [data-lang]:
+ *   ${scope} .cm-codeblock-line[data-lang="python"] .cm-dt-keyword { … }
  */
-function pushSyntaxHighlightRules(rules, scopeSelector, hl) {
-  // Map our template token names to CSS custom property names used by
-  // codemirror-theme.js (--syntax-*)
-  const TOKEN_TO_CSS_VAR = {
-    keyword:        '--syntax-keyword',
-    controlKeyword: '--syntax-control',
-    string:         '--syntax-string',
-    number:         '--syntax-number',
-    comment:        '--syntax-comment',
-    function:       '--syntax-function',
-    variable:       '--syntax-variable',
-    type:           '--syntax-type',
-    operator:       '--syntax-operator',
-    punctuation:    '--syntax-punctuation',
-    property:       '--syntax-property',
-    constant:       '--syntax-constant',
-    regexp:         '--syntax-regexp',
-    escape:         '--syntax-escape',
-    tag:            '--syntax-tag',
-    attribute:      '--syntax-attribute',
-    attributeValue: '--syntax-attribute-value',
-    meta:           '--syntax-meta',
-    inserted:       '--syntax-inserted',
-    deleted:        '--syntax-deleted',
-    changed:        '--syntax-changed',
+function pushSyntaxTokenRules(rules, scopeSelector, hl) {
+  const CODE_LINE_SCOPES = ['.cm-codeblock-line', '.cm-wysiwyg-code-fence-line'];
+
+  const pushTokenColor = (tokenName, color, styleModifier, langAttr) => {
+    if (!color && !styleModifier) return;
+    const cls = DT_TOKEN_CLASS_MAP[tokenName];
+    if (!cls) return;
+
+    const decls = [];
+    if (color) decls.push(`color: ${color} !important`);
+    if (styleModifier) {
+      const { fontWeight, fontStyle } = parseStyleModifier(styleModifier);
+      if (fontWeight) decls.push(`font-weight: ${fontWeight} !important`);
+      if (fontStyle) decls.push(`font-style: ${fontStyle} !important`);
+    }
+    if (!decls.length) return;
+
+    const body = decls.join('; ');
+    const selectors = CODE_LINE_SCOPES.map((scope) => {
+      const lineScope = langAttr ? `${scope}[data-lang="${langAttr}"]` : scope;
+      return `${scopeSelector} ${lineScope} .${cls}`;
+    });
+    rules.push(`${selectors.join(', ')} { ${body}; }`);
   };
 
-  // --- Base token CSS vars (all code blocks) ---
-  const baseVars = [];
-  for (const [token, cssVar] of Object.entries(TOKEN_TO_CSS_VAR)) {
-    if (hl[token]) {
-      baseVars.push(`${cssVar}: ${hl[token]}`);
-    }
-  }
-  if (baseVars.length) {
-    rules.push(`${scopeSelector} { ${baseVars.join('; ')} }`);
-  }
+  // Style modifier lookup: token → style modifier key
+  const STYLE_KEYS = {
+    keyword: 'keywordStyle', controlKeyword: 'keywordStyle',
+    comment: 'commentStyle', function: 'functionStyle', type: 'typeStyle',
+  };
 
-  // --- Style modifiers (font-weight, font-style for specific tokens) ---
-  // These map to CodeMirror tag-based selectors. Since we can't easily
-  // target ͼN classes, we use the approach of overriding via a regenerated
-  // HighlightStyle. For now, we store them as CSS vars too.
-  if (hl.keywordStyle) {
-    const { fontWeight, fontStyle } = parseStyleModifier(hl.keywordStyle);
-    if (fontWeight) baseVars.push(`--syntax-keyword-weight: ${fontWeight}`);
-    if (fontStyle) baseVars.push(`--syntax-keyword-style: ${fontStyle}`);
-  }
-  if (hl.commentStyle) {
-    const { fontWeight, fontStyle } = parseStyleModifier(hl.commentStyle);
-    if (fontWeight) baseVars.push(`--syntax-comment-weight: ${fontWeight}`);
-    if (fontStyle) baseVars.push(`--syntax-comment-style: ${fontStyle}`);
-  }
-  if (hl.functionStyle) {
-    const { fontWeight, fontStyle } = parseStyleModifier(hl.functionStyle);
-    if (fontWeight) baseVars.push(`--syntax-function-weight: ${fontWeight}`);
-    if (fontStyle) baseVars.push(`--syntax-function-style: ${fontStyle}`);
-  }
-  if (hl.typeStyle) {
-    const { fontWeight, fontStyle } = parseStyleModifier(hl.typeStyle);
-    if (fontWeight) baseVars.push(`--syntax-type-weight: ${fontWeight}`);
-    if (fontStyle) baseVars.push(`--syntax-type-style: ${fontStyle}`);
+  // --- Base token rules (all code blocks) ---
+  for (const tokenName of Object.keys(DT_TOKEN_CLASS_MAP)) {
+    const color = hl[tokenName] || '';
+    const styleMod = hl[STYLE_KEYS[tokenName]] || '';
+    pushTokenColor(tokenName, color, styleMod, null);
   }
 
   // --- Per-language overrides ---
-  // Uses data-lang attribute that our code block decoration plugin sets.
   const languages = hl.languages;
   if (languages) {
     for (const [lang, langTokens] of Object.entries(languages)) {
       if (!langTokens || typeof langTokens !== 'object') continue;
-      const langVars = [];
-      for (const [token, cssVar] of Object.entries(TOKEN_TO_CSS_VAR)) {
-        if (langTokens[token]) {
-          langVars.push(`${cssVar}: ${langTokens[token]}`);
+      for (const tokenName of Object.keys(DT_TOKEN_CLASS_MAP)) {
+        const color = langTokens[tokenName] || '';
+        const styleMod = langTokens[STYLE_KEYS[tokenName]] || '';
+        if (color || styleMod) {
+          pushTokenColor(tokenName, color, styleMod, lang);
         }
-      }
-      // Style modifiers per language
-      if (langTokens.keywordStyle) {
-        const { fontWeight, fontStyle } = parseStyleModifier(langTokens.keywordStyle);
-        if (fontWeight) langVars.push(`--syntax-keyword-weight: ${fontWeight}`);
-        if (fontStyle) langVars.push(`--syntax-keyword-style: ${fontStyle}`);
-      }
-      if (langTokens.commentStyle) {
-        const { fontWeight, fontStyle } = parseStyleModifier(langTokens.commentStyle);
-        if (fontWeight) langVars.push(`--syntax-comment-weight: ${fontWeight}`);
-        if (fontStyle) langVars.push(`--syntax-comment-style: ${fontStyle}`);
-      }
-      if (langTokens.functionStyle) {
-        const { fontWeight, fontStyle } = parseStyleModifier(langTokens.functionStyle);
-        if (fontWeight) langVars.push(`--syntax-function-weight: ${fontWeight}`);
-        if (fontStyle) langVars.push(`--syntax-function-style: ${fontStyle}`);
-      }
-      if (langTokens.typeStyle) {
-        const { fontWeight, fontStyle } = parseStyleModifier(langTokens.typeStyle);
-        if (fontWeight) langVars.push(`--syntax-type-weight: ${fontWeight}`);
-        if (fontStyle) langVars.push(`--syntax-type-style: ${fontStyle}`);
-      }
-      if (langVars.length) {
-        // Scope per-language overrides to code blocks with data-lang attribute
-        rules.push(`${scopeSelector} .cm-codeblock-line[data-lang="${lang}"], ${scopeSelector} .cm-codeblock-fence[data-lang="${lang}"] { ${langVars.join('; ')} }`);
       }
     }
   }
@@ -2044,78 +2112,125 @@ function createDocumentTemplateOverrideExtension(template) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Document-template-owned syntax token classes.
+//
+// We use @lezer/highlight's tagHighlighter to stamp deterministic CSS class
+// names (cm-dt-keyword, cm-dt-string, …) on syntax token spans.  These
+// classes coexist with CodeMirror's generated ͼN classes.  The ͼN classes
+// are neutralised (color: inherit !important) by the theme rules above.
+// Our cm-dt-* classes are then coloured in the override <style> element
+// with even higher specificity + !important, so they always win.
+//
+// This is the same pattern used for heading colors and inline mark colors.
+// ---------------------------------------------------------------------------
+
 /**
- * Build a HighlightStyle from the template's code.highlight tokens.
- * This applies syntax highlighting colors owned by the document template,
- * overriding the application theme's HighlightStyle within code blocks.
- *
- * Uses higher specificity via the `scope` option to win over the app theme.
+ * Mapping from our template token names to their deterministic CSS class.
  */
-function createDocumentTemplateHighlightStyle(template) {
+const DT_TOKEN_CLASS_MAP = {
+  keyword:        'cm-dt-keyword',
+  controlKeyword: 'cm-dt-control-keyword',
+  string:         'cm-dt-string',
+  number:         'cm-dt-number',
+  comment:        'cm-dt-comment',
+  function:       'cm-dt-function',
+  variable:       'cm-dt-variable',
+  type:           'cm-dt-type',
+  operator:       'cm-dt-operator',
+  punctuation:    'cm-dt-punctuation',
+  property:       'cm-dt-property',
+  constant:       'cm-dt-constant',
+  regexp:         'cm-dt-regexp',
+  escape:         'cm-dt-escape',
+  tag:            'cm-dt-tag',
+  attribute:      'cm-dt-attribute',
+  attributeValue: 'cm-dt-attribute-value',
+  meta:           'cm-dt-meta',
+  inserted:       'cm-dt-inserted',
+  deleted:        'cm-dt-deleted',
+  changed:        'cm-dt-changed',
+};
+
+/**
+ * Build the tagHighlighter extension that stamps cm-dt-* classes on
+ * syntax token spans.  This is always active when document styles own
+ * the preview — the classes are harmless when no highlight tokens are
+ * set (they just exist on the spans without any matching CSS rule).
+ */
+function createDocumentTemplateTokenClasses(template) {
   const t = normalizeDocumentTemplate(template);
   if (t.editor?.applyDocumentStyles === false) return [];
-  const hl = t.code?.highlight;
-  if (!hl) return [];
 
-  // Check if any base token color is set
-  const hasAnyToken = [
-    'keyword', 'controlKeyword', 'string', 'number', 'comment',
-    'function', 'variable', 'type', 'operator', 'punctuation',
-    'property', 'constant', 'regexp', 'escape', 'tag',
-    'attribute', 'attributeValue', 'meta', 'inserted', 'deleted', 'changed',
-  ].some((k) => hl[k]);
+  const th = tagHighlighter([
+    // Keywords
+    { tag: [lezerTags.keyword, lezerTags.operatorKeyword, lezerTags.definitionKeyword, lezerTags.moduleKeyword],
+      class: DT_TOKEN_CLASS_MAP.keyword },
+    { tag: lezerTags.controlKeyword,
+      class: DT_TOKEN_CLASS_MAP.controlKeyword },
+    // Strings
+    { tag: [lezerTags.string, lezerTags.docString, lezerTags.character, lezerTags.special(lezerTags.string)],
+      class: DT_TOKEN_CLASS_MAP.string },
+    // Numbers
+    { tag: [lezerTags.number, lezerTags.integer, lezerTags.float],
+      class: DT_TOKEN_CLASS_MAP.number },
+    // Comments
+    { tag: [lezerTags.comment, lezerTags.lineComment, lezerTags.blockComment, lezerTags.docComment],
+      class: DT_TOKEN_CLASS_MAP.comment },
+    // Functions
+    { tag: [lezerTags.function(lezerTags.variableName), lezerTags.definition(lezerTags.function(lezerTags.variableName))],
+      class: DT_TOKEN_CLASS_MAP.function },
+    // Variables
+    { tag: [lezerTags.variableName, lezerTags.definition(lezerTags.variableName), lezerTags.local(lezerTags.variableName)],
+      class: DT_TOKEN_CLASS_MAP.variable },
+    // Types & classes
+    { tag: [lezerTags.typeName, lezerTags.className, lezerTags.namespace, lezerTags.macroName],
+      class: DT_TOKEN_CLASS_MAP.type },
+    // Operators
+    { tag: lezerTags.operator,
+      class: DT_TOKEN_CLASS_MAP.operator },
+    // Punctuation
+    { tag: [lezerTags.punctuation, lezerTags.separator, lezerTags.bracket, lezerTags.paren, lezerTags.brace, lezerTags.squareBracket, lezerTags.angleBracket],
+      class: DT_TOKEN_CLASS_MAP.punctuation },
+    // Properties
+    { tag: [lezerTags.propertyName, lezerTags.definition(lezerTags.propertyName), lezerTags.special(lezerTags.propertyName)],
+      class: DT_TOKEN_CLASS_MAP.property },
+    // Constants / booleans / null
+    { tag: [lezerTags.constant(lezerTags.variableName), lezerTags.standard(lezerTags.variableName), lezerTags.bool, lezerTags.null, lezerTags.atom],
+      class: DT_TOKEN_CLASS_MAP.constant },
+    // Regexp
+    { tag: lezerTags.regexp,
+      class: DT_TOKEN_CLASS_MAP.regexp },
+    // Escape sequences
+    { tag: lezerTags.escape,
+      class: DT_TOKEN_CLASS_MAP.escape },
+    // HTML/XML tags
+    { tag: lezerTags.tagName,
+      class: DT_TOKEN_CLASS_MAP.tag },
+    // HTML/XML attributes
+    { tag: lezerTags.attributeName,
+      class: DT_TOKEN_CLASS_MAP.attribute },
+    { tag: lezerTags.attributeValue,
+      class: DT_TOKEN_CLASS_MAP.attributeValue },
+    // Meta / decorators / annotations
+    { tag: [lezerTags.meta, lezerTags.processingInstruction, lezerTags.annotation],
+      class: DT_TOKEN_CLASS_MAP.meta },
+    // Diff
+    { tag: lezerTags.inserted, class: DT_TOKEN_CLASS_MAP.inserted },
+    { tag: lezerTags.deleted,  class: DT_TOKEN_CLASS_MAP.deleted },
+    { tag: lezerTags.changed,  class: DT_TOKEN_CLASS_MAP.changed },
+  ]);
 
-  if (!hasAnyToken) return [];
-
-  const styles = [];
-  const addStyle = (tags, color, styleStr) => {
-    if (!color && !styleStr) return;
-    const spec = {};
-    if (color) spec.color = color;
-    if (styleStr) {
-      const { fontWeight, fontStyle } = parseStyleModifier(styleStr);
-      if (fontWeight) spec.fontWeight = fontWeight;
-      if (fontStyle) spec.fontStyle = fontStyle;
-    }
-    if (Object.keys(spec).length === 0) return;
-    const tagList = Array.isArray(tags) ? tags : [tags];
-    for (const tag of tagList) {
-      styles.push({ tag, ...spec });
-    }
-  };
-
-  addStyle([lezerTags.keyword, lezerTags.operatorKeyword, lezerTags.definitionKeyword, lezerTags.moduleKeyword], hl.keyword, hl.keywordStyle);
-  addStyle([lezerTags.controlKeyword], hl.controlKeyword || hl.keyword, hl.keywordStyle);
-  addStyle([lezerTags.string, lezerTags.docString, lezerTags.character, lezerTags.special(lezerTags.string)], hl.string);
-  addStyle([lezerTags.number, lezerTags.integer, lezerTags.float], hl.number);
-  addStyle([lezerTags.comment, lezerTags.lineComment, lezerTags.blockComment, lezerTags.docComment], hl.comment, hl.commentStyle);
-  addStyle([lezerTags.function(lezerTags.variableName), lezerTags.definition(lezerTags.function(lezerTags.variableName))], hl.function, hl.functionStyle);
-  addStyle([lezerTags.variableName, lezerTags.definition(lezerTags.variableName), lezerTags.local(lezerTags.variableName)], hl.variable);
-  addStyle([lezerTags.typeName, lezerTags.className, lezerTags.namespace], hl.type, hl.typeStyle);
-  addStyle([lezerTags.operator], hl.operator);
-  addStyle([lezerTags.punctuation, lezerTags.separator, lezerTags.bracket, lezerTags.paren, lezerTags.brace, lezerTags.squareBracket, lezerTags.angleBracket], hl.punctuation);
-  addStyle([lezerTags.propertyName, lezerTags.definition(lezerTags.propertyName)], hl.property);
-  addStyle([lezerTags.constant(lezerTags.variableName), lezerTags.standard(lezerTags.variableName), lezerTags.bool, lezerTags.null, lezerTags.atom], hl.constant);
-  addStyle([lezerTags.regexp], hl.regexp);
-  addStyle([lezerTags.escape], hl.escape);
-  addStyle([lezerTags.tagName], hl.tag);
-  addStyle([lezerTags.attributeName], hl.attribute);
-  addStyle([lezerTags.attributeValue], hl.attributeValue);
-  addStyle([lezerTags.meta, lezerTags.processingInstruction, lezerTags.annotation], hl.meta);
-  addStyle([lezerTags.inserted], hl.inserted);
-  addStyle([lezerTags.deleted], hl.deleted);
-  addStyle([lezerTags.changed], hl.changed);
-
-  if (!styles.length) return [];
-
-  const hlStyle = HighlightStyle.define(styles);
-  return [syntaxHighlighting(hlStyle)];
+  return [syntaxHighlighting(th)];
 }
 
 export function createDocumentTemplateExtension(template) {
   return [
     EditorView.theme(compileDocumentTemplateCSS(template)),
     createDocumentTemplateOverrideExtension(template),
-    ...createDocumentTemplateHighlightStyle(template),
+    ...createDocumentTemplateTokenClasses(template),
   ];
 }
+
+// Make the class map available for external consumers
+export { DT_TOKEN_CLASS_MAP };

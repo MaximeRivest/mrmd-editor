@@ -272,6 +272,14 @@ function createFilesSegment({ shellState, orchestratorClient, handlers, onCleanu
       onClick: () => handlers.onOpenFilePicker?.(),
     });
 
+    if (handlers.onImportLinkedTable && handlers.supportsLinkedTableImport?.() !== false) {
+      items.push({
+        icon: '▦',
+        label: 'Import Linked Table...',
+        onClick: () => handlers.onImportLinkedTable?.(),
+      });
+    }
+
     items.push({
       icon: '➕',
       label: 'New File...',

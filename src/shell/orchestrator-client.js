@@ -417,6 +417,75 @@ export class OrchestratorClient {
   }
 
   // ===========================================================================
+  // Context Management
+  // ===========================================================================
+
+  /**
+   * Resolve markdown-managed AI context for a document.
+   * @param {Object} request
+   * @param {string} request.doc
+   * @param {string} [request.content]
+   * @param {number} [request.cursorPos]
+   * @param {{from: number, to: number}} [request.selection]
+   * @param {string[]} [request.codeSymbols]
+   * @param {boolean} [request.ensureExists=false]
+   */
+  async resolveContext(request) {
+    return this._fetch('/api/context/resolve', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  /**
+   * Get context markdown for a document.
+   * @param {string} doc
+   */
+  async getContext(doc) {
+    return this._fetch(`/api/context/${encodeURIComponent(doc)}`);
+  }
+
+  /**
+   * Save context markdown for a document.
+   * @param {string} doc
+   * @param {string} content
+   */
+  async saveContext(doc, content) {
+    return this._fetch(`/api/context/${encodeURIComponent(doc)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  /**
+   * Initialize context markdown for a document if missing.
+   * @param {string} doc
+   */
+  async initContext(doc) {
+    return this._fetch(`/api/context/init/${encodeURIComponent(doc)}`, {
+      method: 'POST',
+    });
+  }
+
+  /**
+   * Get project default context markdown.
+   */
+  async getDefaultContext() {
+    return this._fetch('/api/context');
+  }
+
+  /**
+   * Save project default context markdown.
+   * @param {string} content
+   */
+  async saveDefaultContext(content) {
+    return this._fetch('/api/context', {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  // ===========================================================================
   // Project & Runtime Management
   // ===========================================================================
 
