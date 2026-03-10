@@ -132,6 +132,7 @@ import {
   adaptMRPClient,
   createRuntimeHoverExtension,
   createRuntimeCompletionExtension,
+  createRuntimeSignatureHelpExtension,
   createVariableExplorer,
   injectRuntimeLspStyles,
 } from './runtime-lsp.js';
@@ -1807,6 +1808,12 @@ function create(target, options = {}) {
       additionalSources: [wikiLinkSource],
     });
     runtimeLspExtensions.push(completionExt);
+
+    const signatureHelpExt = createRuntimeSignatureHelpExtension({
+      providers: runtimeLspProviders,
+      getContent: () => view.state.doc.toString(),
+    });
+    runtimeLspExtensions.push(signatureHelpExt);
 
     // Add extensions to the view
     view.dispatch({

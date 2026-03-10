@@ -91841,17 +91841,44 @@ function openSectionControlsMenu(view, editor, options = {}) {
 
   // Position near the existing toolbar for a "grow" feel.
   const anchorRect = anchorEl.getBoundingClientRect();
+  menu.style.visibility = 'hidden';
+  menu.style.left = `${anchorRect.right}px`;
+  menu.style.top = `${anchorRect.bottom + 6}px`;
+
   const rect = menu.getBoundingClientRect();
+  const viewportPadding = 8;
+  const gap = 6;
 
   let left = anchorRect.right - rect.width;
-  let top = anchorRect.bottom + 6;
+  let top = anchorRect.bottom + gap;
+  let flippedY = false;
 
-  left = Math.max(8, Math.min(left, window.innerWidth - rect.width - 8));
-  top = Math.max(8, Math.min(top, window.innerHeight - rect.height - 8));
+  if (left < viewportPadding) {
+    const alternateLeft = anchorRect.left;
+    if (alternateLeft + rect.width <= window.innerWidth - viewportPadding) {
+      left = alternateLeft;
+    }
+  }
+
+  if (top + rect.height > window.innerHeight - viewportPadding) {
+    const alternateTop = anchorRect.top - rect.height - gap;
+    if (alternateTop >= viewportPadding) {
+      top = alternateTop;
+      flippedY = true;
+    }
+  }
+
+  left = Math.max(viewportPadding, Math.min(left, window.innerWidth - rect.width - viewportPadding));
+  top = Math.max(viewportPadding, Math.min(top, window.innerHeight - rect.height - viewportPadding));
+
+  const anchorCenterX = anchorRect.left + (anchorRect.width / 2);
+  const originX = Math.max(12, Math.min(rect.width - 12, anchorCenterX - left));
+  const originY = flippedY ? rect.height : 0;
 
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
-  menu.style.transformOrigin = `${Math.max(12, anchorRect.right - left)}px 0px`;
+  menu.style.transformOrigin = `${originX}px ${originY}px`;
+  menu.style.visibility = '';
 
   root.classList.add('menu-open');
 
@@ -92183,6 +92210,7 @@ const sectionControlsStyles = `
   max-width: 420px;
   max-height: min(72vh, 620px);
   overflow: auto;
+  overscroll-behavior: contain;
   background: var(--bg-secondary, #1f2328);
   border: 1px solid var(--border, #3d444d);
   border-radius: 10px;
@@ -95006,6 +95034,9 @@ function mergeKeybindings(userBindings, defaults = defaultKeybindings) {
  * @property {string} [valuePreview]
  * @property {string} [documentation]
  * @property {string} [insertText]
+ * @property {number} [boost]
+ * @property {string} [sortText]
+ * @property {string|{name: string, rank?: number|'dynamic'}} [section]
  */
 
 /**
@@ -95607,6 +95638,954 @@ function escapeAttr(str) {
 // #region COMPLETION_EXTENSION
 
 /**
+ * Check whether the character at a given index is escaped.
+ *
+ * @param {string} text
+ * @param {number} index
+ * @returns {boolean}
+ */
+function isEscapedAt(text, index) {
+  let backslashes = 0;
+  for (let i = index - 1; i >= 0 && text[i] === '\\'; i--) {
+    backslashes++;
+  }
+  return backslashes % 2 === 1;
+}
+
+/**
+ * Split a source range on a delimiter, ignoring nested (), [], {}, strings, and comments.
+ *
+ * @param {string} code
+ * @param {number} start
+ * @param {number} end
+ * @param {string} [delimiter=',']
+ * @returns {Array<{start: number, end: number, text: string}>}
+ */
+function splitTopLevelRange(code, start, end, delimiter = ',') {
+  /** @type {Array<{start: number, end: number, text: string}>} */
+  const segments = [];
+
+  let segmentStart = start;
+  const stack = [];
+  let stringQuote = null;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let i = start; i < end; i++) {
+    const ch = code[i];
+    const next = i + 1 < end ? code[i + 1] : '';
+
+    if (lineComment) {
+      if (ch === '\n') lineComment = false;
+      continue;
+    }
+
+    if (blockComment) {
+      if (ch === '*' && next === '/') {
+        blockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (stringQuote) {
+      if (ch === stringQuote && !isEscapedAt(code, i)) {
+        stringQuote = null;
+      }
+      continue;
+    }
+
+    if (ch === '#' || (ch === '/' && next === '/')) {
+      lineComment = true;
+      if (ch === '/') i++;
+      continue;
+    }
+
+    if (ch === '/' && next === '*') {
+      blockComment = true;
+      i++;
+      continue;
+    }
+
+    if (ch === '"' || ch === '\'' || ch === '`') {
+      stringQuote = ch;
+      continue;
+    }
+
+    if (ch === '(' || ch === '[' || ch === '{') {
+      stack.push(ch);
+      continue;
+    }
+
+    if (ch === ')' || ch === ']' || ch === '}') {
+      const expected = ch === ')' ? '(' : ch === ']' ? '[' : '{';
+      if (stack[stack.length - 1] === expected) {
+        stack.pop();
+      }
+      continue;
+    }
+
+    if (ch === delimiter && stack.length === 0) {
+      segments.push({
+        start: segmentStart,
+        end: i,
+        text: code.slice(segmentStart, i),
+      });
+      segmentStart = i + 1;
+    }
+  }
+
+  segments.push({
+    start: segmentStart,
+    end,
+    text: code.slice(segmentStart, end),
+  });
+
+  return segments;
+}
+
+/**
+ * Find the innermost unmatched `(` before the cursor.
+ * Only returns it when the cursor is at top level inside that call.
+ *
+ * @param {string} code
+ * @param {number} cursor
+ * @returns {number|null}
+ */
+function findActiveCallOpenParen(code, cursor) {
+  const stack = [];
+  let stringQuote = null;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let i = 0; i < cursor; i++) {
+    const ch = code[i];
+    const next = i + 1 < cursor ? code[i + 1] : '';
+
+    if (lineComment) {
+      if (ch === '\n') lineComment = false;
+      continue;
+    }
+
+    if (blockComment) {
+      if (ch === '*' && next === '/') {
+        blockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (stringQuote) {
+      if (ch === stringQuote && !isEscapedAt(code, i)) {
+        stringQuote = null;
+      }
+      continue;
+    }
+
+    if (ch === '#' || (ch === '/' && next === '/')) {
+      lineComment = true;
+      if (ch === '/') i++;
+      continue;
+    }
+
+    if (ch === '/' && next === '*') {
+      blockComment = true;
+      i++;
+      continue;
+    }
+
+    if (ch === '"' || ch === '\'' || ch === '`') {
+      stringQuote = ch;
+      continue;
+    }
+
+    if (ch === '(' || ch === '[' || ch === '{') {
+      stack.push({ ch, index: i });
+      continue;
+    }
+
+    if (ch === ')' || ch === ']' || ch === '}') {
+      const expected = ch === ')' ? '(' : ch === ']' ? '[' : '{';
+      if (stack[stack.length - 1]?.ch === expected) {
+        stack.pop();
+      }
+    }
+  }
+
+  const top = stack[stack.length - 1];
+  return top?.ch === '(' ? top.index : null;
+}
+
+/**
+ * Extract a simple callable expression before an opening parenthesis.
+ * Supports names like `foo` and dotted paths like `obj.method`.
+ *
+ * @param {string} code
+ * @param {number} openParen
+ * @returns {string|null}
+ */
+function extractCallableNameBeforeParen(code, openParen) {
+  const prefix = code.slice(0, openParen);
+  const match = prefix.match(/([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*$/);
+  return match?.[1] || null;
+}
+
+/**
+ * Extract a leading keyword argument name from an argument segment.
+ *
+ * @param {string} text
+ * @returns {string|null}
+ */
+function extractAssignedKeywordName(text) {
+  const match = text.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+  return match?.[1] || null;
+}
+
+/**
+ * Determine whether the current argument segment is empty or a simple identifier prefix.
+ *
+ * @param {{start: number, end: number, text: string}} segment
+ * @returns {{prefix: string, start: number, end: number}|null}
+ */
+function getArgumentPrefixInfo(segment) {
+  const text = segment.text;
+
+  if (!text.trim()) {
+    return {
+      prefix: '',
+      start: segment.end,
+      end: segment.end,
+    };
+  }
+
+  const match = text.match(/([A-Za-z_][A-Za-z0-9_]*)\s*$/);
+  if (!match) return null;
+
+  const before = text.slice(0, match.index);
+  if (before.trim()) return null;
+
+  return {
+    prefix: match[1],
+    start: segment.start + match.index,
+    end: segment.end,
+  };
+}
+
+/**
+ * Analyze the active call context at the cursor position.
+ *
+ * @param {string} code
+ * @param {number} cursor
+ * @returns {{callee: string, openParen: number, segments: Array<{start: number, end: number, text: string}>, currentSegment: {start: number, end: number, text: string}, usedKeywords: Set<string>, activeKeyword: string|null, positionalIndex: number}|null}
+ */
+function getActiveCallContext(code, cursor) {
+  const openParen = findActiveCallOpenParen(code, cursor);
+  if (openParen == null) return null;
+
+  const callee = extractCallableNameBeforeParen(code, openParen);
+  if (!callee) return null;
+
+  const segments = splitTopLevelRange(code, openParen + 1, cursor);
+  const currentSegment = segments[segments.length - 1] || {
+    start: cursor,
+    end: cursor,
+    text: '',
+  };
+
+  const usedKeywords = new Set();
+  let positionalIndex = 0;
+
+  for (const segment of segments.slice(0, -1)) {
+    const text = segment.text.trim();
+    if (!text) continue;
+
+    const keywordName = extractAssignedKeywordName(segment.text);
+    if (keywordName) {
+      usedKeywords.add(keywordName);
+      continue;
+    }
+
+    if (/^\*{1,2}/.test(text)) continue;
+    positionalIndex++;
+  }
+
+  return {
+    callee,
+    openParen,
+    segments,
+    currentSegment,
+    usedKeywords,
+    activeKeyword: extractAssignedKeywordName(currentSegment.text),
+    positionalIndex,
+  };
+}
+
+/**
+ * Find call-argument completion context for the current cursor position.
+ *
+ * @param {string} code
+ * @param {number} cursor
+ * @returns {{callee: string, openParen: number, prefix: string, replaceStart: number, replaceEnd: number, usedKeywords: Set<string>}|null}
+ */
+function getCallArgumentContext(code, cursor) {
+  const activeCall = getActiveCallContext(code, cursor);
+  if (!activeCall) return null;
+
+  if (/^\s*\*{1,2}/.test(activeCall.currentSegment.text)) return null;
+  if (activeCall.activeKeyword) return null;
+
+  const prefixInfo = getArgumentPrefixInfo(activeCall.currentSegment);
+  if (!prefixInfo) return null;
+
+  return {
+    callee: activeCall.callee,
+    openParen: activeCall.openParen,
+    prefix: prefixInfo.prefix,
+    replaceStart: prefixInfo.start,
+    replaceEnd: prefixInfo.end,
+    usedKeywords: activeCall.usedKeywords,
+  };
+}
+
+/**
+ * Parse a signature string into keyword-capable parameters.
+ *
+ * @param {string} signature
+ * @returns {Array<{name: string, declaration: string, required: boolean}>}
+ */
+function parseSignatureParameters(signature) {
+  if (!signature) return [];
+
+  const openParen = signature.indexOf('(');
+  const closeParen = signature.lastIndexOf(')');
+  if (openParen < 0 || closeParen <= openParen) return [];
+
+  const inner = signature.slice(openParen + 1, closeParen);
+  const parts = splitTopLevelRange(inner, 0, inner.length).map(part => part.text.trim());
+  if (parts.length === 0) return [];
+
+  const positionalOnlyEnd = parts.indexOf('/');
+
+  /** @type {Array<{name: string, declaration: string, required: boolean}>} */
+  const parameters = [];
+
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index];
+    if (!part || part === '/' || part === '*') continue;
+    if (positionalOnlyEnd !== -1 && index < positionalOnlyEnd) continue;
+    if (part.startsWith('**')) continue;
+    if (part.startsWith('*')) continue;
+
+    const nameMatch = part.match(/^([A-Za-z_][A-Za-z0-9_]*)/);
+    const name = nameMatch?.[1];
+    if (!name || name === 'self' || name === 'cls') continue;
+
+    parameters.push({
+      name,
+      declaration: part,
+      required: !part.includes('='),
+    });
+  }
+
+  return parameters;
+}
+
+/**
+ * Extract parameter docs from common docstring formats.
+ *
+ * @param {string} docs
+ * @param {string} parameterName
+ * @returns {string}
+ */
+function extractParameterDocumentation(docs, parameterName) {
+  const text = cleanDocsText(docs);
+  if (!text) return '';
+
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+
+  // NumPy-style docstrings
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (!/^\s*Parameters\s*$/i.test(lines[i]) || !/^\s*-{3,}\s*$/.test(lines[i + 1])) continue;
+
+    let currentNames = [];
+    /** @type {string[]} */
+    let currentLines = [];
+
+    const flush = () => {
+      if (currentNames.includes(parameterName)) {
+        return currentLines.join('\n').trim();
+      }
+      return '';
+    };
+
+    for (let j = i + 2; j < lines.length; j++) {
+      const line = lines[j];
+
+      if (/^\S/.test(line) && j + 1 < lines.length && /^\s*-{3,}\s*$/.test(lines[j + 1])) {
+        return flush();
+      }
+
+      const headerMatch = line.match(/^([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)(\s*:.*)?\s*$/);
+      if (headerMatch && !/^\s/.test(line)) {
+        const existing = flush();
+        if (existing) return existing;
+
+        currentNames = headerMatch[1].split(/\s*,\s*/);
+        currentLines = [];
+        const typeInfo = headerMatch[2]?.replace(/^\s*:\s*/, '').trim();
+        if (typeInfo) currentLines.push(typeInfo);
+        continue;
+      }
+
+      if (currentNames.length > 0) {
+        currentLines.push(line.trimEnd());
+      }
+    }
+
+    return flush();
+  }
+
+  // Google-style docstrings
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*(Args|Arguments|Parameters)\s*:\s*$/i.test(lines[i])) continue;
+
+    let currentName = '';
+    /** @type {string[]} */
+    let currentLines = [];
+
+    const flush = () => {
+      if (currentName === parameterName) {
+        return currentLines.join('\n').trim();
+      }
+      return '';
+    };
+
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j];
+      if (!line.trim()) {
+        if (currentName) currentLines.push('');
+        continue;
+      }
+
+      if (/^\S/.test(line) && !/^\s{2,}/.test(line)) {
+        return flush();
+      }
+
+      const headerMatch = line.match(/^\s{2,}([A-Za-z_][A-Za-z0-9_]*)(?:\s*\([^)]*\))?\s*:\s*(.*)$/);
+      if (headerMatch) {
+        const existing = flush();
+        if (existing) return existing;
+
+        currentName = headerMatch[1];
+        currentLines = headerMatch[2] ? [headerMatch[2].trim()] : [];
+        continue;
+      }
+
+      if (currentName) {
+        currentLines.push(line.trim());
+      }
+    }
+
+    return flush();
+  }
+
+  return '';
+}
+
+/**
+ * Create a short fallback summary from a docstring.
+ *
+ * @param {string} docs
+ * @returns {string}
+ */
+function summarizeDocs(docs) {
+  const text = cleanDocsText(docs);
+  if (!text) return '';
+
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const summary = [];
+
+  for (const line of lines) {
+    if (!line.trim()) {
+      if (summary.length > 0) break;
+      continue;
+    }
+    summary.push(line.trim());
+    if (summary.length >= 5) break;
+  }
+
+  return summary.join('\n').trim();
+}
+
+/**
+ * Get the first non-empty line from a doc snippet.
+ *
+ * @param {string} docs
+ * @param {number} [maxLength=88]
+ * @returns {string}
+ */
+function firstDocLine(docs, maxLength = 88) {
+  const text = cleanDocsText(docs);
+  if (!text) return '';
+
+  const line = text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map(part => part.trim())
+    .find(Boolean) || '';
+
+  if (!line) return '';
+  return line.length > maxLength ? `${line.slice(0, maxLength - 1)}…` : line;
+}
+
+/**
+ * Compact a parameter declaration for use in the completion row.
+ *
+ * @param {string} declaration
+ * @param {string} name
+ * @param {number} [maxLength=48]
+ * @returns {string}
+ */
+function compactParameterDeclaration(declaration, name, maxLength = 48) {
+  if (!declaration) return '';
+
+  let text = declaration
+    .replace(new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[:=]?\\s*`), '')
+    .replace(/(['"])[^'"]{16,}\1/g, '$1…$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!text) text = declaration.trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+/**
+ * Shorten doc text for completion info / compact signature help.
+ *
+ * @param {string} docs
+ * @param {number} [maxLines=4]
+ * @returns {string}
+ */
+function compactDocs(docs, maxLines = 4) {
+  const text = cleanDocsText(docs);
+  if (!text) return '';
+
+  const lines = text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map(line => line.trim())
+    .filter((line, index, arr) => line || (index > 0 && arr[index - 1]));
+
+  const clipped = lines.slice(0, maxLines).join('\n').trim();
+  return clipped;
+}
+
+/**
+ * Parse a signature for display and active-parameter highlighting.
+ *
+ * @param {string} signature
+ * @returns {{head: string, tail: string, parts: Array<{text: string, name: string|null, kind: 'parameter'|'marker'|'varargs'|'kwargs', positionalCapable: boolean, keywordCapable: boolean}>}|null}
+ */
+function parseSignatureDisplay(signature) {
+  if (!signature) return null;
+
+  const openParen = signature.indexOf('(');
+  const closeParen = signature.lastIndexOf(')');
+  if (openParen < 0 || closeParen <= openParen) return null;
+
+  const head = signature.slice(0, openParen + 1);
+  const inner = signature.slice(openParen + 1, closeParen);
+  const tail = signature.slice(closeParen);
+  const rawParts = splitTopLevelRange(inner, 0, inner.length).map(part => part.text.trim());
+  const positionalOnlyEnd = rawParts.indexOf('/');
+
+  /** @type {Array<{text: string, name: string|null, kind: 'parameter'|'marker'|'varargs'|'kwargs', positionalCapable: boolean, keywordCapable: boolean}>} */
+  const parts = [];
+  let keywordOnlyMode = false;
+
+  for (let index = 0; index < rawParts.length; index++) {
+    const part = rawParts[index];
+    if (!part) continue;
+
+    if (part === '/') {
+      parts.push({
+        text: part,
+        name: null,
+        kind: 'marker',
+        positionalCapable: false,
+        keywordCapable: false,
+      });
+      continue;
+    }
+
+    if (part === '*') {
+      keywordOnlyMode = true;
+      parts.push({
+        text: part,
+        name: null,
+        kind: 'marker',
+        positionalCapable: false,
+        keywordCapable: false,
+      });
+      continue;
+    }
+
+    const positionalOnly = positionalOnlyEnd !== -1 && index < positionalOnlyEnd;
+    const isVarKeyword = part.startsWith('**');
+    const isVarArgs = !isVarKeyword && part.startsWith('*');
+    const nameMatch = part.match(/^\*{0,2}([A-Za-z_][A-Za-z0-9_]*)/);
+    const name = nameMatch?.[1] || null;
+
+    parts.push({
+      text: part,
+      name,
+      kind: isVarKeyword ? 'kwargs' : isVarArgs ? 'varargs' : 'parameter',
+      positionalCapable: isVarArgs || (!keywordOnlyMode && !isVarKeyword),
+      keywordCapable: !positionalOnly && !isVarArgs && !isVarKeyword,
+    });
+
+    if (isVarArgs) {
+      keywordOnlyMode = true;
+    }
+  }
+
+  return { head, tail, parts };
+}
+
+/**
+ * Resolve the active signature part for the current call context.
+ *
+ * @param {{parts: Array<{text: string, name: string|null, kind: 'parameter'|'marker'|'varargs'|'kwargs', positionalCapable: boolean, keywordCapable: boolean}>}} parsedSignature
+ * @param {{currentSegment: {text: string}, usedKeywords: Set<string>, activeKeyword: string|null, positionalIndex: number}} callContext
+ * @returns {{text: string, name: string|null, kind: 'parameter'|'marker'|'varargs'|'kwargs', positionalCapable: boolean, keywordCapable: boolean}|null}
+ */
+function resolveActiveSignaturePart(parsedSignature, callContext) {
+  const trimmedCurrent = callContext.currentSegment.text.trimStart();
+
+  if (trimmedCurrent.startsWith('**')) {
+    return parsedSignature.parts.find(part => part.kind === 'kwargs') || null;
+  }
+
+  if (trimmedCurrent.startsWith('*')) {
+    return parsedSignature.parts.find(part => part.kind === 'varargs') || null;
+  }
+
+  if (callContext.activeKeyword) {
+    return parsedSignature.parts.find(part => part.name === callContext.activeKeyword) || null;
+  }
+
+  const positionalParts = parsedSignature.parts.filter(part => part.positionalCapable);
+  if (callContext.positionalIndex < positionalParts.length) {
+    return positionalParts[callContext.positionalIndex] || null;
+  }
+
+  const remainingKeywordPart = parsedSignature.parts.find(part =>
+    part.keywordCapable && part.name && !callContext.usedKeywords.has(part.name)
+  );
+  if (remainingKeywordPart) return remainingKeywordPart;
+
+  return positionalParts[positionalParts.length - 1] || null;
+}
+
+/**
+ * Format a parsed signature to HTML with the active parameter highlighted.
+ *
+ * @param {{head: string, tail: string, parts: Array<{text: string, name: string|null, kind: 'parameter'|'marker'|'varargs'|'kwargs', positionalCapable: boolean, keywordCapable: boolean}>}} parsedSignature
+ * @param {{text: string, name: string|null, kind: 'parameter'|'marker'|'varargs'|'kwargs', positionalCapable: boolean, keywordCapable: boolean}|null} activePart
+ * @returns {string}
+ */
+function formatSignatureMarkup(parsedSignature, activePart) {
+  const pieces = [`<span class="mrmd-signature-help__head">${escapeHtml(parsedSignature.head)}</span>`];
+
+  parsedSignature.parts.forEach((part, index) => {
+    if (index > 0) {
+      pieces.push('<span class="mrmd-signature-help__comma">, </span>');
+    }
+
+    const classes = ['mrmd-signature-help__part'];
+    if (part.kind === 'marker') classes.push('mrmd-signature-help__part--marker');
+    if (activePart === part) classes.push('mrmd-signature-help__part--active');
+
+    pieces.push(`<span class="${classes.join(' ')}">${escapeHtml(part.text)}</span>`);
+  });
+
+  pieces.push(`<span class="mrmd-signature-help__tail">${escapeHtml(parsedSignature.tail)}</span>`);
+  return pieces.join('');
+}
+
+/**
+ * Format signature help content as HTML.
+ *
+ * @param {InspectResult} inspectResult
+ * @param {{currentSegment: {text: string}, usedKeywords: Set<string>, activeKeyword: string|null, positionalIndex: number}} callContext
+ * @param {{compact?: boolean}} [options]
+ * @returns {string}
+ */
+function formatSignatureHelpContent(inspectResult, callContext, { compact = false } = {}) {
+  const parsedSignature = parseSignatureDisplay(inspectResult.signature || '');
+  if (!parsedSignature) return '';
+
+  const activePart = resolveActiveSignaturePart(parsedSignature, callContext);
+  const docs = inspectResult.documentation || inspectResult.docstring || '';
+  const parameterDocs = activePart?.name ? extractParameterDocumentation(docs, activePart.name) : '';
+  const fallbackDocs = compactDocs(summarizeDocs(docs), compact ? 2 : 4);
+
+  let html = `<div class="mrmd-signature-help${compact ? ' mrmd-signature-help--compact' : ''}">`;
+  html += `<div class="mrmd-signature-help__signature"><code>${formatSignatureMarkup(parsedSignature, activePart)}</code></div>`;
+
+  if (activePart && activePart.kind !== 'marker') {
+    html += `<div class="mrmd-signature-help__active">${escapeHtml(activePart.text)}</div>`;
+  }
+
+  if (!compact && inspectResult.name) {
+    html += `<div class="mrmd-signature-help__name">${escapeHtml(inspectResult.name)}</div>`;
+  }
+
+  const docsText = compact ? firstDocLine(parameterDocs || fallbackDocs, 72) : (parameterDocs || fallbackDocs);
+  if (docsText) {
+    html += `<div class="mrmd-signature-help__docs">${escapeHtml(docsText)}</div>`;
+  }
+
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Retrieve signature-bearing inspection data, falling back to hover when inspect is unavailable
+ * or returns too little information.
+ *
+ * @param {Object} options
+ * @param {RuntimeLSPProvider} options.provider
+ * @param {string} options.code
+ * @param {number} options.cursor
+ * @param {string} options.language
+ * @returns {Promise<InspectResult|null>}
+ */
+async function getSignatureInspectData({ provider, code, cursor, language }) {
+  let inspectResult = null;
+
+  if (provider.inspect) {
+    try {
+      inspectResult = await provider.inspect(code, cursor, language, { detail: 1 });
+    } catch {
+      inspectResult = null;
+    }
+  }
+
+  let hoverResult = null;
+  const needsHoverFallback = !inspectResult?.signature || (!inspectResult.documentation && !inspectResult.docstring);
+  if (needsHoverFallback && provider.hover) {
+    try {
+      hoverResult = await provider.hover(code, cursor, language);
+    } catch {
+      hoverResult = null;
+    }
+  }
+
+  const signature = inspectResult?.signature || hoverResult?.signature;
+  if (!signature) return null;
+
+  return {
+    ...(inspectResult || {}),
+    found: true,
+    name: inspectResult?.name || hoverResult?.name,
+    type: inspectResult?.type || hoverResult?.type,
+    signature,
+    documentation:
+      inspectResult?.documentation ||
+      inspectResult?.docstring ||
+      hoverResult?.documentation ||
+      hoverResult?.docstring,
+    docstring: inspectResult?.docstring || hoverResult?.docstring,
+  };
+}
+
+/**
+ * Get an anchor rect derived from the autocomplete popup, for VS Code-like stacked placement.
+ *
+ * @param {import('@codemirror/view').EditorView} view
+ * @returns {import('@codemirror/view').Rect|null}
+ */
+function getAutocompleteTooltipRect(view) {
+  const popup = view.dom.querySelector('.cm-tooltip-autocomplete');
+  if (!(popup instanceof HTMLElement)) return null;
+
+  const rect = popup.getBoundingClientRect();
+  return {
+    left: rect.left,
+    right: rect.left + 1,
+    top: rect.top,
+    bottom: rect.top,
+  };
+}
+
+/**
+ * Lazily inspect a completion candidate to provide docs in the side info panel.
+ *
+ * @param {Object} options
+ * @param {RuntimeLSPProvider} options.provider
+ * @param {string} options.code
+ * @param {number} options.cursorStart
+ * @param {number} options.cursorEnd
+ * @param {string} options.insertText
+ * @param {string} options.language
+ * @returns {Promise<Partial<CompletionItem>|null>}
+ */
+async function loadCompletionItemInfo({ provider, code, cursorStart, cursorEnd, insertText, language }) {
+  if (!provider.inspect && !provider.hover) return null;
+
+  const candidateCode = `${code.slice(0, cursorStart)}${insertText}${code.slice(cursorEnd)}`;
+  const candidateCursor = cursorStart + insertText.length;
+
+  let inspectResult = null;
+  if (provider.inspect) {
+    try {
+      inspectResult = await provider.inspect(candidateCode, candidateCursor, language, { detail: 1 });
+    } catch {
+      inspectResult = null;
+    }
+  }
+
+  let hoverResult = null;
+  const needsHover = !inspectResult?.found || (!inspectResult.signature && !inspectResult.documentation && !inspectResult.docstring);
+  if (needsHover && provider.hover) {
+    try {
+      hoverResult = await provider.hover(candidateCode, candidateCursor, language);
+    } catch {
+      hoverResult = null;
+    }
+  }
+
+  const signature = inspectResult?.signature || hoverResult?.signature || '';
+  const type = inspectResult?.type || hoverResult?.type || '';
+  const docs =
+    inspectResult?.documentation ||
+    inspectResult?.docstring ||
+    hoverResult?.documentation ||
+    hoverResult?.docstring ||
+    hoverResult?.value || '';
+
+  const detail = signature || type || '';
+  if (!detail && !docs) return null;
+
+  return {
+    label: inspectResult?.name || hoverResult?.name,
+    detail,
+    documentation: docs,
+  };
+}
+
+/**
+ * Build high-priority keyword argument completions for the active call site.
+ *
+ * @param {Object} options
+ * @param {RuntimeLSPProvider} options.provider
+ * @param {string} options.code
+ * @param {string} options.language
+ * @param {{callee: string, openParen: number, prefix: string, replaceStart: number, replaceEnd: number, usedKeywords: Set<string>}} options.callContext
+ * @returns {Promise<{matches: CompletionItem[], cursorStart: number, cursorEnd: number}|null>}
+ */
+async function getCallKeywordCompletions({ provider, code, language, callContext }) {
+  const inspectResult = await getSignatureInspectData({
+    provider,
+    code,
+    cursor: callContext.openParen,
+    language,
+  });
+  if (!inspectResult?.signature) return null;
+
+  const parameters = parseSignatureParameters(inspectResult.signature);
+  if (parameters.length === 0) return null;
+
+  const lowerPrefix = callContext.prefix.toLowerCase();
+  const docs = inspectResult.documentation || inspectResult.docstring || '';
+
+  const matches = parameters
+    .filter(param => !callContext.usedKeywords.has(param.name))
+    .filter(param => !lowerPrefix || param.name.toLowerCase().startsWith(lowerPrefix))
+    .map((param, index) => {
+      const parameterDocs = extractParameterDocumentation(docs, param.name);
+      const summary = firstDocLine(parameterDocs || summarizeDocs(docs));
+      const info = [
+        `Parameter: ${param.declaration}`,
+        compactDocs(parameterDocs || summarizeDocs(docs), 6),
+      ].filter(Boolean).join('\n\n');
+
+      return {
+        label: `${param.name}=`,
+        insertText: `${param.name}=`,
+        kind: 'field',
+        detail: compactParameterDeclaration(param.declaration, param.name),
+        documentation: info,
+        boost: 10000 - index,
+        sortText: String(index).padStart(4, '0'),
+        valuePreview: summary || undefined,
+      };
+    });
+
+  if (matches.length === 0) return null;
+
+  return {
+    matches,
+    cursorStart: callContext.replaceStart,
+    cursorEnd: callContext.replaceEnd,
+  };
+}
+
+/**
+ * Build a compact DOM info panel for a completion item.
+ *
+ * @param {CompletionItem} match
+ * @returns {((completion: any) => import('@codemirror/autocomplete').CompletionInfo)|undefined}
+ */
+function createCompletionInfoRenderer(match, loadInfo) {
+  const render = (infoMatch) => {
+    const docs = compactDocs(infoMatch.documentation || '', 6);
+    const detail = infoMatch.detail || '';
+
+    if (!docs && !detail) return null;
+
+    const dom = document.createElement('div');
+    dom.className = 'mrmd-completion-info';
+
+    const title = document.createElement('div');
+    title.className = 'mrmd-completion-info__title';
+    title.textContent = infoMatch.label;
+    dom.appendChild(title);
+
+    if (detail) {
+      const detailEl = document.createElement('div');
+      detailEl.className = 'mrmd-completion-info__detail';
+      detailEl.textContent = detail;
+      dom.appendChild(detailEl);
+    }
+
+    if (docs) {
+      const docsEl = document.createElement('div');
+      docsEl.className = 'mrmd-completion-info__docs';
+      docsEl.textContent = docs;
+      dom.appendChild(docsEl);
+    }
+
+    return dom;
+  };
+
+  const immediate = render(match);
+  if (immediate && !loadInfo) {
+    return () => immediate.cloneNode(true);
+  }
+
+  if (!loadInfo) return undefined;
+
+  return async () => {
+    const loaded = await loadInfo();
+    if (!loaded) return immediate ? immediate.cloneNode(true) : null;
+    const dom = render({ ...match, ...loaded });
+    return dom || (immediate ? immediate.cloneNode(true) : null);
+  };
+}
+
+/**
  * Create a CodeMirror completion source powered by runtime LSP.
  *
  * Provides completions based on actual runtime state, not just static analysis.
@@ -95630,8 +96609,23 @@ function createRuntimeCompletionSource({ providers, getContent, stateManager, yT
     const provider = findProviderForLanguage(providers, codeInfo.language);
     if (!provider) return null;
 
-    // Get completions from runtime
-    const result = await provider.complete(codeInfo.code, codeInfo.offset, codeInfo.language);
+    const callContext = getCallArgumentContext(codeInfo.code, codeInfo.offset);
+
+    let result;
+
+    // Inside a callable's argument-name position, only show synthesized keyword arguments.
+    // This avoids noisy IPython globals/magics when the user has already opened `(` and is
+    // clearly trying to pick a kwarg.
+    if (callContext) {
+      result = await getCallKeywordCompletions({
+        provider,
+        code: codeInfo.code,
+        language: codeInfo.language,
+        callContext,
+      });
+    } else {
+      result = await provider.complete(codeInfo.code, codeInfo.offset, codeInfo.language);
+    }
     if (!result || !result.matches || result.matches.length === 0) return null;
 
     // Broadcast to awareness if available
@@ -95660,12 +96654,24 @@ function createRuntimeCompletionSource({ providers, getContent, stateManager, yT
       options: result.matches.map(match => {
         const insertText = match.insertText || match.label;
         const shouldRetrigger = /[\/\.]$/.test(insertText);
+        const infoLoader = (!match.documentation && (provider.inspect || provider.hover))
+          ? () => loadCompletionItemInfo({
+              provider,
+              code: codeInfo.code,
+              cursorStart: result.cursorStart,
+              cursorEnd: result.cursorEnd,
+              insertText,
+              language: codeInfo.language,
+            })
+          : null;
 
         return {
           label: match.label,
           type: mapCompletionKind(match.kind),
-          detail: match.valuePreview || match.detail,
-          info: match.documentation,
+          detail: match.detail || match.valuePreview,
+          info: createCompletionInfoRenderer(match, infoLoader),
+          section: match.section,
+          sortText: match.sortText,
           // Use custom apply to retrigger completions for paths and chained access
           apply: shouldRetrigger
             ? (view, completion, from, to) => {
@@ -95677,7 +96683,9 @@ function createRuntimeCompletionSource({ providers, getContent, stateManager, yT
                 setTimeout(() => startCompletion(view), 0);
               }
             : insertText,
-          boost: match.kind === 'property' || match.kind === 'method' ? 1 : 0,
+          boost: typeof match.boost === 'number'
+            ? match.boost
+            : (match.kind === 'property' || match.kind === 'method' ? 1 : 0),
         };
       }),
     };
@@ -95733,6 +96741,225 @@ function createRuntimeCompletionExtension({ providers, getContent, stateManager,
 }
 
 // #endregion COMPLETION_EXTENSION
+
+// #region SIGNATURE_HELP
+
+const setSignatureHelpTooltip = StateEffect.define();
+const clearSignatureHelpTooltip = StateEffect.define();
+
+const signatureHelpTooltipField = StateField.define({
+  create() {
+    return null;
+  },
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setSignatureHelpTooltip)) return effect.value;
+      if (effect.is(clearSignatureHelpTooltip)) return null;
+    }
+    return value;
+  },
+  provide: f => showTooltip.from(f),
+});
+
+/**
+ * Create a tooltip descriptor for signature help.
+ *
+ * @param {number} pos
+ * @param {InspectResult} inspectResult
+ * @param {{currentSegment: {text: string}, usedKeywords: Set<string>, activeKeyword: string|null, positionalIndex: number}} callContext
+ * @param {{compact?: boolean}} [options]
+ * @returns {import('@codemirror/view').Tooltip|null}
+ */
+function createSignatureHelpTooltipDescriptor(pos, inspectResult, callContext, { compact = false } = {}) {
+  const html = formatSignatureHelpContent(inspectResult, callContext, { compact });
+  if (!html) return null;
+
+  return {
+    pos,
+    above: compact,
+    strictSide: false,
+    arrow: false,
+    clip: false,
+    create(view) {
+      const dom = document.createElement('div');
+      dom.className = 'mrmd-runtime-signature-help';
+      dom.innerHTML = html;
+
+      return {
+        dom,
+        offset: { x: 0, y: compact ? 6 : 14 },
+        overlap: compact,
+        getCoords: compact
+          ? () => getAutocompleteTooltipRect(view) || view.coordsAtPos(pos)
+          : undefined,
+        positioned: () => {
+          if (!compact) {
+            dom.style.width = '';
+            return;
+          }
+
+          const popup = view.dom.querySelector('.cm-tooltip-autocomplete');
+          if (popup instanceof HTMLElement) {
+            const width = Math.min(Math.max(popup.offsetWidth - 12, 220), 420);
+            dom.style.width = `${width}px`;
+          } else {
+            dom.style.width = '';
+          }
+        },
+      };
+    },
+  };
+}
+
+/**
+ * Create a CodeMirror signature-help extension powered by runtime LSP inspect.
+ *
+ * Shows the active callable signature while the cursor is inside its argument list.
+ *
+ * @param {Object} options
+ * @param {Map<string, RuntimeLSPProvider>} options.providers
+ * @param {function(): string} options.getContent
+ * @param {Object} [options.config]
+ * @param {number} [options.config.debounceMs=80]
+ * @returns {import('@codemirror/state').Extension}
+ */
+function createRuntimeSignatureHelpExtension({ providers, getContent, config = {} }) {
+  const debounceMs = config.debounceMs ?? 80;
+
+  const plugin = ViewPlugin.fromClass(class {
+    constructor(view) {
+      this.view = view;
+      this.requestId = 0;
+      this.timer = null;
+      this.destroyed = false;
+      this.cachedInspectKey = null;
+      this.cachedInspectResult = null;
+      this.autocompleteOpen = false;
+      this.schedule();
+    }
+
+    update(update) {
+      const autocompleteOpen = !!update.view.dom.querySelector('.cm-tooltip-autocomplete');
+      if (update.docChanged || update.selectionSet || update.focusChanged || autocompleteOpen !== this.autocompleteOpen) {
+        this.autocompleteOpen = autocompleteOpen;
+        this.schedule();
+      }
+    }
+
+    destroy() {
+      this.destroyed = true;
+      if (this.timer) clearTimeout(this.timer);
+    }
+
+    schedule() {
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        this.refresh();
+      }, debounceMs);
+    }
+
+    clear() {
+      if (this.destroyed) return;
+      if (!this.view.state.field(signatureHelpTooltipField, false)) return;
+      this.view.dispatch({ effects: clearSignatureHelpTooltip.of(null) });
+    }
+
+    async refresh() {
+      if (this.destroyed) return;
+
+      const selection = this.view.state.selection.main;
+      if (!selection.empty) {
+        this.clear();
+        return;
+      }
+
+      const content = getContent();
+      const pos = selection.head;
+      const codeInfo = getCodeAtPosition(content, pos);
+      if (!codeInfo) {
+        this.clear();
+        return;
+      }
+
+      const provider = findProviderForLanguage(providers, codeInfo.language);
+      if (!provider?.inspect && !provider?.hover) {
+        this.clear();
+        return;
+      }
+
+      const callContext = getActiveCallContext(codeInfo.code, codeInfo.offset);
+      if (!callContext) {
+        this.clear();
+        return;
+      }
+
+      const inspectKey = `${codeInfo.language}:${codeInfo.cell.start}:${callContext.openParen}:${callContext.callee}`;
+      let inspectResult = this.cachedInspectKey === inspectKey ? this.cachedInspectResult : null;
+
+      const requestId = ++this.requestId;
+      if (!inspectResult) {
+        inspectResult = await getSignatureInspectData({
+          provider,
+          code: codeInfo.code,
+          cursor: callContext.openParen,
+          language: codeInfo.language,
+        });
+
+        if (this.destroyed || requestId !== this.requestId) return;
+
+        if (!inspectResult?.found || !inspectResult.signature) {
+          this.cachedInspectKey = null;
+          this.cachedInspectResult = null;
+          this.clear();
+          return;
+        }
+
+        this.cachedInspectKey = inspectKey;
+        this.cachedInspectResult = inspectResult;
+      }
+
+      const latestSelection = this.view.state.selection.main;
+      if (!latestSelection.empty) {
+        this.clear();
+        return;
+      }
+
+      const latestContent = getContent();
+      const latestPos = latestSelection.head;
+      const latestCodeInfo = getCodeAtPosition(latestContent, latestPos);
+      const latestCallContext = latestCodeInfo
+        ? getActiveCallContext(latestCodeInfo.code, latestCodeInfo.offset)
+        : null;
+      const latestInspectKey = latestCodeInfo && latestCallContext
+        ? `${latestCodeInfo.language}:${latestCodeInfo.cell.start}:${latestCallContext.openParen}:${latestCallContext.callee}`
+        : null;
+
+      if (!latestCodeInfo || !latestCallContext || latestInspectKey !== inspectKey) {
+        this.schedule();
+        return;
+      }
+
+      const autocompleteOpen = this.autocompleteOpen || !!this.view.dom.querySelector('.cm-tooltip-autocomplete');
+      const tooltip = createSignatureHelpTooltipDescriptor(
+        latestPos,
+        inspectResult,
+        latestCallContext,
+        { compact: autocompleteOpen }
+      );
+      if (!tooltip) {
+        this.clear();
+        return;
+      }
+
+      this.view.dispatch({ effects: setSignatureHelpTooltip.of(tooltip) });
+    }
+  });
+
+  return [signatureHelpTooltipField, plugin];
+}
+
+// #endregion SIGNATURE_HELP
 
 // #region VARIABLE_EXPLORER
 
@@ -95982,6 +97209,131 @@ const runtimeLspStyles = `
 
 .mrmd-hover-source-link:hover {
   text-decoration-style: solid;
+}
+
+/* Autocomplete / completion info */
+.cm-tooltip.cm-tooltip-autocomplete {
+  margin-top: 8px;
+}
+
+.cm-tooltip.cm-completionInfo {
+  margin-left: 8px;
+  max-width: 320px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.mrmd-completion-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 300px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.mrmd-completion-info__title {
+  color: var(--syntax-variable, var(--widget-text, #e1e1e1));
+  font-family: var(--widget-font-mono, monospace);
+  font-weight: 600;
+}
+
+.mrmd-completion-info__detail {
+  color: var(--syntax-parameter, #9cdcfe);
+  font-family: var(--widget-font-mono, monospace);
+  font-size: 11px;
+}
+
+.mrmd-completion-info__docs {
+  color: var(--widget-text-muted, #9ca3af);
+  white-space: pre-wrap;
+}
+
+/* Runtime Signature Help */
+.mrmd-runtime-signature-help {
+  background: var(--widget-surface-elevated, var(--editor-background, #1e1e1e));
+  border: 1px solid var(--widget-border, #333);
+  border-radius: var(--widget-border-radius, 6px);
+  padding: 5px 8px;
+  max-width: 440px;
+  color: var(--widget-text, var(--editor-foreground, #e1e1e1));
+  box-shadow: var(--mrmd-shadow-md, 0 6px 18px rgba(0, 0, 0, 0.28));
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.mrmd-signature-help {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mrmd-signature-help--compact {
+  gap: 2px;
+}
+
+.mrmd-signature-help__signature {
+  font-family: var(--widget-font-mono, monospace);
+  color: var(--widget-text, var(--editor-foreground, #e1e1e1));
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mrmd-signature-help--compact .mrmd-signature-help__signature {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.mrmd-signature-help__signature code {
+  background: none;
+  padding: 0;
+}
+
+.mrmd-signature-help__head,
+.mrmd-signature-help__tail {
+  color: var(--syntax-function, #dcdcaa);
+}
+
+.mrmd-signature-help__part {
+  color: var(--widget-text, var(--editor-foreground, #e1e1e1));
+}
+
+.mrmd-signature-help__part--marker,
+.mrmd-signature-help__comma {
+  color: var(--widget-text-muted, #9ca3af);
+}
+
+.mrmd-signature-help__part--active {
+  color: var(--editor-background, #111827);
+  background: var(--mrmd-accent, #58a6ff);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.mrmd-signature-help__active {
+  color: var(--syntax-parameter, #9cdcfe);
+  font-family: var(--widget-font-mono, monospace);
+  font-size: 11px;
+}
+
+.mrmd-signature-help__name {
+  color: var(--widget-text-muted, #9ca3af);
+  font-size: 11px;
+}
+
+.mrmd-signature-help__docs {
+  color: var(--widget-text-muted, #9cdcfe);
+  border-top: 1px solid var(--widget-border, #333);
+  padding-top: 4px;
+  white-space: pre-wrap;
+}
+
+.mrmd-signature-help--compact .mrmd-signature-help__docs {
+  border-top: 0;
+  padding-top: 0;
+  color: var(--widget-text-muted, #9ca3af);
 }
 `;
 
@@ -142535,6 +143887,12 @@ function create(target, options = {}) {
       additionalSources: [wikiLinkSource],
     });
     runtimeLspExtensions.push(completionExt);
+
+    const signatureHelpExt = createRuntimeSignatureHelpExtension({
+      providers: runtimeLspProviders,
+      getContent: () => view.state.doc.toString(),
+    });
+    runtimeLspExtensions.push(signatureHelpExt);
 
     // Add extensions to the view
     view.dispatch({

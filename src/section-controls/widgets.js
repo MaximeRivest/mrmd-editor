@@ -411,17 +411,44 @@ export function openSectionControlsMenu(view, editor, options = {}) {
 
   // Position near the existing toolbar for a "grow" feel.
   const anchorRect = anchorEl.getBoundingClientRect();
+  menu.style.visibility = 'hidden';
+  menu.style.left = `${anchorRect.right}px`;
+  menu.style.top = `${anchorRect.bottom + 6}px`;
+
   const rect = menu.getBoundingClientRect();
+  const viewportPadding = 8;
+  const gap = 6;
 
   let left = anchorRect.right - rect.width;
-  let top = anchorRect.bottom + 6;
+  let top = anchorRect.bottom + gap;
+  let flippedY = false;
 
-  left = Math.max(8, Math.min(left, window.innerWidth - rect.width - 8));
-  top = Math.max(8, Math.min(top, window.innerHeight - rect.height - 8));
+  if (left < viewportPadding) {
+    const alternateLeft = anchorRect.left;
+    if (alternateLeft + rect.width <= window.innerWidth - viewportPadding) {
+      left = alternateLeft;
+    }
+  }
+
+  if (top + rect.height > window.innerHeight - viewportPadding) {
+    const alternateTop = anchorRect.top - rect.height - gap;
+    if (alternateTop >= viewportPadding) {
+      top = alternateTop;
+      flippedY = true;
+    }
+  }
+
+  left = Math.max(viewportPadding, Math.min(left, window.innerWidth - rect.width - viewportPadding));
+  top = Math.max(viewportPadding, Math.min(top, window.innerHeight - rect.height - viewportPadding));
+
+  const anchorCenterX = anchorRect.left + (anchorRect.width / 2);
+  const originX = Math.max(12, Math.min(rect.width - 12, anchorCenterX - left));
+  const originY = flippedY ? rect.height : 0;
 
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
-  menu.style.transformOrigin = `${Math.max(12, anchorRect.right - left)}px 0px`;
+  menu.style.transformOrigin = `${originX}px ${originY}px`;
+  menu.style.visibility = '';
 
   root.classList.add('menu-open');
 
@@ -753,6 +780,7 @@ export const sectionControlsStyles = `
   max-width: 420px;
   max-height: min(72vh, 620px);
   overflow: auto;
+  overscroll-behavior: contain;
   background: var(--bg-secondary, #1f2328);
   border: 1px solid var(--border, #3d444d);
   border-radius: 10px;
