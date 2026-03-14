@@ -1,22 +1,21 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>Test: Basic Editor</title>
+  <title>Minimal mrmd</title>
   <style>
-    body { font-family: sans-serif; padding: 20px; }
-    #editor { border: 1px solid #ccc; height: 400px; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { height: 100vh; display: flex; flex-direction: column; }
+    #editor { flex: 1; overflow: auto; max-width: 800px; margin: 0 auto; width: 100%; padding: 20px 0; }
   </style>
 </head>
 <body>
-  <h1>Basic Editor Test</h1>
-  <p>Minimal editor with default options.</p>
-
   <div id="editor"></div>
 
   <script src="../dist/mrmd.iife.js"></script>
   <script>
-    const editor = mrmd.create('#editor');
+    const editor = mrmd.create('#editor', {
+      javascriptIsolation: 'none'
+    });
     window.editor = editor;
   </script>
 </body>
