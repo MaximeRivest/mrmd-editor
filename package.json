@@ -8,7 +8,7 @@
   "browser": "dist/mrmd.iife.js",
   "unpkg": "dist/mrmd.iife.min.js",
   "files": [
-    "dist",
+    "dist/*.js",
     "src"
   ],
   "scripts": {

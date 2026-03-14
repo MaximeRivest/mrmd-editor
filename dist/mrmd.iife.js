@@ -66377,7 +66377,7 @@ ${bodyHtml}
     }
 
     ignoreEvent() {
-      return false;
+      return true;
     }
   }
 
@@ -66570,7 +66570,7 @@ ${bodyHtml}
     }
 
     ignoreEvent() {
-      return false;
+      return true;
     }
   }
 
@@ -66661,7 +66661,7 @@ ${bodyHtml}
     }
 
     ignoreEvent() {
-      return false;
+      return true;
     }
   }
 
@@ -66762,7 +66762,7 @@ ${bodyHtml}
     }
 
     ignoreEvent() {
-      return false;
+      return true;
     }
   }
 
@@ -67429,22 +67429,37 @@ ${bodyHtml}
    This approach works with CM6 viewport virtualization.
    ========================================================================== */
 
-/* Fence lines (opening and closing) - hidden in viewing mode */
+/* Fence lines (opening and closing) - visually hidden in viewing mode.
+ * Uses font-size:1px (not 0) so CodeMirror's posAtCoordsInline can
+ * still find a child with a non-zero bounding rect. With font-size:0,
+ * all text rects are zero-sized, point widgets are skipped, and CM
+ * throws "Invalid child in posBefore". */
 .cm-output-fence-line {
-  font-size: 0 !important;
+  font-size: 1px !important;
   line-height: 0 !important;
   height: 0 !important;
   overflow: hidden !important;
   padding: 0 !important;
   margin: 0 !important;
+  color: transparent !important;
 }
 
 /* Rich output widgets (HTML/CSS/Mermaid->HTML) are mounted on the opening
- * fence line. Keep that line unclipped so the inline widget can paint. */
+ * fence line. Keep that line unclipped so the inline widget can paint.
+ *
+ * The text span children on this line must have non-zero bounding rects
+ * so CodeMirror's posAtCoordsInline can find a measurable child.
+ * Without this, clicking/hovering on the widget area crashes with
+ * "Invalid child in posBefore" because CM skips point widgets during
+ * coordinate mapping and finds no other child with height > 0. */
+/* Rich output widgets are mounted on the opening fence line.
+ * The fence text stays at font-size:1px (inherited from .cm-output-fence-line)
+ * so CodeMirror can measure it for position mapping.
+ * The widget paints via overflow:visible beyond the line's layout height. */
 .cm-output-fence-rich-start {
   height: auto !important;
   overflow: visible !important;
-  line-height: 1 !important;
+  line-height: 0 !important;
 }
 
 /* Hide CodeMirror's special character rendering (escape symbols) in output blocks */
@@ -67763,8 +67778,11 @@ ${bodyHtml}
    ========================================================================== */
 
 /* Hide content lines for rich output (HTML/CSS) */
+/* Hidden content lines for rich output (HTML/CSS/JSON).
+ * Use clip-path instead of height:0 so CodeMirror can still
+ * resolve positions (prevents "Invalid child in posBefore"). */
 .cm-rich-output-hidden {
-  font-size: 0 !important;
+  font-size: 1px !important;
   line-height: 0 !important;
   height: 0 !important;
   overflow: hidden !important;
@@ -67783,6 +67801,8 @@ ${bodyHtml}
   border-radius: var(--widget-border-radius, 6px);
   overflow: hidden;
   border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
+  line-height: normal; /* Override parent's collapsed line-height */
+  font-size: var(--mrmd-ui-font-size, 13px);
 }
 
 .cm-html-output-widget::before {
@@ -67820,6 +67840,8 @@ ${bodyHtml}
   border-radius: var(--widget-border-radius, 6px);
   border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.08));
   border-left: 2px solid var(--widget-accent-css, #64b5f6);
+  line-height: normal; /* Override parent's collapsed line-height */
+  font-size: var(--mrmd-ui-font-size, 13px);
 }
 
 .cm-css-header {
@@ -67945,6 +67967,8 @@ ${bodyHtml}
   border-left: 3px solid var(--widget-border-accent, rgba(100, 149, 237, 0.6));
   border-radius: var(--widget-border-radius, 6px);
   overflow: hidden;
+  line-height: normal; /* Override parent's collapsed line-height */
+  font-size: var(--mrmd-ui-font-size, 13px);
 }
 
 .cm-scroll-output-header {
@@ -68027,6 +68051,8 @@ ${bodyHtml}
   border-left: 3px solid var(--widget-accent-json, #8cc0ff);
   border-radius: var(--widget-border-radius, 6px);
   overflow: hidden;
+  line-height: normal; /* Override parent's collapsed line-height */
+  font-size: var(--mrmd-ui-font-size, 13px);
 }
 
 .cm-json-header {
@@ -134790,7 +134816,7 @@ $1 $2
     dark: null,
     theme: null,  // Defaults to plain-light
     readonly: false,
-    placeholder: 'Your journey begins here...',
+    placeholder: 'Start typing...',
     spellcheck: true,
   };
 
