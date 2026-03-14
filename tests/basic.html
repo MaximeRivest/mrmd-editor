@@ -1,13 +1,39 @@
 <!DOCTYPE html>
 <html>
+
 <head>
+    <meta charset="UTF-8">
   <title>Minimal mrmd</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { height: 100vh; display: flex; flex-direction: column; }
-    #editor { flex: 1; overflow: auto; max-width: 800px; margin: 0 auto; width: 100%; padding: 20px 0; }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #editor {
+      flex: 1;
+      overflow: auto;
+      max-width: 800px;
+      margin: 0 auto;
+      width: 100%;
+      padding: 20px 0;
+    }
+
+    html,
+    body {
+      background: var(--editor-background, #ffffff);
+      color: var(--widget-text, #000000);
+    }
   </style>
 </head>
+
 <body>
   <div id="editor"></div>
 
@@ -19,4 +45,5 @@
     window.editor = editor;
   </script>
 </body>
+
 </html>
