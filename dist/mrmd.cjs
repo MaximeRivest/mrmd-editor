@@ -134791,7 +134791,7 @@ const DEFAULT_APPEARANCE = {
   dark: null,
   theme: null,  // Defaults to plain-light
   readonly: false,
-  placeholder: 'Start typing...',
+  placeholder: 'Your journey begins here...',
   spellcheck: true,
 };
 
