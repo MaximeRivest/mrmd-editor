@@ -1,7 +1,11 @@
+---
+template: Notebook
+---
+
 # Learn mrmd-editor: From Zero to Mastery
 
 An interactive notebook for learning mrmd-editor step by step.
-Best experienced with a running editor — follow along in your browser console.
+Best experienced with a **running** editor — follow along in your browser console.
 
 ---
 
@@ -173,7 +177,7 @@ Open the browser console (F12) and try these one at a time:
 ### Get current content
 
 ```js
-editor.getContent()
+editor.getContent().toString().replaceAll('`', '')
 // → "" (empty editor)
 ```
 
@@ -206,7 +210,7 @@ editor.replace(0, 5, "REPLACED")
 ### Read it back
 
 ```js
-editor.getContent()
+editor.getContent().toString().replaceAll('`', '')
 // Returns the full document as a string
 ```
 
@@ -327,31 +331,183 @@ editor.setTheme('midnight')    // dark, deep blue
 editor.setTheme('nord')        // dark, muted arctic
 editor.setTheme('daylight')    // light, warm
 editor.setTheme('github')      // light, GitHub-style
-editor.setTheme('plain-light') // minimal light (default)
+editor.setTheme('plain-light') // minimal light fallback / base theme
 ```
 
 Try them all — the editor repaints instantly!
 
-### Themes Are Not Self-Standing (Architecture Note)
+### How the Theme System Actually Works
 
-The mrmd-editor themes set **CSS variables** on the document (like `--widget-surface`,
-`--editor-background`, `--widget-text`), but they don't apply them to the page's `body`
-or `html` elements. That's the consuming app's responsibility.
+At first glance, `editor.setTheme('midnight')` looks like "change colors" — and it does —
+but the system is a bit richer than that.
 
-This means a vanilla `mrmd.create()` in a plain HTML page will have styled code blocks
-and widgets, but the page background and body text won't change when you switch themes.
+There are **two separate styling layers** in mrmd-editor:
 
-To make themes fully take effect on the page, add a CSS bridge:
+1. **Editor theme**
+   - Colors and tokens for the editor container
+   - CodeMirror surface, selection, cursor, gutters
+   - Widgets and outputs
+   - Syntax highlighting
+   - Terminal/output surfaces
 
-```css
-html, body {
-  background: var(--editor-background, #ffffff);
-  color: var(--widget-text, #000000);
-  font-family: var(--editor-font-family, system-ui, sans-serif);
-}
+2. **Document style**
+   - Semantic typography and page styling from the document template
+   - Prose font, heading sizes, blockquotes, tables, inline code, page background
+   - Optional syntax-token overrides for code blocks
+
+### Theme ownership: who styles the document?
+
+By default, the **editor theme owns the visible surface**. That means:
+
+```js
+editor.setTheme('midnight')
 ```
 
-The full Electron app (`mrmd-electron`) does this — that's why themes look richer there.
+updates the overall editor look, including the background around the document, the editor
+surface, widgets, outputs, and syntax colors.
+
+If you enable document-style preview, ownership changes:
+
+```js
+editor.setDocumentStylePreview(true)
+```
+
+Now the **document template** becomes the main visual authority for the content surface.
+mrmd-editor switches to a neutral base theme underneath so the template can control page
+background, typography, and content styling cleanly.
+
+Turn it back off and the selected editor theme becomes visible again:
+
+```js
+editor.setDocumentStylePreview(false)
+```
+
+### The selected theme vs the effective theme
+
+mrmd keeps track of the theme you chose, even if document-style preview is enabled.
+So if you do this:
+
+```js
+editor.setTheme('midnight')
+editor.setDocumentStylePreview(true)
+```
+
+mrmd may temporarily use a neutral internal palette for rendering, but your **selected**
+theme is still `midnight`. When you disable document-style preview, `midnight` comes back.
+
+### Auto theme behavior
+
+If you do not set an explicit theme, mrmd uses a simple auto fallback:
+
+- dark mode → `plain-dark`
+- light mode → `plain-light`
+
+So these are equivalent ideas:
+
+```js
+editor.setTheme(null)   // return to auto theme
+editor.setDark(true)    // auto resolves to plain-dark when no explicit theme is set
+editor.setDark(false)   // auto resolves to plain-light when no explicit theme is set
+```
+
+### Full-page standalone behavior
+
+In a simple standalone page — where the editor is effectively the whole page — mrmd also
+bridges the selected theme onto the page background so the editor does not look like a
+styled island floating inside an unstyled white document.
+
+That is why this now feels self-contained:
+
+```html
+<div id="editor"></div>
+<script>
+  const editor = mrmd.create('#editor');
+  editor.setTheme('midnight');
+</script>
+```
+
+### Practical mental model
+
+A good way to think about the system is:
+
+- `setTheme(...)` = choose the **editor palette**
+- `setDocumentTemplate(...)` = choose the **document's semantic style**
+- `setDocumentStylePreview(true/false)` = choose **which one currently owns the document surface**
+
+### Common recipes
+
+**Use the editor theme as the main look**
+
+```js
+editor.setTheme('nord')
+editor.setDocumentStylePreview(false)
+```
+
+**Preview the document template as the main look**
+
+```js
+editor.setTheme('midnight')
+editor.setDocumentTemplatePreset('Academic')
+editor.setDocumentStylePreview(true)
+```
+
+**List preset names**
+
+```js
+editor.getDocumentTemplatePresetNames()
+// ["Default", "Manuscript", "Report", "Notebook", ...]
+```
+
+**Read a preset without applying it**
+
+```js
+const preset = editor.getDocumentTemplatePreset('Academic')
+```
+
+**Switch between flow and page presentation**
+
+```js
+editor.setDocumentPresentationMode('flow')
+editor.setDocumentPresentationMode('page')
+
+// convenience alias
+editor.setPageView(true)
+editor.setPageView(false)
+```
+
+`'page'` gives you a centered paper-on-canvas presentation using the document
+template's page width, background, and margins. It is still one continuous
+editor surface — useful for document preview, but not full automatic pagination.
+
+**Use the browser page scroll instead of the editor's internal scroll**
+
+```js
+editor.setScrollMode('page')    // browser owns the scroll
+editor.setScrollMode('editor')  // CodeMirror owns the scroll (default)
+```
+
+In `'page'` scroll mode the editor expands to its full content height and the
+browser's native page scrollbar takes over. This gives you native scroll feel,
+auto-fading scrollbars, and no nested scroll traps. Best for standalone pages
+where the editor is the whole document.
+
+In `'editor'` scroll mode (default), CodeMirror manages its own scroll
+container. This is better for app layouts where the editor lives inside a
+fixed-height panel.
+
+You can also set scroll mode at creation:
+
+```js
+const editor = mrmd.create('#editor', {
+  scrollMode: 'page'
+});
+```
+
+**Go back to auto theme**
+
+```js
+editor.setTheme(null)
+```
 
 ---
 
@@ -359,9 +515,78 @@ The full Electron app (`mrmd-electron`) does this — that's why themes look ric
 
 *Coming soon...*
 
-## Chapter 7: Code Execution
+## Chapter 7: Code Execution & the mrmd-js Runtime
 
-*Coming soon...*
+### How mrmd-js fits in
+
+mrmd-editor doesn't execute JavaScript itself — it delegates to **mrmd-js**, a
+separate package that provides a browser-based JavaScript runtime.
+
+```
+mrmd-editor (the editor)              mrmd-js (the runtime)
+────────────────────────               ─────────────────────
+src/index.js                           src/transform/async.js
+  createJavaScriptRuntime()              wrapWithLastExpression()
+    ↓                                    → wraps code to capture last expression
+  executeStreaming()                      → auto-inserts await for fetch/import
+    ↓                                    → suppresses assignment return values
+  context.execute(wrappedCode)
+    ↓                                  src/execute/javascript.js
+  result.resultString                    JavaScriptExecutor
+    ↓                                    → eval() in context
+  onChunk(output)                        → formatValue(result) → resultString
+    ↓
+  writes ```output:execId block        src/session/context/
+                                         IframeContext (sandboxed iframe)
+                                         MainContext (main window, no isolation)
+```
+
+In the monorepo, mrmd-js is **symlinked** into mrmd-editor's `node_modules/`:
+
+```
+mrmd-packages/
+  mrmd-editor/
+    node_modules/mrmd-js → ../../mrmd-js   (symlink!)
+  mrmd-js/
+```
+
+This means edits to mrmd-js are immediately available. Rebuild mrmd-js
+(`cd mrmd-js && npm run build`), then Vite picks up the changes.
+
+### Code transforms
+
+Before execution, mrmd-js transforms your code through a pipeline:
+
+1. **`transformForPersistence`** — Converts `const`/`let` to `var` so variables
+   persist between cell executions (like R's global environment)
+2. **`autoInsertAwaits`** — Adds `await` before `fetch()`, `.json()`, etc.
+   so async code works without explicit `await` (like Python/R)
+3. **`wrapWithLastExpression`** — Wraps the code to capture the return value
+   of the last expression, like a REPL
+
+### R-style assignment suppression
+
+In R, `x <- 5` prints nothing, but `x` prints `5`. mrmd-js follows the same
+convention: if the last statement is an assignment, the return value is suppressed.
+
+```javascript
+// Cell 1: assignment → no output
+data = [1, 2, 3, 4, 5]
+
+// Cell 2: expression → prints the value
+data
+
+// Cell 3: console.log always prints (like R's cat())
+x = 42
+console.log("x is", x)
+// Output: "x is 42" (but x=42 itself is suppressed)
+```
+
+This applies to all assignment forms:
+- `x = value`
+- `let x = value` / `const x = value` / `var x = value`
+- `obj.prop = value`
+- `arr[0] = value`
 
 ## Chapter 8: Streaming Text (Simulating AI)
 
