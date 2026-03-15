@@ -596,9 +596,218 @@ This applies to all assignment forms:
 
 *Coming soon...*
 
-## Chapter 10: Source Code Architecture
+## Chapter 10: The Complete Editor API Reference
 
-*Coming soon...*
+The `editor` object returned by `mrmd.create()` has many properties, but most
+are internal wiring. Here's the **public API** organized by category.
+
+You can explore it yourself in a code cell:
+
+```javascript
+// List all methods
+Object.entries(editor)
+  .filter(([k, v]) => typeof v === 'function')
+  .map(([k, v]) => k + '(' + (v.length ? '...' : '') + ')')
+  .sort()
+  .join('\n')
+```
+
+```javascript
+// Inspect the full object tree (circular-safe)
+function inspect(obj, depth = 2, prefix = '', seen = new WeakSet()) {
+  if (seen.has(obj)) return prefix + '[circular]'
+  seen.add(obj)
+  const lines = []
+  for (const key of Object.keys(obj).sort()) {
+    if (key.startsWith('_')) continue
+    const val = obj[key]
+    const type = typeof val
+    if (type === 'function') {
+      lines.push(prefix + key + '(' + (val.length ? '...' : '') + ')')
+    } else if (type === 'object' && val && depth > 0 && !Array.isArray(val)) {
+      lines.push(prefix + key + ':')
+      lines.push(inspect(val, depth - 1, prefix + '  ', seen))
+    } else if (Array.isArray(val)) {
+      lines.push(prefix + key + ': Array(' + val.length + ')')
+    } else {
+      lines.push(prefix + key + ': ' + (val === null ? 'null' : val === undefined ? 'undefined' : type))
+    }
+  }
+  return lines.join('\n')
+}
+console.log(inspect(editor, 3))
+```
+
+### Content
+
+| Method | Description |
+|--------|-------------|
+| `getContent()` | Get document as string |
+| `setContent(text)` | Replace entire document |
+| `insert(pos, text)` | Insert at character position |
+| `insertAtCursor(text)` | Insert at cursor |
+| `replace(from, to, text)` | Replace range |
+| `focus()` | Focus the editor |
+| `blur()` | Blur the editor |
+
+### Code Cells
+
+| Method | Description |
+|--------|-------------|
+| `getCells()` | List all code blocks (language, code, positions) |
+| `getCurrentCell()` | Cell at cursor |
+| `cellCount()` | Number of code cells |
+| `runCurrentCell()` | Execute cell at cursor (Shift+Enter) |
+| `runCell(index)` | Execute cell by index |
+| `runAll()` | Execute all cells |
+| `runAllAbove()` | Execute cells above cursor |
+| `cancelExecution(index)` | Stop a running cell |
+| `clearOutput(index)` | Clear one cell's output |
+| `clearOutputs()` | Clear all outputs |
+| `insertCodeBlock()` | Insert new code cell |
+| `deleteCodeBlock()` | Delete current code cell |
+| `supportsLanguage(lang)` | Check if a runtime is registered |
+
+### Themes & Appearance
+
+| Method | Description |
+|--------|-------------|
+| `getThemeNames()` | List available themes |
+| `getTheme()` | Current theme name |
+| `setTheme(name)` | Switch theme |
+| `setDark(bool)` | Dark/light mode (`null` = system) |
+| `setReadonly(bool)` | Read-only toggle |
+| `setSourceMode(bool)` | Show raw markdown everywhere |
+| `setWysiwygMode(bool)` | Rich text editing mode |
+| `setShowInvisibles(bool)` | Show whitespace characters |
+| `getSourceMode()` | Current source mode |
+| `getWysiwygMode()` | Current WYSIWYG mode |
+
+### Formatting (WYSIWYG)
+
+| Method | Description |
+|--------|-------------|
+| `toggleBold()` | Toggle **bold** |
+| `toggleItalic()` | Toggle *italic* |
+| `toggleUnderline()` | Toggle underline |
+| `toggleStrikethrough()` | Toggle ~~strikethrough~~ |
+| `toggleInlineCode()` | Toggle `inline code` |
+| `setBlockType(type)` | Set block type (paragraph, heading, etc.) |
+| `getSelectionFormatting()` | What formatting is active at cursor |
+| `getCurrentBlockType()` | Current block type |
+
+### Undo / Redo
+
+| Method | Description |
+|--------|-------------|
+| `undo()` | Undo last change |
+| `redo()` | Redo last undone change |
+| `canUndo()` | Whether undo is available |
+| `canRedo()` | Whether redo is available |
+| `undoDepth()` | Number of undo steps |
+| `redoDepth()` | Number of redo steps |
+| `clearUndoHistory()` | Clear undo stack |
+
+### Events
+
+| Method | Description |
+|--------|-------------|
+| `onChange(cb)` | Document content changed |
+| `onSave(cb)` | Ctrl+S / Cmd+S pressed |
+| `onCellRun(cb)` | Cell started executing |
+| `onCellComplete(cb)` | Cell finished |
+| `onCellError(cb)` | Cell error |
+| `onCellOutput(cb)` | Cell output chunk received |
+| `onSelectionChange(cb)` | Cursor or selection moved |
+| `onCollaboratorsChange(cb)` | Collaborators joined/left |
+| `onStateChange(cb)` | Any state change |
+| `onConfigChange(cb)` | Configuration changed |
+| `onViewSource(cb)` | View source requested |
+
+All event methods return an unsubscribe function:
+
+```javascript
+const unsub = editor.onChange(() => console.log('changed!'))
+// Later: unsub() to stop listening
+```
+
+### Commands (Keyboard Shortcuts)
+
+| Method | Default Shortcut |
+|--------|-----------------|
+| `commands.runCell()` | Shift+Enter |
+| `commands.runCellAndAdvance()` | Ctrl+Enter |
+| `commands.runAllCells()` | |
+| `commands.goToNextCell()` | |
+| `commands.goToPrevCell()` | |
+| `commands.insertCellAbove()` | |
+| `commands.insertCellBelow()` | |
+| `commands.insertCellSmart()` | |
+| `commands.formatCell()` | |
+| `commands.formatDocument()` | |
+| `commands.toggleSourceMode()` | |
+| `commands.toggleWysiwygMode()` | |
+| `commands.toggleInvisibles()` | |
+| `commands.viewSource()` | |
+
+### Collaboration
+
+| Property/Method | Description |
+|----------------|-------------|
+| `awareness` | Raw Yjs Awareness instance |
+| `getCollaborators()` | List connected users |
+| `announceCollaborator(type, name, color)` | Broadcast presence |
+
+### Runtimes
+
+| Method | Description |
+|--------|-------------|
+| `registerRuntime(name, runtime)` | Add a language runtime |
+| `unregisterRuntime(name)` | Remove a runtime |
+| `connectRuntime(lang, options)` | Connect to a remote runtime |
+| `listVariables()` | List variables from runtime |
+| `refreshVariables()` | Refresh variable list |
+| `clearVariables(sessionId)` | Clear runtime variables |
+
+### Document Templates
+
+| Method | Description |
+|--------|-------------|
+| `getDocumentTemplate()` | Get current document style template |
+| `setDocumentTemplate(template)` | Apply a style template |
+| `getDocumentTemplatePresets()` | List available presets |
+| `setDocumentTemplatePreset(name)` | Apply a preset |
+| `compileDocumentTemplate()` | Compile template to CSS |
+| `serializeDocumentTemplate()` | Export as JSON |
+| `serializeDocumentTemplateHtml()` | Export as HTML |
+| `serializeDocumentTemplateLatex()` | Export as LaTeX |
+| `serializeDocumentTemplatePandoc()` | Export as Pandoc |
+
+### Configuration
+
+The `config` object is **reactive** — mutate it and the editor reconfigures:
+
+```javascript
+editor.config.appearance.theme = 'midnight'     // same as setTheme('midnight')
+editor.config.appearance.dark = true             // same as setDark(true)
+editor.config.appearance.readonly = true         // same as setReadonly(true)
+editor.config.cellControls.enabled = false       // hide run buttons
+editor.config.awareness.showCursors = false      // hide collaborator cursors
+```
+
+### Low-Level Access
+
+| Property | Description |
+|----------|-------------|
+| `view` | Raw CodeMirror `EditorView` — full CM6 API |
+| `yText` | Raw Yjs `Y.Text` — the shared text type |
+| `ydoc` | Raw Yjs `Y.Doc` — the shared document |
+| `execution` | `ExecutionManager` — cell execution internals |
+| `jsRuntime` | mrmd-js runtime — `execute()`, `complete()`, etc. |
+| `registry` | `RuntimeRegistry` — registered language runtimes |
+| `state` | Reactive state tree (read-only snapshot) |
+| `writer(pos)` | Returns a streaming writer for AI text insertion |
+| `destroy()` | Clean up all resources |
 
 ---
 
