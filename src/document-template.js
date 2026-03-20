@@ -763,6 +763,20 @@ export function compileDocumentTemplateCSS(template, scope = '&') {
       // styling is explicitly enabled. App chrome theme stays outside this scope.
       '--editor-background': t.page.background || '#ffffff',
       '--editor-foreground': t.body.color || '#222222',
+      '--editor-selection': (() => {
+        // Derive a visible selection color from the page background.
+        // If the page is dark, use a lighter blue; if light, use a subtle blue tint.
+        const bg = t.page.background || '#ffffff';
+        const hex = bg.match(/^#([\da-f]{6})$/i);
+        if (hex) {
+          const r = parseInt(hex[1].slice(0, 2), 16);
+          const g = parseInt(hex[1].slice(2, 4), 16);
+          const b = parseInt(hex[1].slice(4, 6), 16);
+          const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+          return lum < 0.5 ? 'rgba(100, 149, 237, 0.4)' : 'rgba(59, 130, 246, 0.22)';
+        }
+        return 'rgba(59, 130, 246, 0.22)';
+      })(),
       '--md-heading-color': t.heading?.color || (t.body.color || '#111827'),
       '--md-link-color': t.link?.color || '#1d4ed8',
       '--md-link-decoration': t.link?.underline === false ? 'none' : 'underline',
@@ -877,10 +891,12 @@ export function compileDocumentTemplateCSS(template, scope = '&') {
       ...(t.code?.inline?.background ? { backgroundColor: t.code.inline.background } : {}),
     },
     // --- Code blocks (source) ---
+    // Use box-shadow instead of background-color on .cm-line elements so
+    // CM6's selection layer (which paints below .cm-line) stays visible.
     [s('.cm-codeblock-line') + ', ' + s('.cm-codeblock-fence') + ', ' + s('.cm-wysiwyg-code-fence-line')]: {
       ...(t.code?.block?.fontFamily ? { fontFamily: t.code.block.fontFamily } : {}),
       ...(t.code?.block?.fontSize ? { fontSize: t.code.block.fontSize } : {}),
-      ...(t.code?.block?.background ? { backgroundColor: t.code.block.background } : {}),
+      ...(t.code?.block?.background ? { boxShadow: `inset 0 0 0 9999px ${t.code.block.background}` } : {}),
     },
     [s('.cm-wysiwyg-code-fence-widget') + ', ' + s('.cm-wysiwyg-code-header')]: {
       ...(t.code?.block?.background ? { backgroundColor: t.code.block.background } : {}),
@@ -1904,10 +1920,15 @@ function buildDocumentTemplateOverrideCSS(template, scopeSelector) {
     ], 'color', t.code.block.color);
   }
   if (t.code?.block?.background) {
+    // Use box-shadow on .cm-line elements so CM6's selection layer stays visible.
+    // background-color on .cm-line hides the selection layer painted below it.
     rule([
       '.cm-codeblock-line',
       '.cm-codeblock-fence',
       '.cm-wysiwyg-code-fence-line',
+    ], 'box-shadow', `inset 0 0 0 9999px ${t.code.block.background}`);
+    // Non-line elements (widgets, headers) can keep background-color safely.
+    rule([
       '.cm-wysiwyg-code-fence-widget',
       '.cm-wysiwyg-code-header',
     ], 'background-color', t.code.block.background);

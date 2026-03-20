@@ -26,17 +26,12 @@
       padding: 20px 0;
     }
 
-    html,
-    body {
-      background: var(--editor-background, #ffffff);
-      color: var(--widget-text, #000000);
-    }
   </style>
 </head>
 
 <body>
   <div id="editor"></div>
-
+<!-- <script src="https://unpkg.com/mrmd-editor@0.8.2/dist/mrmd.iife.min.js"></script> -->
   <script src="../dist/mrmd.iife.js"></script>
   <script>
     const editor = mrmd.create('#editor', {

@@ -6,7 +6,7 @@
  * ## Theme Detection
  *
  * Themes are detected in this priority:
- * 1. Explicit config (config.appearance.widgetTheme)
+ * 1. Explicit theme name / config override
  * 2. CodeMirror theme class (.cm-theme-dark)
  * 3. System preference (prefers-color-scheme)
  * 4. Default: 'plain-light'
@@ -32,6 +32,10 @@ import { getTheme, getDefaultTokens } from './theme.js';
  * 2. CodeMirror theme class on the editor element
  * 3. System color scheme preference
  * 4. Default: 'plain-light'
+ *
+ * Note: standalone editors often resolve auto-theme before first render and then
+ * apply the chosen theme directly to their container. This helper remains useful
+ * for generic detection and host integrations.
  *
  * @param {Object} [options]
  * @param {string} [options.themeName] - Explicit theme name (highest priority)

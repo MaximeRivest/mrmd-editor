@@ -26649,22 +26649,9 @@ function createCodemirrorTheme(theme) {
       borderLeftColor: theme['--editor-cursor'] || '#aeafad',
     },
 
-    // Selection — ensure visibility above line decoration backgrounds.
-    // drawSelection() renders .cm-selectionBackground in a layer below content.
-    // Line decorations (code block bg, active line) can obscure it.
-    // We boost the layer and use !important so selection always shows.
-    '& .cm-selectionLayer .cm-selectionBackground': {
-      backgroundColor: `${theme['--editor-selection'] || '#264f78'} !important`,
-    },
-    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
+    // Selection
+    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
       backgroundColor: theme['--editor-selection'] || '#264f78',
-    },
-    '.cm-content ::selection': {
-      backgroundColor: theme['--editor-selection'] || '#264f78',
-    },
-    // Ensure the selection layer paints above line backgrounds
-    '& .cm-selectionLayer': {
-      zIndex: '1 !important',
     },
 
     // Search match highlighting
@@ -100003,7 +99990,7 @@ function wrapWithLastExpression(code, persistentVars = []) {
  * @param {number} [maxLength=1000]
  * @returns {string | undefined}
  */
-function formatValue$1(value, maxLength = 10000) {
+function formatValue$1(value, maxLength = 100000) {
   if (value === undefined) return undefined;
   if (value === null) return 'null';
 
@@ -143011,16 +142998,18 @@ const codeBlockBackground = ViewPlugin.fromClass(class {
  * 2. Styling ::selection pseudo-element (native browser selection, always on top)
  */
 const codeBlockStyles = EditorView.theme({
-  // Content lines - smaller than prose, monospace font for code
+  // Content lines - smaller than prose, monospace font for code.
+  // Backgrounds are semi-transparent so the selection layer shows through.
   '.cm-codeblock-line': {
-    backgroundColor: 'color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
+    backgroundColor: 'color-mix(in srgb, var(--widget-surface, #f5f5f5) 78%, transparent)',
     fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
     fontSize: 'var(--code-font-size, 0.8em)',
     lineHeight: 'var(--code-line-height, 1.5)',
+    position: 'relative',
   },
   // Fence lines (``` markers) - even smaller, very subtle
   '.cm-codeblock-fence': {
-    backgroundColor: 'color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
+    backgroundColor: 'color-mix(in srgb, var(--widget-surface, #f5f5f5) 78%, transparent)',
     fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
     fontSize: '0.5em',
     color: 'var(--widget-text-muted, #888)',

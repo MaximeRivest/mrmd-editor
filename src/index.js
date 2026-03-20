@@ -782,26 +782,23 @@ const codeBlockBackground = ViewPlugin.fromClass(class {
  * 2. Styling ::selection pseudo-element (native browser selection, always on top)
  */
 const codeBlockStyles = EditorView.theme({
-  // Content lines - smaller than prose, monospace font for code
+  // Content lines - monospace font for code.
+  // Code block background uses box-shadow (inset) instead of background-color.
+  // CM6's drawSelection layer paints BELOW .cm-line with `above: false`.
+  // Any background-color on .cm-line hides the selection.
+  // box-shadow doesn't participate in layer painting — selection shows through.
   '.cm-codeblock-line': {
-    backgroundColor: 'color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
+    boxShadow: 'inset 0 0 0 9999px color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
     fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
     fontSize: 'var(--code-font-size, 0.8em)',
     lineHeight: 'var(--code-line-height, 1.5)',
   },
   // Fence lines (``` markers) - even smaller, very subtle
   '.cm-codeblock-fence': {
-    backgroundColor: 'color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
+    boxShadow: 'inset 0 0 0 9999px color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
     fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
     fontSize: '0.5em',
     color: 'var(--widget-text-muted, #888)',
-  },
-  // Selection styling for code blocks - ensure visibility with native ::selection
-  '.cm-codeblock-line::selection, .cm-codeblock-line *::selection': {
-    backgroundColor: 'var(--editor-selection, #264f78) !important',
-  },
-  '.cm-codeblock-fence::selection, .cm-codeblock-fence *::selection': {
-    backgroundColor: 'var(--editor-selection, #264f78) !important',
   },
   // Mobile: code blocks need to be larger and scroll horizontally
   '@media (max-width: 768px)': {
@@ -1502,7 +1499,31 @@ function create(target, options = {}) {
 
   // Always read initial content from Yjs (source of truth)
   const initialContent = yText.toString();
+  const themingMode = options.themingMode === 'hosted' ? 'hosted' : 'standalone';
+  const standaloneFullPageHost = (() => {
+    if (themingMode !== 'standalone' || typeof document === 'undefined') return false;
+    if (element.parentElement !== document.body) return false;
+    const nonScriptBodyChildren = Array.from(document.body.children)
+      .filter((child) => !['SCRIPT', 'STYLE'].includes(child.tagName));
+    return nonScriptBodyChildren.length === 1 && nonScriptBodyChildren[0] === element;
+  })();
+  element.classList.add('mrmd-root');
+  element.dataset.mrmdThemingMode = themingMode;
+
   const initialDocumentTemplate = normalizeDocumentTemplate(options.documentTemplate || defaultDocumentTemplate);
+  const explicitDocumentStylePreview = typeof options.documentStylePreview === 'boolean'
+    ? options.documentStylePreview
+    : (options.documentTemplate?.editor && Object.prototype.hasOwnProperty.call(options.documentTemplate.editor, 'applyDocumentStyles'))
+      ? options.documentTemplate.editor.applyDocumentStyles !== false
+      : themingMode === 'hosted';
+  const initialDocumentPresentationMode = options.documentPresentationMode === 'page' || options.pageView === true
+    ? 'page'
+    : 'flow';
+  initialDocumentTemplate.editor = {
+    ...(initialDocumentTemplate.editor || {}),
+    applyDocumentStyles: explicitDocumentStylePreview,
+  };
+
   const themeCompartment = new Compartment();
   const documentTemplateCompartment = new Compartment();
   const readonlyCompartment = new Compartment();
@@ -1549,16 +1570,242 @@ function create(target, options = {}) {
   // Initialize unified theme system
   // Use explicit theme if set, otherwise auto-select based on dark mode
   const resolveThemeName = (theme, isDarkMode) => {
-    if (theme) return theme;
-    return 'plain-light';
+    if (theme && getTheme(theme)) return theme;
+    return isDarkMode ? 'plain-dark' : 'plain-light';
   };
-  const initialThemeName = resolveThemeName(config.appearance?.theme, isDark);
 
-  // Apply widget theme (CSS variables)
-  applyTheme(initialThemeName);
+  const applyStandaloneScrollbarStyles = (theme) => {
+    if (typeof document === 'undefined') return;
+    let styleEl = document.getElementById('mrmd-standalone-scrollbars');
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = 'mrmd-standalone-scrollbars';
+      document.head.appendChild(styleEl);
+    }
+
+    const thumb = theme.isDark ? 'rgba(255, 255, 255, 0.22)' : 'rgba(15, 23, 42, 0.2)';
+    const thumbHover = theme.isDark ? 'rgba(255, 255, 255, 0.35)' : 'rgba(15, 23, 42, 0.32)';
+
+    // Scrollbars that are invisible when idle and fade in only on scroll
+    // or when the pointer enters the scrollbar track zone.
+    //
+    // Pure CSS can't detect "is scrolling", so we use a thin JS helper
+    // that adds/removes a .mrmd-scrolling class on scroll containers.
+    // The CSS transitions handle the fade.
+    const idle = 'rgba(0, 0, 0, 0)';
+    const scrollSelectors = [
+      '.mrmd-root .cm-scroller',
+      '.mrmd-root .cm-scroll-output-body',
+      '.mrmd-root .cm-json-tree',
+      '.mrmd-root .cm-output-content',
+    ];
+    const allSelectors = scrollSelectors.join(',\n');
+    const scrollingSelectors = scrollSelectors.map(s => `${s}.mrmd-scrolling`).join(',\n');
+    const thumbHoverSelectors = scrollSelectors.map(s => `${s}::-webkit-scrollbar-thumb:hover`).join(',\n');
+
+    styleEl.textContent = `
+/* --- Firefox --- */
+${allSelectors} {
+  scrollbar-width: thin;
+  scrollbar-color: ${idle} transparent;
+}
+${scrollingSelectors} {
+  scrollbar-color: ${thumb} transparent;
+}
+
+/* --- Chromium / Safari --- */
+${scrollSelectors.map(s => `${s}::-webkit-scrollbar`).join(',\n')} {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+${scrollSelectors.map(s => `${s}::-webkit-scrollbar-track`).join(',\n')} {
+  background: transparent;
+}
+${scrollSelectors.map(s => `${s}::-webkit-scrollbar-thumb`).join(',\n')} {
+  background: ${idle};
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: background 0.35s ease 0s;
+}
+${scrollSelectors.map(s => `${s}.mrmd-scrolling::-webkit-scrollbar-thumb`).join(',\n')} {
+  background: ${thumb};
+  background-clip: content-box;
+  transition: background 0.1s ease 0s;
+}
+${thumbHoverSelectors} {
+  background: ${thumbHover};
+  background-clip: content-box;
+}
+${scrollSelectors.map(s => `${s}::-webkit-scrollbar-corner`).join(',\n')} {
+  background: transparent;
+}
+`;
+  };
+
+  const applyThemeToHost = (themeName) => {
+    const theme = getTheme(themeName);
+    if (!theme) return null;
+
+    if (themingMode === 'hosted') {
+      // In hosted mode the embedding app owns the outer theme variables.
+      // We only need the theme object here so CodeMirror can be reconfigured.
+    } else {
+      if (theme.fontFace && typeof document !== 'undefined') {
+        let fontStyle = document.getElementById('mrmd-standalone-theme-fonts');
+        if (!fontStyle) {
+          fontStyle = document.createElement('style');
+          fontStyle.id = 'mrmd-standalone-theme-fonts';
+          document.head.insertBefore(fontStyle, document.head.firstChild || null);
+        }
+        fontStyle.textContent = theme.fontFace;
+      }
+
+      applyStandaloneScrollbarStyles(theme);
+      applyTheme(themeName, { target: element, useStyleTag: false });
+
+      if (standaloneFullPageHost) {
+        applyTheme(themeName, { target: document.documentElement, useStyleTag: false });
+        document.documentElement.style.background = 'var(--editor-background, #ffffff)';
+        document.body.style.background = 'var(--editor-background, #ffffff)';
+        document.body.style.color = 'var(--widget-text, #111111)';
+        document.body.style.fontFamily = 'var(--editor-font-family, var(--widget-font-sans, system-ui, sans-serif))';
+        document.body.style.colorScheme = theme.isDark ? 'dark' : 'light';
+        document.body.dataset.theme = themeName;
+        document.body.classList.toggle('mrmd-theme-dark', !!theme.isDark);
+        document.body.classList.toggle('mrmd-theme-light', theme.isDark === false);
+      }
+
+      element.style.background = 'var(--editor-background, #ffffff)';
+      element.style.color = 'var(--widget-text, #111111)';
+      element.style.fontFamily = 'var(--editor-font-family, var(--widget-font-sans, system-ui, sans-serif))';
+      element.style.minHeight = '100%';
+      element.style.caretColor = 'var(--editor-cursor, currentColor)';
+      element.style.colorScheme = theme.isDark ? 'dark' : 'light';
+      element.dataset.theme = themeName;
+      element.classList.toggle('mrmd-theme-dark', !!theme.isDark);
+      element.classList.toggle('mrmd-theme-light', theme.isDark === false);
+    }
+
+    return theme;
+  };
+
+  const parseThemePreviewColor = (value) => {
+    if (!value || typeof value !== 'string') return null;
+    const color = value.trim();
+    if (!color) return null;
+
+    const hex = color.match(/^#([\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i);
+    if (hex) {
+      const raw = hex[1];
+      const normalized = raw.length <= 4
+        ? raw.split('').map((ch) => ch + ch).join('')
+        : raw;
+      return {
+        r: parseInt(normalized.slice(0, 2), 16),
+        g: parseInt(normalized.slice(2, 4), 16),
+        b: parseInt(normalized.slice(4, 6), 16),
+      };
+    }
+
+    const rgb = color.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+    if (rgb) {
+      return {
+        r: Math.max(0, Math.min(255, parseInt(rgb[1], 10))),
+        g: Math.max(0, Math.min(255, parseInt(rgb[2], 10))),
+        b: Math.max(0, Math.min(255, parseInt(rgb[3], 10))),
+      };
+    }
+
+    return null;
+  };
+
+  const documentStylePreviewEnabled = (template) => template?.editor?.applyDocumentStyles !== false;
+
+  const cssUnitToPixels = (value, fallback = 0) => {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const str = String(value).trim();
+    if (!str) return fallback;
+    const match = str.match(/^(-?\d*\.?\d+)(px|in|cm|mm|pt|pc|rem|em)?$/i);
+    if (!match) return fallback;
+    const num = parseFloat(match[1]);
+    const unit = (match[2] || 'px').toLowerCase();
+    if (!Number.isFinite(num)) return fallback;
+    switch (unit) {
+      case 'px': return num;
+      case 'in': return num * 96;
+      case 'cm': return num * (96 / 2.54);
+      case 'mm': return num * (96 / 25.4);
+      case 'pt': return num * (96 / 72);
+      case 'pc': return num * 16;
+      case 'rem': return num * 16;
+      case 'em': return num * 16;
+      default: return fallback;
+    }
+  };
+
+  const resolveNeutralThemeName = (template, fallbackThemeName) => {
+    const previewColor = parseThemePreviewColor(template?.page?.background);
+    if (previewColor) {
+      const luminance = (0.299 * previewColor.r + 0.587 * previewColor.g + 0.114 * previewColor.b) / 255;
+      return luminance < 0.5 ? 'plain-dark' : 'plain-light';
+    }
+
+    const fallbackTheme = getTheme(fallbackThemeName);
+    return fallbackTheme?.isDark ? 'plain-dark' : 'plain-light';
+  };
+
+  const getPresentationMetrics = (template, effectiveThemeName) => {
+    const t = template || initialDocumentTemplate;
+    const effectiveTheme = getTheme(effectiveThemeName);
+    const paperSizes = {
+      letter: { width: 816, height: 1056 },
+      legal: { width: 816, height: 1344 },
+      a4: { width: 794, height: 1123 },
+      a5: { width: 559, height: 794 },
+    };
+    const paperSpec = paperSizes[t?.page?.paperSize] || paperSizes.letter;
+    const paperWidthPx = t?.page?.maxWidth
+      ? cssUnitToPixels(t.page.maxWidth, paperSpec.width)
+      : paperSpec.width;
+    const paperHeightPx = Math.round(paperWidthPx * (paperSpec.height / paperSpec.width));
+    const paperColor = t?.page?.background || 'var(--editor-background, #ffffff)';
+    const paperRgb = parseThemePreviewColor(t?.page?.background);
+    const paperIsDark = paperRgb
+      ? ((0.299 * paperRgb.r + 0.587 * paperRgb.g + 0.114 * paperRgb.b) / 255) < 0.5
+      : !!effectiveTheme?.isDark;
+    const mt = cssUnitToPixels(t?.page?.marginTop, 96);
+    const mb = cssUnitToPixels(t?.page?.marginBottom, 96);
+    const ml = cssUnitToPixels(t?.page?.marginLeft, 96);
+    const mr = cssUnitToPixels(t?.page?.marginRight, 96);
+
+    return {
+      paperWidth: `${paperWidthPx}px`,
+      paperHeight: `${paperHeightPx}px`,
+      paperBackground: paperColor,
+      canvasBackground: paperIsDark ? '#111827' : '#d1d5db',
+      marginTop: `${mt}px`,
+      marginRight: `${mr}px`,
+      marginBottom: `${mb}px`,
+      marginLeft: `${ml}px`,
+      canvasPadding: standaloneFullPageHost ? '44px 24px 56px' : '28px',
+      shadow: paperIsDark
+        ? '0 12px 36px rgba(0, 0, 0, 0.35)'
+        : '0 12px 36px rgba(15, 23, 42, 0.14)',
+    };
+  };
+
+  const initialThemeName = resolveThemeName(config.appearance?.theme, isDark);
+  const initialEffectiveThemeName = documentStylePreviewEnabled(initialDocumentTemplate)
+    ? resolveNeutralThemeName(initialDocumentTemplate, initialThemeName)
+    : initialThemeName;
+
+  // Apply widget/theme variables before the editor view mounts.
+  const initialTheme = applyThemeToHost(initialEffectiveThemeName);
 
   // Generate CodeMirror theme extension from our theme spec
-  const initialTheme = getTheme(initialThemeName);
   const initialCMTheme = initialTheme ? createCodemirrorTheme(initialTheme) : [];
 
   // Prepare awareness system (created after view exists)
@@ -1625,20 +1872,57 @@ function create(target, options = {}) {
     parent: element
   });
 
-  // Watch for theme changes (system preference changes)
-  // Only auto-switch theme if no explicit theme is configured
-  let currentWidgetTheme = initialThemeName;
-  const unwatchTheme = watchTheme({
-    editorElement: view.dom,
-    currentTheme: currentWidgetTheme,
-    onThemeChange: (newTheme) => {
-      // Only auto-change if user hasn't set an explicit theme
-      if (!config.appearance?.theme) {
-        currentWidgetTheme = newTheme;
-        applyTheme(newTheme);
-      }
-    },
-  });
+  // Scroll-fade: toggle .mrmd-scrolling class on scroll containers.
+  // The CSS transitions handle fade-in (fast) and fade-out (slow).
+  const scrollFadeTimers = new WeakMap();
+  const scrollFadeDelay = 1200;
+
+  const handleScrollFade = (e) => {
+    const el = e.target;
+    if (!(el instanceof HTMLElement)) return;
+    if (!el.closest('.mrmd-root')) return;
+
+    const isScrollContainer = el.classList.contains('cm-scroller')
+      || el.classList.contains('cm-scroll-output-body')
+      || el.classList.contains('cm-json-tree')
+      || el.classList.contains('cm-output-content');
+    if (!isScrollContainer) return;
+
+    el.classList.add('mrmd-scrolling');
+
+    const prev = scrollFadeTimers.get(el);
+    if (prev) clearTimeout(prev);
+    scrollFadeTimers.set(el, setTimeout(() => {
+      el.classList.remove('mrmd-scrolling');
+      scrollFadeTimers.delete(el);
+    }, scrollFadeDelay));
+  };
+
+  element.addEventListener('scroll', handleScrollFade, { capture: true, passive: true });
+
+  // Follow system color-scheme changes when the editor is in auto-theme mode.
+  const unwatchTheme = (() => {
+    if (typeof window === 'undefined' || !window.matchMedia) {
+      return () => {};
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleMediaChange = () => {
+      const hasExplicitTheme = !!(config.appearance?.theme && getTheme(config.appearance.theme));
+      if (hasExplicitTheme || config.appearance?.dark !== null) return;
+      applySelectedTheme(resolveThemeName(null, mediaQuery.matches));
+    };
+
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleMediaChange);
+      return () => mediaQuery.removeEventListener('change', handleMediaChange);
+    }
+    if (mediaQuery.addListener) {
+      mediaQuery.addListener(handleMediaChange);
+      return () => mediaQuery.removeListener(handleMediaChange);
+    }
+    return () => {};
+  })();
 
   // Initialize awareness system after view exists
   if (awarenessConfig) {
@@ -2085,6 +2369,17 @@ function create(target, options = {}) {
     },
 
     /**
+     * Get the currently selected theme name.
+     * This is the user's theme choice, not necessarily the effective
+     * neutral theme used while document-style preview owns the document.
+     *
+     * @returns {string}
+     */
+    getTheme() {
+      return this._selectedThemeName || initialThemeName;
+    },
+
+    /**
      * Apply a semantic document template to the editor content surface.
      * This is separate from the app/editor chrome theme.
      *
@@ -2095,16 +2390,87 @@ function create(target, options = {}) {
       const next = normalizeDocumentTemplate(template || defaultDocumentTemplate);
       this._documentTemplate = cloneDocumentTemplate(next);
       this._documentTemplateName = next.name || 'Untitled Template';
-      view.dispatch({
-        effects: documentTemplateCompartment.reconfigure(
-          createDocumentTemplateExtension(next)
-        ),
-      });
+      syncDocumentTemplatePreview();
       return this.getDocumentTemplate();
+    },
+
+    /**
+     * Enable or disable document-style preview ownership.
+     * When enabled, the document template owns the content surface and the
+     * editor palette falls back to a neutral theme underneath.
+     *
+     * @param {boolean} enabled
+     * @returns {boolean}
+     */
+    setDocumentStylePreview(enabled) {
+      if (!this._documentTemplate || typeof this._documentTemplate !== 'object') {
+        this._documentTemplate = cloneDocumentTemplate(initialDocumentTemplate);
+      }
+      this._documentTemplate.editor = {
+        ...(this._documentTemplate.editor || {}),
+        applyDocumentStyles: !!enabled,
+      };
+      syncDocumentTemplatePreview();
+      return this.getDocumentStylePreview();
+    },
+
+    getDocumentStylePreview() {
+      return documentStylePreviewEnabled(this._documentTemplate || initialDocumentTemplate);
     },
 
     getDocumentTemplate() {
       return cloneDocumentTemplate(this._documentTemplate || initialDocumentTemplate);
+    },
+
+    /**
+     * Set how the document surface is presented.
+     * 'flow' = continuous editor surface
+     * 'page' = centered paper-on-canvas presentation
+     *
+     * @param {'flow'|'page'} mode
+     * @returns {'flow'|'page'}
+     */
+    setDocumentPresentationMode(mode) {
+      this._documentPresentationMode = mode === 'page' ? 'page' : 'flow';
+      applyDocumentPresentationMode();
+      return this._documentPresentationMode;
+    },
+
+    getDocumentPresentationMode() {
+      return this._documentPresentationMode || 'flow';
+    },
+
+    /**
+     * Convenience alias for page-style presentation.
+     * @param {boolean} enabled
+     * @returns {boolean}
+     */
+    setPageView(enabled) {
+      return this.setDocumentPresentationMode(enabled ? 'page' : 'flow') === 'page';
+    },
+
+    getPageView() {
+      return this.getDocumentPresentationMode() === 'page';
+    },
+
+    /**
+     * Set the scroll mode.
+     * 'editor' = CodeMirror owns scroll (default, virtualized, good for large docs)
+     * 'page'   = browser page scroll (native feel, no inner scrollbar, better for standalone)
+     *
+     * @param {'editor'|'page'} mode
+     * @returns {'editor'|'page'}
+     */
+    setScrollMode(mode) {
+      const newMode = mode === 'page' ? 'page' : 'editor';
+      if (newMode === this._scrollMode) return newMode;
+      this._scrollMode = newMode;
+      applyScrollMode(newMode);
+      return newMode;
+    },
+
+    getScrollMode() {
+      return this._scrollMode || 'editor';
     },
 
     getDocumentTemplateName() {
@@ -2113,6 +2479,37 @@ function create(target, options = {}) {
 
     getDocumentTemplatePresets() {
       return documentTemplatePresets.map(cloneDocumentTemplate);
+    },
+
+    /**
+     * Get available document template preset names.
+     * @returns {string[]}
+     */
+    getDocumentTemplatePresetNames() {
+      return documentTemplatePresets.map((template) => template.name);
+    },
+
+    /**
+     * Get a document template preset by name.
+     * @param {string} name
+     * @returns {object|null}
+     */
+    getDocumentTemplatePreset(name) {
+      const preset = findDocumentTemplatePreset(name);
+      return preset ? cloneDocumentTemplate(preset) : null;
+    },
+
+    /**
+     * Apply a document template preset by name.
+     * @param {string} name
+     * @returns {object}
+     */
+    setDocumentTemplatePreset(name) {
+      const preset = findDocumentTemplatePreset(name);
+      if (!preset) {
+        throw new Error(`Unknown document template preset: ${name}`);
+      }
+      return this.setDocumentTemplate(preset);
     },
 
     compileDocumentTemplate(template = null) {
@@ -2208,6 +2605,16 @@ function create(target, options = {}) {
     _wysiwygMode: false,
     /** @private */
     _showInvisibles: false,
+    /** @private */
+    _scrollMode: options.scrollMode === 'editor' ? 'editor'
+      : options.scrollMode === 'page' ? 'page'
+      : standaloneFullPageHost ? 'page' : 'editor',
+    /** @private */
+    _documentPresentationMode: initialDocumentPresentationMode,
+    /** @private */
+    _selectedThemeName: initialThemeName,
+    /** @private */
+    _effectiveThemeName: initialEffectiveThemeName,
     /** @private */
     _documentTemplate: cloneDocumentTemplate(initialDocumentTemplate),
     /** @private */
@@ -3197,8 +3604,31 @@ function create(target, options = {}) {
         }
         this.provider = null;
       }
-      // Clean up theme watcher
+      // Clean up scroll-fade listener and theme watcher
+      element.removeEventListener('scroll', handleScrollFade, { capture: true, passive: true });
       unwatchTheme();
+      if (standaloneFullPageHost && typeof document !== 'undefined') {
+        const standaloneTheme = getTheme(this._effectiveThemeName || initialEffectiveThemeName);
+        if (standaloneTheme) {
+          for (const key of Object.keys(standaloneTheme)) {
+            if (key.startsWith('--')) {
+              document.documentElement.style.removeProperty(key);
+            }
+          }
+        }
+        document.documentElement.style.removeProperty('background');
+
+        document.body.style.removeProperty('background');
+        document.body.style.removeProperty('color');
+        document.body.style.removeProperty('fontFamily');
+        document.body.style.removeProperty('colorScheme');
+
+        document.body.removeAttribute('data-theme');
+        document.body.classList.remove('mrmd-theme-dark', 'mrmd-theme-light');
+      }
+      if (typeof document !== 'undefined') {
+        document.getElementById('mrmd-standalone-scrollbars')?.remove();
+      }
       element.removeEventListener('mrmd:frontmatter-title-commit', handleFrontmatterTitleCommit);
       // Clean up undo manager
       undoManager.destroy();
@@ -3237,6 +3667,50 @@ function create(target, options = {}) {
       toggleDevPanel(view);
     },
   };
+
+  // Scroll mode state + helper (must be before first call)
+  let savedElementOverflow = null;
+  let savedElementHeight = null;
+  let savedBodyOverflow = null;
+  let savedBodyHeight = null;
+
+  function applyScrollMode(mode) {
+    const scroller = view.scrollDOM;
+    const editorDom = view.dom;
+    if (mode === 'page') {
+      if (savedElementOverflow === null) savedElementOverflow = element.style.overflow || '';
+      if (savedElementHeight === null) savedElementHeight = element.style.height || '';
+      if (standaloneFullPageHost && typeof document !== 'undefined') {
+        if (savedBodyOverflow === null) savedBodyOverflow = document.body.style.overflow || '';
+        if (savedBodyHeight === null) savedBodyHeight = document.body.style.height || '';
+        document.body.style.overflow = 'visible';
+        document.body.style.height = 'auto';
+      }
+      element.style.overflow = 'visible';
+      element.style.height = 'auto';
+      editorDom.style.height = 'auto';
+      scroller.style.overflow = 'visible';
+      requestAnimationFrame(() => view.dispatch({}));
+    } else {
+      if (standaloneFullPageHost && typeof document !== 'undefined') {
+        document.body.style.overflow = savedBodyOverflow || '';
+        document.body.style.height = savedBodyHeight || '';
+      }
+      element.style.overflow = savedElementOverflow || '';
+      element.style.height = savedElementHeight || '';
+      editorDom.style.height = '100%';
+      scroller.style.overflow = 'auto';
+      savedElementOverflow = null;
+      savedElementHeight = null;
+      savedBodyOverflow = null;
+      savedBodyHeight = null;
+      requestAnimationFrame(() => view.dispatch({}));
+    }
+  }
+
+  // Apply presentation framing and scroll mode now that the API state exists.
+  applyDocumentPresentationMode();
+  applyScrollMode(api._scrollMode);
 
   // Create execution manager
   api.execution = createExecutionManager(api, registry);
@@ -3420,6 +3894,124 @@ function create(target, options = {}) {
     api.cellControls = cellControls;
   }
 
+  function resolveCurrentThemeName(themeName) {
+    const requestedTheme = arguments.length > 0
+      ? themeName
+      : (api?._selectedThemeName ?? config.appearance?.theme ?? initialThemeName);
+    const resolvedDark = config.appearance?.dark === null
+      ? getSystemDarkMode()
+      : config.appearance?.dark;
+    return resolveThemeName(requestedTheme, resolvedDark);
+  }
+
+  function applyDocumentPresentationMode() {
+    if (!api) return;
+
+    const mode = api._documentPresentationMode || 'flow';
+    const template = api._documentTemplate || initialDocumentTemplate;
+    const effectiveThemeName = api._effectiveThemeName || initialEffectiveThemeName;
+    const metrics = getPresentationMetrics(template, effectiveThemeName);
+    const scroller = view.scrollDOM;
+
+    element.classList.toggle('mrmd-presentation-page', mode === 'page');
+    element.classList.toggle('mrmd-presentation-flow', mode !== 'page');
+
+    if (mode === 'page') {
+      element.style.maxWidth = 'none';
+      element.style.width = '100%';
+      element.style.margin = '0';
+      element.style.padding = metrics.canvasPadding;
+      element.style.boxSizing = 'border-box';
+      element.style.backgroundColor = metrics.canvasBackground;
+
+      if (standaloneFullPageHost && typeof document !== 'undefined') {
+        document.documentElement.style.background = metrics.canvasBackground;
+        document.body.style.background = metrics.canvasBackground;
+      }
+
+      view.dom.style.width = '100%';
+      view.dom.style.maxWidth = metrics.paperWidth;
+      view.dom.style.margin = '0 auto';
+      view.dom.style.backgroundColor = metrics.paperBackground;
+      view.dom.style.boxShadow = metrics.shadow;
+      view.dom.style.minHeight = metrics.paperHeight;
+
+      if (scroller) {
+        scroller.style.backgroundColor = metrics.paperBackground;
+        scroller.style.minHeight = metrics.paperHeight;
+        scroller.style.paddingTop = metrics.marginTop;
+        scroller.style.paddingRight = `calc(${metrics.marginRight} + 22px)`;
+        scroller.style.paddingBottom = metrics.marginBottom;
+        scroller.style.paddingLeft = `calc(${metrics.marginLeft} + 10px)`;
+      }
+    } else {
+      const flowBackground = documentStylePreviewEnabled(template) && template?.page?.background
+        ? template.page.background
+        : 'var(--editor-background, #ffffff)';
+
+      element.style.removeProperty('max-width');
+      element.style.removeProperty('width');
+      element.style.removeProperty('margin');
+      element.style.removeProperty('padding');
+      element.style.removeProperty('box-sizing');
+      element.style.backgroundColor = flowBackground;
+
+      if (standaloneFullPageHost && typeof document !== 'undefined') {
+        document.documentElement.style.background = flowBackground;
+        document.body.style.background = flowBackground;
+      }
+
+      view.dom.style.removeProperty('width');
+      view.dom.style.removeProperty('max-width');
+      view.dom.style.removeProperty('margin');
+      view.dom.style.removeProperty('background-color');
+      view.dom.style.removeProperty('box-shadow');
+      view.dom.style.removeProperty('min-height');
+
+      if (scroller) {
+        scroller.style.removeProperty('background-color');
+        scroller.style.removeProperty('min-height');
+        scroller.style.removeProperty('padding-top');
+        scroller.style.removeProperty('padding-right');
+        scroller.style.removeProperty('padding-bottom');
+        scroller.style.removeProperty('padding-left');
+      }
+    }
+  }
+
+  function applySelectedTheme(themeName = null) {
+    const selectedThemeName = resolveCurrentThemeName(themeName);
+    const documentTemplate = api?._documentTemplate || initialDocumentTemplate;
+    const effectiveThemeName = documentStylePreviewEnabled(documentTemplate)
+      ? resolveNeutralThemeName(documentTemplate, selectedThemeName)
+      : selectedThemeName;
+
+    const theme = applyThemeToHost(effectiveThemeName);
+    if (theme) {
+      view.dispatch({
+        effects: themeCompartment.reconfigure(createCodemirrorTheme(theme))
+      });
+    }
+
+    if (api) {
+      api._selectedThemeName = selectedThemeName;
+      api._effectiveThemeName = effectiveThemeName;
+      applyDocumentPresentationMode();
+    }
+
+    return effectiveThemeName;
+  }
+
+  function syncDocumentTemplatePreview() {
+    const template = cloneDocumentTemplate(api?._documentTemplate || initialDocumentTemplate);
+    view.dispatch({
+      effects: documentTemplateCompartment.reconfigure(
+        createDocumentTemplateExtension(template)
+      ),
+    });
+    applySelectedTheme();
+  }
+
   // =========================================================================
   // WIRE CONFIG CHANGE HANDLERS
   // Config changes trigger editor reconfiguration
@@ -3434,6 +4026,7 @@ function create(target, options = {}) {
     awarenessSystem,
     cellControls,
     config: reactiveConfig,  // Pass config for reading current values in handlers
+    applyThemeByName: applySelectedTheme,
     createRuntime: (rtConfig) => {
       // Create runtime from config
       if (rtConfig.type === 'builtin') {

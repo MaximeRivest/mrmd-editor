@@ -52,7 +52,7 @@
  * @typedef {Object} AppearanceConfig
  * @property {boolean | null} [dark] - Dark mode: true=dark, false=light, null=system
  * @property {string | null} [theme] - Theme name: 'midnight', 'daylight', 'plain-light', or custom.
- *   If null, defaults to 'plain-light'.
+ *   If null, auto-selects `plain-dark` / `plain-light` from dark-mode state.
  * @property {boolean} [readonly] - View-only mode
  * @property {string} [placeholder] - Placeholder text when empty
  * @property {boolean} [spellcheck] - Enable browser-native spellcheck on prose
@@ -63,7 +63,7 @@
 /** @type {AppearanceConfig} */
 export const DEFAULT_APPEARANCE = {
   dark: null,
-  theme: null,  // Defaults to plain-light
+  theme: null,  // Auto-selects plain-dark / plain-light
   readonly: false,
   placeholder: 'Start typing...',
   spellcheck: true,

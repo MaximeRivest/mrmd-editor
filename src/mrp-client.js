@@ -593,6 +593,29 @@ export class MRPClient {
     return res.json();
   }
 
+  /**
+   * Browse execution input history
+   *
+   * @param {import('./mrp-types.js').HistoryRequest} [request]
+   * @returns {Promise<import('./mrp-types.js').HistoryResult>}
+   */
+  async getHistory(request = {}) {
+    const caps = await this.getCapabilities();
+
+    if (!caps.features.history) {
+      return { entries: [], hasMore: false };
+    }
+
+    const res = await fetch(`${this.#endpoint}/history`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+
+    if (!res.ok) throw new Error(`History failed: ${res.status}`);
+    return res.json();
+  }
+
   // ===========================================================================
   // Utilities
   // ===========================================================================

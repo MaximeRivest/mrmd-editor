@@ -34,6 +34,7 @@
  * @property {boolean} reset - Clear namespace
  * @property {boolean} isComplete - Check if code is complete statement
  * @property {boolean} format - Format/prettify code
+ * @property {boolean} history - Browse execution input history
  * @property {boolean} assets - Saves files to disk
  */
 
@@ -400,6 +401,28 @@
  * @property {boolean} changed - Whether code was modified
  */
 
+/**
+ * History request
+ * @typedef {Object} HistoryRequest
+ * @property {number} [n] - Max entries to return
+ * @property {string} [pattern] - Glob pattern filter
+ * @property {number} [before] - Return entries before this historyIndex
+ */
+
+/**
+ * History entry
+ * @typedef {Object} HistoryEntry
+ * @property {number} historyIndex - Monotonic runtime history index
+ * @property {string} code - Executed input/code
+ */
+
+/**
+ * History result
+ * @typedef {Object} HistoryResult
+ * @property {HistoryEntry[]} entries - History entries in chronological order
+ * @property {boolean} hasMore - Whether older entries exist
+ */
+
 // #endregion CODE_ANALYSIS
 
 // #region RUNTIME_INTERFACE
@@ -423,6 +446,7 @@
  * @property {function(string, string=): Promise<VariableDetail>} [getVariableDetail] - Drill into variable
  * @property {function(string=): Promise<void>} [interrupt] - Cancel execution
  * @property {function(string=): Promise<void>} [reset] - Clear namespace
+ * @property {function(HistoryRequest=): Promise<HistoryResult>} [getHistory] - Browse execution history
  * @property {function(string): Promise<IsCompleteResult>} [isComplete] - Check if code is complete
  * @property {function(string): Promise<FormatResult>} [format] - Format code
  */

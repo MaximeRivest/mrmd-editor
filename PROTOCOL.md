@@ -88,9 +88,6 @@ Returns what this runtime supports. Clients should call this once on connection 
 
   "lspFallback": "ws://localhost:5007",
 
-  "defaultSession": "default",
-  "maxSessions": 10,
-
   "environment": {
     "cwd": "/home/user/project",
     "executable": "/usr/bin/python3",
@@ -108,12 +105,12 @@ Returns what this runtime supports. Clients should call this once on connection 
 | `execute` | Run code and return result (always true) |
 | `executeStream` | Stream output via SSE |
 | `interrupt` | Cancel running execution |
-| `complete` | Tab completion from live session |
+| `complete` | Tab completion from live runtime state |
 | `inspect` | Get symbol info (signature, docs, source) |
 | `hover` | Quick value/type preview |
 | `variables` | List variables in namespace |
 | `variableExpand` | Drill into objects (children, attributes) |
-| `reset` | Clear namespace without destroying session |
+| `reset` | Clear namespace without restarting the runtime process |
 | `isComplete` | Check if code is a complete statement |
 | `format` | Format/prettify code |
 | `assets` | Saves files (figures, HTML) to disk |
@@ -331,7 +328,6 @@ Send user input to a waiting execution.
 
 ```json
 {
-  "session": "default",
   "exec_id": "exec-123",
   "text": "Alice\n"
 }
@@ -364,7 +360,6 @@ Cancel a pending input request. Called when the user dismisses the input field w
 
 ```json
 {
-  "session": "default",
   "exec_id": "exec-123"
 }
 ```
@@ -431,9 +426,7 @@ Cancel running execution.
 **Request:**
 
 ```json
-{
-  "session": "default"
-}
+{}
 ```
 
 **Response:**
@@ -450,7 +443,7 @@ Cancel running execution.
 
 ### `POST /complete`
 
-Get completions at cursor position. Uses live session state, so completions know actual variable values.
+Get completions at cursor position. Uses live runtime state, so completions know actual variable values.
 
 **Request:**
 
@@ -458,7 +451,6 @@ Get completions at cursor position. Uses live session state, so completions know
 {
   "code": "df.hea",
   "cursor": 6,
-  "session": "default",
   "triggerKind": "invoked",
   "triggerCharacter": null
 }
@@ -468,7 +460,6 @@ Get completions at cursor position. Uses live session state, so completions know
 |-------|------|---------|-------------|
 | `code` | string | required | Code in cell |
 | `cursor` | number | required | Cursor position (character offset) |
-| `session` | string | `"default"` | Session ID |
 | `triggerKind` | string | `"invoked"` | `"invoked"`, `"character"`, `"incomplete"` |
 | `triggerCharacter` | string | | Character that triggered (`.`, `[`, etc.) |
 
@@ -508,7 +499,7 @@ Get completions at cursor position. Uses live session state, so completions know
 
 | Source | Description |
 |--------|-------------|
-| `runtime` | From live session (knows actual values) |
+| `runtime` | From live runtime state (knows actual values) |
 | `lsp` | From fallback language server |
 | `static` | From static analysis |
 
@@ -518,7 +509,7 @@ Get completions at cursor position. Uses live session state, so completions know
 
 ### `POST /inspect`
 
-Get detailed information about a symbol.
+Get detailed information about a symbol in the current runtime namespace.
 
 **Request:**
 
@@ -526,7 +517,6 @@ Get detailed information about a symbol.
 {
   "code": "df.head",
   "cursor": 7,
-  "session": "default",
   "detail": 1
 }
 ```
@@ -535,7 +525,6 @@ Get detailed information about a symbol.
 |-------|------|---------|-------------|
 | `code` | string | required | Code in cell |
 | `cursor` | number | required | Cursor position |
-| `session` | string | `"default"` | Session ID |
 | `detail` | number | `0` | Detail level: 0=signature, 1=+docs, 2=+source |
 
 **Response:**
@@ -563,15 +552,14 @@ Get detailed information about a symbol.
 
 ### `POST /hover`
 
-Quick tooltip info (lightweight inspect).
+Quick tooltip info (lightweight inspect) against the current runtime namespace.
 
 **Request:**
 
 ```json
 {
   "code": "df",
-  "cursor": 2,
-  "session": "default"
+  "cursor": 2
 }
 ```
 
@@ -593,13 +581,12 @@ Quick tooltip info (lightweight inspect).
 
 ### `POST /variables`
 
-List all variables in session namespace.
+List all variables in the runtime namespace.
 
 **Request:**
 
 ```json
 {
-  "session": "default",
   "filter": {
     "types": ["DataFrame", "ndarray"],
     "namePattern": "^[^_]",
@@ -656,7 +643,6 @@ Get detailed info about a variable, including children for expandable objects.
 
 ```json
 {
-  "session": "default",
   "path": ["columns"],
   "maxChildren": 100,
   "maxValueLength": 1000
@@ -665,7 +651,6 @@ Get detailed info about a variable, including children for expandable objects.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `session` | string | `"default"` | Session ID |
 | `path` | string[] | `[]` | Drill-down path: `["key", "0", "attr"]` |
 | `maxChildren` | number | `100` | Max children to return |
 | `maxValueLength` | number | `1000` | Max chars for value repr |
@@ -707,8 +692,7 @@ Check if code is a complete statement (for multiline input).
 
 ```json
 {
-  "code": "def foo():\n    pass",
-  "session": "default"
+  "code": "def foo():\n    pass"
 }
 ```
 
@@ -738,8 +722,7 @@ Format code (if supported).
 
 ```json
 {
-  "code": "x=1+2",
-  "session": "default"
+  "code": "x=1+2"
 }
 ```
 
@@ -895,7 +878,7 @@ Style codes: 1 (bold), 2 (dim), 3 (italic), 4 (underline), 7 (inverse), 9 (strik
 - Limited introspection (it's a shell)
 - Completions: `compgen -A function -abck`
 - Variables: parse `set` and `env` output
-- No real "session" state beyond environment variables
+- No real multi-namespace state beyond environment variables
 
 ---
 
@@ -1110,3 +1093,41 @@ adapter.hover(pos);            // result broadcast via awareness
 The protocol version is in the URL path: `/mrp/v1/`.
 
 Breaking changes require a version bump. Additive changes (new optional fields, new endpoints) are backwards compatible.
+ndpoints) are backwards compatible.
+compatible.
+compatible.
+compatible.
+le.
+compatible.
+compatible.
+ble.
+patible.
+le.
+compatible.
+compatible.
+ble.
+
+le.
+compatible.
+compatible.
+ble.
+patible.
+compatible.
+ble.
+e.
+ble.
+
+le.
+compatible.
+compatible.
+ble.
+patible.
+compatible.
+ble.
+e.
+ble.
+
+le.
+compatible.
+compatible.
+ble.

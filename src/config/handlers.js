@@ -25,6 +25,7 @@ import { createCodemirrorTheme } from '../widgets/codemirror-theme.js';
  * @property {Object} [awarenessSystem] - AwarenessSystem
  * @property {Object} [cellControls] - CellControlsSystem
  * @property {Object} [provider] - WebsocketProvider
+ * @property {(themeName: string) => void} [applyThemeByName] - Editor-owned theme applier
  * @property {Function} createRuntime - Factory to create runtime from config
  * @property {Object} [config] - The reactive config object (for reading current values)
  */
@@ -112,7 +113,7 @@ function resolveThemeName(theme, isDark) {
   if (theme && getTheme(theme)) {
     return theme;
   }
-  return 'plain-light';
+  return isDark ? 'plain-dark' : 'plain-light';
 }
 
 /**
@@ -121,19 +122,24 @@ function resolveThemeName(theme, isDark) {
  * @param {string} themeName
  */
 function applyUnifiedTheme(internals, themeName) {
-  const { view, themeCompartment } = internals;
+  const { view, themeCompartment, applyThemeByName } = internals;
 
-  // Get theme object
+  // Preferred path: let the editor decide the effective theme so it can
+  // honor standalone vs hosted ownership and document-style preview.
+  if (typeof applyThemeByName === 'function') {
+    applyThemeByName(themeName);
+    return;
+  }
+
+  // Fallback path for older callers.
   const theme = getTheme(themeName);
   if (!theme) {
     console.warn(`Theme "${themeName}" not found`);
     return;
   }
 
-  // Apply widget theme (CSS variables)
   applyTheme(themeName);
 
-  // Apply CodeMirror theme
   const cmTheme = createCodemirrorTheme(theme);
   view.dispatch({
     effects: themeCompartment.reconfigure(cmTheme)
@@ -153,7 +159,7 @@ function handleDarkMode(internals, event) {
   const isDark = resolveIsDark(dark);
 
   // Only update theme if no explicit theme is set (auto mode)
-  const explicitTheme = config?.appearance?.theme;
+  const explicitTheme = config?.appearance?.theme && getTheme(config.appearance.theme);
   if (!explicitTheme) {
     const themeName = resolveThemeName(null, isDark);
     applyUnifiedTheme(internals, themeName);
