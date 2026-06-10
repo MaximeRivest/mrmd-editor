@@ -15,6 +15,8 @@
     "dev": "rollup -c --watch",
     "build": "rollup -c",
     "serve": "npx serve .",
+    "test": "node test/math-extraction.test.js && node --test test/frontmatter-template.test.js test/tables-controller.test.js test/tables-import-command.test.js test/tables-shell.test.js test/tables-state.test.js",
+    "test:render": "node test/render-smoke.test.js",
     "test:node": "node -e \"const m = require('./dist/mrmd.cjs'); console.log('Loaded:', m.version, Object.keys(m))\"",
     "prepublishOnly": "npm run build"
   },

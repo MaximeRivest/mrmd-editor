@@ -108,6 +108,74 @@ export function clearHeightCache() {
   widgetHeightCache.clear();
 }
 
+// Heights measured before webfonts finish loading are wrong (fallback font
+// metrics). Drop them once fonts are ready so the next renders re-measure.
+if (typeof document !== 'undefined' && document.fonts?.ready) {
+  document.fonts.ready.then(() => clearHeightCache()).catch(() => {});
+}
+
+// =============================================================================
+// Stable height reservation while editing inside a block region
+// =============================================================================
+//
+// When the cursor enters a rendered block (table, math, frontmatter, ...) the
+// widget is swapped for raw source padded to the widget's cached height. The
+// cache is keyed by content hash — but the user is *editing*, so after the
+// first keystroke the hash no longer matches and the padding used to vanish,
+// making everything below the block jump up and later back down. Fix: when a
+// region is revealed for editing, reserve its last known rendered height under
+// a stable region key and keep using that reservation until the cursor leaves.
+
+let activeEditReservations = new Map();
+let pendingEditReservations = null;
+
+function beginEditReservationPass() {
+  pendingEditReservations = new Map();
+}
+
+function endEditReservationPass() {
+  if (pendingEditReservations) activeEditReservations = pendingEditReservations;
+  pendingEditReservations = null;
+}
+
+/**
+ * Compute the spacer padding for a block region revealed for editing.
+ * Falls back to the reservation made when the region was first revealed if
+ * the live content hash no longer matches the height cache.
+ *
+ * @param {string} regionKey - stable identity, e.g. `table:42`
+ * @param {string} contentHash - live content hash for the region
+ * @param {number} lineCount - current number of raw source lines
+ * @returns {number} padding-bottom in px (0 when nothing should be reserved)
+ */
+function editingSpacerPadding(regionKey, contentHash, lineCount) {
+  let reserved = getCachedHeight(contentHash);
+  if (!reserved) reserved = activeEditReservations.get(regionKey);
+  if (!reserved) return 0;
+
+  if (pendingEditReservations) pendingEditReservations.set(regionKey, reserved);
+
+  const padding = reserved - lineCount * getLineHeight();
+  return padding > 0 ? padding : 0;
+}
+
+/**
+ * Build the standard spacer line decoration for a revealed block region.
+ *
+ * @param {import('@codemirror/state').Text} doc
+ * @param {number} endLineNumber - 1-based last line of the region
+ * @param {number} padding - px
+ */
+function editingSpacerDecoration(doc, endLineNumber, padding) {
+  const lastLine = doc.line(endLineNumber);
+  return Decoration.line({
+    attributes: {
+      class: 'cm-block-spacer-line',
+      style: `padding-bottom: ${padding}px`,
+    },
+  }).range(lastLine.from);
+}
+
 /**
  * Simple hash function for content-based caching
  */
@@ -185,10 +253,19 @@ class TableWidgetWithHeightCache extends TableWidget {
   constructor(table, tableId, contentHash) {
     super(table, tableId);
     this.contentHash = contentHash;
+    this.rowCount = (table?.rows?.length ?? 0) + 1; // + header row
   }
 
   eq(other) {
     return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  // Tell CodeMirror's height map how tall this widget really is *before* it
+  // renders. Without this, off-screen widgets are assumed to be ~one line
+  // tall and the page jumps when the measured height corrects the estimate.
+  get estimatedHeight() {
+    return getCachedHeight(this.contentHash) ??
+      Math.round((this.rowCount + 1) * getLineHeight());
   }
 
   toDOM() {
@@ -217,10 +294,16 @@ class LinkedTableWidgetWithHeightCache extends LinkedTableWidget {
   constructor(block, parsedTable, contentHash, options = {}) {
     super(block, parsedTable, contentHash, options);
     this.contentHash = contentHash;
+    this.rowCount = (parsedTable?.rows?.length ?? 0) + 1;
   }
 
   eq(other) {
     return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  get estimatedHeight() {
+    return getCachedHeight(this.contentHash) ??
+      Math.round((this.rowCount + 2) * getLineHeight());
   }
 
   toDOM(view) {
@@ -250,6 +333,11 @@ class DisplayMathWidgetWithHeightCache extends DisplayMathWidget {
 
   eq(other) {
     return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  get estimatedHeight() {
+    return getCachedHeight(this.contentHash) ??
+      Math.round(getLineHeight() * 3);
   }
 
   toDOM() {
@@ -509,6 +597,7 @@ function buildBlockDecorations(state) {
   const cursorPos = state.selection.main.head;
   const cursorLine = doc.lineAt(cursorPos).number;
   const decorations = [];
+  beginEditReservationPass();
 
   // Mode flags
   const isSourceMode = state.facet(sourceModeFacet);
@@ -543,24 +632,13 @@ function buildBlockDecorations(state) {
         );
       }
 
-      const cachedHeight = getCachedHeight(contentHash);
-      if (cachedHeight) {
-        const lineCount = block.endLine - block.startLine + 1;
-        const lineHeight = getLineHeight();
-        const rawHeight = lineCount * lineHeight;
-        const padding = cachedHeight - rawHeight;
-
-        if (padding > 0) {
-          const lastLine = doc.line(block.endLine);
-          decorations.push(
-            Decoration.line({
-              attributes: {
-                class: 'cm-block-spacer-line',
-                style: `padding-bottom: ${padding}px`
-              }
-            }).range(lastLine.from)
-          );
-        }
+      const padding = editingSpacerPadding(
+        `linked-table:${block.startLine}`,
+        contentHash,
+        block.endLine - block.startLine + 1,
+      );
+      if (padding > 0) {
+        decorations.push(editingSpacerDecoration(doc, block.endLine, padding));
       }
     }
   }
@@ -596,27 +674,13 @@ function buildBlockDecorations(state) {
       }
     } else {
       // Cursor inside: show raw markdown, but add spacer to prevent layout shift
-
-      const cachedHeight = getCachedHeight(contentHash);
-      if (cachedHeight) {
-        // Calculate raw content height using actual line height
-        const lineCount = range.endLine - range.startLine + 1;
-        const lineHeight = getLineHeight();
-        const rawHeight = lineCount * lineHeight;
-        const padding = cachedHeight - rawHeight;
-
-        if (padding > 0) {
-          // Use line decoration with padding-bottom (doesn't block navigation)
-          const lastLine = doc.line(range.endLine);
-          decorations.push(
-            Decoration.line({
-              attributes: {
-                class: 'cm-block-spacer-line',
-                style: `padding-bottom: ${padding}px`
-              }
-            }).range(lastLine.from)
-          );
-        }
+      const padding = editingSpacerPadding(
+        `table:${range.startLine}`,
+        contentHash,
+        range.endLine - range.startLine + 1,
+      );
+      if (padding > 0) {
+        decorations.push(editingSpacerDecoration(doc, range.endLine, padding));
       }
     }
   }
@@ -681,28 +745,18 @@ function buildBlockDecorations(state) {
       );
     } else {
       // Cursor inside: show raw YAML with spacer for stable height
-      const cachedHeight = getCachedHeight(contentHash);
-      if (cachedHeight) {
-        const lineCount = fmRange.endLine - fmRange.startLine + 1;
-        const lineHeight = getLineHeight();
-        const rawHeight = lineCount * lineHeight;
-        const padding = cachedHeight - rawHeight;
-
-        if (padding > 0) {
-          const lastLine = doc.line(fmRange.endLine);
-          decorations.push(
-            Decoration.line({
-              attributes: {
-                class: 'cm-block-spacer-line',
-                style: `padding-bottom: ${padding}px`
-              }
-            }).range(lastLine.from)
-          );
-        }
+      const padding = editingSpacerPadding(
+        `frontmatter:${fmRange.startLine}`,
+        contentHash,
+        fmRange.endLine - fmRange.startLine + 1,
+      );
+      if (padding > 0) {
+        decorations.push(editingSpacerDecoration(doc, fmRange.endLine, padding));
       }
     }
   }
 
+  endEditReservationPass();
   return Decoration.set(decorations, true);
 }
 
