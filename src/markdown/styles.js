@@ -1183,6 +1183,43 @@ export const markdownStyles = `
   display: inline;
 }
 
+.cm-details-widget {
+  display: block;
+  margin: 0.5em 0;
+  padding: 0.45em 0.65em;
+  border: 1px solid var(--widget-border);
+  border-radius: 6px;
+  background: var(--widget-surface);
+}
+
+.cm-details-summary {
+  cursor: pointer;
+  color: var(--widget-text-accent);
+  user-select: none;
+}
+
+.cm-details-content {
+  margin-top: 0.6em;
+}
+
+.cm-details-content p {
+  margin: 0.45em 0;
+}
+
+.cm-details-codeblock {
+  margin: 0.5em 0 0;
+  padding: 0.65em 0.8em;
+  overflow: auto;
+  white-space: pre;
+  font-family: var(--widget-font-mono);
+  font-size: 0.92em;
+  line-height: 1.45;
+  color: var(--md-code-color, var(--widget-text));
+  background: var(--md-code-background, var(--widget-surface-inset));
+  border: 1px solid var(--widget-border);
+  border-radius: 4px;
+}
+
 /* HTML syntax when editing (cursor on line) */
 .cm-html-syntax {
   color: var(--md-html-syntax-color, var(--md-marker-color));

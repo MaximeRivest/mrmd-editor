@@ -57,6 +57,7 @@ import {
 } from './widgets/math.js';
 import {
   extractHtmlElements,
+  extractDetailsBlocks,
   InlineHtmlWidget,
 } from './html-inline.js';
 import {
@@ -1076,6 +1077,13 @@ function buildDecorations(view) {
   // ==========================================================================
   // Inline HTML - process line by line
   // ==========================================================================
+  const detailsLines = new Set();
+  for (const block of extractDetailsBlocks(doc.toString())) {
+    const startLine = doc.lineAt(block.start).number;
+    const endLine = doc.lineAt(block.end).number;
+    for (let lineNo = startLine; lineNo <= endLine; lineNo++) detailsLines.add(lineNo);
+  }
+
   // Track which ranges are already covered by other decorations to avoid conflicts
   const coveredRanges = [];
   for (const dec of decorations) {
@@ -1093,6 +1101,9 @@ function buildDecorations(view) {
 
     // Skip lines inside code blocks (using syntax tree detection)
     if (codeBlockLines.has(i)) continue;
+
+    // Skip lines inside block HTML handled by block-decorations.js
+    if (detailsLines.has(i)) continue;
 
     const htmlElements = extractHtmlElements(line.text);
 

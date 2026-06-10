@@ -69,6 +69,10 @@ import {
   FrontmatterWidget,
 } from './widgets/frontmatter.js';
 import {
+  DetailsBlockWidget,
+  extractDetailsBlocks,
+} from './html-inline.js';
+import {
   LinkedTableWidget,
 } from '../tables/widgets/linked-table-widget.js';
 import {
@@ -325,6 +329,31 @@ class LinkedTableWidgetWithHeightCache extends LinkedTableWidget {
 /**
  * DisplayMathWidget wrapper that caches its rendered height for stable layout.
  */
+class DetailsBlockWidgetWithHeightCache extends DetailsBlockWidget {
+  constructor(summary, content, open, contentHash) {
+    super(summary, content, open);
+    this.contentHash = contentHash;
+  }
+
+  eq(other) {
+    return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  get estimatedHeight() {
+    return getCachedHeight(this.contentHash) ??
+      Math.round(getLineHeight() * 1.5);
+  }
+
+  toDOM() {
+    const dom = super.toDOM();
+    requestAnimationFrame(() => {
+      const height = dom.offsetHeight;
+      if (height > 0) cacheWidgetHeight(this.contentHash, height);
+    });
+    return dom;
+  }
+}
+
 class DisplayMathWidgetWithHeightCache extends DisplayMathWidget {
   constructor(latex, mathId, contentHash) {
     super(latex, mathId);
@@ -702,25 +731,46 @@ function buildBlockDecorations(state) {
       );
     } else {
       // Cursor inside: show raw LaTeX, but add spacer to prevent layout shift
-      const cachedHeight = getCachedHeight(contentHash);
-      if (cachedHeight) {
-        const lineCount = range.endLine - range.startLine + 1;
-        const lineHeight = getLineHeight();
-        const rawHeight = lineCount * lineHeight;
-        const padding = cachedHeight - rawHeight;
+      const padding = editingSpacerPadding(
+        `math:${range.startLine}`,
+        contentHash,
+        range.endLine - range.startLine + 1,
+      );
+      if (padding > 0) {
+        decorations.push(editingSpacerDecoration(doc, range.endLine, padding));
+      }
+    }
+  }
 
-        if (padding > 0) {
-          // Use line decoration with padding-bottom (doesn't block navigation)
-          const lastLine = doc.line(range.endLine);
-          decorations.push(
-            Decoration.line({
-              attributes: {
-                class: 'cm-block-spacer-line',
-                style: `padding-bottom: ${padding}px`
-              }
-            }).range(lastLine.from)
-          );
-        }
+  // Find and process raw HTML <details>/<summary> blocks.
+  // These can span multiple lines and contain fenced code, so they must live in
+  // this StateField rather than the line-oriented inline HTML ViewPlugin.
+  const detailsRanges = extractDetailsBlocks(doc.toString());
+  for (const range of detailsRanges) {
+    const startLine = doc.lineAt(range.start).number;
+    const endLine = doc.lineAt(range.end).number;
+    // Unlike tables/math, <details> is itself interactive. Clicking the
+    // summary moves CodeMirror's selection into the replaced source range; if
+    // we reveal raw source on cursor entry the disclosure immediately collapses
+    // into literal <details> text. Keep it rendered unless explicit source mode
+    // is enabled.
+    const cursorInDetails = isSourceMode;
+    const contentHash = 'details-' + hashContent(doc.sliceString(range.start, range.end));
+
+    if (!cursorInDetails) {
+      decorations.push(
+        Decoration.replace({
+          widget: new DetailsBlockWidgetWithHeightCache(range.summary, range.content, range.open, contentHash),
+        }).range(range.start, range.end)
+      );
+    } else {
+      const padding = editingSpacerPadding(
+        `details:${startLine}`,
+        contentHash,
+        endLine - startLine + 1,
+      );
+      if (padding > 0) {
+        decorations.push(editingSpacerDecoration(doc, endLine, padding));
       }
     }
   }

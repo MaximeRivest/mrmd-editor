@@ -134,6 +134,104 @@ export function extractHtmlElements(text) {
 /**
  * Widget that renders inline HTML content
  */
+export class DetailsBlockWidget extends WidgetType {
+  constructor(summary, content, open = false) {
+    super();
+    this.summary = summary;
+    this.content = content;
+    this.open = open;
+  }
+
+  eq(other) {
+    return this.summary === other.summary && this.content === other.content && this.open === other.open;
+  }
+
+  toDOM() {
+    const details = document.createElement('details');
+    details.className = 'cm-details-widget';
+    details.open = this.open;
+
+    const summary = document.createElement('summary');
+    summary.className = 'cm-details-summary';
+    summary.textContent = this.summary || 'Details';
+    details.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'cm-details-content';
+    renderDetailsMarkdown(body, this.content);
+    details.appendChild(body);
+
+    return details;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+const DETAILS_BLOCK_RE = /<details\b([^>]*)>([\s\S]*?)<\/details>/gi;
+const SUMMARY_RE = /<summary\b[^>]*>([\s\S]*?)<\/summary>/i;
+
+export function extractDetailsBlocks(text) {
+  const results = [];
+  DETAILS_BLOCK_RE.lastIndex = 0;
+  let match;
+  while ((match = DETAILS_BLOCK_RE.exec(text)) !== null) {
+    const attrs = match[1] || '';
+    const inner = match[2] || '';
+    const summaryMatch = inner.match(SUMMARY_RE);
+    const summary = stripHtml(summaryMatch?.[1] || 'Details').trim() || 'Details';
+    const content = summaryMatch ? inner.replace(SUMMARY_RE, '').trim() : inner.trim();
+    results.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      summary,
+      content,
+      open: /(?:^|\s)open(?:\s|=|$)/i.test(attrs),
+    });
+  }
+  return results;
+}
+
+function renderDetailsMarkdown(container, markdown) {
+  const text = String(markdown || '').trim();
+  if (!text) return;
+
+  const fenceRe = /```([\w-]*)\n([\s\S]*?)\n```/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = fenceRe.exec(text)) !== null) {
+    appendDetailsParagraphs(container, text.slice(lastIndex, match.index));
+
+    const pre = document.createElement('pre');
+    pre.className = 'cm-details-codeblock';
+    if (match[1]) pre.dataset.language = match[1];
+    const code = document.createElement('code');
+    code.textContent = match[2];
+    pre.appendChild(code);
+    container.appendChild(pre);
+
+    lastIndex = match.index + match[0].length;
+  }
+  appendDetailsParagraphs(container, text.slice(lastIndex));
+}
+
+function appendDetailsParagraphs(container, text) {
+  for (const part of String(text || '').split(/\n{2,}/)) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const p = document.createElement('p');
+    p.innerHTML = renderInlineMarkdownWithHtml(trimmed).replace(/\n/g, '<br>');
+    container.appendChild(p);
+  }
+}
+
+function stripHtml(text) {
+  const div = document.createElement('div');
+  div.innerHTML = String(text || '');
+  return div.textContent || div.innerText || '';
+}
+
 export class InlineHtmlWidget extends WidgetType {
   /**
    * @param {string} html - Raw HTML string to render
@@ -308,4 +406,6 @@ export default {
   renderInlineMarkdownWithHtml,
   createHtmlElement,
   InlineHtmlWidget,
+  DetailsBlockWidget,
+  extractDetailsBlocks,
 };
