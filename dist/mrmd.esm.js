@@ -54032,15 +54032,15 @@ function findCodeBlocks(content) {
     const lineStart = charOffset;
 
     if (!inBlock) {
-      // Look for opening fence: ```language [context]
-      // Examples: ```js, ```js sandbox, ```python myenv, ```html:artifact, ```css:myapp
+      // Look for opening fence: ```language [context] or Quarto/knitr ```{language, options}
+      // Examples: ```js, ```js sandbox, ```python myenv, ```{python}, ```{r, echo=FALSE}
       // Language can include colon for targets (html:name, css:name, js:name, term:session)
-      const match = line.match(/^(`{3,})([\w:.-]*)(?:\s+(\S+))?/);
+      const match = line.match(/^(`{3,})\s*(?:\{([\w:.-]+)(?:[,\s][^}]*)?\}|([\w:.-]*))(?:\s+(\S+))?/);
       if (match) {
         inBlock = true;
         blockStart = lineStart;
-        blockLanguage = match[2].toLowerCase();
-        blockContext = match[3] || null; // optional context name after language
+        blockLanguage = (match[2] || match[3] || '').toLowerCase();
+        blockContext = match[4] || null; // optional context name after language
         codeStart = lineStart + line.length + 1; // +1 for newline
         blockLine = i;
       }
@@ -55405,10 +55405,12 @@ function compileDocumentTemplateCSS(template, scope = '&') {
       ...(t.code?.inline?.background ? { backgroundColor: t.code.inline.background } : {}),
     },
     // --- Code blocks (source) ---
+    // Use box-shadow instead of background-color on .cm-line elements so
+    // CM6's selection layer (which paints below .cm-line) stays visible.
     [s('.cm-codeblock-line') + ', ' + s('.cm-codeblock-fence') + ', ' + s('.cm-wysiwyg-code-fence-line')]: {
       ...(t.code?.block?.fontFamily ? { fontFamily: t.code.block.fontFamily } : {}),
       ...(t.code?.block?.fontSize ? { fontSize: t.code.block.fontSize } : {}),
-      ...(t.code?.block?.background ? { backgroundColor: t.code.block.background } : {}),
+      ...(t.code?.block?.background ? { boxShadow: `inset 0 0 0 9999px ${t.code.block.background}` } : {}),
     },
     [s('.cm-wysiwyg-code-fence-widget') + ', ' + s('.cm-wysiwyg-code-header')]: {
       ...(t.code?.block?.background ? { backgroundColor: t.code.block.background } : {}),
@@ -55503,11 +55505,11 @@ function compileDocumentTemplateCSS(template, scope = '&') {
       },
     } : {}),
     ...(t.code?.block?.borderRadius ? {
-      [s('.cm-codeblock-fence:first-child, .cm-codeblock-line:first-child')]: {
+      [s('.cm-codeblock-fence-open') + ', ' + s('.cm-codeblock-fence:first-child, .cm-codeblock-line:first-child')]: {
         borderTopLeftRadius: t.code.block.borderRadius,
         borderTopRightRadius: t.code.block.borderRadius,
       },
-      [s('.cm-codeblock-fence:last-child, .cm-codeblock-line:last-child')]: {
+      [s('.cm-codeblock-fence-close') + ', ' + s('.cm-codeblock-fence:last-child, .cm-codeblock-line:last-child')]: {
         borderBottomLeftRadius: t.code.block.borderRadius,
         borderBottomRightRadius: t.code.block.borderRadius,
       },
@@ -55517,10 +55519,12 @@ function compileDocumentTemplateCSS(template, scope = '&') {
         borderLeft: `1px solid ${t.code.block.borderColor}`,
         borderRight: `1px solid ${t.code.block.borderColor}`,
       },
-      [s('.cm-codeblock-fence:first-of-type')]: {
+      [s('.cm-codeblock-fence-open')]: {
         borderTop: `1px solid ${t.code.block.borderColor}`,
+        borderBottom: '0',
       },
-      [s('.cm-codeblock-fence:last-of-type')]: {
+      [s('.cm-codeblock-fence-close')]: {
+        borderTop: '0',
         borderBottom: `1px solid ${t.code.block.borderColor}`,
       },
     } : {}),
@@ -56432,10 +56436,15 @@ function buildDocumentTemplateOverrideCSS(template, scopeSelector) {
     ], 'color', t.code.block.color);
   }
   if (t.code?.block?.background) {
+    // Use box-shadow on .cm-line elements so CM6's selection layer stays visible.
+    // background-color on .cm-line hides the selection layer painted below it.
     rule([
       '.cm-codeblock-line',
       '.cm-codeblock-fence',
       '.cm-wysiwyg-code-fence-line',
+    ], 'box-shadow', `inset 0 0 0 9999px ${t.code.block.background}`);
+    // Non-line elements (widgets, headers) can keep background-color safely.
+    rule([
       '.cm-wysiwyg-code-fence-widget',
       '.cm-wysiwyg-code-header',
     ], 'background-color', t.code.block.background);
@@ -72629,6 +72638,104 @@ function extractHtmlElements(text) {
 /**
  * Widget that renders inline HTML content
  */
+class DetailsBlockWidget extends WidgetType {
+  constructor(summary, content, open = false) {
+    super();
+    this.summary = summary;
+    this.content = content;
+    this.open = open;
+  }
+
+  eq(other) {
+    return this.summary === other.summary && this.content === other.content && this.open === other.open;
+  }
+
+  toDOM() {
+    const details = document.createElement('details');
+    details.className = 'cm-details-widget';
+    details.open = this.open;
+
+    const summary = document.createElement('summary');
+    summary.className = 'cm-details-summary';
+    summary.textContent = this.summary || 'Details';
+    details.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'cm-details-content';
+    renderDetailsMarkdown(body, this.content);
+    details.appendChild(body);
+
+    return details;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+const DETAILS_BLOCK_RE = /<details\b([^>]*)>([\s\S]*?)<\/details>/gi;
+const SUMMARY_RE = /<summary\b[^>]*>([\s\S]*?)<\/summary>/i;
+
+function extractDetailsBlocks(text) {
+  const results = [];
+  DETAILS_BLOCK_RE.lastIndex = 0;
+  let match;
+  while ((match = DETAILS_BLOCK_RE.exec(text)) !== null) {
+    const attrs = match[1] || '';
+    const inner = match[2] || '';
+    const summaryMatch = inner.match(SUMMARY_RE);
+    const summary = stripHtml(summaryMatch?.[1] || 'Details').trim() || 'Details';
+    const content = summaryMatch ? inner.replace(SUMMARY_RE, '').trim() : inner.trim();
+    results.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      summary,
+      content,
+      open: /(?:^|\s)open(?:\s|=|$)/i.test(attrs),
+    });
+  }
+  return results;
+}
+
+function renderDetailsMarkdown(container, markdown) {
+  const text = String(markdown || '').trim();
+  if (!text) return;
+
+  const fenceRe = /```([\w-]*)\n([\s\S]*?)\n```/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = fenceRe.exec(text)) !== null) {
+    appendDetailsParagraphs(container, text.slice(lastIndex, match.index));
+
+    const pre = document.createElement('pre');
+    pre.className = 'cm-details-codeblock';
+    if (match[1]) pre.dataset.language = match[1];
+    const code = document.createElement('code');
+    code.textContent = match[2];
+    pre.appendChild(code);
+    container.appendChild(pre);
+
+    lastIndex = match.index + match[0].length;
+  }
+  appendDetailsParagraphs(container, text.slice(lastIndex));
+}
+
+function appendDetailsParagraphs(container, text) {
+  for (const part of String(text || '').split(/\n{2,}/)) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const p = document.createElement('p');
+    p.innerHTML = renderInlineMarkdownWithHtml(trimmed).replace(/\n/g, '<br>');
+    container.appendChild(p);
+  }
+}
+
+function stripHtml(text) {
+  const div = document.createElement('div');
+  div.innerHTML = String(text);
+  return div.textContent || div.innerText || '';
+}
+
 class InlineHtmlWidget extends WidgetType {
   /**
    * @param {string} html - Raw HTML string to render
@@ -74421,6 +74528,29 @@ class MRPClient {
     });
 
     if (!res.ok) throw new Error(`Format failed: ${res.status}`);
+    return res.json();
+  }
+
+  /**
+   * Browse execution input history
+   *
+   * @param {import('./mrp-types.js').HistoryRequest} [request]
+   * @returns {Promise<import('./mrp-types.js').HistoryResult>}
+   */
+  async getHistory(request = {}) {
+    const caps = await this.getCapabilities();
+
+    if (!caps.features.history) {
+      return { entries: [], hasMore: false };
+    }
+
+    const res = await fetch(`${this.#endpoint}/history`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+
+    if (!res.ok) throw new Error(`History failed: ${res.status}`);
     return res.json();
   }
 
@@ -82501,11 +82631,11 @@ async function createStudio$1(target, options = {}) {
       const lineStart = charOffset;
 
       if (!inBlock) {
-        const match = line.match(/^(`{3,})(\w*)/);
+        const match = line.match(/^(`{3,})\s*(?:\{([\w:.-]+)(?:[,\s][^}]*)?\}|([\w:.-]*))/);
         if (match) {
           inBlock = true;
           blockStart = lineStart;
-          blockLanguage = match[2].toLowerCase();
+          blockLanguage = (match[2] || match[3] || '').toLowerCase();
           codeStart = lineStart + line.length + 1;
         }
       } else {
@@ -125480,18 +125610,49 @@ var katex = {
 
 
 /**
- * Extract inline math expressions from text
+ * Check whether [start, end) overlaps any of the given ranges.
+ *
+ * @param {number} start
+ * @param {number} end
+ * @param {Array<{start: number, end: number}>} ranges
+ * @returns {boolean}
+ */
+function overlapsRange(start, end, ranges) {
+  for (const r of ranges) {
+    if (start < r.end && end > r.start) return true;
+  }
+  return false;
+}
+
+/**
+ * Extract inline math expressions from text.
+ *
+ * `$...$` follows Pandoc's rules so that prose like "costs $5 and $10" or
+ * R code like `df$col` is never mistaken for math:
+ * - the opening `$` must be immediately followed by a non-space character
+ * - the closing `$` must be immediately preceded by a non-space character
+ * - the closing `$` must not be immediately followed by a digit
+ * - `\$` is an escaped dollar sign, never a delimiter
  *
  * @param {string} text
+ * @param {Array<{start: number, end: number}>} [excludeRanges] - ranges (e.g.
+ *   inline code spans) within which math must not be detected; offsets are
+ *   relative to `text`
  * @returns {Array<{start: number, end: number, latex: string, raw: string}>}
  */
-function extractInlineMath(text) {
+function extractInlineMath(text, excludeRanges = []) {
   const matches = [];
 
-  // Match $...$ (not $$)
-  const dollarRegex = /(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)/g;
+  // Match $...$ (not $$) following Pandoc's delimiter rules.
+  // - opening `$`: not preceded by `\` or `$`, not followed by space/`$`
+  // - content: no raw `$` or newline; `\$` allowed via escape pairs
+  // - closing `$`: not preceded by space/`\`, not followed by digit/`$`
+  const dollarRegex = /(?<![\\$])\$(?![\s$])((?:\\.|[^$\\\n])*?)(?<![\s\\])\$(?![\d$])/g;
   let match;
   while ((match = dollarRegex.exec(text)) !== null) {
+    if (overlapsRange(match.index, match.index + match[0].length, excludeRanges)) {
+      continue;
+    }
     matches.push({
       start: match.index,
       end: match.index + match[0].length,
@@ -125503,6 +125664,9 @@ function extractInlineMath(text) {
   // Match \(...\)
   const parenRegex = /\\\((.+?)\\\)/g;
   while ((match = parenRegex.exec(text)) !== null) {
+    if (overlapsRange(match.index, match.index + match[0].length, excludeRanges)) {
+      continue;
+    }
     matches.push({
       start: match.index,
       end: match.index + match[0].length,
@@ -126481,6 +126645,74 @@ function clearHeightCache() {
   widgetHeightCache.clear();
 }
 
+// Heights measured before webfonts finish loading are wrong (fallback font
+// metrics). Drop them once fonts are ready so the next renders re-measure.
+if (typeof document !== 'undefined' && document.fonts?.ready) {
+  document.fonts.ready.then(() => clearHeightCache()).catch(() => {});
+}
+
+// =============================================================================
+// Stable height reservation while editing inside a block region
+// =============================================================================
+//
+// When the cursor enters a rendered block (table, math, frontmatter, ...) the
+// widget is swapped for raw source padded to the widget's cached height. The
+// cache is keyed by content hash — but the user is *editing*, so after the
+// first keystroke the hash no longer matches and the padding used to vanish,
+// making everything below the block jump up and later back down. Fix: when a
+// region is revealed for editing, reserve its last known rendered height under
+// a stable region key and keep using that reservation until the cursor leaves.
+
+let activeEditReservations = new Map();
+let pendingEditReservations = null;
+
+function beginEditReservationPass() {
+  pendingEditReservations = new Map();
+}
+
+function endEditReservationPass() {
+  if (pendingEditReservations) activeEditReservations = pendingEditReservations;
+  pendingEditReservations = null;
+}
+
+/**
+ * Compute the spacer padding for a block region revealed for editing.
+ * Falls back to the reservation made when the region was first revealed if
+ * the live content hash no longer matches the height cache.
+ *
+ * @param {string} regionKey - stable identity, e.g. `table:42`
+ * @param {string} contentHash - live content hash for the region
+ * @param {number} lineCount - current number of raw source lines
+ * @returns {number} padding-bottom in px (0 when nothing should be reserved)
+ */
+function editingSpacerPadding(regionKey, contentHash, lineCount) {
+  let reserved = getCachedHeight(contentHash);
+  if (!reserved) reserved = activeEditReservations.get(regionKey);
+  if (!reserved) return 0;
+
+  if (pendingEditReservations) pendingEditReservations.set(regionKey, reserved);
+
+  const padding = reserved - lineCount * getLineHeight();
+  return padding > 0 ? padding : 0;
+}
+
+/**
+ * Build the standard spacer line decoration for a revealed block region.
+ *
+ * @param {import('@codemirror/state').Text} doc
+ * @param {number} endLineNumber - 1-based last line of the region
+ * @param {number} padding - px
+ */
+function editingSpacerDecoration(doc, endLineNumber, padding) {
+  const lastLine = doc.line(endLineNumber);
+  return Decoration.line({
+    attributes: {
+      class: 'cm-block-spacer-line',
+      style: `padding-bottom: ${padding}px`,
+    },
+  }).range(lastLine.from);
+}
+
 /**
  * Simple hash function for content-based caching
  */
@@ -126515,10 +126747,19 @@ class TableWidgetWithHeightCache extends TableWidget {
   constructor(table, tableId, contentHash) {
     super(table, tableId);
     this.contentHash = contentHash;
+    this.rowCount = (table?.rows?.length ?? 0) + 1; // + header row
   }
 
   eq(other) {
     return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  // Tell CodeMirror's height map how tall this widget really is *before* it
+  // renders. Without this, off-screen widgets are assumed to be ~one line
+  // tall and the page jumps when the measured height corrects the estimate.
+  get estimatedHeight() {
+    return getCachedHeight(this.contentHash) ??
+      Math.round((this.rowCount + 1) * getLineHeight());
   }
 
   toDOM() {
@@ -126547,10 +126788,16 @@ class LinkedTableWidgetWithHeightCache extends LinkedTableWidget {
   constructor(block, parsedTable, contentHash, options = {}) {
     super(block, parsedTable, contentHash, options);
     this.contentHash = contentHash;
+    this.rowCount = (parsedTable?.rows?.length ?? 0) + 1;
   }
 
   eq(other) {
     return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  get estimatedHeight() {
+    return getCachedHeight(this.contentHash) ??
+      Math.round((this.rowCount + 2) * getLineHeight());
   }
 
   toDOM(view) {
@@ -126572,6 +126819,31 @@ class LinkedTableWidgetWithHeightCache extends LinkedTableWidget {
 /**
  * DisplayMathWidget wrapper that caches its rendered height for stable layout.
  */
+class DetailsBlockWidgetWithHeightCache extends DetailsBlockWidget {
+  constructor(summary, content, open, contentHash) {
+    super(summary, content, open);
+    this.contentHash = contentHash;
+  }
+
+  eq(other) {
+    return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  get estimatedHeight() {
+    return getCachedHeight(this.contentHash) ??
+      Math.round(getLineHeight() * 1.5);
+  }
+
+  toDOM() {
+    const dom = super.toDOM();
+    requestAnimationFrame(() => {
+      const height = dom.offsetHeight;
+      if (height > 0) cacheWidgetHeight(this.contentHash, height);
+    });
+    return dom;
+  }
+}
+
 class DisplayMathWidgetWithHeightCache extends DisplayMathWidget {
   constructor(latex, mathId, contentHash) {
     super(latex, mathId);
@@ -126580,6 +126852,11 @@ class DisplayMathWidgetWithHeightCache extends DisplayMathWidget {
 
   eq(other) {
     return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  get estimatedHeight() {
+    return getCachedHeight(this.contentHash) ??
+      Math.round(getLineHeight() * 3);
   }
 
   toDOM() {
@@ -126695,16 +126972,35 @@ function findDisplayMathRanges(state) {
   const text = doc.toString();
   const ranges = [];
 
-  // Match $$ ... $$ (multi-line)
-  const dollarPattern = /\$\$([\s\S]*?)\$\$/g;
+  // Positions inside fenced/inline code must never participate in math
+  // delimiter pairing. Otherwise a `$$` in a Python string or shell heredoc
+  // pairs with real math elsewhere and swallows everything between them.
+  const codeRanges = [];
+  syntaxTree(state).iterate({
+    enter: (node) => {
+      if (node.name === 'FencedCode' || node.name === 'CodeBlock' || node.name === 'InlineCode') {
+        codeRanges.push({ from: node.from, to: node.to });
+        return false;
+      }
+    },
+  });
+  const inCode = (pos) => codeRanges.some((r) => pos >= r.from && pos < r.to);
+
+  // Collect `$$` delimiter positions outside code, then pair them
+  // sequentially (1st with 2nd, 3rd with 4th, ...). This also stops an odd
+  // `$$` inside code from flipping math rendering for the rest of the file.
+  const delimiters = [];
+  const delimPattern = /\$\$/g;
   let match;
+  while ((match = delimPattern.exec(text)) !== null) {
+    if (!inCode(match.index)) delimiters.push(match.index);
+  }
 
-  while ((match = dollarPattern.exec(text)) !== null) {
-    const from = match.index;
-    const to = match.index + match[0].length;
-    const content = match[1];
+  for (let d = 0; d + 1 < delimiters.length; d += 2) {
+    const from = delimiters[d];
+    const to = delimiters[d + 1] + 2;
+    const content = text.slice(from + 2, to - 2);
 
-    // Only include if it spans multiple lines or is a block
     const startLine = doc.lineAt(from);
     const endLine = doc.lineAt(to);
 
@@ -126730,6 +127026,7 @@ function findDisplayMathRanges(state) {
   while ((match = bracketPattern.exec(text)) !== null) {
     const from = match.index;
     const to = match.index + match[0].length;
+    if (inCode(from) || inCode(to - 1)) continue;
     const content = match[1];
     const startLine = doc.lineAt(from);
     const endLine = doc.lineAt(to);
@@ -126753,6 +127050,12 @@ function findDisplayMathRanges(state) {
 class FrontmatterWidgetWithHeightCache extends FrontmatterWidget {
   constructor(yamlContent, contentHash, sourceFrom, sourceTo) {
     super(yamlContent, contentHash, sourceFrom, sourceTo);
+    this.yamlLineCount = String(yamlContent ?? '').split('\n').length;
+  }
+
+  get estimatedHeight() {
+    return getCachedHeight(this.contentHash) ??
+      Math.round((this.yamlLineCount + 2) * getLineHeight());
   }
 
   toDOM(view) {
@@ -126813,6 +127116,7 @@ function buildBlockDecorations(state) {
   const cursorPos = state.selection.main.head;
   const cursorLine = doc.lineAt(cursorPos).number;
   const decorations = [];
+  beginEditReservationPass();
 
   // Mode flags
   const isSourceMode = state.facet(sourceModeFacet);
@@ -126847,24 +127151,13 @@ function buildBlockDecorations(state) {
         );
       }
 
-      const cachedHeight = getCachedHeight(contentHash);
-      if (cachedHeight) {
-        const lineCount = block.endLine - block.startLine + 1;
-        const lineHeight = getLineHeight();
-        const rawHeight = lineCount * lineHeight;
-        const padding = cachedHeight - rawHeight;
-
-        if (padding > 0) {
-          const lastLine = doc.line(block.endLine);
-          decorations.push(
-            Decoration.line({
-              attributes: {
-                class: 'cm-block-spacer-line',
-                style: `padding-bottom: ${padding}px`
-              }
-            }).range(lastLine.from)
-          );
-        }
+      const padding = editingSpacerPadding(
+        `linked-table:${block.startLine}`,
+        contentHash,
+        block.endLine - block.startLine + 1,
+      );
+      if (padding > 0) {
+        decorations.push(editingSpacerDecoration(doc, block.endLine, padding));
       }
     }
   }
@@ -126900,27 +127193,13 @@ function buildBlockDecorations(state) {
       }
     } else {
       // Cursor inside: show raw markdown, but add spacer to prevent layout shift
-
-      const cachedHeight = getCachedHeight(contentHash);
-      if (cachedHeight) {
-        // Calculate raw content height using actual line height
-        const lineCount = range.endLine - range.startLine + 1;
-        const lineHeight = getLineHeight();
-        const rawHeight = lineCount * lineHeight;
-        const padding = cachedHeight - rawHeight;
-
-        if (padding > 0) {
-          // Use line decoration with padding-bottom (doesn't block navigation)
-          const lastLine = doc.line(range.endLine);
-          decorations.push(
-            Decoration.line({
-              attributes: {
-                class: 'cm-block-spacer-line',
-                style: `padding-bottom: ${padding}px`
-              }
-            }).range(lastLine.from)
-          );
-        }
+      const padding = editingSpacerPadding(
+        `table:${range.startLine}`,
+        contentHash,
+        range.endLine - range.startLine + 1,
+      );
+      if (padding > 0) {
+        decorations.push(editingSpacerDecoration(doc, range.endLine, padding));
       }
     }
   }
@@ -126942,25 +127221,46 @@ function buildBlockDecorations(state) {
       );
     } else {
       // Cursor inside: show raw LaTeX, but add spacer to prevent layout shift
-      const cachedHeight = getCachedHeight(contentHash);
-      if (cachedHeight) {
-        const lineCount = range.endLine - range.startLine + 1;
-        const lineHeight = getLineHeight();
-        const rawHeight = lineCount * lineHeight;
-        const padding = cachedHeight - rawHeight;
+      const padding = editingSpacerPadding(
+        `math:${range.startLine}`,
+        contentHash,
+        range.endLine - range.startLine + 1,
+      );
+      if (padding > 0) {
+        decorations.push(editingSpacerDecoration(doc, range.endLine, padding));
+      }
+    }
+  }
 
-        if (padding > 0) {
-          // Use line decoration with padding-bottom (doesn't block navigation)
-          const lastLine = doc.line(range.endLine);
-          decorations.push(
-            Decoration.line({
-              attributes: {
-                class: 'cm-block-spacer-line',
-                style: `padding-bottom: ${padding}px`
-              }
-            }).range(lastLine.from)
-          );
-        }
+  // Find and process raw HTML <details>/<summary> blocks.
+  // These can span multiple lines and contain fenced code, so they must live in
+  // this StateField rather than the line-oriented inline HTML ViewPlugin.
+  const detailsRanges = extractDetailsBlocks(doc.toString());
+  for (const range of detailsRanges) {
+    const startLine = doc.lineAt(range.start).number;
+    const endLine = doc.lineAt(range.end).number;
+    // Unlike tables/math, <details> is itself interactive. Clicking the
+    // summary moves CodeMirror's selection into the replaced source range; if
+    // we reveal raw source on cursor entry the disclosure immediately collapses
+    // into literal <details> text. Keep it rendered unless explicit source mode
+    // is enabled.
+    const cursorInDetails = isSourceMode;
+    const contentHash = 'details-' + hashContent$1(doc.sliceString(range.start, range.end));
+
+    if (!cursorInDetails) {
+      decorations.push(
+        Decoration.replace({
+          widget: new DetailsBlockWidgetWithHeightCache(range.summary, range.content, range.open, contentHash),
+        }).range(range.start, range.end)
+      );
+    } else {
+      const padding = editingSpacerPadding(
+        `details:${startLine}`,
+        contentHash,
+        endLine - startLine + 1,
+      );
+      if (padding > 0) {
+        decorations.push(editingSpacerDecoration(doc, endLine, padding));
       }
     }
   }
@@ -126985,28 +127285,18 @@ function buildBlockDecorations(state) {
       );
     } else {
       // Cursor inside: show raw YAML with spacer for stable height
-      const cachedHeight = getCachedHeight(contentHash);
-      if (cachedHeight) {
-        const lineCount = fmRange.endLine - fmRange.startLine + 1;
-        const lineHeight = getLineHeight();
-        const rawHeight = lineCount * lineHeight;
-        const padding = cachedHeight - rawHeight;
-
-        if (padding > 0) {
-          const lastLine = doc.line(fmRange.endLine);
-          decorations.push(
-            Decoration.line({
-              attributes: {
-                class: 'cm-block-spacer-line',
-                style: `padding-bottom: ${padding}px`
-              }
-            }).range(lastLine.from)
-          );
-        }
+      const padding = editingSpacerPadding(
+        `frontmatter:${fmRange.startLine}`,
+        contentHash,
+        fmRange.endLine - fmRange.startLine + 1,
+      );
+      if (padding > 0) {
+        decorations.push(editingSpacerDecoration(doc, fmRange.endLine, padding));
       }
     }
   }
 
+  endEditReservationPass();
   return Decoration.set(decorations, true);
 }
 
@@ -127894,6 +128184,10 @@ function buildDecorations(view) {
   // Build a set of line numbers that are inside fenced code blocks
   // This properly tracks code block boundaries using the syntax tree
   const codeBlockLines = new Set();
+  // Absolute-position ranges of inline code spans, keyed by line number.
+  // Used to keep regex-based inline detectors (math, wiki-links) from firing
+  // inside `inline code` — e.g. R's `df$col` must never render as math.
+  const inlineCodeRangesByLine = new Map();
   syntaxTree(view.state).iterate({
     enter: (node) => {
       if (node.name === 'FencedCode') {
@@ -127902,9 +128196,29 @@ function buildDecorations(view) {
         for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
           codeBlockLines.add(lineNum);
         }
+      } else if (node.name === 'InlineCode') {
+        const lineNum = doc.lineAt(node.from).number;
+        let ranges = inlineCodeRangesByLine.get(lineNum);
+        if (!ranges) {
+          ranges = [];
+          inlineCodeRangesByLine.set(lineNum, ranges);
+        }
+        ranges.push({ from: node.from, to: node.to });
       }
     }
   });
+
+  /**
+   * Line-relative exclusion ranges for inline detectors on line `i`.
+   * @param {number} i - 1-based line number
+   * @param {{from: number}} line - the doc line object
+   * @returns {Array<{start: number, end: number}>}
+   */
+  const inlineCodeExclusions = (i, line) => {
+    const ranges = inlineCodeRangesByLine.get(i);
+    if (!ranges) return [];
+    return ranges.map((r) => ({ start: r.from - line.from, end: r.to - line.from }));
+  };
 
   // ==========================================================================
   // MKDOCS-STYLE ADMONITIONS: !!! tip / !!! warning / ...
@@ -127990,7 +128304,7 @@ function buildDecorations(view) {
     // Skip if this line is part of a display math block
     if (line.text.includes('$$')) continue;
 
-    const inlineMaths = extractInlineMath(line.text);
+    const inlineMaths = extractInlineMath(line.text, inlineCodeExclusions(i, line));
 
     for (const math of inlineMaths) {
       const from = line.from + math.start;
@@ -128025,7 +128339,10 @@ function buildDecorations(view) {
     // Skip lines inside code blocks (using syntax tree detection)
     if (codeBlockLines.has(i)) continue;
 
-    const wikiLinks = extractWikiLinks(line.text);
+    const wikiExclusions = inlineCodeExclusions(i, line);
+    const wikiLinks = extractWikiLinks(line.text).filter(
+      (link) => !wikiExclusions.some((r) => link.start < r.end && link.end > r.start)
+    );
 
     for (const link of wikiLinks) {
       const from = line.from + link.start;
@@ -128050,6 +128367,13 @@ function buildDecorations(view) {
   // ==========================================================================
   // Inline HTML - process line by line
   // ==========================================================================
+  const detailsLines = new Set();
+  for (const block of extractDetailsBlocks(doc.toString())) {
+    const startLine = doc.lineAt(block.start).number;
+    const endLine = doc.lineAt(block.end).number;
+    for (let lineNo = startLine; lineNo <= endLine; lineNo++) detailsLines.add(lineNo);
+  }
+
   // Track which ranges are already covered by other decorations to avoid conflicts
   const coveredRanges = [];
   for (const dec of decorations) {
@@ -128067,6 +128391,9 @@ function buildDecorations(view) {
 
     // Skip lines inside code blocks (using syntax tree detection)
     if (codeBlockLines.has(i)) continue;
+
+    // Skip lines inside block HTML handled by block-decorations.js
+    if (detailsLines.has(i)) continue;
 
     const htmlElements = extractHtmlElements(line.text);
 
@@ -130318,6 +130645,43 @@ const markdownStyles = `
 /* Container for rendered inline HTML */
 .cm-inline-html {
   display: inline;
+}
+
+.cm-details-widget {
+  display: block;
+  margin: 0.5em 0;
+  padding: 0.45em 0.65em;
+  border: 1px solid var(--widget-border);
+  border-radius: 6px;
+  background: var(--widget-surface);
+}
+
+.cm-details-summary {
+  cursor: pointer;
+  color: var(--widget-text-accent);
+  user-select: none;
+}
+
+.cm-details-content {
+  margin-top: 0.6em;
+}
+
+.cm-details-content p {
+  margin: 0.45em 0;
+}
+
+.cm-details-codeblock {
+  margin: 0.5em 0 0;
+  padding: 0.65em 0.8em;
+  overflow: auto;
+  white-space: pre;
+  font-family: var(--widget-font-mono);
+  font-size: 0.92em;
+  line-height: 1.45;
+  color: var(--md-code-color, var(--widget-text));
+  background: var(--md-code-background, var(--widget-surface-inset));
+  border: 1px solid var(--widget-border);
+  border-radius: 4px;
 }
 
 /* HTML syntax when editing (cursor on line) */
@@ -142861,7 +143225,7 @@ const shellLang = StreamLanguage.define(shell);
 const powershellLang = StreamLanguage.define(powerShell);
 
 function codeBlockLanguage(info) {
-  const lang = info.toLowerCase().trim();
+  const lang = normalizeCodeLanguage(info);
   switch (lang) {
     case 'javascript': case 'js': case 'node': case 'ecmascript':
       return jsSupport.language;
@@ -142959,10 +143323,15 @@ const codeBlockBackground = ViewPlugin.fromClass(class {
             const isLastLine = line.number === lastLine.number;
 
             if (isFirstLine || isLastLine) {
-              // Fence lines - subtle styling
+              // Fence lines - subtle styling. Keep the generic class for
+              // existing themes, and add role classes so wrappers/templates can
+              // style the opening and closing fence edges independently.
               decorations.push(
                 Decoration.line({
-                  class: 'cm-codeblock-fence',
+                  class: [
+                    'cm-codeblock-fence',
+                    isFirstLine ? 'cm-codeblock-fence-open' : 'cm-codeblock-fence-close',
+                  ].join(' '),
                   attributes: language ? { 'data-lang': language } : undefined,
                 }).range(line.from)
               );
@@ -142998,28 +143367,33 @@ const codeBlockBackground = ViewPlugin.fromClass(class {
  * 2. Styling ::selection pseudo-element (native browser selection, always on top)
  */
 const codeBlockStyles = EditorView.theme({
-  // Content lines - smaller than prose, monospace font for code.
-  // Backgrounds are semi-transparent so the selection layer shows through.
+  // Content lines - monospace font for code.
+  // Code block background uses box-shadow (inset) instead of background-color.
+  // CM6's drawSelection layer paints BELOW .cm-line with `above: false`.
+  // Any background-color on .cm-line hides the selection.
+  // box-shadow doesn't participate in layer painting — selection shows through.
   '.cm-codeblock-line': {
-    backgroundColor: 'color-mix(in srgb, var(--widget-surface, #f5f5f5) 78%, transparent)',
+    boxShadow: 'inset 0 0 0 9999px color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
     fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
     fontSize: 'var(--code-font-size, 0.8em)',
     lineHeight: 'var(--code-line-height, 1.5)',
-    position: 'relative',
   },
   // Fence lines (``` markers) - even smaller, very subtle
   '.cm-codeblock-fence': {
-    backgroundColor: 'color-mix(in srgb, var(--widget-surface, #f5f5f5) 78%, transparent)',
+    boxShadow: 'inset 0 0 0 9999px color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
     fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
     fontSize: '0.5em',
     color: 'var(--widget-text-muted, #888)',
   },
-  // Selection styling for code blocks - ensure visibility with native ::selection
-  '.cm-codeblock-line::selection, .cm-codeblock-line *::selection': {
-    backgroundColor: 'var(--editor-selection, #264f78) !important',
+  '.cm-codeblock-fence-open': {
+    borderTop: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
+    borderBottom: '0',
+    borderRadius: '3px 3px 0 0',
   },
-  '.cm-codeblock-fence::selection, .cm-codeblock-fence *::selection': {
-    backgroundColor: 'var(--editor-selection, #264f78) !important',
+  '.cm-codeblock-fence-close': {
+    borderTop: '0',
+    borderBottom: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
+    borderRadius: '0 0 3px 3px',
   },
   // Mobile: code blocks need to be larger and scroll horizontally
   '@media (max-width: 768px)': {
@@ -143282,11 +143656,25 @@ function getCurrentBlockTypeInfo(view) {
 }
 
 /**
+ * Extract the language identifier from a Markdown fence info string.
+ * Supports both standard Markdown (` ```python `) and Quarto/knitr
+ * (` ```{python, echo=false} `) forms.
+ */
+function codeFenceLanguage(raw) {
+  if (!raw) return '';
+  const value = String(raw).trim();
+  const quarto = value.match(/^\{([\w:.-]+)(?:[,\s][^}]*)?\}/);
+  if (quarto) return quarto[1];
+  const standard = value.match(/^([\w:.-]+)/);
+  return standard ? standard[1] : '';
+}
+
+/**
  * Normalize code language aliases to canonical names matching template keys.
  */
 function normalizeCodeLanguage(raw) {
-  if (!raw) return '';
-  const lang = raw.toLowerCase().trim();
+  const lang = codeFenceLanguage(raw).toLowerCase().trim();
+  if (!lang) return '';
   const map = {
     'js': 'javascript', 'node': 'javascript', 'ecmascript': 'javascript',
     'ts': 'typescript',
@@ -143625,6 +144013,7 @@ function create(target, options = {}) {
   const userName = config.user.name;
   const userColor = config.user.color;
   const userType = config.user.type;
+  const outputWidgetsEnabled = options.outputWidgets !== false && options.outputWidget !== false;
 
   // Yjs options (not in structured config yet - passed directly)
   const {
@@ -143756,7 +144145,9 @@ function create(target, options = {}) {
   });
 
   // Inject CSS styles
-  injectOutputWidgetStyles();
+  if (outputWidgetsEnabled) {
+    injectOutputWidgetStyles();
+  }
   if (awarenessUI) {
     injectAwarenessStyles();
   }
@@ -144029,7 +144420,7 @@ ${scrollSelectors.map(s => `${s}::-webkit-scrollbar-corner`).join(',\n')} {
     // Cell execution keymap (Shift-Enter, Mod-Enter, etc.)
     // Initially empty, configured after api is created
     keymapCompartment.of([]),
-    outputWidgetPlugin, // ANSI output rendering
+    ...(outputWidgetsEnabled ? [outputWidgetPlugin] : []), // ANSI output rendering
     ...createInlineEditingExtensions(),
     lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
     linkedTableMarkdownState,
@@ -144131,7 +144522,9 @@ ${scrollSelectors.map(s => `${s}::-webkit-scrollbar-corner`).join(',\n')} {
     // Add awareness extensions to the view
     const awarenessExtensions = awarenessSystem.getExtensions();
     // Also configure output widget to use awareness (for collaborative focus sync)
-    awarenessExtensions.push(outputWidgetAwarenessFacet.of(awarenessSystem));
+    if (outputWidgetsEnabled) {
+      awarenessExtensions.push(outputWidgetAwarenessFacet.of(awarenessSystem));
+    }
 
     if (awarenessExtensions.length > 0) {
       view.dispatch({
@@ -146673,6 +147066,7 @@ const codemirror = {
   EditorView,
   EditorState,
   StateEffect,
+  StateField,
   Compartment,
   Text,
   Transaction: Transaction$1,
