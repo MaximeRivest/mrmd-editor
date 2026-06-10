@@ -893,6 +893,10 @@ function buildDecorations(view) {
   // Build a set of line numbers that are inside fenced code blocks
   // This properly tracks code block boundaries using the syntax tree
   const codeBlockLines = new Set();
+  // Absolute-position ranges of inline code spans, keyed by line number.
+  // Used to keep regex-based inline detectors (math, wiki-links) from firing
+  // inside `inline code` — e.g. R's `df$col` must never render as math.
+  const inlineCodeRangesByLine = new Map();
   syntaxTree(view.state).iterate({
     enter: (node) => {
       if (node.name === 'FencedCode') {
@@ -901,9 +905,29 @@ function buildDecorations(view) {
         for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
           codeBlockLines.add(lineNum);
         }
+      } else if (node.name === 'InlineCode') {
+        const lineNum = doc.lineAt(node.from).number;
+        let ranges = inlineCodeRangesByLine.get(lineNum);
+        if (!ranges) {
+          ranges = [];
+          inlineCodeRangesByLine.set(lineNum, ranges);
+        }
+        ranges.push({ from: node.from, to: node.to });
       }
     }
   });
+
+  /**
+   * Line-relative exclusion ranges for inline detectors on line `i`.
+   * @param {number} i - 1-based line number
+   * @param {{from: number}} line - the doc line object
+   * @returns {Array<{start: number, end: number}>}
+   */
+  const inlineCodeExclusions = (i, line) => {
+    const ranges = inlineCodeRangesByLine.get(i);
+    if (!ranges) return [];
+    return ranges.map((r) => ({ start: r.from - line.from, end: r.to - line.from }));
+  };
 
   // ==========================================================================
   // MKDOCS-STYLE ADMONITIONS: !!! tip / !!! warning / ...
@@ -989,7 +1013,7 @@ function buildDecorations(view) {
     // Skip if this line is part of a display math block
     if (line.text.includes('$$')) continue;
 
-    const inlineMaths = extractInlineMath(line.text);
+    const inlineMaths = extractInlineMath(line.text, inlineCodeExclusions(i, line));
 
     for (const math of inlineMaths) {
       const from = line.from + math.start;
@@ -1024,7 +1048,10 @@ function buildDecorations(view) {
     // Skip lines inside code blocks (using syntax tree detection)
     if (codeBlockLines.has(i)) continue;
 
-    const wikiLinks = extractWikiLinks(line.text);
+    const wikiExclusions = inlineCodeExclusions(i, line);
+    const wikiLinks = extractWikiLinks(line.text).filter(
+      (link) => !wikiExclusions.some((r) => link.start < r.end && link.end > r.start)
+    );
 
     for (const link of wikiLinks) {
       const from = line.from + link.start;

@@ -365,16 +365,35 @@ function findDisplayMathRanges(state) {
   const text = doc.toString();
   const ranges = [];
 
-  // Match $$ ... $$ (multi-line)
-  const dollarPattern = /\$\$([\s\S]*?)\$\$/g;
+  // Positions inside fenced/inline code must never participate in math
+  // delimiter pairing. Otherwise a `$$` in a Python string or shell heredoc
+  // pairs with real math elsewhere and swallows everything between them.
+  const codeRanges = [];
+  syntaxTree(state).iterate({
+    enter: (node) => {
+      if (node.name === 'FencedCode' || node.name === 'CodeBlock' || node.name === 'InlineCode') {
+        codeRanges.push({ from: node.from, to: node.to });
+        return false;
+      }
+    },
+  });
+  const inCode = (pos) => codeRanges.some((r) => pos >= r.from && pos < r.to);
+
+  // Collect `$$` delimiter positions outside code, then pair them
+  // sequentially (1st with 2nd, 3rd with 4th, ...). This also stops an odd
+  // `$$` inside code from flipping math rendering for the rest of the file.
+  const delimiters = [];
+  const delimPattern = /\$\$/g;
   let match;
+  while ((match = delimPattern.exec(text)) !== null) {
+    if (!inCode(match.index)) delimiters.push(match.index);
+  }
 
-  while ((match = dollarPattern.exec(text)) !== null) {
-    const from = match.index;
-    const to = match.index + match[0].length;
-    const content = match[1];
+  for (let d = 0; d + 1 < delimiters.length; d += 2) {
+    const from = delimiters[d];
+    const to = delimiters[d + 1] + 2;
+    const content = text.slice(from + 2, to - 2);
 
-    // Only include if it spans multiple lines or is a block
     const startLine = doc.lineAt(from);
     const endLine = doc.lineAt(to);
 
@@ -400,6 +419,7 @@ function findDisplayMathRanges(state) {
   while ((match = bracketPattern.exec(text)) !== null) {
     const from = match.index;
     const to = match.index + match[0].length;
+    if (inCode(from) || inCode(to - 1)) continue;
     const content = match[1];
     const startLine = doc.lineAt(from);
     const endLine = doc.lineAt(to);
@@ -423,6 +443,12 @@ function findDisplayMathRanges(state) {
 class FrontmatterWidgetWithHeightCache extends FrontmatterWidget {
   constructor(yamlContent, contentHash, sourceFrom, sourceTo) {
     super(yamlContent, contentHash, sourceFrom, sourceTo);
+    this.yamlLineCount = String(yamlContent ?? '').split('\n').length;
+  }
+
+  get estimatedHeight() {
+    return getCachedHeight(this.contentHash) ??
+      Math.round((this.yamlLineCount + 2) * getLineHeight());
   }
 
   toDOM(view) {

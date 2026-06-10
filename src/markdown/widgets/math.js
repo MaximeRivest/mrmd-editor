@@ -31,9 +31,7 @@ import katex from 'katex';
  * @returns {boolean}
  */
 export function hasInlineMath(text) {
-  // Match $...$ but not $$...$$
-  // Also match \(...\)
-  return /(?<!\$)\$(?!\$)([^$\n]+)\$(?!\$)/.test(text) || /\\\((.+?)\\\)/.test(text);
+  return extractInlineMath(text).length > 0;
 }
 
 /**
@@ -51,18 +49,49 @@ export function isDisplayMath(text) {
 }
 
 /**
- * Extract inline math expressions from text
+ * Check whether [start, end) overlaps any of the given ranges.
+ *
+ * @param {number} start
+ * @param {number} end
+ * @param {Array<{start: number, end: number}>} ranges
+ * @returns {boolean}
+ */
+function overlapsRange(start, end, ranges) {
+  for (const r of ranges) {
+    if (start < r.end && end > r.start) return true;
+  }
+  return false;
+}
+
+/**
+ * Extract inline math expressions from text.
+ *
+ * `$...$` follows Pandoc's rules so that prose like "costs $5 and $10" or
+ * R code like `df$col` is never mistaken for math:
+ * - the opening `$` must be immediately followed by a non-space character
+ * - the closing `$` must be immediately preceded by a non-space character
+ * - the closing `$` must not be immediately followed by a digit
+ * - `\$` is an escaped dollar sign, never a delimiter
  *
  * @param {string} text
+ * @param {Array<{start: number, end: number}>} [excludeRanges] - ranges (e.g.
+ *   inline code spans) within which math must not be detected; offsets are
+ *   relative to `text`
  * @returns {Array<{start: number, end: number, latex: string, raw: string}>}
  */
-export function extractInlineMath(text) {
+export function extractInlineMath(text, excludeRanges = []) {
   const matches = [];
 
-  // Match $...$ (not $$)
-  const dollarRegex = /(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)/g;
+  // Match $...$ (not $$) following Pandoc's delimiter rules.
+  // - opening `$`: not preceded by `\` or `$`, not followed by space/`$`
+  // - content: no raw `$` or newline; `\$` allowed via escape pairs
+  // - closing `$`: not preceded by space/`\`, not followed by digit/`$`
+  const dollarRegex = /(?<![\\$])\$(?![\s$])((?:\\.|[^$\\\n])*?)(?<![\s\\])\$(?![\d$])/g;
   let match;
   while ((match = dollarRegex.exec(text)) !== null) {
+    if (overlapsRange(match.index, match.index + match[0].length, excludeRanges)) {
+      continue;
+    }
     matches.push({
       start: match.index,
       end: match.index + match[0].length,
@@ -74,6 +103,9 @@ export function extractInlineMath(text) {
   // Match \(...\)
   const parenRegex = /\\\((.+?)\\\)/g;
   while ((match = parenRegex.exec(text)) !== null) {
+    if (overlapsRange(match.index, match.index + match[0].length, excludeRanges)) {
+      continue;
+    }
     matches.push({
       start: match.index,
       end: match.index + match[0].length,
