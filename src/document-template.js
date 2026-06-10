@@ -991,11 +991,11 @@ export function compileDocumentTemplateCSS(template, scope = '&') {
       },
     } : {}),
     ...(t.code?.block?.borderRadius ? {
-      [s('.cm-codeblock-fence:first-child, .cm-codeblock-line:first-child')]: {
+      [s('.cm-codeblock-fence-open') + ', ' + s('.cm-codeblock-fence:first-child, .cm-codeblock-line:first-child')]: {
         borderTopLeftRadius: t.code.block.borderRadius,
         borderTopRightRadius: t.code.block.borderRadius,
       },
-      [s('.cm-codeblock-fence:last-child, .cm-codeblock-line:last-child')]: {
+      [s('.cm-codeblock-fence-close') + ', ' + s('.cm-codeblock-fence:last-child, .cm-codeblock-line:last-child')]: {
         borderBottomLeftRadius: t.code.block.borderRadius,
         borderBottomRightRadius: t.code.block.borderRadius,
       },
@@ -1005,10 +1005,12 @@ export function compileDocumentTemplateCSS(template, scope = '&') {
         borderLeft: `1px solid ${t.code.block.borderColor}`,
         borderRight: `1px solid ${t.code.block.borderColor}`,
       },
-      [s('.cm-codeblock-fence:first-of-type')]: {
+      [s('.cm-codeblock-fence-open')]: {
         borderTop: `1px solid ${t.code.block.borderColor}`,
+        borderBottom: '0',
       },
-      [s('.cm-codeblock-fence:last-of-type')]: {
+      [s('.cm-codeblock-fence-close')]: {
+        borderTop: '0',
         borderBottom: `1px solid ${t.code.block.borderColor}`,
       },
     } : {}),

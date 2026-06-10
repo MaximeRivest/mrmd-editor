@@ -197,11 +197,11 @@ export async function createStudio(target, options = {}) {
       const lineStart = charOffset;
 
       if (!inBlock) {
-        const match = line.match(/^(`{3,})(\w*)/);
+        const match = line.match(/^(`{3,})\s*(?:\{([\w:.-]+)(?:[,\s][^}]*)?\}|([\w:.-]*))/);
         if (match) {
           inBlock = true;
           blockStart = lineStart;
-          blockLanguage = match[2].toLowerCase();
+          blockLanguage = (match[2] || match[3] || '').toLowerCase();
           codeStart = lineStart + line.length + 1;
         }
       } else {

@@ -134,15 +134,15 @@ export function findCodeBlocks(content) {
     const lineStart = charOffset;
 
     if (!inBlock) {
-      // Look for opening fence: ```language [context]
-      // Examples: ```js, ```js sandbox, ```python myenv, ```html:artifact, ```css:myapp
+      // Look for opening fence: ```language [context] or Quarto/knitr ```{language, options}
+      // Examples: ```js, ```js sandbox, ```python myenv, ```{python}, ```{r, echo=FALSE}
       // Language can include colon for targets (html:name, css:name, js:name, term:session)
-      const match = line.match(/^(`{3,})([\w:.-]*)(?:\s+(\S+))?/);
+      const match = line.match(/^(`{3,})\s*(?:\{([\w:.-]+)(?:[,\s][^}]*)?\}|([\w:.-]*))(?:\s+(\S+))?/);
       if (match) {
         inBlock = true;
         blockStart = lineStart;
-        blockLanguage = match[2].toLowerCase();
-        blockContext = match[3] || null; // optional context name after language
+        blockLanguage = (match[2] || match[3] || '').toLowerCase();
+        blockContext = match[4] || null; // optional context name after language
         codeStart = lineStart + line.length + 1; // +1 for newline
         blockLine = i;
       }

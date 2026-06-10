@@ -30,7 +30,7 @@
 
 // #region IMPORTS
 import { EditorView, basicSetup } from 'codemirror';
-import { EditorState, StateEffect, Compartment, Text, Transaction } from '@codemirror/state';
+import { EditorState, StateEffect, StateField, Compartment, Text, Transaction } from '@codemirror/state';
 import { keymap, Decoration, ViewPlugin, WidgetType, placeholder, highlightWhitespace } from '@codemirror/view';
 import { StreamLanguage, syntaxTree, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language';
 import { createCodemirrorTheme } from './widgets/codemirror-theme.js';
@@ -645,7 +645,7 @@ const shellLang = StreamLanguage.define(shell);
 const powershellLang = StreamLanguage.define(powerShell);
 
 function codeBlockLanguage(info) {
-  const lang = info.toLowerCase().trim();
+  const lang = normalizeCodeLanguage(info);
   switch (lang) {
     case 'javascript': case 'js': case 'node': case 'ecmascript':
       return jsSupport.language;
@@ -743,10 +743,15 @@ const codeBlockBackground = ViewPlugin.fromClass(class {
             const isLastLine = line.number === lastLine.number;
 
             if (isFirstLine || isLastLine) {
-              // Fence lines - subtle styling
+              // Fence lines - subtle styling. Keep the generic class for
+              // existing themes, and add role classes so wrappers/templates can
+              // style the opening and closing fence edges independently.
               decorations.push(
                 Decoration.line({
-                  class: 'cm-codeblock-fence',
+                  class: [
+                    'cm-codeblock-fence',
+                    isFirstLine ? 'cm-codeblock-fence-open' : 'cm-codeblock-fence-close',
+                  ].join(' '),
                   attributes: language ? { 'data-lang': language } : undefined,
                 }).range(line.from)
               );
@@ -799,6 +804,16 @@ const codeBlockStyles = EditorView.theme({
     fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
     fontSize: '0.5em',
     color: 'var(--widget-text-muted, #888)',
+  },
+  '.cm-codeblock-fence-open': {
+    borderTop: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
+    borderBottom: '0',
+    borderRadius: '3px 3px 0 0',
+  },
+  '.cm-codeblock-fence-close': {
+    borderTop: '0',
+    borderBottom: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
+    borderRadius: '0 0 3px 3px',
   },
   // Mobile: code blocks need to be larger and scroll horizontally
   '@media (max-width: 768px)': {
@@ -1088,11 +1103,25 @@ function getCurrentBlockTypeInfo(view) {
 }
 
 /**
+ * Extract the language identifier from a Markdown fence info string.
+ * Supports both standard Markdown (` ```python `) and Quarto/knitr
+ * (` ```{python, echo=false} `) forms.
+ */
+function codeFenceLanguage(raw) {
+  if (!raw) return '';
+  const value = String(raw).trim();
+  const quarto = value.match(/^\{([\w:.-]+)(?:[,\s][^}]*)?\}/);
+  if (quarto) return quarto[1];
+  const standard = value.match(/^([\w:.-]+)/);
+  return standard ? standard[1] : '';
+}
+
+/**
  * Normalize code language aliases to canonical names matching template keys.
  */
 function normalizeCodeLanguage(raw) {
-  if (!raw) return '';
-  const lang = raw.toLowerCase().trim();
+  const lang = codeFenceLanguage(raw).toLowerCase().trim();
+  if (!lang) return '';
   const map = {
     'js': 'javascript', 'node': 'javascript', 'ecmascript': 'javascript',
     'ts': 'typescript',
@@ -1431,6 +1460,7 @@ function create(target, options = {}) {
   const userName = config.user.name;
   const userColor = config.user.color;
   const userType = config.user.type;
+  const outputWidgetsEnabled = options.outputWidgets !== false && options.outputWidget !== false;
 
   // Yjs options (not in structured config yet - passed directly)
   const {
@@ -1562,7 +1592,9 @@ function create(target, options = {}) {
   });
 
   // Inject CSS styles
-  injectOutputWidgetStyles();
+  if (outputWidgetsEnabled) {
+    injectOutputWidgetStyles();
+  }
   if (awarenessUI) {
     injectAwarenessStyles();
   }
@@ -1838,7 +1870,7 @@ ${scrollSelectors.map(s => `${s}::-webkit-scrollbar-corner`).join(',\n')} {
     // Cell execution keymap (Shift-Enter, Mod-Enter, etc.)
     // Initially empty, configured after api is created
     keymapCompartment.of([]),
-    outputWidgetPlugin, // ANSI output rendering
+    ...(outputWidgetsEnabled ? [outputWidgetPlugin] : []), // ANSI output rendering
     ...createInlineEditingExtensions(),
     lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
     linkedTableMarkdownState,
@@ -1940,7 +1972,9 @@ ${scrollSelectors.map(s => `${s}::-webkit-scrollbar-corner`).join(',\n')} {
     // Add awareness extensions to the view
     const awarenessExtensions = awarenessSystem.getExtensions();
     // Also configure output widget to use awareness (for collaborative focus sync)
-    awarenessExtensions.push(outputWidgetAwarenessFacet.of(awarenessSystem));
+    if (outputWidgetsEnabled) {
+      awarenessExtensions.push(outputWidgetAwarenessFacet.of(awarenessSystem));
+    }
 
     if (awarenessExtensions.length > 0) {
       view.dispatch({
@@ -4486,6 +4520,7 @@ const codemirror = {
   EditorView,
   EditorState,
   StateEffect,
+  StateField,
   Compartment,
   Text,
   Transaction,
