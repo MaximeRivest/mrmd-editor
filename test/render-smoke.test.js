@@ -18,6 +18,25 @@ const bundle = readFileSync(path.join(root, 'dist', 'mrmd.iife.js'), 'utf8');
 
 const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox'] });
 
+/**
+ * Wait until webfonts are loaded and the editor's content height has been
+ * stable for two consecutive checks. Layout-stability assertions must not
+ * race font loading or async widget measurement.
+ */
+async function waitForStableLayout(page) {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    const view = window.editor.view;
+    let last = -1;
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      const h = view.contentHeight;
+      if (h === last) return;
+      last = h;
+    }
+  });
+}
+
 async function render(doc) {
   const page = await browser.newPage();
   page.on('pageerror', (err) => {
@@ -115,7 +134,7 @@ const stabilityDoc = [
     const len = window.editor.view.state.doc.length;
     window.editor.view.dispatch({ selection: { anchor: len } });
   }, stabilityDoc);
-  await new Promise((r) => setTimeout(r, 400)); // widgets render + measure
+  await waitForStableLayout(page); // widgets render + fonts load + measure
 
   const drift = await page.evaluate(async () => {
     const view = window.editor.view;
@@ -146,7 +165,7 @@ const stabilityDoc = [
     const len = window.editor.view.state.doc.length;
     window.editor.view.dispatch({ selection: { anchor: len } });
   }, stabilityDoc);
-  await new Promise((r) => setTimeout(r, 400)); // table renders, height cached
+  await waitForStableLayout(page); // table renders, fonts load, height cached
 
   const result = await page.evaluate(async () => {
     const view = window.editor.view;
@@ -174,6 +193,54 @@ const stabilityDoc = [
     `document height drifted ${result.maxDrift}px while editing inside a table`
   );
   await page.close();
+}
+
+// ── Click-to-edit on rendered widgets ──
+
+// 7. Clicking a rendered table or math block must reveal its source.
+{
+  const page = await browser.newPage();
+  page.on('pageerror', (err) => { throw new Error(`page error: ${err.message}`); });
+  await page.setContent('<div id="editor" style="height:600px"></div>');
+  await page.evaluate(bundle);
+  await page.evaluate((content) => {
+    window.editor = window.mrmd.create('#editor', { doc: content });
+    const len = window.editor.view.state.doc.length;
+    window.editor.view.dispatch({ selection: { anchor: len } });
+  }, stabilityDoc);
+  await waitForStableLayout(page);
+
+  // Table: dispatch a mousedown on the rendered table widget.
+  const tableRevealed = await page.evaluate(async () => {
+    const widget = document.querySelector('.cm-table-widget, [data-table-id], table');
+    if (!widget) return 'no table widget found';
+    widget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 100));
+    const view = window.editor.view;
+    const cursorLineText = view.state.doc.lineAt(view.state.selection.main.head).text;
+    return cursorLineText.includes('|') ? 'ok' : `cursor on: ${cursorLineText}`;
+  });
+  assert.equal(tableRevealed, 'ok', `table click-to-edit failed (${tableRevealed})`);
+
+  // Math: click the rendered display math, cursor should land inside $$ ... $$.
+  const mathRevealed = await page.evaluate(async () => {
+    const widget = document.querySelector('.cm-math-display');
+    if (!widget) return 'no math widget found';
+    widget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 100));
+    const view = window.editor.view;
+    const cursorLineText = view.state.doc.lineAt(view.state.selection.main.head).text;
+    return /\\int|\$\$/.test(cursorLineText) ? 'ok' : `cursor on: ${cursorLineText}`;
+  });
+  assert.equal(mathRevealed, 'ok', `math click-to-edit failed (${mathRevealed})`);
+  await page.close();
+}
+
+// 8. Backslash escapes render without the backslash (\$5 → $5).
+{
+  const r = await render('Pay \\$3 up front, escaped star \\* here.\n\ntail prose\n');
+  assert.ok(!r.text.includes('\\$'), `escaped dollar still shows backslash: ${JSON.stringify(r.text.slice(0, 80))}`);
+  assert.ok(r.text.includes('$3'), 'escaped dollar lost its $');
 }
 
 await browser.close();

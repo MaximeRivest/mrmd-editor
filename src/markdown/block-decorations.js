@@ -112,11 +112,42 @@ export function clearHeightCache() {
   widgetHeightCache.clear();
 }
 
-// Heights measured before webfonts finish loading are wrong (fallback font
-// metrics). Drop them once fonts are ready so the next renders re-measure.
-if (typeof document !== 'undefined' && document.fonts?.ready) {
-  document.fonts.ready.then(() => clearHeightCache()).catch(() => {});
-}
+/**
+ * Re-measure when webfonts finish loading.
+ *
+ * Widget DOM heights change when fonts swap in (KaTeX loads its fonts lazily
+ * on first math render). CodeMirror only measures during update cycles, so
+ * without this the stale height sits in the height map until the user's next
+ * keystroke forces a measure — and the page visibly jumps at the start of
+ * typing. Instead: drop cached heights and request a measure immediately,
+ * at idle, when each font batch lands.
+ */
+export const fontRemeasurePlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.view = view;
+      this.onFontsChanged = () => {
+        clearHeightCache();
+        // Double rAF: ensure the font swap has actually reflowed the DOM
+        // before CodeMirror reads heights, otherwise we measure the old
+        // fallback-font layout and keep the stale value.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => this.view.requestMeasure());
+        });
+      };
+      if (typeof document !== 'undefined' && document.fonts) {
+        document.fonts.addEventListener?.('loadingdone', this.onFontsChanged);
+        document.fonts.ready?.then(() => this.onFontsChanged()).catch(() => {});
+      }
+    }
+
+    destroy() {
+      if (typeof document !== 'undefined' && document.fonts) {
+        document.fonts.removeEventListener?.('loadingdone', this.onFontsChanged);
+      }
+    }
+  },
+);
 
 // =============================================================================
 // Stable height reservation while editing inside a block region
@@ -161,6 +192,34 @@ function editingSpacerPadding(regionKey, contentHash, lineCount) {
 
   const padding = reserved - lineCount * getLineHeight();
   return padding > 0 ? padding : 0;
+}
+
+/**
+ * Make a rendered block widget enter edit mode on click: place the cursor at
+ * the widget's current document position so the StateField reveals the raw
+ * source. Uses posAtDOM so positions are never stale after document edits.
+ *
+ * @param {HTMLElement} dom
+ * @param {import('@codemirror/view').EditorView | undefined} view
+ * @param {number} lineOffset - lines to move the cursor past the region start
+ *   (e.g. 1 to land inside `$$ ... $$` rather than on the opening fence)
+ */
+function attachClickToEdit(dom, view, lineOffset = 0) {
+  if (!view) return;
+  dom.style.cursor = 'text';
+  dom.addEventListener('mousedown', (event) => {
+    // Leave interactive elements (links, buttons, inputs) alone.
+    if (event.target.closest('a, button, input, textarea, select')) return;
+    event.preventDefault();
+    let pos = view.posAtDOM(dom);
+    if (lineOffset > 0) {
+      const startLine = view.state.doc.lineAt(pos).number;
+      const target = Math.min(startLine + lineOffset, view.state.doc.lines);
+      pos = view.state.doc.line(target).from;
+    }
+    view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+    view.focus();
+  });
 }
 
 /**
@@ -272,9 +331,10 @@ class TableWidgetWithHeightCache extends TableWidget {
       Math.round((this.rowCount + 1) * getLineHeight());
   }
 
-  toDOM() {
-    const dom = super.toDOM();
+  toDOM(view) {
+    const dom = super.toDOM(view);
     const contentHash = this.contentHash;
+    attachClickToEdit(dom, view);
 
     // Cache the LINE height (not widget height) after render
     // The line includes widget buffers and other CM overhead
@@ -369,9 +429,11 @@ class DisplayMathWidgetWithHeightCache extends DisplayMathWidget {
       Math.round(getLineHeight() * 3);
   }
 
-  toDOM() {
-    const dom = super.toDOM();
+  toDOM(view) {
+    const dom = super.toDOM(view);
     const contentHash = this.contentHash;
+    // Land inside the $$ ... $$ body, not on the opening delimiter line.
+    attachClickToEdit(dom, view, 1);
 
     // Cache the LINE height (not widget height) after render
     // The line includes widget buffers and other CM overhead

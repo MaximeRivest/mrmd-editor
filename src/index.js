@@ -205,6 +205,7 @@ import {
   findFencedCodeAt,
   blockDecorations,  // StateField for tables, display math (multi-line replace)
   lineHeightTracker, // ViewPlugin for accurate line height tracking
+  fontRemeasurePlugin, // ViewPlugin: re-measure widget heights when webfonts land
   markdownStyles,
   injectMarkdownStyles,
   // Widgets
@@ -798,12 +799,15 @@ const codeBlockStyles = EditorView.theme({
     fontSize: 'var(--code-font-size, 0.8em)',
     lineHeight: 'var(--code-line-height, 1.5)',
   },
-  // Fence lines (``` markers) - even smaller, very subtle
+  // Fence lines (``` markers) - even smaller, very subtle. Backtick marks are
+  // hidden on blur by the renderer, so these rows read as header/footer chrome.
   '.cm-codeblock-fence': {
     boxShadow: 'inset 0 0 0 9999px color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
     fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
     fontSize: '0.5em',
     color: 'var(--widget-text-muted, #888)',
+    padding: '3px 0 3px 8px',
+    minHeight: '14px',
   },
   '.cm-codeblock-fence-open': {
     borderTop: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
@@ -1873,6 +1877,7 @@ ${scrollSelectors.map(s => `${s}::-webkit-scrollbar-corner`).join(',\n')} {
     ...(outputWidgetsEnabled ? [outputWidgetPlugin] : []), // ANSI output rendering
     ...createInlineEditingExtensions(),
     lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
+    fontRemeasurePlugin, // ViewPlugin: re-measure when webfonts land (KaTeX fonts load late)
     linkedTableMarkdownState,
     blockDecorations,   // StateField for tables, display math (multi-line)
     markdownRenderer,   // ViewPlugin for everything else (inline)
