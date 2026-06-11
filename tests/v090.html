@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>mrmd 0.9.0 — fix showcase (click tables/math/images to edit)</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { height: 100vh; display: flex; flex-direction: column; }
+    #editor { flex: 1; overflow: auto; max-width: 820px; margin: 0 auto; width: 100%; padding: 20px 0; }
+  </style>
+</head>
+<body>
+  <div id="editor"></div>
+  <script src="../dist/mrmd.iife.js"></script>
+  <script>
+    const doc = [
+      '---',
+      'title: mrmd 0.9.0 showcase',
+      'author: maxime',
+      '---',
+      '',
+      '# What to try',
+      '',
+      '## 1. No more page jumps',
+      '',
+      'Click **inside the table below**, then type fast. The page should not move at all.',
+      '',
+      '| Region | Q1 | Q2 | Q3 |',
+      '|--------|----|----|----|',
+      '| East   | 42 | 38 | 51 |',
+      '| West   | 38 | 44 | 40 |',
+      '| North  | 29 | 31 | 35 |',
+      '| South  | 47 | 45 | 52 |',
+      '',
+      'Same for the math block — click into it and edit the LaTeX:',
+      '',
+      '$$',
+      '\\int_0^\\infty e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}',
+      '$$',
+      '',
+      '## 2. R and currency are no longer math',
+      '',
+      'Use `df$col` and `df$other` to select columns — no stray math.',
+      '',
+      'It costs $5 and $10 more than expected. Pay \\$3 up front.',
+      '',
+      'But real math still works inline: $e^{i\\pi} + 1 = 0$ and $\\sum_{k=1}^n k = \\frac{n(n+1)}{2}$.',
+      '',
+      '## 3. $$ inside code cannot eat the document',
+      '',
+      '```python',
+      'template = "$$PLACEHOLDER$$"',
+      'print(template)',
+      '```',
+      '',
+      'This paragraph survives, and the display math above still renders.',
+      '',
+      '## 4. Quarto fences',
+      '',
+      '```{python, echo=FALSE}',
+      'import pandas as pd',
+      'pd.DataFrame({"a": [1, 2, 3]})',
+      '```',
+      '',
+      '## 5. Images — click one to edit its markdown',
+      '',
+      '![sample screenshot](../_assets/paste-2026-03-14T18-35-08.png)',
+      '',
+      '## 6. Details blocks',
+      '',
+      '<details>',
+      '<summary>Click to expand the appendix</summary>',
+      '',
+      'Hidden content with **markdown** inside, and a fence:',
+      '',
+      '```js',
+      'console.log("hello from inside details")',
+      '```',
+      '',
+      '</details>',
+      '',
+      'A closing paragraph so there is content below everything.',
+      '',
+    ].join('\n');
+
+    const editor = mrmd.create('#editor', { doc, javascriptIsolation: 'none' });
+    window.editor = editor;
+  </script>
+</body>
+</html>
