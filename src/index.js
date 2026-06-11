@@ -1941,6 +1941,8 @@ ${scrollSelectors.map(s => `${s}::-webkit-scrollbar-corner`).join(',\n')} {
     parent: element
   });
 
+  if (readonly) view.dom.classList.add('mrmd-readonly');
+
   // Scroll-fade: toggle .mrmd-scrolling class on scroll containers.
   // The CSS transitions handle fade-in (fast) and fade-out (slow).
   const scrollFadeTimers = new WeakMap();
@@ -2411,6 +2413,14 @@ ${scrollSelectors.map(s => `${s}::-webkit-scrollbar-corner`).join(',\n')} {
           value ? EditorState.readOnly.of(true) : []
         )
       });
+      // Reading-mode presentation: everything stays rendered, no caret, no
+      // click-to-edit reveals. Cell run buttons keep working (execution
+      // writes output programmatically, which readOnly does not block).
+      view.dom.classList.toggle('mrmd-readonly', !!value);
+    },
+
+    isReadonly() {
+      return view.state.readOnly;
     },
 
     /**

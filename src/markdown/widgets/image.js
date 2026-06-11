@@ -26,6 +26,7 @@ import { WidgetType } from '@codemirror/view';
 function attachImageClickToEdit(dom, view) {
   if (!view) return;
   dom.addEventListener('mousedown', (event) => {
+    if (view.state.readOnly) return; // reading mode: no source reveal
     if (event.target.closest('a')) return; // linked images stay clickable
     event.preventDefault();
     const pos = view.posAtDOM(dom);

@@ -1193,6 +1193,26 @@ export const markdownStyles = `
   background: var(--widget-surface);
 }
 
+/* Reading mode: no caret, no active-line highlight, no edit affordances.
+   Selection and cell run controls keep working. */
+.mrmd-readonly .cm-cursor,
+.mrmd-readonly .cm-dropCursor {
+  display: none !important;
+}
+
+.mrmd-readonly .cm-activeLine {
+  background: transparent !important;
+}
+
+.mrmd-readonly .cm-details-edit {
+  display: none !important;
+}
+
+.mrmd-readonly .cm-content {
+  caret-color: transparent !important;
+  cursor: default;
+}
+
 .cm-details-edit {
   position: absolute;
   top: 6px;
