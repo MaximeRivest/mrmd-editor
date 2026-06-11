@@ -66636,8 +66636,9 @@ ${bodyHtml}
 
       const header = document.createElement('div');
       header.className = 'cm-scroll-output-header';
+      // Header is quiet chrome: muted label, actions revealed on hover.
       header.innerHTML = `
-      <span class="cm-scroll-output-badge">Output</span>
+      <span class="cm-scroll-output-badge">output</span>
       <span class="cm-scroll-output-lines">${escapeHtml$2(String(this.lineCount))} lines</span>
       <div class="cm-scroll-output-actions">
         <button type="button" class="cm-scroll-output-action" data-action="expand">Expand</button>
@@ -66735,7 +66736,7 @@ ${bodyHtml}
       const header = document.createElement('div');
       header.className = 'cm-json-header';
       header.innerHTML = `
-      <span class="cm-json-badge">JSON</span>
+      <span class="cm-json-badge">json</span>
       ${originLabel ? `<span class="cm-json-origin">${escapeHtml$2(originLabel)}</span>` : ''}
       <span class="cm-json-summary">${escapeHtml$2(summarizeJson(parsedValue))}</span>
       <div class="cm-json-actions">
@@ -67461,9 +67462,12 @@ ${bodyHtml}
   font-size: 1px !important;
   line-height: 0 !important;
   height: 0 !important;
+  min-height: 0 !important;
   overflow: hidden !important;
   padding: 0 !important;
   margin: 0 !important;
+  border: 0 !important;
+  box-shadow: none !important;
   color: transparent !important;
 }
 
@@ -67818,7 +67822,7 @@ ${bodyHtml}
 .cm-html-output-widget {
   position: relative;
   z-index: 5;
-  margin: 8px 0;
+  margin: 8px 0 8px var(--widget-inset-left, 24px);
   padding: 0;
   background: var(--widget-surface, rgba(0, 0, 0, 0.35));
   border-radius: var(--widget-border-radius, 6px);
@@ -67857,12 +67861,11 @@ ${bodyHtml}
 /* CSS Output Widget - compact selector impact summary */
 .cm-css-output-widget {
   position: relative;
-  margin: 8px 0;
+  margin: 8px 0 8px var(--widget-inset-left, 24px);
   padding: 0;
   background: var(--widget-surface, rgba(0, 0, 0, 0.35));
   border-radius: var(--widget-border-radius, 6px);
   border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.08));
-  border-left: 2px solid var(--widget-accent-css, #64b5f6);
   line-height: normal; /* Override parent's collapsed line-height */
   font-size: var(--mrmd-ui-font-size, 13px);
 }
@@ -67984,10 +67987,9 @@ ${bodyHtml}
 /* Scrollable plain output widget (for long outputs) */
 .cm-scroll-output-widget {
   position: relative;
-  margin: 8px 0;
+  margin: 8px 0 8px var(--widget-inset-left, 24px);
   background: var(--widget-surface, rgba(0, 0, 0, 0.35));
   border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
-  border-left: 3px solid var(--widget-border-accent, rgba(100, 149, 237, 0.6));
   border-radius: var(--widget-border-radius, 6px);
   overflow: hidden;
   line-height: normal; /* Override parent's collapsed line-height */
@@ -67998,20 +68000,13 @@ ${bodyHtml}
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--widget-border, rgba(255, 255, 255, 0.08));
-  background: var(--widget-surface-elevated, rgba(255, 255, 255, 0.02));
+  padding: 3px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--widget-border, rgba(255, 255, 255, 0.08)) 50%, transparent);
 }
 
 .cm-scroll-output-badge {
   font-size: 10px;
-  color: var(--widget-text-accent, #8cc0ff);
-  background: color-mix(in srgb, var(--widget-text-accent, #8cc0ff) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--widget-text-accent, #8cc0ff) 35%, transparent);
-  border-radius: 3px;
-  padding: 2px 6px;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
+  color: var(--widget-text-muted, #888);
   font-family: var(--widget-font-mono, monospace);
 }
 
@@ -68027,19 +68022,26 @@ ${bodyHtml}
 }
 
 .cm-scroll-output-action {
-  background: var(--widget-surface-inset, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.14));
+  background: transparent;
+  border: 0;
   color: var(--widget-text-muted, rgba(255, 255, 255, 0.75));
   border-radius: 4px;
-  padding: 2px 7px;
-  font-size: 11px;
+  padding: 1px 6px;
+  font-size: 10px;
   cursor: pointer;
-  font-family: var(--widget-font-mono, monospace);
+  font-family: var(--widget-font-sans, system-ui, sans-serif);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.cm-scroll-output-widget:hover .cm-scroll-output-action {
+  opacity: 0.8;
 }
 
 .cm-scroll-output-action:hover {
   background: var(--widget-surface-hover, rgba(255, 255, 255, 0.08));
   color: var(--widget-text, #e0e0e0);
+  opacity: 1;
 }
 
 .cm-scroll-output-body {
@@ -68068,10 +68070,9 @@ ${bodyHtml}
 /* JSON Output Widget - expandable tree view */
 .cm-json-output-widget {
   position: relative;
-  margin: 8px 0;
+  margin: 8px 0 8px var(--widget-inset-left, 24px);
   background: var(--widget-surface, rgba(0, 0, 0, 0.35));
   border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.1));
-  border-left: 3px solid var(--widget-accent-json, #8cc0ff);
   border-radius: var(--widget-border-radius, 6px);
   overflow: hidden;
   line-height: normal; /* Override parent's collapsed line-height */
@@ -68082,20 +68083,13 @@ ${bodyHtml}
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--widget-border, rgba(255, 255, 255, 0.08));
-  background: var(--widget-surface-elevated, rgba(255, 255, 255, 0.02));
+  padding: 3px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--widget-border, rgba(255, 255, 255, 0.08)) 50%, transparent);
 }
 
 .cm-json-badge {
   font-size: 10px;
-  color: var(--widget-accent-json, #8cc0ff);
-  background: color-mix(in srgb, var(--widget-accent-json, #8cc0ff) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--widget-accent-json, #8cc0ff) 35%, transparent);
-  border-radius: 3px;
-  padding: 2px 6px;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
+  color: var(--widget-text-muted, #888);
   font-family: var(--widget-font-mono, monospace);
 }
 
@@ -68118,19 +68112,26 @@ ${bodyHtml}
 }
 
 .cm-json-action {
-  background: var(--widget-surface-inset, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--widget-border, rgba(255, 255, 255, 0.14));
+  background: transparent;
+  border: 0;
   color: var(--widget-text-muted, rgba(255, 255, 255, 0.75));
   border-radius: 4px;
-  padding: 2px 7px;
-  font-size: 11px;
+  padding: 1px 6px;
+  font-size: 10px;
   cursor: pointer;
-  font-family: var(--widget-font-mono, monospace);
+  font-family: var(--widget-font-sans, system-ui, sans-serif);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.cm-json-output-widget:hover .cm-json-action {
+  opacity: 0.8;
 }
 
 .cm-json-action:hover {
   background: var(--widget-surface-hover, rgba(255, 255, 255, 0.08));
   color: var(--widget-text, #e0e0e0);
+  opacity: 1;
 }
 
 .cm-json-tree {
@@ -143573,7 +143574,9 @@ $1 $2
     },
     // Fence lines (``` markers) - even smaller, very subtle. Backtick marks are
     // hidden on blur by the renderer, so these rows read as header/footer chrome.
-    '.cm-codeblock-fence': {
+    // Output fences (.cm-output-fence-line) are excluded: the output widget
+    // collapses them to invisible chrome and provides its own frame.
+    '.cm-codeblock-fence:not(.cm-output-fence-line):not(.cm-output-fence-editing)': {
       boxShadow: 'inset 0 0 0 9999px color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
       fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
       fontSize: '0.5em',
@@ -143583,12 +143586,12 @@ $1 $2
       borderLeft: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
       borderRight: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
     },
-    '.cm-codeblock-fence-open': {
+    '.cm-codeblock-fence-open:not(.cm-output-fence-line):not(.cm-output-fence-editing)': {
       borderTop: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
       borderBottom: '0',
       borderRadius: '3px 3px 0 0',
     },
-    '.cm-codeblock-fence-close': {
+    '.cm-codeblock-fence-close:not(.cm-output-fence-line):not(.cm-output-fence-editing)': {
       borderTop: '0',
       borderBottom: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
       borderRadius: '0 0 3px 3px',
