@@ -128,6 +128,10 @@
     p('```python', 'template = "$$PLACEHOLDER$$"', 'print(template)', '```');
     p('This paragraph survives, and all math above still renders.');
 
+    p('## 11. Inline comments');
+    p('Click a 💬 marker to open, edit, save, or delete the comment — it lives in the markdown as <!--! ... !-->. Ctrl+Shift+/ adds one at the cursor.');
+    p('This sentence has a comment <!--! is this the right tone? !--> in the middle, and another one here <!--! cite the Q3 numbers !--> too.');
+
     p('Closing paragraph so there is content below everything.');
 
     const editor = mrmd.create('#editor', {
