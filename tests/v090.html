@@ -19,6 +19,7 @@
   <div id="theme-bar">
     <label for="theme-select">theme</label>
     <select id="theme-select"></select>
+    <button id="lock-toggle" title="Toggle reading mode (locked: cells run, nothing edits)">🔓</button>
   </div>
   <div id="editor"></div>
   <script src="../dist/mrmd.iife.js"></script>
@@ -159,6 +160,17 @@
       editor.setTheme?.(select.value);
       document.body.style.background =
         getComputedStyle(document.querySelector('.cm-editor')).backgroundColor || '';
+    });
+
+    // Reading mode toggle: locked = fully rendered, selectable, runnable.
+    const lock = document.getElementById('lock-toggle');
+    lock.addEventListener('click', () => {
+      const next = !editor.isReadonly();
+      editor.setReadonly(next);
+      lock.textContent = next ? '🔒' : '🔓';
+      lock.title = next
+        ? 'Reading mode ON — cells run, nothing edits. Click to unlock.'
+        : 'Toggle reading mode (locked: cells run, nothing edits)';
     });
   </script>
 </body>
