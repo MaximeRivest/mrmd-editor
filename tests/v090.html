@@ -7,9 +7,19 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { height: 100vh; display: flex; flex-direction: column; }
     #editor { flex: 1; overflow: auto; max-width: 860px; margin: 0 auto; width: 100%; padding: 20px 0; }
+    #theme-bar {
+      position: fixed; top: 10px; right: 14px; z-index: 50;
+      display: flex; gap: 6px; align-items: center;
+      font: 12px system-ui, sans-serif; opacity: 0.85;
+    }
+    #theme-bar select { font: inherit; padding: 2px 6px; }
   </style>
 </head>
 <body>
+  <div id="theme-bar">
+    <label for="theme-select">theme</label>
+    <select id="theme-select"></select>
+  </div>
   <div id="editor"></div>
   <script src="../dist/mrmd.iife.js"></script>
   <script>
@@ -125,6 +135,27 @@
       javascriptIsolation: 'none',
     });
     window.editor = editor;
+
+    // Theme preset switcher — exercises every registered theme.
+    const widgets = mrmd.widgets || mrmd;
+    const select = document.getElementById('theme-select');
+    const names = (widgets.getThemeNames ? widgets.getThemeNames() : []).sort();
+    for (const name of names) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      select.appendChild(opt);
+    }
+    const initial = names.includes('daylight') ? 'daylight' : names[0];
+    if (initial) {
+      select.value = initial;
+      editor.setTheme?.(initial);
+    }
+    select.addEventListener('change', () => {
+      editor.setTheme?.(select.value);
+      document.body.style.background =
+        getComputedStyle(document.querySelector('.cm-editor')).backgroundColor || '';
+    });
   </script>
 </body>
 </html>
