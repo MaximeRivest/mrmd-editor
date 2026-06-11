@@ -454,6 +454,21 @@ function buildDecorations(view) {
       }
 
       // =======================================================================
+      // BACKSLASH ESCAPES (\$ \* \_ ...) — hide the backslash when rendered
+      // =======================================================================
+      if (node.name === 'Escape') {
+        if (isActiveLine) {
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-marker' }).range(node.from, node.from + 1)
+          );
+        } else {
+          decorations.push(
+            Decoration.replace({}).range(node.from, node.from + 1)
+          );
+        }
+      }
+
+      // =======================================================================
       // STRIKETHROUGH
       // =======================================================================
       if (node.name === 'Strikethrough') {
@@ -477,16 +492,14 @@ function buildDecorations(view) {
         );
       }
 
-      // Code backticks (inline only, not fenced code)
+      // Code backticks — inline and fence markers both follow the standard
+      // blur→hidden / focus→visible marker rule. Hiding fence backticks turns
+      // the fence rows into clean header/footer chrome instead of showing
+      // floating ``` glyphs inside the block.
       if (node.name === 'CodeMark') {
-        const text = doc.sliceString(node.from, node.to);
-        // In normal rendered mode, only hide inline backticks.
-        // In WYSIWYG mode, also hide fenced code markers.
-        if (text.length < 3 || isWysiwygMode) {
-          decorations.push(
-            Decoration.mark({ class: markerClass }).range(node.from, node.to)
-          );
-        }
+        decorations.push(
+          Decoration.mark({ class: markerClass }).range(node.from, node.to)
+        );
       }
 
       // =======================================================================

@@ -16,6 +16,24 @@
 
 import { WidgetType } from '@codemirror/view';
 
+/**
+ * Clicking a rendered image places the cursor at the image's markdown source
+ * so the user can edit it. Links inside (linked images) keep working.
+ *
+ * @param {HTMLElement} dom
+ * @param {import('@codemirror/view').EditorView | undefined} view
+ */
+function attachImageClickToEdit(dom, view) {
+  if (!view) return;
+  dom.addEventListener('mousedown', (event) => {
+    if (event.target.closest('a')) return; // linked images stay clickable
+    event.preventDefault();
+    const pos = view.posAtDOM(dom);
+    view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+    view.focus();
+  });
+}
+
 // =============================================================================
 // Link Definition Cache
 // =============================================================================
@@ -182,9 +200,10 @@ export class ImageWidget extends WidgetType {
     );
   }
 
-  toDOM() {
+  toDOM(view) {
     const container = document.createElement('span');
     container.className = 'cm-image-inline cm-image-loading';
+    attachImageClickToEdit(container, view);
 
     const img = document.createElement('img');
     img.alt = this.alt;
@@ -277,11 +296,12 @@ export class BlockImageWidget extends WidgetType {
     );
   }
 
-  toDOM() {
+  toDOM(view) {
     const container = document.createElement('div');
     container.className = `cm-image-block cm-image-pos-${this.position}`;
     container.dataset.imageId = this.imageId;
     container.dataset.position = this.position;
+    attachImageClickToEdit(container, view);
 
     const wrapper = document.createElement('div');
     wrapper.className = 'cm-image-block-wrapper cm-image-loading';
