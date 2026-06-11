@@ -26,10 +26,63 @@ import { tags as t } from '@lezer/highlight';
  *   parent: document.body,
  * });
  */
+/**
+ * Parse a CSS color into [r, g, b] (0-255). Supports #rgb, #rrggbb, #rrggbbaa
+ * and rgb()/rgba(). Returns null for anything else (var(), color-mix, names).
+ */
+function parseColor(value) {
+  if (typeof value !== 'string') return null;
+  const v = value.trim();
+  const hex = v.match(/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
+  if (hex) {
+    let h = hex[1];
+    if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+    return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+  }
+  const rgb = v.match(/^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i);
+  if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
+  return null;
+}
+
+function luminance([r, g, b]) {
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+}
+
+/**
+ * Guarantee the selection color is visibly different from the editor
+ * background. Themes routinely pick selection colors that are nearly
+ * invisible against their background; the editor protects itself by blending
+ * the theme's selection toward its accent until there is enough separation.
+ * The theme's hue is preserved — only its weight is corrected.
+ */
+function ensureVisibleSelection(selection, background, accent) {
+  const sel = parseColor(selection);
+  const bg = parseColor(background);
+  if (!sel || !bg) return selection;
+
+  const MIN_DELTA = 0.085;
+  if (Math.abs(luminance(sel) - luminance(bg)) >= MIN_DELTA) return selection;
+
+  const fallback = parseColor(accent) || (luminance(bg) > 0.5 ? [37, 99, 235] : [96, 165, 250]);
+  // Blend selection toward the accent until the floor is met (max 3 steps).
+  let mixed = sel;
+  for (let step = 0; step < 3; step++) {
+    mixed = mixed.map((c, i) => Math.round(c * 0.6 + fallback[i] * 0.4));
+    if (Math.abs(luminance(mixed) - luminance(bg)) >= MIN_DELTA) break;
+  }
+  return `rgb(${mixed[0]}, ${mixed[1]}, ${mixed[2]})`;
+}
+
 export function createCodemirrorTheme(theme) {
   if (!theme) {
     throw new Error('Theme is required');
   }
+
+  const selectionColor = ensureVisibleSelection(
+    theme['--editor-selection'] || '#264f78',
+    theme['--editor-background'] || '#1e1e1e',
+    theme['--widget-border-accent'] || theme['--widget-text-accent'] || theme['--mrmd-accent'],
+  );
 
   // Create the base editor theme (backgrounds, cursors, etc.)
   const editorTheme = EditorView.theme({
@@ -59,9 +112,10 @@ export function createCodemirrorTheme(theme) {
       borderLeftColor: theme['--editor-cursor'] || '#aeafad',
     },
 
-    // Selection
+    // Selection — uses the visibility-protected color (see
+    // ensureVisibleSelection above), not the raw theme token.
     '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-      backgroundColor: theme['--editor-selection'] || '#264f78',
+      backgroundColor: selectionColor,
     },
 
     // Search match highlighting

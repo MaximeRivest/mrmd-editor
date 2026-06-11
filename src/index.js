@@ -828,14 +828,14 @@ const codeBlockStyles = EditorView.theme({
     padding: '4px 96px 2px 12px',
     borderTop: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 55%, transparent)',
     borderBottom: '0',
-    borderRadius: '6px 6px 0 0',
+    borderRadius: 'var(--widget-border-radius, 6px) var(--widget-border-radius, 6px) 0 0',
   },
   '.cm-codeblock-fence-close:not(.cm-output-fence-line):not(.cm-output-fence-editing)': {
     minHeight: '8px',
     padding: '0 12px',
     borderTop: '0',
     borderBottom: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 55%, transparent)',
-    borderRadius: '0 0 6px 6px',
+    borderRadius: '0 0 var(--widget-border-radius, 6px) var(--widget-border-radius, 6px)',
   },
   // Cell controls live at the right edge of the header, quiet until hover.
   '.cm-codeblock-fence-open .cm-cell-controls': {

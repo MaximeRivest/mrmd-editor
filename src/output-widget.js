@@ -1915,6 +1915,18 @@ export const outputWidgetStyles = `
   color: transparent !important;
 }
 
+/* Theme syntax highlighting paints fence text through the line's transparent
+ * color (highlight spans carry their own color — including CodeMirror's
+ * hashed highlight classes). Without this, the 1px fence text shows as a tiny
+ * trailing dash beside rich output widgets. Rich widgets mount on this same
+ * line, so exclude their containers; everything else goes invisible. */
+.cm-output-fence-line > span:not([class*="-output-widget"]),
+.cm-output-fence-line > span:not([class*="-output-widget"]) * {
+  color: transparent !important;
+  background: transparent !important;
+  text-shadow: none !important;
+}
+
 /* Rich output widgets (HTML/CSS/Mermaid->HTML) are mounted on the opening
  * fence line. Keep that line unclipped so the inline widget can paint.
  *
