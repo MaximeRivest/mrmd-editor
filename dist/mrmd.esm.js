@@ -66983,7 +66983,13 @@ class EmptyStdinWidget extends WidgetType {
 function buildDecorations$4(view, awarenessSystem) {
   const decorations = [];
   const doc = view.state.doc;
-  const cursorPos = view.state.selection.main.head;
+  // Reveal raw output based on the selection ANCHOR, not the head. The anchor
+  // is fixed for the whole life of a mouse drag, so dragging a selection
+  // across a rendered output cannot flip it between rendered and editing
+  // layouts mid-drag (which reflows the document under the moving mouse and
+  // oscillates: widget ↔ raw, "big and small"). For a plain caret,
+  // anchor === head, so click-to-edit and arrow navigation are unchanged.
+  const cursorPos = view.state.selection.main.anchor;
   const cursorLine = doc.lineAt(cursorPos).number;
   const text = doc.toString();
   const outputWidgetSettings = getOutputWidgetSettings();
@@ -67035,8 +67041,10 @@ function buildDecorations$4(view, awarenessSystem) {
     const startLine = doc.lineAt(blockStart);
     const endLine = doc.lineAt(blockEnd);
 
-    // Check if LOCAL cursor is inside this block
-    const localCursorInBlock = cursorLine >= startLine.number && cursorLine <= endLine.number;
+    // Check if LOCAL cursor is inside this block. In locked/reading mode
+    // outputs never switch to raw editing layout.
+    const localCursorInBlock = !view.state.readOnly &&
+      cursorLine >= startLine.number && cursorLine <= endLine.number;
 
     // Check if ANY collaborator (local or remote) is focused on this block
     // Uses y-codemirror.next's cursor positions which survive document edits
@@ -67301,8 +67309,10 @@ function buildDecorations$4(view, awarenessSystem) {
     const startLine = doc.lineAt(blockStart);
     const endLine = doc.lineAt(blockEnd);
 
-    // Check if LOCAL cursor is inside this block
-    const localCursorInBlock = cursorLine >= startLine.number && cursorLine <= endLine.number;
+    // Check if LOCAL cursor is inside this block. In locked/reading mode
+    // outputs never switch to raw editing layout.
+    const localCursorInBlock = !view.state.readOnly &&
+      cursorLine >= startLine.number && cursorLine <= endLine.number;
 
     // Check if ANY collaborator is focused on this block
     let anyCollaboratorFocused = localCursorInBlock;
@@ -106521,6 +106531,7 @@ const wysiwygModeFacet = Facet.define({
 function attachImageClickToEdit(dom, view) {
   if (!view) return;
   dom.addEventListener('mousedown', (event) => {
+    if (view.state.readOnly) return; // reading mode: no source reveal
     if (event.target.closest('a')) return; // linked images stay clickable
     event.preventDefault();
     const pos = view.posAtDOM(dom);
@@ -126874,6 +126885,8 @@ function attachClickToEdit(dom, view, lineOffset = 0) {
   if (!view) return;
   dom.style.cursor = 'text';
   dom.addEventListener('mousedown', (event) => {
+    // Reading mode: widgets are not editable, so never reveal source.
+    if (view.state.readOnly) return;
     // Leave interactive elements (links, buttons, inputs) alone.
     if (event.target.closest('a, button, input, textarea, select')) return;
     event.preventDefault();
@@ -127331,13 +127344,20 @@ function findFrontmatterRange$1(state) {
  */
 function buildBlockDecorations(state) {
   const doc = state.doc;
-  const cursorPos = state.selection.main.head;
+  // Anchor, not head: the anchor is fixed during a mouse drag, so selecting
+  // across rendered tables/math cannot flip them to raw source mid-drag
+  // (which reflows the document under the mouse and oscillates the layout).
+  // For a caret, anchor === head — click/arrow behavior is unchanged.
+  const cursorPos = state.selection.main.anchor;
   const cursorLine = doc.lineAt(cursorPos).number;
   const decorations = [];
   beginEditReservationPass();
 
   // Mode flags
   const isSourceMode = state.facet(sourceModeFacet);
+  // Locked/reading mode: blocks never reveal raw source; widgets stay
+  // rendered. (Cell execution still works - it writes programmatically.)
+  const isLocked = state.readOnly && !isSourceMode;
   const isWysiwygMode = state.facet(wysiwygModeFacet);
   const revealedLinkedTables = state.field(linkedTableMarkdownState, false) || new Set();
 
@@ -127388,7 +127408,7 @@ function buildBlockDecorations(state) {
       continue;
     }
 
-    const cursorInTable = isSourceMode || (!isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
+    const cursorInTable = isSourceMode || (!isLocked && !isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
 
     // Collect lines for both rendering and height calculation
     const lines = [];
@@ -127426,7 +127446,7 @@ function buildBlockDecorations(state) {
   const mathRanges = findDisplayMathRanges(state);
 
   for (const range of mathRanges) {
-    const cursorInMath = isSourceMode || (!isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
+    const cursorInMath = isSourceMode || (!isLocked && !isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
     const contentHash = 'math-' + hashContent$1(range.content);
 
     if (!cursorInMath) {
@@ -127462,7 +127482,7 @@ function buildBlockDecorations(state) {
     // collapse the disclosure mid-click because <details> is interactive.
     const revealedDetails = state.field(revealedDetailsState, false) || [];
     const cursorInDetails = isSourceMode ||
-      revealedDetails.some((p) => p >= range.start && p <= range.end);
+      (!isLocked && revealedDetails.some((p) => p >= range.start && p <= range.end));
     const contentHash = 'details-' + hashContent$1(doc.sliceString(range.start, range.end));
 
     if (!cursorInDetails) {
@@ -127487,7 +127507,7 @@ function buildBlockDecorations(state) {
   const fmRange = findFrontmatterRange$1(state);
 
   if (fmRange) {
-    const cursorInFrontmatter = isSourceMode || (!isWysiwygMode && cursorLine >= fmRange.startLine && cursorLine <= fmRange.endLine);
+    const cursorInFrontmatter = isSourceMode || (!isLocked && !isWysiwygMode && cursorLine >= fmRange.startLine && cursorLine <= fmRange.endLine);
     const contentHash = 'fm-' + hashContent$1(fmRange.content);
 
     if (!cursorInFrontmatter) {
@@ -127846,8 +127866,14 @@ function findBangAdmonitions(doc) {
 function buildDecorations(view) {
   const decorations = [];
   const doc = view.state.doc;
-  const cursorPos = view.state.selection.main.head;
-  const cursorLine = doc.lineAt(cursorPos).number;
+  // Anchor, not head: raw markdown reveals follow the stable end of the
+  // selection so dragging across rendered inline elements (math, links,
+  // markers) cannot reflow lines under the moving mouse. Caret behavior is
+  // unchanged (anchor === head).
+  const cursorPos = view.state.selection.main.anchor;
+  // Locked/reading mode: no line is "active"; markers stay hidden and inline
+  // widgets stay rendered even when the caret is placed for selection.
+  const cursorLine = view.state.readOnly ? -1 : doc.lineAt(cursorPos).number;
   const frontmatterRange = findFrontmatterRange(doc);
 
   // Mode flags
@@ -130886,6 +130912,26 @@ const markdownStyles = `
   border: 1px solid var(--widget-border);
   border-radius: 6px;
   background: var(--widget-surface);
+}
+
+/* Reading mode: no caret, no active-line highlight, no edit affordances.
+   Selection and cell run controls keep working. */
+.mrmd-readonly .cm-cursor,
+.mrmd-readonly .cm-dropCursor {
+  display: none !important;
+}
+
+.mrmd-readonly .cm-activeLine {
+  background: transparent !important;
+}
+
+.mrmd-readonly .cm-details-edit {
+  display: none !important;
+}
+
+.mrmd-readonly .cm-content {
+  caret-color: transparent !important;
+  cursor: default;
 }
 
 .cm-details-edit {
@@ -144750,6 +144796,8 @@ ${scrollSelectors.map(s => `${s}::-webkit-scrollbar-corner`).join(',\n')} {
     parent: element
   });
 
+  if (readonly) view.dom.classList.add('mrmd-readonly');
+
   // Scroll-fade: toggle .mrmd-scrolling class on scroll containers.
   // The CSS transitions handle fade-in (fast) and fade-out (slow).
   const scrollFadeTimers = new WeakMap();
@@ -145216,6 +145264,14 @@ ${scrollSelectors.map(s => `${s}::-webkit-scrollbar-corner`).join(',\n')} {
           value ? EditorState.readOnly.of(true) : []
         )
       });
+      // Reading-mode presentation: everything stays rendered, no caret, no
+      // click-to-edit reveals. Cell run buttons keep working (execution
+      // writes output programmatically, which readOnly does not block).
+      view.dom.classList.toggle('mrmd-readonly', !!value);
+    },
+
+    isReadonly() {
+      return view.state.readOnly;
     },
 
     /**
