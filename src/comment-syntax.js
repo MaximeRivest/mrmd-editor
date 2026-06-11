@@ -939,7 +939,15 @@ const bubbleManagerPlugin = ViewPlugin.fromClass(
     checkBubble(state) {
       const bubbleData = state.field(commentBubbleState);
       if (bubbleData) {
-        showBubble(this.view, bubbleData);
+        // Defer: this runs inside a CodeMirror update cycle, and showBubble
+        // reads layout (coordsAtPos), which is forbidden during updates and
+        // crashes the plugin — the bubble would never open.
+        const view = this.view;
+        queueMicrotask(() => {
+          if (view.state.field(commentBubbleState, false) === bubbleData) {
+            showBubble(view, bubbleData);
+          }
+        });
       } else {
         closeActiveBubble();
       }

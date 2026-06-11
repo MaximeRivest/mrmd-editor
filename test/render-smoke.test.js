@@ -289,5 +289,42 @@ const stabilityDoc = [
   await page.close();
 }
 
+// 10. Comment markers open an editing bubble; saving persists to markdown.
+{
+  const page = await browser.newPage();
+  page.on('pageerror', (err) => { throw new Error(`page error: ${err.message}`); });
+  await page.setContent('<div id="editor" style="height:500px"></div>');
+  await page.evaluate(bundle);
+  await page.evaluate(() => {
+    window.editor = window.mrmd.create('#editor', {
+      doc: 'Hello <!--! this needs review !--> world.\n\nmore text\n',
+    });
+    window.editor.view.dispatch({ selection: { anchor: window.editor.view.state.doc.length } });
+  });
+  await new Promise((r) => setTimeout(r, 400));
+
+  const result = await page.evaluate(async () => {
+    const marker = document.querySelector('.cm-comment-marker');
+    if (!marker) return 'no comment marker rendered';
+    marker.click();
+    await new Promise((r) => setTimeout(r, 400));
+    const bubble = document.querySelector('.cm-comment-bubble');
+    if (!bubble) return 'bubble did not open';
+    const textarea = bubble.querySelector('textarea');
+    if (!textarea) return 'bubble has no textarea';
+    textarea.value = 'edited comment text';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    const save = [...bubble.querySelectorAll('button')].find((b) => /save/i.test(b.textContent));
+    if (!save) return 'no save button';
+    save.click();
+    await new Promise((r) => setTimeout(r, 300));
+    return window.editor.view.state.doc.toString().includes('edited comment text')
+      ? 'ok'
+      : 'edit not persisted';
+  });
+  assert.equal(result, 'ok', `comment editing flow failed (${result})`);
+  await page.close();
+}
+
 await browser.close();
 console.log('render-smoke tests passed');
