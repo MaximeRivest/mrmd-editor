@@ -1376,7 +1376,13 @@ class EmptyStdinWidget extends WidgetType {
 function buildDecorations(view, awarenessSystem) {
   const decorations = [];
   const doc = view.state.doc;
-  const cursorPos = view.state.selection.main.head;
+  // Reveal raw output based on the selection ANCHOR, not the head. The anchor
+  // is fixed for the whole life of a mouse drag, so dragging a selection
+  // across a rendered output cannot flip it between rendered and editing
+  // layouts mid-drag (which reflows the document under the moving mouse and
+  // oscillates: widget ↔ raw, "big and small"). For a plain caret,
+  // anchor === head, so click-to-edit and arrow navigation are unchanged.
+  const cursorPos = view.state.selection.main.anchor;
   const cursorLine = doc.lineAt(cursorPos).number;
   const text = doc.toString();
   const outputWidgetSettings = getOutputWidgetSettings();
@@ -1428,8 +1434,10 @@ function buildDecorations(view, awarenessSystem) {
     const startLine = doc.lineAt(blockStart);
     const endLine = doc.lineAt(blockEnd);
 
-    // Check if LOCAL cursor is inside this block
-    const localCursorInBlock = cursorLine >= startLine.number && cursorLine <= endLine.number;
+    // Check if LOCAL cursor is inside this block. In locked/reading mode
+    // outputs never switch to raw editing layout.
+    const localCursorInBlock = !view.state.readOnly &&
+      cursorLine >= startLine.number && cursorLine <= endLine.number;
 
     // Check if ANY collaborator (local or remote) is focused on this block
     // Uses y-codemirror.next's cursor positions which survive document edits
@@ -1694,8 +1702,10 @@ function buildDecorations(view, awarenessSystem) {
     const startLine = doc.lineAt(blockStart);
     const endLine = doc.lineAt(blockEnd);
 
-    // Check if LOCAL cursor is inside this block
-    const localCursorInBlock = cursorLine >= startLine.number && cursorLine <= endLine.number;
+    // Check if LOCAL cursor is inside this block. In locked/reading mode
+    // outputs never switch to raw editing layout.
+    const localCursorInBlock = !view.state.readOnly &&
+      cursorLine >= startLine.number && cursorLine <= endLine.number;
 
     // Check if ANY collaborator is focused on this block
     let anyCollaboratorFocused = localCursorInBlock;

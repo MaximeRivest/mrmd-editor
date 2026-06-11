@@ -326,5 +326,101 @@ const stabilityDoc = [
   await page.close();
 }
 
+// 11. Drag-selection across a rendered output must not flip its layout
+//     (anchor-based reveal: no reveal while anchor is outside the block).
+{
+  const dragDoc = [
+    'paragraph above',
+    '',
+    '```js',
+    'compute()',
+    '```',
+    '```output',
+    '{"a": 1, "b": {"c": [1, 2, 3]}, "d": "text"}',
+    '```',
+    '',
+    'paragraph below the output block',
+    '',
+  ].join('\n');
+  const page = await browser.newPage();
+  page.on('pageerror', (err) => { throw new Error(`page error: ${err.message}`); });
+  await page.setContent('<div id="editor" style="height:600px"></div>');
+  await page.evaluate(bundle);
+  await page.evaluate((content) => {
+    window.editor = window.mrmd.create('#editor', { doc: content });
+    window.editor.view.dispatch({ selection: { anchor: window.editor.view.state.doc.length } });
+  }, dragDoc);
+  await waitForStableLayout(page);
+
+  const result = await page.evaluate(async () => {
+    const view = window.editor.view;
+    const text = view.state.doc.toString();
+    const anchor = text.indexOf('paragraph below');  // below the output
+    const target = text.indexOf('paragraph above'); // above the output
+    if (!document.querySelector('.cm-json-output-widget')) return 'no json widget rendered';
+    const before = view.contentHeight;
+    // Simulate a drag upward: anchor fixed below, head sweeps up through the
+    // output block in small steps (like mousemove selection extension).
+    let maxDrift = 0;
+    for (let head = anchor; head >= target; head -= 7) {
+      view.dispatch({ selection: { anchor, head } });
+      maxDrift = Math.max(maxDrift, Math.abs(view.contentHeight - before));
+    }
+    await new Promise((r) => setTimeout(r, 150));
+    maxDrift = Math.max(maxDrift, Math.abs(view.contentHeight - before));
+    const widgetStill = !!document.querySelector('.cm-json-output-widget');
+    if (!widgetStill) return 'widget flipped to raw during drag';
+    return maxDrift <= 2 ? 'ok' : `layout drifted ${maxDrift}px during drag`;
+  });
+  assert.equal(result, 'ok', `drag-across-output failed (${result})`);
+  await page.close();
+}
+
+// 12. Reading mode: no edits, no source reveals, cells still runnable.
+{
+  const page = await browser.newPage();
+  page.on('pageerror', (err) => { throw new Error(`page error: ${err.message}`); });
+  await page.setContent('<div id="editor" style="height:600px"></div>');
+  await page.evaluate(bundle);
+  await page.evaluate((content) => {
+    window.editor = window.mrmd.create('#editor', { doc: content });
+    window.editor.view.dispatch({ selection: { anchor: window.editor.view.state.doc.length } });
+  }, stabilityDoc);
+  await waitForStableLayout(page);
+
+  const result = await page.evaluate(async () => {
+    const editor = window.editor;
+    editor.setReadonly(true);
+    await new Promise((r) => setTimeout(r, 100));
+    const view = editor.view;
+    const text = view.state.doc.toString();
+
+    // 1. Clicking into the rendered table must NOT reveal raw source.
+    const widget = document.querySelector('table');
+    widget?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 100));
+    if (!document.querySelector('table')) return 'table revealed source in reading mode';
+
+    // 2. Typing commands must not change the document.
+    const lenBefore = view.state.doc.length;
+    const handled = view.contentDOM.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true })
+    );
+    void handled;
+    await new Promise((r) => setTimeout(r, 50));
+    if (view.state.doc.length !== lenBefore) return 'document changed in reading mode';
+
+    // 3. Programmatic writes (execution output) still work.
+    view.dispatch({ changes: { from: view.state.doc.length, insert: '\nx' } });
+    if (view.state.doc.length === lenBefore) return 'programmatic write blocked';
+
+    // 4. Unlock restores editing affordances.
+    editor.setReadonly(false);
+    return editor.isReadonly() ? 'unlock failed' : 'ok';
+  });
+  assert.equal(result, 'ok', `reading mode failed (${result})`);
+  await page.close();
+}
+
 await browser.close();
 console.log('render-smoke tests passed');

@@ -338,8 +338,14 @@ function findBangAdmonitions(doc) {
 function buildDecorations(view) {
   const decorations = [];
   const doc = view.state.doc;
-  const cursorPos = view.state.selection.main.head;
-  const cursorLine = doc.lineAt(cursorPos).number;
+  // Anchor, not head: raw markdown reveals follow the stable end of the
+  // selection so dragging across rendered inline elements (math, links,
+  // markers) cannot reflow lines under the moving mouse. Caret behavior is
+  // unchanged (anchor === head).
+  const cursorPos = view.state.selection.main.anchor;
+  // Locked/reading mode: no line is "active"; markers stay hidden and inline
+  // widgets stay rendered even when the caret is placed for selection.
+  const cursorLine = view.state.readOnly ? -1 : doc.lineAt(cursorPos).number;
   const frontmatterRange = findFrontmatterRange(doc);
 
   // Mode flags

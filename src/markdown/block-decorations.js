@@ -246,6 +246,8 @@ function attachClickToEdit(dom, view, lineOffset = 0) {
   if (!view) return;
   dom.style.cursor = 'text';
   dom.addEventListener('mousedown', (event) => {
+    // Reading mode: widgets are not editable, so never reveal source.
+    if (view.state.readOnly) return;
     // Leave interactive elements (links, buttons, inputs) alone.
     if (event.target.closest('a, button, input, textarea, select')) return;
     event.preventDefault();
@@ -746,13 +748,20 @@ function findFrontmatterRange(state) {
  */
 function buildBlockDecorations(state) {
   const doc = state.doc;
-  const cursorPos = state.selection.main.head;
+  // Anchor, not head: the anchor is fixed during a mouse drag, so selecting
+  // across rendered tables/math cannot flip them to raw source mid-drag
+  // (which reflows the document under the mouse and oscillates the layout).
+  // For a caret, anchor === head — click/arrow behavior is unchanged.
+  const cursorPos = state.selection.main.anchor;
   const cursorLine = doc.lineAt(cursorPos).number;
   const decorations = [];
   beginEditReservationPass();
 
   // Mode flags
   const isSourceMode = state.facet(sourceModeFacet);
+  // Locked/reading mode: blocks never reveal raw source; widgets stay
+  // rendered. (Cell execution still works - it writes programmatically.)
+  const isLocked = state.readOnly && !isSourceMode;
   const isWysiwygMode = state.facet(wysiwygModeFacet);
   const revealedLinkedTables = state.field(linkedTableMarkdownState, false) || new Set();
 
@@ -803,7 +812,7 @@ function buildBlockDecorations(state) {
       continue;
     }
 
-    const cursorInTable = isSourceMode || (!isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
+    const cursorInTable = isSourceMode || (!isLocked && !isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
 
     // Collect lines for both rendering and height calculation
     const lines = [];
@@ -841,7 +850,7 @@ function buildBlockDecorations(state) {
   const mathRanges = findDisplayMathRanges(state);
 
   for (const range of mathRanges) {
-    const cursorInMath = isSourceMode || (!isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
+    const cursorInMath = isSourceMode || (!isLocked && !isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
     const contentHash = 'math-' + hashContent(range.content);
 
     if (!cursorInMath) {
@@ -877,7 +886,7 @@ function buildBlockDecorations(state) {
     // collapse the disclosure mid-click because <details> is interactive.
     const revealedDetails = state.field(revealedDetailsState, false) || [];
     const cursorInDetails = isSourceMode ||
-      revealedDetails.some((p) => p >= range.start && p <= range.end);
+      (!isLocked && revealedDetails.some((p) => p >= range.start && p <= range.end));
     const contentHash = 'details-' + hashContent(doc.sliceString(range.start, range.end));
 
     if (!cursorInDetails) {
@@ -902,7 +911,7 @@ function buildBlockDecorations(state) {
   const fmRange = findFrontmatterRange(state);
 
   if (fmRange) {
-    const cursorInFrontmatter = isSourceMode || (!isWysiwygMode && cursorLine >= fmRange.startLine && cursorLine <= fmRange.endLine);
+    const cursorInFrontmatter = isSourceMode || (!isLocked && !isWysiwygMode && cursorLine >= fmRange.startLine && cursorLine <= fmRange.endLine);
     const contentHash = 'fm-' + hashContent(fmRange.content);
 
     if (!cursorInFrontmatter) {
