@@ -87992,7 +87992,15 @@ ${mobileStyles}
       checkBubble(state) {
         const bubbleData = state.field(commentBubbleState);
         if (bubbleData) {
-          showBubble(this.view, bubbleData);
+          // Defer: this runs inside a CodeMirror update cycle, and showBubble
+          // reads layout (coordsAtPos), which is forbidden during updates and
+          // crashes the plugin — the bubble would never open.
+          const view = this.view;
+          queueMicrotask(() => {
+            if (view.state.field(commentBubbleState, false) === bubbleData) {
+              showBubble(view, bubbleData);
+            }
+          });
         } else {
           closeActiveBubble();
         }
@@ -143566,35 +143574,57 @@ $1 $2
       boxShadow: 'inset 0 0 0 9999px color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
       fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
       fontSize: 'var(--code-font-size, 0.8em)',
-      lineHeight: 'var(--code-line-height, 1.5)',
-      borderLeft: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
-      borderRight: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
-      paddingLeft: '10px',
-      paddingRight: '10px',
+      lineHeight: 'var(--code-line-height, 1.55)',
+      borderLeft: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 55%, transparent)',
+      borderRight: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 55%, transparent)',
+      paddingLeft: '12px',
+      paddingRight: '12px',
     },
-    // Fence lines (``` markers) - even smaller, very subtle. Backtick marks are
-    // hidden on blur by the renderer, so these rows read as header/footer chrome.
-    // Output fences (.cm-output-fence-line) are excluded: the output widget
-    // collapses them to invisible chrome and provides its own frame.
+    // Fence lines (``` markers) read as quiet cell chrome: the open fence is a
+    // slim header carrying the language label (left) and hover-revealed cell
+    // controls (right); the close fence is a thin strip that closes the card.
+    // Backtick marks are hidden on blur by the renderer. Output fences
+    // (.cm-output-fence-line) are excluded: the output widget collapses them.
     '.cm-codeblock-fence:not(.cm-output-fence-line):not(.cm-output-fence-editing)': {
       boxShadow: 'inset 0 0 0 9999px color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
       fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
-      fontSize: '0.5em',
-      color: 'var(--widget-text-muted, #888)',
-      padding: '3px 0 3px 10px',
-      minHeight: '14px',
-      borderLeft: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
-      borderRight: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
+      fontSize: '10px',
+      letterSpacing: '0.04em',
+      color: 'color-mix(in srgb, var(--widget-text-muted, #888) 75%, transparent)',
+      borderLeft: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 55%, transparent)',
+      borderRight: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 55%, transparent)',
     },
     '.cm-codeblock-fence-open:not(.cm-output-fence-line):not(.cm-output-fence-editing)': {
-      borderTop: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
+      position: 'relative',
+      minHeight: '24px',
+      // Relative line-height: the hidden backtick span has width:0 and wraps
+      // each character to its own line — absolute line-height would give each
+      // invisible wrapped char real height (3 × 18px of ghost space).
+      lineHeight: '1.7',
+      padding: '4px 96px 2px 12px',
+      borderTop: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 55%, transparent)',
       borderBottom: '0',
-      borderRadius: '3px 3px 0 0',
+      borderRadius: '6px 6px 0 0',
     },
     '.cm-codeblock-fence-close:not(.cm-output-fence-line):not(.cm-output-fence-editing)': {
+      minHeight: '8px',
+      padding: '0 12px',
       borderTop: '0',
-      borderBottom: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
-      borderRadius: '0 0 3px 3px',
+      borderBottom: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 55%, transparent)',
+      borderRadius: '0 0 6px 6px',
+    },
+    // Cell controls live at the right edge of the header, quiet until hover.
+    '.cm-codeblock-fence-open .cm-cell-controls': {
+      position: 'absolute',
+      right: '8px',
+      top: '50%',
+      transform: 'translateY(-50%)',
+      marginLeft: '0',
+      opacity: '0.35',
+      transition: 'opacity 120ms ease',
+    },
+    '.cm-codeblock-fence-open:hover .cm-cell-controls': {
+      opacity: '1',
     },
     // Mobile: code blocks need to be larger and scroll horizontally
     '@media (max-width: 768px)': {
