@@ -2,88 +2,128 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>mrmd 0.9.0 — fix showcase (click tables/math/images to edit)</title>
+  <title>mrmd 0.9.0 — full showcase</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { height: 100vh; display: flex; flex-direction: column; }
-    #editor { flex: 1; overflow: auto; max-width: 820px; margin: 0 auto; width: 100%; padding: 20px 0; }
+    #editor { flex: 1; overflow: auto; max-width: 860px; margin: 0 auto; width: 100%; padding: 20px 0; }
   </style>
 </head>
 <body>
   <div id="editor"></div>
   <script src="../dist/mrmd.iife.js"></script>
   <script>
-    const doc = [
-      '---',
-      'title: mrmd 0.9.0 showcase',
-      'author: maxime',
-      '---',
-      '',
-      '# What to try',
-      '',
-      '## 1. No more page jumps',
-      '',
-      'Click **inside the table below**, then type fast. The page should not move at all.',
-      '',
-      '| Region | Q1 | Q2 | Q3 |',
-      '|--------|----|----|----|',
-      '| East   | 42 | 38 | 51 |',
-      '| West   | 38 | 44 | 40 |',
-      '| North  | 29 | 31 | 35 |',
-      '| South  | 47 | 45 | 52 |',
-      '',
-      'Same for the math block — click into it and edit the LaTeX:',
-      '',
-      '$$',
-      '\\int_0^\\infty e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}',
-      '$$',
-      '',
-      '## 2. R and currency are no longer math',
-      '',
-      'Use `df$col` and `df$other` to select columns — no stray math.',
-      '',
-      'It costs $5 and $10 more than expected. Pay \\$3 up front.',
-      '',
-      'But real math still works inline: $e^{i\\pi} + 1 = 0$ and $\\sum_{k=1}^n k = \\frac{n(n+1)}{2}$.',
-      '',
-      '## 3. $$ inside code cannot eat the document',
-      '',
-      '```python',
-      'template = "$$PLACEHOLDER$$"',
-      'print(template)',
-      '```',
-      '',
-      'This paragraph survives, and the display math above still renders.',
-      '',
-      '## 4. Quarto fences',
-      '',
-      '```{python, echo=FALSE}',
+    const L = [];
+    const p = (...lines) => L.push(...lines, '');
+
+    p('---', 'title: mrmd 0.9.0 full showcase', 'author: maxime', 'tags: [demo, release]', '---');
+
+    p('# mrmd 0.9.0 — everything on one page');
+    p('Each section says what to try. **Click any rendered widget** (table, math, image) to edit its source.');
+
+    p('## 1. Layout stability');
+    p('Click inside the table or the math block and **type fast** — the page must not move.');
+    p('| Region | Q1 | Q2 | Q3 |', '|--------|----|----|----|',
+      '| East   | 42 | 38 | 51 |', '| West   | 38 | 44 | 40 |',
+      '| North  | 29 | 31 | 35 |', '| South  | 47 | 45 | 52 |');
+    p('$$', '\\int_0^\\infty e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}', '$$');
+
+    p('## 2. Runnable JavaScript with text output');
+    p('Press the **▶ run button** on this cell — output streams into an output block below it:');
+    p('```js',
+      'const nums = [1, 2, 3, 4, 5];',
+      'console.log("sum:", nums.reduce((a, b) => a + b, 0));',
+      'console.log("squares:", nums.map(n => n * n).join(", "));',
+      '```');
+
+    p('## 3. JavaScript producing JSON output');
+    p('Run this — the result is an object, rendered as structured JSON:');
+    p('```js',
+      'const report = {',
+      '  region: "East",',
+      '  quarters: { q1: 42, q2: 38, q3: 51 },',
+      '  trend: [42, 38, 51].map((v, i) => ({ q: i + 1, v })),',
+      '};',
+      'report',
+      '```');
+
+    p('## 4. A cell with a pre-existing output block');
+    p('This is what a saved document looks like — the output travels with the file as plain text:');
+    p('```python',
       'import pandas as pd',
-      'pd.DataFrame({"a": [1, 2, 3]})',
+      'df = pd.DataFrame({"region": ["East", "West"], "revenue": [42000, 38000]})',
+      'df',
       '```',
-      '',
-      '## 5. Images — click one to edit its markdown',
-      '',
-      '![sample screenshot](../_assets/paste-2026-03-14T18-35-08.png)',
-      '',
-      '## 6. Details blocks',
-      '',
-      '<details>',
+      '```output',
+      '  region  revenue',
+      '0   East    42000',
+      '1   West    38000',
+      '```');
+    p('And one with JSON content in the output:');
+    p('```js',
+      'fetch("/api/health").then(r => r.json())',
+      '```',
+      '```output',
+      '{"status": "ok", "uptime_s": 86400, "services": {"db": "up", "cache": "up"}}',
+      '```');
+
+    p('## 5. HTML + CSS artifact cells');
+    p('An `html:` cell renders its artifact live; the `css:` cell styles it. Edit either and re-run:');
+    p('```html:demo-card',
+      '<div class="card">',
+      '  <h3>Live HTML artifact</h3>',
+      '  <p>Rendered from an <code>html:demo-card</code> cell.</p>',
+      '  <button onclick="this.textContent = \'clicked!\'">Click me</button>',
+      '</div>',
+      '```');
+    p('```css:demo-card',
+      '.card { border: 2px solid #4a90d9; border-radius: 8px; padding: 12px 16px; }',
+      '.card h3 { color: #4a90d9; margin-bottom: 6px; }',
+      '.card button { padding: 4px 12px; cursor: pointer; }',
+      '```');
+
+    p('## 6. Static / non-executable cells');
+    p('Bash, YAML, JSON, and a Quarto fence — highlighting without a runtime:');
+    p('```bash', 'grep -rn "TODO" src/ | wc -l', 'export RAT_ENV=production', '```');
+    p('```yaml', 'server:', '  port: 8080', '  tls: true', '```');
+    p('```json', '{ "name": "mrmd-editor", "version": "0.9.0" }', '```');
+    p('```{python, echo=FALSE}', 'import numpy as np', 'np.linspace(0, 1, 5)', '```');
+
+    p('## 7. Text rendering');
+    p('**Bold**, *italic*, ~~struck~~, `inline code`, [a link](https://example.com), and real inline math: $e^{i\\pi} + 1 = 0$.');
+    p('R-style code is safe: `df$col` and `df$other`. Currency is safe: it costs $5 and $10. Escapes: pay \\$3, literal \\*star\\*.');
+    p('> Blockquote with **markdown** inside.');
+    p('- bullet one', '- bullet two', '  - nested', '1. numbered', '2. also numbered');
+    p('- [ ] open task', '- [x] done task');
+    p('Term | Meaning', '-----|--------', 'fence | triple-backtick block', 'cell  | executable fence');
+
+    p('## 8. Images');
+    p('Click the image to edit its markdown:');
+    p('![sample screenshot](../_assets/paste-2026-03-14T18-35-08.png)');
+
+    p('## 9. Details blocks');
+    p('Toggle it open/closed; use the edit affordance to change the source:');
+    p('<details>',
       '<summary>Click to expand the appendix</summary>',
       '',
-      'Hidden content with **markdown** inside, and a fence:',
+      'Hidden content with **markdown**, math $a^2+b^2=c^2$, and a fence:',
       '',
       '```js',
       'console.log("hello from inside details")',
       '```',
       '',
-      '</details>',
-      '',
-      'A closing paragraph so there is content below everything.',
-      '',
-    ].join('\n');
+      '</details>');
 
-    const editor = mrmd.create('#editor', { doc, javascriptIsolation: 'none' });
+    p('## 10. The $$-in-code containment test');
+    p('```python', 'template = "$$PLACEHOLDER$$"', 'print(template)', '```');
+    p('This paragraph survives, and all math above still renders.');
+
+    p('Closing paragraph so there is content below everything.');
+
+    const editor = mrmd.create('#editor', {
+      doc: L.join('\n'),
+      javascriptIsolation: 'none',
+    });
     window.editor = editor;
   </script>
 </body>

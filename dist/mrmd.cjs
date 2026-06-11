@@ -126751,6 +126751,44 @@ function editingSpacerPadding(regionKey, contentHash, lineCount) {
   return padding > 0 ? padding : 0;
 }
 
+// =============================================================================
+// Details block edit mode
+// =============================================================================
+//
+// <details> is itself interactive (the summary toggles disclosure), so unlike
+// tables/math it cannot reveal its source merely because the cursor entered
+// the range — clicking the summary would instantly collapse the widget into
+// raw HTML. Instead an explicit edit affordance toggles a reveal flag held in
+// editor state; the flag expires when the cursor leaves the block.
+
+/** Toggle edit mode for the details block containing `pos`. */
+const toggleDetailsEditEffect = StateEffect.define();
+
+const revealedDetailsState = StateField.define({
+  create() {
+    return [];
+  },
+  update(positions, tr) {
+    let next = positions.map((p) => tr.changes.mapPos(p, 1));
+    for (const effect of tr.effects) {
+      if (effect.is(toggleDetailsEditEffect)) {
+        const pos = effect.value.pos;
+        next = next.includes(pos) ? next.filter((p) => p !== pos) : [...next, pos];
+      }
+    }
+    // Expire reveals once the cursor leaves the block.
+    if (next.length > 0 && (tr.selection || tr.docChanged)) {
+      const head = tr.state.selection.main.head;
+      const blocks = extractDetailsBlocks(tr.state.doc.toString());
+      next = next.filter((p) => {
+        const block = blocks.find((b) => p >= b.start && p <= b.end);
+        return block && head >= block.start && head <= block.end + 1;
+      });
+    }
+    return next;
+  },
+});
+
 /**
  * Make a rendered block widget enter edit mode on click: place the cursor at
  * the widget's current document position so the StateField reveals the raw
@@ -126918,8 +126956,31 @@ class DetailsBlockWidgetWithHeightCache extends DetailsBlockWidget {
       Math.round(getLineHeight() * 1.5);
   }
 
-  toDOM() {
-    const dom = super.toDOM();
+  toDOM(view) {
+    const dom = super.toDOM(view);
+
+    // Edit affordance: reveals the raw <details> source. Summary clicks keep
+    // toggling the disclosure as usual.
+    if (view) {
+      const edit = document.createElement('button');
+      edit.className = 'cm-details-edit';
+      edit.type = 'button';
+      edit.title = 'Edit details source';
+      edit.textContent = '✎';
+      edit.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const pos = view.posAtDOM(dom);
+        view.dispatch({
+          effects: toggleDetailsEditEffect.of({ pos }),
+          selection: { anchor: pos },
+          scrollIntoView: true,
+        });
+        view.focus();
+      });
+      dom.appendChild(edit);
+    }
+
     requestAnimationFrame(() => {
       const height = dom.offsetHeight;
       if (height > 0) cacheWidgetHeight(this.contentHash, height);
@@ -127325,12 +127386,12 @@ function buildBlockDecorations(state) {
   for (const range of detailsRanges) {
     const startLine = doc.lineAt(range.start).number;
     const endLine = doc.lineAt(range.end).number;
-    // Unlike tables/math, <details> is itself interactive. Clicking the
-    // summary moves CodeMirror's selection into the replaced source range; if
-    // we reveal raw source on cursor entry the disclosure immediately collapses
-    // into literal <details> text. Keep it rendered unless explicit source mode
-    // is enabled.
-    const cursorInDetails = isSourceMode;
+    // Rendered unless explicitly revealed via the widget's edit button (see
+    // revealedDetailsState) or global source mode — cursor-entry reveal would
+    // collapse the disclosure mid-click because <details> is interactive.
+    const revealedDetails = state.field(revealedDetailsState, false) || [];
+    const cursorInDetails = isSourceMode ||
+      revealedDetails.some((p) => p >= range.start && p <= range.end);
     const contentHash = 'details-' + hashContent$1(doc.sliceString(range.start, range.end));
 
     if (!cursorInDetails) {
@@ -130748,11 +130809,39 @@ const markdownStyles = `
 
 .cm-details-widget {
   display: block;
+  position: relative;
   margin: 0.5em 0;
   padding: 0.45em 0.65em;
   border: 1px solid var(--widget-border);
   border-radius: 6px;
   background: var(--widget-surface);
+}
+
+.cm-details-edit {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--widget-text-muted);
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.cm-details-widget:hover .cm-details-edit {
+  opacity: 0.75;
+}
+
+.cm-details-edit:hover {
+  opacity: 1 !important;
+  border-color: var(--widget-border);
+  background: var(--widget-surface-hover);
+  color: var(--widget-text);
 }
 
 .cm-details-summary {
@@ -131093,6 +131182,7 @@ function markdown() {
   return [
     lineHeightTracker,          // ViewPlugin: updates line height cache (must come first!)
     fontRemeasurePlugin,        // ViewPlugin: re-measure when webfonts land (KaTeX!)
+    revealedDetailsState,       // StateField: <details> blocks revealed for editing
     ...createInlineEditingExtensions(),
     blockDecorations,           // StateField: tables, display math
     markdownRenderer,           // ViewPlugin: everything else
@@ -143477,6 +143567,10 @@ const codeBlockStyles = EditorView.theme({
     fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
     fontSize: 'var(--code-font-size, 0.8em)',
     lineHeight: 'var(--code-line-height, 1.5)',
+    borderLeft: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
+    borderRight: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
+    paddingLeft: '10px',
+    paddingRight: '10px',
   },
   // Fence lines (``` markers) - even smaller, very subtle. Backtick marks are
   // hidden on blur by the renderer, so these rows read as header/footer chrome.
@@ -143485,8 +143579,10 @@ const codeBlockStyles = EditorView.theme({
     fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
     fontSize: '0.5em',
     color: 'var(--widget-text-muted, #888)',
-    padding: '3px 0 3px 8px',
+    padding: '3px 0 3px 10px',
     minHeight: '14px',
+    borderLeft: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
+    borderRight: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
   },
   '.cm-codeblock-fence-open': {
     borderTop: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
@@ -144527,6 +144623,7 @@ ${scrollSelectors.map(s => `${s}::-webkit-scrollbar-corner`).join(',\n')} {
     ...createInlineEditingExtensions(),
     lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
     fontRemeasurePlugin, // ViewPlugin: re-measure when webfonts land (KaTeX fonts load late)
+    revealedDetailsState, // StateField: <details> blocks revealed for editing
     linkedTableMarkdownState,
     blockDecorations,   // StateField for tables, display math (multi-line)
     markdownRenderer,   // ViewPlugin for everything else (inline)
