@@ -243,5 +243,51 @@ const stabilityDoc = [
   assert.ok(r.text.includes('$3'), 'escaped dollar lost its $');
 }
 
+// 9. Details blocks: edit affordance reveals source; leaving re-renders.
+{
+  const detailsDoc = [
+    'before paragraph',
+    '',
+    '<details>',
+    '<summary>The appendix</summary>',
+    '',
+    'Hidden **content** here.',
+    '',
+    '</details>',
+    '',
+    'after paragraph',
+    '',
+  ].join('\n');
+  const page = await browser.newPage();
+  page.on('pageerror', (err) => { throw new Error(`page error: ${err.message}`); });
+  await page.setContent('<div id="editor" style="height:600px"></div>');
+  await page.evaluate(bundle);
+  await page.evaluate((content) => {
+    window.editor = window.mrmd.create('#editor', { doc: content });
+    const len = window.editor.view.state.doc.length;
+    window.editor.view.dispatch({ selection: { anchor: len } });
+  }, detailsDoc);
+  await waitForStableLayout(page);
+
+  const result = await page.evaluate(async () => {
+    const widget = document.querySelector('.cm-details-widget');
+    if (!widget) return 'no details widget';
+    const edit = widget.querySelector('.cm-details-edit');
+    if (!edit) return 'no edit button';
+    edit.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 150));
+    const view = window.editor.view;
+    const revealed = !document.querySelector('.cm-details-widget') &&
+      view.state.doc.lineAt(view.state.selection.main.head).text.includes('<details>');
+    if (!revealed) return 'source not revealed after edit click';
+    // Move the cursor out of the block — the widget must come back.
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    await new Promise((r) => setTimeout(r, 150));
+    return document.querySelector('.cm-details-widget') ? 'ok' : 'widget did not re-render on exit';
+  });
+  assert.equal(result, 'ok', `details edit flow failed (${result})`);
+  await page.close();
+}
+
 await browser.close();
 console.log('render-smoke tests passed');

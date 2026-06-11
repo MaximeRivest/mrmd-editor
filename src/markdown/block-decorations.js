@@ -15,7 +15,7 @@
  */
 
 
-import { StateField } from '@codemirror/state';
+import { StateField, StateEffect } from '@codemirror/state';
 import { EditorView, Decoration, WidgetType, ViewPlugin } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { sourceModeFacet, wysiwygModeFacet } from './facets.js';
@@ -193,6 +193,44 @@ function editingSpacerPadding(regionKey, contentHash, lineCount) {
   const padding = reserved - lineCount * getLineHeight();
   return padding > 0 ? padding : 0;
 }
+
+// =============================================================================
+// Details block edit mode
+// =============================================================================
+//
+// <details> is itself interactive (the summary toggles disclosure), so unlike
+// tables/math it cannot reveal its source merely because the cursor entered
+// the range — clicking the summary would instantly collapse the widget into
+// raw HTML. Instead an explicit edit affordance toggles a reveal flag held in
+// editor state; the flag expires when the cursor leaves the block.
+
+/** Toggle edit mode for the details block containing `pos`. */
+export const toggleDetailsEditEffect = StateEffect.define();
+
+export const revealedDetailsState = StateField.define({
+  create() {
+    return [];
+  },
+  update(positions, tr) {
+    let next = positions.map((p) => tr.changes.mapPos(p, 1));
+    for (const effect of tr.effects) {
+      if (effect.is(toggleDetailsEditEffect)) {
+        const pos = effect.value.pos;
+        next = next.includes(pos) ? next.filter((p) => p !== pos) : [...next, pos];
+      }
+    }
+    // Expire reveals once the cursor leaves the block.
+    if (next.length > 0 && (tr.selection || tr.docChanged)) {
+      const head = tr.state.selection.main.head;
+      const blocks = extractDetailsBlocks(tr.state.doc.toString());
+      next = next.filter((p) => {
+        const block = blocks.find((b) => p >= b.start && p <= b.end);
+        return block && head >= block.start && head <= block.end + 1;
+      });
+    }
+    return next;
+  },
+});
 
 /**
  * Make a rendered block widget enter edit mode on click: place the cursor at
@@ -404,8 +442,31 @@ class DetailsBlockWidgetWithHeightCache extends DetailsBlockWidget {
       Math.round(getLineHeight() * 1.5);
   }
 
-  toDOM() {
-    const dom = super.toDOM();
+  toDOM(view) {
+    const dom = super.toDOM(view);
+
+    // Edit affordance: reveals the raw <details> source. Summary clicks keep
+    // toggling the disclosure as usual.
+    if (view) {
+      const edit = document.createElement('button');
+      edit.className = 'cm-details-edit';
+      edit.type = 'button';
+      edit.title = 'Edit details source';
+      edit.textContent = '✎';
+      edit.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const pos = view.posAtDOM(dom);
+        view.dispatch({
+          effects: toggleDetailsEditEffect.of({ pos }),
+          selection: { anchor: pos },
+          scrollIntoView: true,
+        });
+        view.focus();
+      });
+      dom.appendChild(edit);
+    }
+
     requestAnimationFrame(() => {
       const height = dom.offsetHeight;
       if (height > 0) cacheWidgetHeight(this.contentHash, height);
@@ -811,12 +872,12 @@ function buildBlockDecorations(state) {
   for (const range of detailsRanges) {
     const startLine = doc.lineAt(range.start).number;
     const endLine = doc.lineAt(range.end).number;
-    // Unlike tables/math, <details> is itself interactive. Clicking the
-    // summary moves CodeMirror's selection into the replaced source range; if
-    // we reveal raw source on cursor entry the disclosure immediately collapses
-    // into literal <details> text. Keep it rendered unless explicit source mode
-    // is enabled.
-    const cursorInDetails = isSourceMode;
+    // Rendered unless explicitly revealed via the widget's edit button (see
+    // revealedDetailsState) or global source mode — cursor-entry reveal would
+    // collapse the disclosure mid-click because <details> is interactive.
+    const revealedDetails = state.field(revealedDetailsState, false) || [];
+    const cursorInDetails = isSourceMode ||
+      revealedDetails.some((p) => p >= range.start && p <= range.end);
     const contentHash = 'details-' + hashContent(doc.sliceString(range.start, range.end));
 
     if (!cursorInDetails) {

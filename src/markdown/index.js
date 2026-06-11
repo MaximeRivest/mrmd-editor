@@ -27,7 +27,7 @@
  */
 
 import { markdownRenderer } from './renderer.js';
-import { blockDecorations, lineHeightTracker, fontRemeasurePlugin } from './block-decorations.js';
+import { blockDecorations, lineHeightTracker, fontRemeasurePlugin, revealedDetailsState } from './block-decorations.js';
 import { createWysiwygExtensions } from './wysiwyg.js';
 import { createInlineEditingExtensions } from './inline-state.js';
 import { markdownStyles, injectMarkdownStyles } from './styles.js';
@@ -53,6 +53,7 @@ export function markdown() {
   return [
     lineHeightTracker,          // ViewPlugin: updates line height cache (must come first!)
     fontRemeasurePlugin,        // ViewPlugin: re-measure when webfonts land (KaTeX!)
+    revealedDetailsState,       // StateField: <details> blocks revealed for editing
     ...createInlineEditingExtensions(),
     blockDecorations,           // StateField: tables, display math
     markdownRenderer,           // ViewPlugin: everything else
@@ -67,7 +68,7 @@ export { createWysiwygExtensions, toggleInlineFormat, findDelimitedRange, findFe
 export { createInlineEditingExtensions, getPendingInlineSplit } from './inline-state.js';
 export { toggleInlineMark, toggleInlineMarkFromSyntax, getActiveInlineMarks, getSelectionFormattingState } from './inline-commands.js';
 export { getLineInlineModel, getCaretInlineContext, getSelectionInlineContext, inlineClassForMark, syntaxToMark, markToSyntax } from './inline-model.js';
-export { blockDecorations, lineHeightTracker, fontRemeasurePlugin, cacheWidgetHeight, getCachedHeight, clearHeightCache } from './block-decorations.js';
+export { blockDecorations, lineHeightTracker, fontRemeasurePlugin, revealedDetailsState, toggleDetailsEditEffect, cacheWidgetHeight, getCachedHeight, clearHeightCache } from './block-decorations.js';
 export { markdownStyles, injectMarkdownStyles } from './styles.js';
 
 // Widget exports

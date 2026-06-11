@@ -1185,11 +1185,39 @@ export const markdownStyles = `
 
 .cm-details-widget {
   display: block;
+  position: relative;
   margin: 0.5em 0;
   padding: 0.45em 0.65em;
   border: 1px solid var(--widget-border);
   border-radius: 6px;
   background: var(--widget-surface);
+}
+
+.cm-details-edit {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--widget-text-muted);
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.cm-details-widget:hover .cm-details-edit {
+  opacity: 0.75;
+}
+
+.cm-details-edit:hover {
+  opacity: 1 !important;
+  border-color: var(--widget-border);
+  background: var(--widget-surface-hover);
+  color: var(--widget-text);
 }
 
 .cm-details-summary {
