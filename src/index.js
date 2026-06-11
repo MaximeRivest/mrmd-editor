@@ -806,7 +806,9 @@ const codeBlockStyles = EditorView.theme({
   },
   // Fence lines (``` markers) - even smaller, very subtle. Backtick marks are
   // hidden on blur by the renderer, so these rows read as header/footer chrome.
-  '.cm-codeblock-fence': {
+  // Output fences (.cm-output-fence-line) are excluded: the output widget
+  // collapses them to invisible chrome and provides its own frame.
+  '.cm-codeblock-fence:not(.cm-output-fence-line):not(.cm-output-fence-editing)': {
     boxShadow: 'inset 0 0 0 9999px color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
     fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
     fontSize: '0.5em',
@@ -816,12 +818,12 @@ const codeBlockStyles = EditorView.theme({
     borderLeft: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
     borderRight: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
   },
-  '.cm-codeblock-fence-open': {
+  '.cm-codeblock-fence-open:not(.cm-output-fence-line):not(.cm-output-fence-editing)': {
     borderTop: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
     borderBottom: '0',
     borderRadius: '3px 3px 0 0',
   },
-  '.cm-codeblock-fence-close': {
+  '.cm-codeblock-fence-close:not(.cm-output-fence-line):not(.cm-output-fence-editing)': {
     borderTop: '0',
     borderBottom: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
     borderRadius: '0 0 3px 3px',
