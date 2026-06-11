@@ -106436,6 +106436,24 @@ const wysiwygModeFacet = Facet.define({
  */
 
 
+/**
+ * Clicking a rendered image places the cursor at the image's markdown source
+ * so the user can edit it. Links inside (linked images) keep working.
+ *
+ * @param {HTMLElement} dom
+ * @param {import('@codemirror/view').EditorView | undefined} view
+ */
+function attachImageClickToEdit(dom, view) {
+  if (!view) return;
+  dom.addEventListener('mousedown', (event) => {
+    if (event.target.closest('a')) return; // linked images stay clickable
+    event.preventDefault();
+    const pos = view.posAtDOM(dom);
+    view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+    view.focus();
+  });
+}
+
 // =============================================================================
 // Link Definition Cache
 // =============================================================================
@@ -106594,9 +106612,10 @@ class ImageWidget extends WidgetType {
     );
   }
 
-  toDOM() {
+  toDOM(view) {
     const container = document.createElement('span');
     container.className = 'cm-image-inline cm-image-loading';
+    attachImageClickToEdit(container, view);
 
     const img = document.createElement('img');
     img.alt = this.alt;
@@ -106689,11 +106708,12 @@ class BlockImageWidget extends WidgetType {
     );
   }
 
-  toDOM() {
+  toDOM(view) {
     const container = document.createElement('div');
     container.className = `cm-image-block cm-image-pos-${this.position}`;
     container.dataset.imageId = this.imageId;
     container.dataset.position = this.position;
+    attachImageClickToEdit(container, view);
 
     const wrapper = document.createElement('div');
     wrapper.className = 'cm-image-block-wrapper cm-image-loading';
@@ -126645,11 +126665,42 @@ function clearHeightCache() {
   widgetHeightCache.clear();
 }
 
-// Heights measured before webfonts finish loading are wrong (fallback font
-// metrics). Drop them once fonts are ready so the next renders re-measure.
-if (typeof document !== 'undefined' && document.fonts?.ready) {
-  document.fonts.ready.then(() => clearHeightCache()).catch(() => {});
-}
+/**
+ * Re-measure when webfonts finish loading.
+ *
+ * Widget DOM heights change when fonts swap in (KaTeX loads its fonts lazily
+ * on first math render). CodeMirror only measures during update cycles, so
+ * without this the stale height sits in the height map until the user's next
+ * keystroke forces a measure — and the page visibly jumps at the start of
+ * typing. Instead: drop cached heights and request a measure immediately,
+ * at idle, when each font batch lands.
+ */
+const fontRemeasurePlugin = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.view = view;
+      this.onFontsChanged = () => {
+        clearHeightCache();
+        // Double rAF: ensure the font swap has actually reflowed the DOM
+        // before CodeMirror reads heights, otherwise we measure the old
+        // fallback-font layout and keep the stale value.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => this.view.requestMeasure());
+        });
+      };
+      if (typeof document !== 'undefined' && document.fonts) {
+        document.fonts.addEventListener?.('loadingdone', this.onFontsChanged);
+        document.fonts.ready?.then(() => this.onFontsChanged()).catch(() => {});
+      }
+    }
+
+    destroy() {
+      if (typeof document !== 'undefined' && document.fonts) {
+        document.fonts.removeEventListener?.('loadingdone', this.onFontsChanged);
+      }
+    }
+  },
+);
 
 // =============================================================================
 // Stable height reservation while editing inside a block region
@@ -126694,6 +126745,34 @@ function editingSpacerPadding(regionKey, contentHash, lineCount) {
 
   const padding = reserved - lineCount * getLineHeight();
   return padding > 0 ? padding : 0;
+}
+
+/**
+ * Make a rendered block widget enter edit mode on click: place the cursor at
+ * the widget's current document position so the StateField reveals the raw
+ * source. Uses posAtDOM so positions are never stale after document edits.
+ *
+ * @param {HTMLElement} dom
+ * @param {import('@codemirror/view').EditorView | undefined} view
+ * @param {number} lineOffset - lines to move the cursor past the region start
+ *   (e.g. 1 to land inside `$$ ... $$` rather than on the opening fence)
+ */
+function attachClickToEdit(dom, view, lineOffset = 0) {
+  if (!view) return;
+  dom.style.cursor = 'text';
+  dom.addEventListener('mousedown', (event) => {
+    // Leave interactive elements (links, buttons, inputs) alone.
+    if (event.target.closest('a, button, input, textarea, select')) return;
+    event.preventDefault();
+    let pos = view.posAtDOM(dom);
+    if (lineOffset > 0) {
+      const startLine = view.state.doc.lineAt(pos).number;
+      const target = Math.min(startLine + lineOffset, view.state.doc.lines);
+      pos = view.state.doc.line(target).from;
+    }
+    view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+    view.focus();
+  });
 }
 
 /**
@@ -126762,9 +126841,10 @@ class TableWidgetWithHeightCache extends TableWidget {
       Math.round((this.rowCount + 1) * getLineHeight());
   }
 
-  toDOM() {
-    const dom = super.toDOM();
+  toDOM(view) {
+    const dom = super.toDOM(view);
     const contentHash = this.contentHash;
+    attachClickToEdit(dom, view);
 
     // Cache the LINE height (not widget height) after render
     // The line includes widget buffers and other CM overhead
@@ -126859,9 +126939,11 @@ class DisplayMathWidgetWithHeightCache extends DisplayMathWidget {
       Math.round(getLineHeight() * 3);
   }
 
-  toDOM() {
-    const dom = super.toDOM();
+  toDOM(view) {
+    const dom = super.toDOM(view);
     const contentHash = this.contentHash;
+    // Land inside the $$ ... $$ body, not on the opening delimiter line.
+    attachClickToEdit(dom, view, 1);
 
     // Cache the LINE height (not widget height) after render
     // The line includes widget buffers and other CM overhead
@@ -127744,6 +127826,21 @@ function buildDecorations(view) {
       }
 
       // =======================================================================
+      // BACKSLASH ESCAPES (\$ \* \_ ...) — hide the backslash when rendered
+      // =======================================================================
+      if (node.name === 'Escape') {
+        if (isActiveLine) {
+          decorations.push(
+            Decoration.mark({ class: 'cm-md-marker' }).range(node.from, node.from + 1)
+          );
+        } else {
+          decorations.push(
+            Decoration.replace({}).range(node.from, node.from + 1)
+          );
+        }
+      }
+
+      // =======================================================================
       // STRIKETHROUGH
       // =======================================================================
       if (node.name === 'Strikethrough') {
@@ -127767,16 +127864,14 @@ function buildDecorations(view) {
         );
       }
 
-      // Code backticks (inline only, not fenced code)
+      // Code backticks — inline and fence markers both follow the standard
+      // blur→hidden / focus→visible marker rule. Hiding fence backticks turns
+      // the fence rows into clean header/footer chrome instead of showing
+      // floating ``` glyphs inside the block.
       if (node.name === 'CodeMark') {
-        const text = doc.sliceString(node.from, node.to);
-        // In normal rendered mode, only hide inline backticks.
-        // In WYSIWYG mode, also hide fenced code markers.
-        if (text.length < 3 || isWysiwygMode) {
-          decorations.push(
-            Decoration.mark({ class: markerClass }).range(node.from, node.to)
-          );
-        }
+        decorations.push(
+          Decoration.mark({ class: markerClass }).range(node.from, node.to)
+        );
       }
 
       // =======================================================================
@@ -130993,6 +131088,7 @@ function markdown() {
 
   return [
     lineHeightTracker,          // ViewPlugin: updates line height cache (must come first!)
+    fontRemeasurePlugin,        // ViewPlugin: re-measure when webfonts land (KaTeX!)
     ...createInlineEditingExtensions(),
     blockDecorations,           // StateField: tables, display math
     markdownRenderer,           // ViewPlugin: everything else
@@ -143378,12 +143474,15 @@ const codeBlockStyles = EditorView.theme({
     fontSize: 'var(--code-font-size, 0.8em)',
     lineHeight: 'var(--code-line-height, 1.5)',
   },
-  // Fence lines (``` markers) - even smaller, very subtle
+  // Fence lines (``` markers) - even smaller, very subtle. Backtick marks are
+  // hidden on blur by the renderer, so these rows read as header/footer chrome.
   '.cm-codeblock-fence': {
     boxShadow: 'inset 0 0 0 9999px color-mix(in srgb, var(--widget-surface, #f5f5f5) 85%, transparent)',
     fontFamily: "var(--widget-font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace)",
     fontSize: '0.5em',
     color: 'var(--widget-text-muted, #888)',
+    padding: '3px 0 3px 8px',
+    minHeight: '14px',
   },
   '.cm-codeblock-fence-open': {
     borderTop: '1px solid color-mix(in srgb, var(--widget-border, #ddd) 60%, transparent)',
@@ -144423,6 +144522,7 @@ ${scrollSelectors.map(s => `${s}::-webkit-scrollbar-corner`).join(',\n')} {
     ...(outputWidgetsEnabled ? [outputWidgetPlugin] : []), // ANSI output rendering
     ...createInlineEditingExtensions(),
     lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
+    fontRemeasurePlugin, // ViewPlugin: re-measure when webfonts land (KaTeX fonts load late)
     linkedTableMarkdownState,
     blockDecorations,   // StateField for tables, display math (multi-line)
     markdownRenderer,   // ViewPlugin for everything else (inline)
