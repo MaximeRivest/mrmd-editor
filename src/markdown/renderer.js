@@ -403,6 +403,13 @@ function buildDecorations(view) {
       if (node.name.startsWith('ATXHeading')) {
         const level = node.name.match(/\d/)?.[0] || '1';
 
+        // Line class so hosts/themes can style the whole heading row
+        // (full-width rules, spacing). No default look ships with it.
+        decorations.push(
+          Decoration.line({ class: `cm-md-heading-line cm-md-h${level}-line` })
+            .range(doc.lineAt(node.from).from)
+        );
+
         // Find content start (after # markers and space)
         let contentStart = node.from;
         const cursor = node.node.cursor();
@@ -922,8 +929,24 @@ function buildDecorations(view) {
       if (node.name === 'FencedCode') {
         const startLine = doc.lineAt(node.from).number;
         const endLine = doc.lineAt(node.to).number;
+        // The fence's info string, so hosts can style languages apart
+        // (```output result blocks vs runnable code, for example).
+        const infoLang = ((doc.line(startLine).text.match(/^\s*(?:`{3,}|~{3,})\s*(\S*)/) || [])[1] || '').toLowerCase();
         for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
           codeBlockLines.add(lineNum);
+          // Line classes so hosts/themes can draw the block as one unit
+          // (box, background, borders). No default styling ships with the
+          // classes — the look is fully owned by CSS/themes.
+          const line = doc.line(lineNum);
+          const cls = ['cm-md-codeblock-line'];
+          if (lineNum === startLine) cls.push('cm-md-codeblock-first');
+          if (lineNum === endLine) cls.push('cm-md-codeblock-last');
+          decorations.push(
+            Decoration.line({
+              class: cls.join(' '),
+              attributes: infoLang ? { 'data-lang': infoLang } : undefined,
+            }).range(line.from)
+          );
         }
       } else if (node.name === 'InlineCode') {
         const lineNum = doc.lineAt(node.from).number;
