@@ -28,6 +28,21 @@ import { sql } from '@codemirror/lang-sql';
 import { yaml } from '@codemirror/lang-yaml';
 import { r } from 'codemirror-lang-r';
 import { shell } from '@codemirror/legacy-modes/mode/shell';
+// Whole-file code editing (aiconvo files mode): the compiled languages
+// too, plus a few legacy modes for config files.
+import { rust } from '@codemirror/lang-rust';
+import { go } from '@codemirror/lang-go';
+import { cpp } from '@codemirror/lang-cpp';
+import { java } from '@codemirror/lang-java';
+import { xml } from '@codemirror/lang-xml';
+import { toml } from '@codemirror/legacy-modes/mode/toml';
+import { lua } from '@codemirror/legacy-modes/mode/lua';
+import { ruby } from '@codemirror/legacy-modes/mode/ruby';
+import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile';
+import { diff as diffMode } from '@codemirror/legacy-modes/mode/diff';
+import { lineNumbers, highlightActiveLine, highlightActiveLineGutter, gutter, GutterMarker } from '@codemirror/view';
+import { search, searchKeymap } from '@codemirror/search';
+import { indentUnit } from '@codemirror/language';
 
 // MRMD's markdown rendering: blur→render / focus→source, tables, math,
 // images, checkboxes, alerts — the document experience.
@@ -62,6 +77,50 @@ function codeBlockLanguage(info) {
     case 'r': case 'rlang': return rSupport.language;
     case 'shell': case 'sh': case 'bash': case 'zsh': case 'fish': case 'console': return shellLang;
     default: return null;
+  }
+}
+
+let rustSupport = null, goSupport = null, cppSupport = null, javaSupport = null, xmlSupport = null;
+const legacy = new Map();
+function legacyLang(name, mode) {
+  if (!legacy.has(name)) legacy.set(name, StreamLanguage.define(mode));
+  return legacy.get(name);
+}
+
+/**
+ * Language support for a whole file, by name. Returns a CM extension
+ * (LanguageSupport or StreamLanguage) or null for plain text.
+ */
+export function fileLanguage(filename) {
+  const name = String(filename || '').split('/').pop().toLowerCase();
+  const ext = name.includes('.') ? name.split('.').pop() : name;
+  switch (ext) {
+    case 'js': case 'mjs': case 'cjs': case 'jsx': case 'ts': case 'tsx': case 'mts': case 'cts':
+      return javascript({ jsx: ext.endsWith('x'), typescript: ext.startsWith('t') || ext === 'mts' || ext === 'cts' });
+    case 'py': case 'pyi': return pySupport;
+    case 'html': case 'htm': case 'vue': case 'svelte': return htmlSupport;
+    case 'css': case 'scss': case 'less': return cssSupport;
+    case 'json': case 'jsonc': case 'webmanifest': return jsonSupport;
+    case 'sql': return sqlSupport;
+    case 'yaml': case 'yml': return yamlSupport;
+    case 'r': case 'rmd': return rSupport;
+    case 'sh': case 'bash': case 'zsh': case 'fish': case 'bashrc': case 'zshrc': case 'profile': return shellLang;
+    case 'rs': return rustSupport || (rustSupport = rust());
+    case 'go': return goSupport || (goSupport = go());
+    case 'c': case 'h': case 'cc': case 'cpp': case 'cxx': case 'hpp': case 'hh': return cppSupport || (cppSupport = cpp());
+    case 'java': case 'kt': case 'kts': return javaSupport || (javaSupport = java());
+    case 'xml': case 'svg': case 'plist': case 'xsl': return xmlSupport || (xmlSupport = xml());
+    case 'toml': return legacyLang('toml', toml);
+    case 'lua': return legacyLang('lua', lua);
+    case 'rb': case 'gemfile': case 'rakefile': return legacyLang('ruby', ruby);
+    case 'dockerfile': return legacyLang('dockerfile', dockerFile);
+    case 'diff': case 'patch': return legacyLang('diff', diffMode);
+    case 'md': case 'markdown': case 'qmd': case 'mdx':
+      return markdownLang({ base: markdownLanguage, codeLanguages: codeBlockLanguage });
+    default:
+      if (name === 'dockerfile' || name === 'containerfile') return legacyLang('dockerfile', dockerFile);
+      if (name === 'makefile') return null;
+      return null;
   }
 }
 
@@ -411,6 +470,11 @@ export function createDocumentEditor(target, options = {}) {
 
     focus() { view.focus(); },
 
+    /** Cursor and selection as 1-based lines: {line, from, to, text}. */
+    selection() { return selectionInfo(view); },
+    /** Move the cursor to a 1-based line and scroll it into view. */
+    gotoLine(n) { gotoLine(view, n); },
+
     destroy() {
       view.destroy();
       element.classList.remove('mrmd-root');
@@ -419,7 +483,161 @@ export function createDocumentEditor(target, options = {}) {
   };
 }
 
-export { getTheme, getThemeNames };
-export const version = '0.9.4-document';
+function selectionInfo(view) {
+  const state = view.state;
+  const main = state.selection.main;
+  const fromLine = state.doc.lineAt(main.from), toLine = state.doc.lineAt(main.to);
+  return {
+    line: state.doc.lineAt(main.head).number,
+    from: fromLine.number, to: toLine.number,
+    empty: main.empty,
+    text: main.empty ? '' : state.doc.sliceString(main.from, main.to),
+    lineText: state.doc.lineAt(main.head).text,
+  };
+}
 
-export default { createDocumentEditor, getTheme, getThemeNames, version };
+function gotoLine(view, n) {
+  const line = view.state.doc.line(Math.max(1, Math.min(view.state.doc.lines, Number(n) || 1)));
+  view.dispatch({ selection: { anchor: line.from }, scrollIntoView: true, effects: EditorView.scrollIntoView(line.from, { y: 'center' }) });
+  view.focus();
+}
+
+/**
+ * Create a whole-file code editor — the same engine, keymaps, and theme
+ * object as the document editor, with line numbers, a language picked
+ * from the file name, and a gutter the host can mark (provenance, trust).
+ *
+ * @param {string|HTMLElement} target
+ * @param {Object} options
+ *   doc, filename, theme, dark, readonly, onChange, onSave — as for the
+ *   document editor. tabSize (default 2).
+ * @returns editor API (+ setLineMarks(map) — {line: {glyph, title, cls}})
+ */
+export function createCodeEditor(target, options = {}) {
+  const element = typeof target === 'string' ? document.querySelector(target) : target;
+  if (!element) throw new Error('mrmd-document: target element not found');
+  element.classList.add('mrmd-root', 'mrmd-code-root');
+  element.dataset.mrmdThemingMode = 'hosted';
+  const systemDark = typeof window !== 'undefined'
+    && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  let themeName = options.theme || null;
+  let theme = resolveTheme(themeName, options.dark !== null && options.dark !== undefined ? options.dark : systemDark);
+  applyThemeTokens(element, theme);
+
+  const themeCompartment = new Compartment();
+  const readonlyCompartment = new Compartment();
+  const languageCompartment = new Compartment();
+  const saveHandlers = [];
+  const changeHandlers = [];
+  if (typeof options.onSave === 'function') saveHandlers.push(options.onSave);
+  if (typeof options.onChange === 'function') changeHandlers.push(options.onChange);
+
+  // Host line marks: a gutter of glyphs (trust ✓ ✗, provenance ●).
+  let lineMarks = new Map();
+  class Mark extends GutterMarker {
+    constructor(info) { super(); this.info = info; }
+    eq(other) { return other.info && other.info.glyph === this.info.glyph && other.info.title === this.info.title; }
+    toDOM() {
+      const el = document.createElement('span');
+      el.className = 'mrmd-line-mark ' + (this.info.cls || '');
+      el.textContent = this.info.glyph || '·';
+      if (this.info.title) el.title = this.info.title;
+      return el;
+    }
+  }
+  const markGutter = gutter({
+    class: 'mrmd-mark-gutter',
+    lineMarker(view, line) {
+      const n = view.state.doc.lineAt(line.from).number;
+      const info = lineMarks.get(n);
+      return info ? new Mark(info) : null;
+    },
+    lineMarkerChange: () => true,
+    domEventHandlers: {
+      click(view, line) {
+        const n = view.state.doc.lineAt(line.from).number;
+        const info = lineMarks.get(n);
+        if (info && typeof options.onMarkClick === 'function') { options.onMarkClick(n, info); return true; }
+        return false;
+      },
+    },
+  });
+
+  const codeBase = EditorView.theme({
+    '&': { height: '100%', fontSize: '13px' },
+    '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--editor-font-family, monospace)', lineHeight: '1.5' },
+    '.cm-content': { padding: '8px 0 40vh' },
+    '&.cm-focused': { outline: 'none' },
+    '.mrmd-mark-gutter': { minWidth: '14px' },
+    '.mrmd-line-mark': { display: 'inline-block', width: '12px', textAlign: 'center', cursor: 'pointer', color: 'var(--editor-line-number, #888)' },
+    '.mrmd-selection-overlay': {
+      backgroundColor: 'var(--mrmd-selection-overlay, color-mix(in srgb, var(--widget-border-accent, #3b82f6) 30%, transparent))',
+    },
+  });
+
+  const lang = fileLanguage(options.filename || '');
+  const extensions = [
+    lineNumbers(),
+    markGutter,
+    highlightActiveLineGutter(),
+    highlightActiveLine(),
+    selectionOverlay,
+    basicSetup,
+    search({ top: true }),
+    keymap.of(searchKeymap),
+    indentUnit.of(' '.repeat(Math.max(1, Number(options.tabSize) || 2))),
+    EditorView.lineWrapping,
+    codeBase,
+    themeCompartment.of(createCodemirrorTheme(theme)),
+    readonlyCompartment.of(options.readonly ? EditorState.readOnly.of(true) : []),
+    languageCompartment.of(lang || []),
+    keymap.of([{ key: 'Mod-s', preventDefault: true, run: () => { saveHandlers.forEach(fn => fn()); return true; } }]),
+    EditorView.updateListener.of(update => {
+      if (update.docChanged) changeHandlers.forEach(fn => fn());
+    }),
+  ];
+  const view = new EditorView({ state: EditorState.create({ doc: options.doc || '', extensions }), parent: element });
+  if (options.readonly) view.dom.classList.add('mrmd-readonly');
+
+  return {
+    view,
+    element,
+    getContent() { return view.state.doc.toString(); },
+    setContent(text) { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: String(text ?? '') } }); },
+    setTheme(name) {
+      theme = resolveTheme(name, systemDark);
+      themeName = theme.name;
+      applyThemeTokens(element, theme);
+      view.dispatch({ effects: themeCompartment.reconfigure(createCodemirrorTheme(theme)) });
+      return themeName;
+    },
+    getThemeName() { return themeName || theme.name; },
+    setReadonly(value) {
+      view.dispatch({ effects: readonlyCompartment.reconfigure(value ? EditorState.readOnly.of(true) : []) });
+      view.dom.classList.toggle('mrmd-readonly', !!value);
+    },
+    setFilename(filename) {
+      const next = fileLanguage(filename);
+      view.dispatch({ effects: languageCompartment.reconfigure(next || []) });
+    },
+    setLineMarks(marks) {
+      lineMarks = marks instanceof Map ? marks : new Map(Object.entries(marks || {}).map(([k, v]) => [Number(k), v]));
+      view.dispatch({});
+    },
+    selection() { return selectionInfo(view); },
+    gotoLine(n) { gotoLine(view, n); },
+    onChange(fn) { changeHandlers.push(fn); return () => { const i = changeHandlers.indexOf(fn); if (i >= 0) changeHandlers.splice(i, 1); }; },
+    onSave(fn) { saveHandlers.push(fn); return () => { const i = saveHandlers.indexOf(fn); if (i >= 0) saveHandlers.splice(i, 1); }; },
+    focus() { view.focus(); },
+    destroy() {
+      view.destroy();
+      element.classList.remove('mrmd-root', 'mrmd-code-root');
+      delete element.dataset.mrmdThemingMode;
+    },
+  };
+}
+
+export { getTheme, getThemeNames };
+export const version = '0.10.0-document';
+
+export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, version };
