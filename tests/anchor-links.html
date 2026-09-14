@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anchor links — [text](#heading)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; }
+    #editor { height: 420px; border: 1px solid #ccc; }
+    p { color: #555; max-width: 60ch; }
+  </style>
+</head>
+<body>
+  <h1>Anchor links</h1>
+  <p>
+    A <code>[text](#heading)</code> link should carry the reader to that heading in this
+    document. Click <em>the details</em> below; <em>nowhere</em> points at a heading that
+    does not exist and is drawn as broken. Scenarios run from
+    <code>test/anchor-links.browser.test.js</code>.
+  </p>
+  <div id="editor"></div>
+
+  <script src="../dist/mrmd.iife.js"></script>
+  <script>
+    const editor = mrmd.create('#editor', { javascriptIsolation: 'none' });
+    editor.setContent([
+      '# Top',
+      '',
+      'Jump to [the details](#details), or to [nowhere](#missing).',
+      '',
+      ...Array.from({ length: 40 }, (_, i) => `Filler line ${i + 1}.`),
+      '',
+      '## Details',
+      '',
+      'Here.',
+      '',
+    ].join('\n'));
+    window.editor = editor;
+
+    // Helpers the browser test drives. Each returns plain data.
+    window.scenario = {
+      // Given the caret is not on the link line (the active line shows raw source)
+      caretToTop() { editor.view.dispatch({ selection: { anchor: 0 } }); },
+      widgets() {
+        return [...document.querySelectorAll('.cm-anchor-link')].map((s) => ({
+          text: s.textContent,
+          fragment: s.dataset.fragment || null,
+          broken: s.classList.contains('cm-broken-link'),
+        }));
+      },
+      // When the link is clicked; a host may take over with preventDefault
+      click(text, opts = {}) {
+        const span = [...document.querySelectorAll('.cm-anchor-link')].find((s) => s.textContent === text);
+        if (!span) return { clicked: false };
+        let event = null;
+        const listener = (e) => {
+          event = { fragment: e.detail && e.detail.fragment, line: e.detail && e.detail.line, cancelable: e.cancelable };
+          if (opts.preventDefault) e.preventDefault();
+        };
+        editor.view.dom.addEventListener('anchor-link-navigate', listener);
+        span.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        editor.view.dom.removeEventListener('anchor-link-navigate', listener);
+        const head = editor.view.state.selection.main.head;
+        return { clicked: true, event, caretLine: editor.view.state.doc.lineAt(head).number };
+      },
+      headingLine(text) { return editor.getContent().split('\n').findIndex((l) => l === text) + 1; },
+    };
+  </script>
+</body>
+</html>

@@ -253,6 +253,27 @@ editor.onCellError(callback)           // cell execution error
 editor.onCollaboratorsChange(callback) // collaborators changed
 ```
 
+Links in the document are widgets. `http(s)`, `mailto:` and `tel:` links open in a
+new tab; the others ask the host with a bubbling `CustomEvent` on `editor.view.dom`:
+
+```javascript
+editor.view.dom.addEventListener('file-link-navigate', e => {
+  e.detail.path        // '[text](./other.md)' → './other.md', document-relative
+});
+editor.view.dom.addEventListener('wiki-link-navigate', e => {
+  e.detail.target      // '[[installation]]' → 'installation'
+});
+editor.view.dom.addEventListener('anchor-link-navigate', e => {
+  e.detail.fragment    // '[text](#details)' → 'details'
+  e.detail.line        // the heading's line, or null when no heading matches
+  e.preventDefault();  // optional: take over — otherwise the editor moves the
+                       // selection to the heading and scrolls it into view
+});
+```
+
+Anchors follow GitHub's rules: lowercase, punctuation dropped, spaces to dashes,
+duplicates numbered `-1`, `-2`; a link that names no heading is drawn as broken.
+
 ### Destroy
 
 ```javascript

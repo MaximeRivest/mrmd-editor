@@ -63,9 +63,11 @@ import {
   WikiLinkWidget,
   ExternalLinkWidget,
   FileLinkWidget,
+  AnchorLinkWidget,
   getLinkType,
   wikiLinkDisplayText,
 } from './widgets/link.js';
+import { resolveAnchor } from './headings.js';
 // Display math handled by StateField (block-decorations.js) - multi-line replace not allowed in ViewPlugin
 
 // Import height caching for stable layout
@@ -560,18 +562,14 @@ function buildDecorations(view) {
               }).range(node.from, node.to)
             );
           } else if (linkType === 'anchor') {
-            // Anchor links - hide brackets and URL, style text
-            const textStart = node.from + 1;
-            const textEnd = node.from + 1 + linkText.length;
-
+            // Anchor link: a widget like a file link, so a click navigates to
+            // the heading instead of placing the caret in the label. Drawn as
+            // broken when no heading in this document answers to the fragment.
+            const fragment = linkUrl.slice(1);
             decorations.push(
-              Decoration.mark({ class: 'cm-md-hidden' }).range(node.from, textStart) // [
-            );
-            decorations.push(
-              Decoration.mark({ class: 'cm-md-link-text cm-anchor-link' }).range(textStart, textEnd) // text
-            );
-            decorations.push(
-              Decoration.mark({ class: 'cm-md-hidden' }).range(textEnd, node.to) // ](url)
+              Decoration.replace({
+                widget: new AnchorLinkWidget(fragment, linkText, resolveAnchor(view.state, fragment)),
+              }).range(node.from, node.to)
             );
           } else {
             // File link

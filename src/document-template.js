@@ -908,7 +908,7 @@ export function compileDocumentTemplateCSS(template, scope = '&') {
       },
     } : {}),
     // --- Links ---
-    [s('.cm-md-link-text') + ', ' + s('.cm-external-link') + ', ' + s('.cm-file-link') + ', ' + s('.cm-wiki-link')]: {
+    [s('.cm-md-link-text') + ', ' + s('.cm-external-link') + ', ' + s('.cm-file-link') + ', ' + s('.cm-wiki-link') + ', ' + s('.cm-anchor-link')]: {
       ...(t.link?.underline === false ? { textDecoration: 'none' } : {}),
     },
     // --- Tables ---
@@ -1902,7 +1902,7 @@ function buildDocumentTemplateOverrideCSS(template, scopeSelector) {
 
   // --- Links ---
   if (t.link?.color) {
-    rule(['.cm-md-link-text', '.cm-external-link', '.cm-file-link', '.cm-wiki-link'], 'color', t.link.color);
+    rule(['.cm-md-link-text', '.cm-external-link', '.cm-file-link', '.cm-wiki-link', '.cm-anchor-link'], 'color', t.link.color);
   }
 
   // --- Inline code ---
