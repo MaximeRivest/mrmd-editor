@@ -5,12 +5,14 @@
  * - WikiLinkWidget: [[internal-link]] style links
  * - ExternalLinkWidget: [text](https://...) style links
  * - FileLinkWidget: [text](./relative/path) style links
+ * - AnchorLinkWidget: [text](#heading) links within the same document
  *
  * @module markdown/widgets/link
  */
 
-import { WidgetType } from '@codemirror/view';
+import { WidgetType, EditorView } from '@codemirror/view';
 import { renderTextWithHtml } from '../html-inline.js';
+import { resolveAnchor } from '../headings.js';
 
 // #region WIKI_LINK_WIDGET
 
@@ -177,6 +179,76 @@ export class FileLinkWidget extends WidgetType {
 }
 
 // #endregion FILE_LINK_WIDGET
+
+// #region ANCHOR_LINK_WIDGET
+
+/**
+ * Widget for rendering same-document anchor links [text](#heading).
+ *
+ * A click dispatches a cancelable 'anchor-link-navigate' event with the
+ * fragment and the heading's line (null when no heading answers to it).
+ * Unless the host calls preventDefault(), the selection then moves to that
+ * heading and it scrolls into view. Drawn as broken when unresolved, like a
+ * wiki-link whose target does not exist.
+ */
+export class AnchorLinkWidget extends WidgetType {
+  /**
+   * @param {string} fragment - The part after '#'
+   * @param {string} text - Display text
+   * @param {{line: number | null, from: number | null}} target - Resolved when drawn, for broken styling
+   */
+  constructor(fragment, text, target) {
+    super();
+    this.fragment = fragment;
+    this.text = text;
+    this.line = target ? target.line : null;
+  }
+
+  eq(other) {
+    return this.fragment === other.fragment && this.text === other.text && this.line === other.line;
+  }
+
+  toDOM(view) {
+    const span = document.createElement('span');
+    span.className = this.line === null ? 'cm-anchor-link cm-broken-link' : 'cm-anchor-link';
+    span.innerHTML = renderTextWithHtml(this.text);
+    span.setAttribute('data-fragment', this.fragment);
+
+    span.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Resolve again now: the document may have changed since this widget was drawn.
+      const target = resolveAnchor(view.state, this.fragment);
+      const event = new CustomEvent('anchor-link-navigate', {
+        detail: { fragment: this.fragment, line: target.line },
+        bubbles: true,
+        cancelable: true,
+      });
+      // dispatchEvent is false when a listener called preventDefault(): the host navigates.
+      if (!view.dom.dispatchEvent(event) || target.from === null) return;
+
+      view.dispatch({
+        selection: { anchor: target.from },
+        effects: EditorView.scrollIntoView(target.from, { y: 'start' }),
+      });
+      view.focus();
+    });
+
+    // Prevent editor from losing focus
+    span.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+    });
+
+    return span;
+  }
+
+  ignoreEvent() {
+    return false; // Allow click events
+  }
+}
+
+// #endregion ANCHOR_LINK_WIDGET
 
 // #region HELPERS
 

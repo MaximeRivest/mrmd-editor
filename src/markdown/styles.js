@@ -185,10 +185,23 @@ export const markdownStyles = `
   opacity: 0.8;
 }
 
-/* Anchor links [text](#heading) */
+/* Anchor links [text](#heading): the same look as a file link, and broken
+   like a wiki-link when no heading in the document answers to the fragment */
 .cm-anchor-link {
+  color: var(--md-link-color);
   text-decoration: underline dotted;
   text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cm-anchor-link:hover {
+  opacity: 0.8;
+}
+
+.cm-anchor-link.cm-broken-link {
+  color: var(--text-muted, #6b7280);
+  text-decoration: underline dashed;
 }
 
 /* ==========================================================================
