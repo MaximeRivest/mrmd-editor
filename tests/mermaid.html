@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>Mermaid diagram blocks</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { height: 100vh; display: flex; flex-direction: column; }
+    #editor { flex: 1; overflow: auto; max-width: 800px; margin: 0 auto; width: 100%; padding: 20px 0; }
+  </style>
+</head>
+
+<body>
+  <div id="editor"></div>
+  <script src="../dist/mrmd.iife.js"></script>
+  <script>
+    // The renderer here is a stub on purpose: this page proves the host seam
+    // and the block behaviour. Real mermaid markup is the host's business.
+    const mode = new URLSearchParams(location.search).get('renderer') || 'stub';
+    window.__renderedCodes = [];
+    window.__mode = mode;
+
+    function stubRenderer(code, options) {
+      window.__renderedCodes.push({ code, signal: !!(options && options.signal) });
+      if (mode === 'error') throw new Error('renderer refused the diagram');
+      return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text>' + code + '</text></svg>';
+    }
+
+    const DOC = [
+      '# Diagram',
+      '',
+      'Prose before.',
+      '',
+      '```mermaid',
+      'graph LR',
+      '  A --> B',
+      '```',
+      '',
+      'Prose after.',
+      '',
+    ].join('\n');
+
+    window.editor = mrmd.create('#editor', {
+      javascriptIsolation: 'none',
+      mermaidRenderer: mode === 'none' ? undefined : stubRenderer,
+    });
+    window.editor.setContent(DOC);
+    // Outside the fence, so the diagram is the rendered form.
+    window.editor.view.dispatch({ selection: { anchor: 0 } });
+  </script>
+</body>
+
+</html>

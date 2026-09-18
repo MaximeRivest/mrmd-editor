@@ -35,10 +35,24 @@ const editor = mrmd.create('#editor', {
 
   // Code execution
   runtimes: {},             // { javascript: executor, python: executor }
+
+  // Mermaid diagrams: draw ```mermaid fences with your own renderer.
+  // Omit it and a mermaid fence stays an ordinary code block.
+  mermaidRenderer: (code, { signal }) => mermaid.render(code, { signal }),
 });
 ```
 
 **Returns:** `Editor`
+
+The mermaid renderer is a host function, not a bundled dependency: mermaid is
+about 3.5 MB and hosts that want diagrams usually ship it already. It receives
+the fence body and an options object with an `AbortSignal`, and returns SVG
+markup (a string or `{ svg }`). While the caret is elsewhere in the document the
+fence is replaced by the diagram; clicking the diagram moves the caret into the
+block, which brings the source back. A rejected promise, a missing SVG, or an
+aborted render draws the reason *and* the fence source, so a failure is never a
+blank block. Lower-level hosts can compose `mrmd.mermaidRendererFacet.of(fn)`
+into their own `EditorState` instead.
 
 ---
 

@@ -377,6 +377,51 @@ export const markdownStyles = `
   padding: 0.5em 0;
 }
 
+/* Mermaid diagram - replaces the whole fence while the caret is elsewhere.
+   The host supplies the SVG through mermaidRendererFacet; these rules only
+   give it a frame and keep a failure readable. */
+.cm-mermaid-block {
+  display: block;
+  margin: 0.6em 0;
+  padding: 0.6em 0.75em;
+  border: 1px solid var(--widget-border, rgba(128, 128, 128, 0.2));
+  border-radius: var(--widget-border-radius, 8px);
+  background: var(--md-table-bg, var(--editor-background));
+}
+
+.cm-mermaid-block[data-mermaid-state="rendering"] .cm-mermaid-diagram {
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+
+.cm-mermaid-diagram {
+  display: block;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.cm-mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.cm-mermaid-error {
+  color: var(--md-error-color, #c0392b);
+  font-size: 0.85em;
+  margin-bottom: 0.35em;
+}
+
+.cm-mermaid-source {
+  margin: 0;
+  padding: 0.4em 0.5em;
+  overflow-x: auto;
+  background: var(--md-code-background, rgba(128, 128, 128, 0.08));
+  border-radius: var(--widget-border-radius, 8px);
+  font-family: var(--md-code-font, monospace);
+  font-size: 0.85em;
+  white-space: pre;
+}
+
 /* Linked-table wrapper (header chrome + table snapshot) */
 .cm-linked-table-widget {
   display: block;
