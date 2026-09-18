@@ -61,7 +61,8 @@ export function markdown() {
 
 // Export individual pieces for advanced use
 export { markdownRenderer, assetResolverFacet } from './renderer.js';
-export { sourceModeFacet, wysiwygModeFacet } from './facets.js';
+export { sourceModeFacet, wysiwygModeFacet, mermaidRendererFacet } from './facets.js';
+export { MermaidWidget, isMermaidFence, mermaidSvgFromResult } from './widgets/mermaid.js';
 export { createWysiwygExtensions, toggleInlineFormat, findDelimitedRange, findFencedCodeAt } from './wysiwyg.js';
 export { createInlineEditingExtensions, getPendingInlineSplit } from './inline-state.js';
 export { toggleInlineMark, toggleInlineMarkFromSyntax, getActiveInlineMarks, getSelectionFormattingState } from './inline-commands.js';

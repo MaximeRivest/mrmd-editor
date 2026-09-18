@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>Mermaid diagram blocks</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { height: 100vh; display: flex; flex-direction: column; }
+    #editor { flex: 1; overflow: auto; max-width: 800px; margin: 0 auto; width: 100%; padding: 20px 0; }
+  </style>
+</head>
+
+<body>
+  <div id="editor"></div>
+  <script src="../dist/mrmd.iife.js"></script>
+  <script>
+    // The renderer here is a stub on purpose: this page proves the host seam
+    // and the block behaviour. Real mermaid markup is the host's business —
+    // but the shape of the stub matters: mermaid returns
+    //   <svg width="100%" style="max-width: Npx" viewBox="0 0 W H">
+    // so `stub` imitates that. `huge` imitates a renderer that returns a tiny
+    // viewBox with no size at all, which is what the frame has to survive.
+    const mode = new URLSearchParams(location.search).get('renderer') || 'stub';
+    window.__renderedCodes = [];
+    window.__mode = mode;
+
+    const escapeText = text => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    function stubRenderer(code, options) {
+      window.__renderedCodes.push({ code, signal: !!(options && options.signal) });
+      if (mode === 'error') throw new Error('renderer refused the diagram');
+      if (mode === 'huge') return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text font-size="6">' + escapeText(code) + '</text></svg>';
+      const lines = String(code).split('\n');
+      return '<svg xmlns="http://www.w3.org/2000/svg" width="100%" style="max-width: 240px;" viewBox="0 0 240 80" role="img">'
+        + '<style>text{font-family:ui-monospace,monospace;font-size:12px;fill:#8ab4f8}</style>'
+        + '<rect x="1" y="1" width="238" height="78" fill="none" stroke="#4b5563"/>'
+        + '<text x="16" y="34">' + escapeText(lines[0] || '') + '</text>'
+        + '<text x="16" y="58">' + escapeText(lines[1] || '') + '</text>'
+        + '</svg>';
+    }
+
+    const DOC = [
+      '# Diagram',
+      '',
+      'Prose before.',
+      '',
+      '```mermaid',
+      'graph LR',
+      '  A --> B',
+      '```',
+      '',
+      'Prose after.',
+      '',
+    ].join('\n');
+
+    window.editor = mrmd.create('#editor', {
+      javascriptIsolation: 'none',
+      mermaidRenderer: mode === 'none' ? undefined : stubRenderer,
+    });
+    window.editor.setContent(DOC);
+    // Outside the fence, so the diagram is the rendered form.
+    window.editor.view.dispatch({ selection: { anchor: 0 } });
+  </script>
+</body>
+
+</html>

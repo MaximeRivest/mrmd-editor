@@ -35,3 +35,24 @@ export const sourceModeFacet = Facet.define({
 export const wysiwygModeFacet = Facet.define({
   combine: (values) => values.some(v => v),
 });
+
+/**
+ * Facet for rendering a mermaid fence as a diagram.
+ *
+ * The renderer belongs to the host: mermaid itself is ~3.5 MB and most hosts
+ * that want diagrams already ship it, so nothing is bundled here. Without a
+ * renderer a mermaid fence stays an ordinary code block, exactly as today.
+ *
+ * The renderer receives the fence body and an options object carrying an
+ * AbortSignal; it resolves to the SVG markup (or `{ svg }`). A rejected
+ * promise, a missing SVG, or an abort is drawn as an error block that keeps
+ * the source readable.
+ *
+ * Usage:
+ *   mermaidRendererFacet.of((code, { signal }) => render(code, { signal }))
+ *
+ * @type {Facet<(code: string, options: { signal: AbortSignal }) => string|Promise<string>|{svg: string}|Promise<{svg: string}>, ((code: string, options: { signal: AbortSignal }) => any) | null>}
+ */
+export const mermaidRendererFacet = Facet.define({
+  combine: (values) => values[values.length - 1] || null,
+});

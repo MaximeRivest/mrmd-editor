@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mrmd — Mermaid diagrams</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { color-scheme: light dark; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: light-dark(#ffffff, #1e1e1e);
+      color: light-dark(#1a1a1a, #e0e0e0);
+    }
+    header { padding: 14px 20px; border-bottom: 1px solid light-dark(#e4e4e4, #333); }
+    header h1 { font-size: 16px; font-weight: 600; }
+    header p { font-size: 12px; opacity: 0.7; margin-top: 4px; }
+    #notice { padding: 10px 20px; font-size: 12px; background: light-dark(#fff8e1, #33290d); display: none; }
+    #editor { flex: 1; overflow: auto; }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>Mermaid diagrams</h1>
+    <p>
+      A <code>```mermaid</code> fence is drawn as a diagram while the caret is elsewhere;
+      click a diagram to bring its source back. The renderer is supplied by the host, so
+      mermaid itself stays out of the package.
+    </p>
+  </header>
+  <div id="notice"></div>
+  <div id="editor"></div>
+
+  <script src="../dist/mrmd.iife.js"></script>
+  <!--
+    mermaid is deliberately NOT a dependency of this package. To see real diagrams,
+    drop a copy next to this file:
+
+      cp node_modules/mermaid/dist/mermaid.min.js examples/mermaid.min.js
+
+    Without it the example still runs: fences render as ordinary code blocks and the
+    notice above says why (that is exactly the behaviour when no renderer is set).
+  -->
+  <script src="./mermaid.min.js" onerror="window.__noMermaid = true"></script>
+  <script>
+    const DOC = [
+      '# Mermaid diagrams',
+      '',
+      'Prose before the diagram.',
+      '',
+      '```mermaid',
+      'flowchart LR',
+      '  A[Source] --> B[Reading] --> C[Wiki]',
+      '```',
+      '',
+      'A nested statechart, the shape architecture notes tend to use:',
+      '',
+      '```mermaid',
+      'stateDiagram-v2',
+      '    [*] --> SourcePreparation',
+      '    SourcePreparation --> Intent: source revision ready',
+      '    state Reading {',
+      '        [*] --> L1',
+      '        L1 --> L5',
+      '        L5 --> [*]',
+      '    }',
+      '    Intent --> Reading: budget admitted',
+      '    Reading --> RoutingReview',
+      '```',
+      '',
+      'Prose after the diagrams.',
+      '',
+    ].join('\n');
+
+    let seq = 0;
+    const hasMermaid = !window.__noMermaid && typeof window.mermaid !== 'undefined';
+
+    if (hasMermaid) {
+      // Match the page instead of mermaid's default light theme.
+      const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      window.mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: dark ? 'dark' : 'default',
+      });
+    } else {
+      const notice = document.getElementById('notice');
+      notice.style.display = 'block';
+      notice.textContent = 'No renderer: examples/mermaid.min.js is missing, so mermaid fences stay code blocks. See the comment in this file.';
+    }
+
+    window.editor = mrmd.create('#editor', {
+      javascriptIsolation: 'none',
+      // The whole seam: a host function that turns a fence body into SVG.
+      mermaidRenderer: hasMermaid
+        ? async (code, { signal }) => {
+          const { svg } = await window.mermaid.render('example' + (++seq), code);
+          if (signal && signal.aborted) throw new Error('aborted');
+          return svg;
+        }
+        : undefined,
+    });
+    window.editor.setContent(DOC);
+    window.editor.view.dispatch({ selection: { anchor: 0 } });
+  </script>
+</body>
+
+</html>

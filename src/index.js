@@ -195,6 +195,9 @@ import {
   markdown as markdownRendering,
   markdownRenderer,
   assetResolverFacet,  // Facet for resolving asset URLs in Electron/desktop apps
+  mermaidRendererFacet, // Facet for drawing mermaid fences with a host renderer
+  MermaidWidget,
+  isMermaidFence,
   sourceModeFacet,     // Facet to toggle source/raw markdown view
   wysiwygModeFacet,    // Facet to toggle protected WYSIWYG rendering
   createWysiwygExtensions,
@@ -1532,6 +1535,7 @@ function create(target, options = {}) {
   const sectionControlsCompartment = new Compartment();
   const sourceModeCompartment = new Compartment();
   const wysiwygModeCompartment = new Compartment();
+  const mermaidRendererCompartment = new Compartment();
   const invisiblesCompartment = new Compartment();
 
   // Create UndoManager for undo/redo tracking
@@ -1843,6 +1847,9 @@ ${scrollSelectors.map(s => `${s}::-webkit-scrollbar-corner`).join(',\n')} {
     lineHeightTracker,  // ViewPlugin: tracks line height for spacer calculations
     linkedTableMarkdownState,
     blockDecorations,   // StateField for tables, display math (multi-line)
+    // Mermaid diagrams: the host supplies the renderer; nothing is bundled.
+    // Empty means a mermaid fence keeps rendering as an ordinary code block.
+    mermaidRendererCompartment.of(typeof options.mermaidRenderer === 'function' ? mermaidRendererFacet.of(options.mermaidRenderer) : []),
     markdownRenderer,   // ViewPlugin for everything else (inline)
     pageViewPagination, // ViewPlugin: page-view spacers at page boundaries
     ...createWysiwygExtensions(),
@@ -4626,6 +4633,9 @@ const markdownExports = {
   // Asset resolver facet (for Electron/desktop apps)
   assetResolverFacet,
 
+  // Mermaid diagrams: the host supplies the renderer, nothing is bundled
+  mermaidRendererFacet,
+
   // Mode facets
   sourceModeFacet,
   wysiwygModeFacet,
@@ -4875,6 +4885,9 @@ export {
   markdownRendering as markdown,
   markdownRenderer,
   assetResolverFacet,
+  mermaidRendererFacet,
+  MermaidWidget,
+  isMermaidFence,
   markdownStyles,
   injectMarkdownStyles,
   TaskCheckboxWidget,

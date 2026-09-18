@@ -1,3 +1,7 @@
 node_modules/
 .DS_Store
 *.log
+
+# Dropped in next to examples/mermaid.html to see real diagrams; mermaid is not a
+# dependency of this package.
+examples/mermaid.min.js

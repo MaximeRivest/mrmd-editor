@@ -18,7 +18,8 @@
 import { StateField } from '@codemirror/state';
 import { EditorView, Decoration, WidgetType, ViewPlugin } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
-import { sourceModeFacet, wysiwygModeFacet } from './facets.js';
+import { sourceModeFacet, wysiwygModeFacet, mermaidRendererFacet } from './facets.js';
+import { MermaidWidget, isMermaidFence } from './widgets/mermaid.js';
 
 // =============================================================================
 // Line Height Tracking for Accurate Spacing
@@ -475,6 +476,41 @@ function findFrontmatterRange(state) {
   return null;
 }
 
+// =============================================================================
+// Mermaid fences
+// =============================================================================
+
+/**
+ * Find every mermaid fence in the document, as whole-node ranges.
+ *
+ * The syntax tree is the authority: `FencedCode` nodes carry the info string
+ * (`CodeInfo`) and the body (`CodeText`), so an indented code block, a fence
+ * inside a list, or the word "mermaid" in prose can never be mistaken for a
+ * diagram.
+ *
+ * @param {import('@codemirror/state').EditorState} state
+ * @returns {{ from: number, to: number, startLine: number, endLine: number, code: string }[]}
+ */
+function findMermaidRanges(state) {
+  const ranges = [];
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (node.name !== 'FencedCode') return;
+      const info = node.node.getChild('CodeInfo');
+      if (!info || !isMermaidFence(state.doc.sliceString(info.from, info.to))) return;
+      const body = node.node.getChild('CodeText');
+      ranges.push({
+        from: node.from,
+        to: node.to,
+        startLine: state.doc.lineAt(node.from).number,
+        endLine: state.doc.lineAt(node.to).number,
+        code: body ? state.doc.sliceString(body.from, body.to) : '',
+      });
+    },
+  });
+  return ranges;
+}
+
 /**
  * Build decorations for all block elements
  */
@@ -632,6 +668,23 @@ function buildBlockDecorations(state) {
           );
         }
       }
+    }
+  }
+
+  // Mermaid diagrams. Only when the host supplied a renderer: without one a
+  // mermaid fence stays an ordinary code block. The caret behaves exactly
+  // like it does for tables — inside the block the source is shown as it is.
+  const mermaidRenderer = state.facet(mermaidRendererFacet);
+
+  if (mermaidRenderer) {
+    for (const range of findMermaidRanges(state)) {
+      const cursorInsideBlock = isSourceMode || (!isWysiwygMode && cursorLine >= range.startLine && cursorLine <= range.endLine);
+      if (cursorInsideBlock) continue;
+      decorations.push(
+        Decoration.replace({
+          widget: new MermaidWidget({ code: range.code, from: range.from, renderer: mermaidRenderer }),
+        }).range(range.from, range.to)
+      );
     }
   }
 
