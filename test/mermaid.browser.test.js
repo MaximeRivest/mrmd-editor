@@ -97,6 +97,27 @@ test('mermaid blocks in a real editor', { skip, timeout: 120000 }, async t => {
     await page.close();
   }
 
+  // A renderer that returns an SVG with a tiny viewBox and no size at all must
+  // not be able to push the document off the screen (this is what the frame's
+  // max-height is for; the first version of the stub fixture did exactly that).
+  {
+    const { page, errors } = await openPage('huge', () => document.querySelector('.cm-mermaid-block[data-mermaid-state="rendered"]'));
+    const bounds = await page.evaluate(() => {
+      const block = document.querySelector('.cm-mermaid-block');
+      const frame = block.querySelector('.cm-mermaid-diagram');
+      return {
+        blockHeight: Math.round(block.getBoundingClientRect().height),
+        viewport: window.innerHeight,
+        frameScrolls: frame.scrollHeight > frame.clientHeight + 1,
+      };
+    });
+    assert.ok(bounds.blockHeight <= bounds.viewport * 0.85,
+      `an underspecified SVG stays inside the frame (block ${bounds.blockHeight}px, viewport ${bounds.viewport}px)`);
+    assert.equal(bounds.frameScrolls, true, 'the diagram scrolls inside the frame instead of growing');
+    assert.deepEqual(errors, [], 'no page errors');
+    await page.close();
+  }
+
   // Clicking the diagram puts the caret in the block: the source comes back.
   {
     const { page, errors } = await openPage('stub', () => document.querySelector('.cm-mermaid-block[data-mermaid-state="rendered"]'));

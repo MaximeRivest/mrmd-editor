@@ -396,7 +396,11 @@ export const markdownStyles = `
 
 .cm-mermaid-diagram {
   display: block;
-  overflow-x: auto;
+  overflow: auto;
+  /* A renderer that returns an SVG without a sensible size must not be able to
+     take over the document: the frame scrolls instead of growing without end.
+     Mermaid's own output carries width="100%" + max-width, so it is unaffected. */
+  max-height: var(--cm-mermaid-max-height, 70vh);
   text-align: center;
 }
 
