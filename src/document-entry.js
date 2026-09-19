@@ -5,8 +5,11 @@
  * markdown writing experience without the full platform. This entry
  * includes the editor, markdown rendering, core widgets, and themes.
  *
- * It excludes: Yjs networking, runtimes, terminals, linked tables,
- * AI panels, collaboration UI, MRP clients, and document templates.
+ * It excludes: runtimes, terminals, linked tables, AI panels, MRP clients,
+ * and document templates. Since 0.12.0 it carries the collaboration
+ * primitives (Yjs, awareness, the y-websocket provider and the CodeMirror
+ * binding) under `collab`, and both editors accept `extensions`, so a host
+ * can make any editor shared.
  *
  * Build: npm run build:document
  * Output: dist/mrmd-document.iife.min.js (global: mrmdDocument)
@@ -40,8 +43,8 @@ import { lua } from '@codemirror/legacy-modes/mode/lua';
 import { ruby } from '@codemirror/legacy-modes/mode/ruby';
 import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile';
 import { diff as diffMode } from '@codemirror/legacy-modes/mode/diff';
-import { lineNumbers, highlightActiveLine, highlightActiveLineGutter, gutter, GutterMarker } from '@codemirror/view';
-import { search, searchKeymap } from '@codemirror/search';
+import { lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
+import { search, searchKeymap, openSearchPanel } from '@codemirror/search';
 import { indentUnit } from '@codemirror/language';
 
 // MRMD's markdown rendering: blur→render / focus→source, tables, math,
@@ -51,6 +54,16 @@ import { markdown as markdownRendering, assetResolverFacet, sourceModeFacet } fr
 // MRMD themes (tokens + CodeMirror theme builder).
 import { getTheme, getThemeNames, getDefaultTokens } from './widgets/theme.js';
 import { createCodemirrorTheme } from './widgets/codemirror-theme.js';
+import { documentHostServices } from './document-host-services.js';
+
+// Collaboration primitives for hosts: the CRDT, awareness (cursors, names),
+// the y-websocket provider and the CodeMirror binding. Exported, not wired:
+// the host owns the document identity, the endpoint and who is who.
+import * as Y from 'yjs';
+import { Awareness } from 'y-protocols/awareness';
+import { WebsocketProvider } from 'y-websocket';
+import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
+export const collab = { Y, Awareness, WebsocketProvider, yCollab, yUndoManagerKeymap };
 
 const jsSupport = javascript();
 const pySupport = python();
@@ -323,6 +336,7 @@ export function createDocumentEditor(target, options = {}) {
   const themeCompartment = new Compartment();
   const readonlyCompartment = new Compartment();
   const sourceCompartment = new Compartment();
+  const hostServices = documentHostServices({ ...options, lineGutter: !!options.lineGutter });
 
   const documentBase = EditorView.theme({
     '&': { height: '100%', fontSize: '16px' },
@@ -332,7 +346,11 @@ export function createDocumentEditor(target, options = {}) {
       lineHeight: '1.6',
     },
     '.cm-content': { padding: '0', maxWidth: 'none' },
-    '.cm-gutters': { display: 'none' },
+    '.cm-gutters': { display: options.lineGutter ? 'flex' : 'none' },
+    // CM's gutter base theme forces display:flex !important. Prose keeps only
+    // the opt-in host marker gutter, not code-editor line/fold gutters.
+    '.cm-gutter.cm-lineNumbers': { display: 'none !important' },
+    '.cm-gutter.cm-foldGutter': { display: 'none !important' },
     '.cm-activeLineGutter': { backgroundColor: 'transparent' },
     '&.cm-focused': { outline: 'none' },
     '.mrmd-selection-overlay': {
@@ -368,8 +386,10 @@ export function createDocumentEditor(target, options = {}) {
     }])) : [],
     selectionOverlay,
     basicSetup,
+    hostServices.extension,
     markdownLang({ base: markdownLanguage, codeLanguages: codeBlockLanguage }),
     EditorView.lineWrapping,
+    ...(Array.isArray(options.extensions) ? options.extensions : []),
     documentBase,
     themeCompartment.of(createCodemirrorTheme(theme)),
     readonlyCompartment.of(options.readonly ? EditorState.readOnly.of(true) : []),
@@ -391,11 +411,16 @@ export function createDocumentEditor(target, options = {}) {
     state: EditorState.create({ doc: options.doc || '', extensions }),
     parent: element,
   });
+  hostServices.attach(view);
   if (options.readonly) view.dom.classList.add('mrmd-readonly');
 
   return {
     view,
     element,
+    setLineMarks: hostServices.setLineMarks,
+    setLanguageServices: hostServices.setLanguageServices,
+    setDiagnostics: hostServices.setDiagnostics,
+    openSearch() { return openSearchPanel(view); },
 
     getContent() { return view.state.doc.toString(); },
 
@@ -476,6 +501,7 @@ export function createDocumentEditor(target, options = {}) {
     gotoLine(n) { gotoLine(view, n); },
 
     destroy() {
+      hostServices.destroy();
       view.destroy();
       element.classList.remove('mrmd-root');
       delete element.dataset.mrmdThemingMode;
@@ -532,36 +558,7 @@ export function createCodeEditor(target, options = {}) {
   if (typeof options.onSave === 'function') saveHandlers.push(options.onSave);
   if (typeof options.onChange === 'function') changeHandlers.push(options.onChange);
 
-  // Host line marks: a gutter of glyphs (trust ✓ ✗, provenance ●).
-  let lineMarks = new Map();
-  class Mark extends GutterMarker {
-    constructor(info) { super(); this.info = info; }
-    eq(other) { return other.info && other.info.glyph === this.info.glyph && other.info.title === this.info.title; }
-    toDOM() {
-      const el = document.createElement('span');
-      el.className = 'mrmd-line-mark ' + (this.info.cls || '');
-      el.textContent = this.info.glyph || '·';
-      if (this.info.title) el.title = this.info.title;
-      return el;
-    }
-  }
-  const markGutter = gutter({
-    class: 'mrmd-mark-gutter',
-    lineMarker(view, line) {
-      const n = view.state.doc.lineAt(line.from).number;
-      const info = lineMarks.get(n);
-      return info ? new Mark(info) : null;
-    },
-    lineMarkerChange: () => true,
-    domEventHandlers: {
-      click(view, line) {
-        const n = view.state.doc.lineAt(line.from).number;
-        const info = lineMarks.get(n);
-        if (info && typeof options.onMarkClick === 'function') { options.onMarkClick(n, info); return true; }
-        return false;
-      },
-    },
-  });
+  const hostServices = documentHostServices({ ...options, lineGutter: true, wordCompletion: true, codeKeys: true });
 
   const codeBase = EditorView.theme({
     '&': { height: '100%', fontSize: '13px' },
@@ -578,7 +575,7 @@ export function createCodeEditor(target, options = {}) {
   const lang = fileLanguage(options.filename || '');
   const extensions = [
     lineNumbers(),
-    markGutter,
+    hostServices.extension,
     highlightActiveLineGutter(),
     highlightActiveLine(),
     selectionOverlay,
@@ -587,6 +584,7 @@ export function createCodeEditor(target, options = {}) {
     keymap.of(searchKeymap),
     indentUnit.of(' '.repeat(Math.max(1, Number(options.tabSize) || 2))),
     EditorView.lineWrapping,
+    ...(Array.isArray(options.extensions) ? options.extensions : []),
     codeBase,
     themeCompartment.of(createCodemirrorTheme(theme)),
     readonlyCompartment.of(options.readonly ? EditorState.readOnly.of(true) : []),
@@ -597,6 +595,7 @@ export function createCodeEditor(target, options = {}) {
     }),
   ];
   const view = new EditorView({ state: EditorState.create({ doc: options.doc || '', extensions }), parent: element });
+  hostServices.attach(view);
   if (options.readonly) view.dom.classList.add('mrmd-readonly');
 
   return {
@@ -617,19 +616,21 @@ export function createCodeEditor(target, options = {}) {
       view.dom.classList.toggle('mrmd-readonly', !!value);
     },
     setFilename(filename) {
+      hostServices.setFilename(filename);
       const next = fileLanguage(filename);
       view.dispatch({ effects: languageCompartment.reconfigure(next || []) });
     },
-    setLineMarks(marks) {
-      lineMarks = marks instanceof Map ? marks : new Map(Object.entries(marks || {}).map(([k, v]) => [Number(k), v]));
-      view.dispatch({});
-    },
+    setLineMarks: hostServices.setLineMarks,
+    setLanguageServices: hostServices.setLanguageServices,
+    setDiagnostics: hostServices.setDiagnostics,
+    openSearch() { return openSearchPanel(view); },
     selection() { return selectionInfo(view); },
     gotoLine(n) { gotoLine(view, n); },
     onChange(fn) { changeHandlers.push(fn); return () => { const i = changeHandlers.indexOf(fn); if (i >= 0) changeHandlers.splice(i, 1); }; },
     onSave(fn) { saveHandlers.push(fn); return () => { const i = saveHandlers.indexOf(fn); if (i >= 0) saveHandlers.splice(i, 1); }; },
     focus() { view.focus(); },
     destroy() {
+      hostServices.destroy();
       view.destroy();
       element.classList.remove('mrmd-root', 'mrmd-code-root');
       delete element.dataset.mrmdThemingMode;
@@ -638,6 +639,6 @@ export function createCodeEditor(target, options = {}) {
 }
 
 export { getTheme, getThemeNames };
-export const version = '0.10.0-document';
+export const version = '0.12.0-document';
 
-export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, version };
+export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, version };
