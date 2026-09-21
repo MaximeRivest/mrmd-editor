@@ -1105,6 +1105,50 @@ export const markdownStyles = `
 }
 
 /* ==========================================================================
+   DIAGRAMS (fenced blocks the host draws, such as mermaid)
+
+   Same StateField + Decoration.replace pattern as display math. The bundle
+   only frames the drawing; the host's renderer owns what is inside.
+   ========================================================================== */
+
+.cm-diagram {
+  display: block;
+  padding: 0.75em 0;
+  text-align: center;
+  overflow-x: auto;
+}
+
+.cm-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* While the host draws, and under an error, the source stays readable. */
+.cm-diagram-source {
+  margin: 0;
+  padding: 0.5em 1em;
+  text-align: left;
+  font-family: var(--widget-font-mono);
+  font-size: 0.9em;
+  color: var(--widget-text-muted);
+  background: var(--widget-surface);
+  border-radius: var(--widget-border-radius);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.cm-diagram-pending .cm-diagram-source {
+  opacity: 0.7;
+}
+
+.cm-diagram-error-message {
+  margin-bottom: 0.4em;
+  text-align: left;
+  font-size: 0.85em;
+  color: var(--widget-error);
+}
+
+/* ==========================================================================
    TASK CHECKBOXES
    ========================================================================== */
 

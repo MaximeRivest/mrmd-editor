@@ -37272,6 +37272,18 @@ var mrmdDocument = (function (exports) {
   });
 
   /**
+   * Facet carrying the host's diagram renderer: which fence languages it draws
+   * and how. Null when the host draws none, in which case those fences stay
+   * highlighted code. Build values with `diagramsConfig()` from
+   * widgets/diagram.js; the last configured value wins.
+   *
+   * @type {Facet<{languages: Set<string>, render: Function}, {languages: Set<string>, render: Function} | null>}
+   */
+  const diagramsFacet = Facet.define({
+    combine: (values) => (values.length ? values[values.length - 1] : null),
+  });
+
+  /**
    * Cache scans by CodeMirror's immutable Text identity, not content hashes.
    * Selection/viewport transactions share their Text; edits get a new one.
    * Weak keys let closed editors and discarded undo states be collected.
@@ -57260,7 +57272,11 @@ var mrmdDocument = (function (exports) {
    * Widget for rendering relative file links [text](./path).
    *
    * Dispatches a custom 'file-link-navigate' event when clicked,
-   * allowing the host application to handle navigation.
+   * allowing the host application to handle navigation. The event detail
+   * carries the raw link target and the modifier keys held during the click
+   * (`{ path, modifiers: { ctrl, meta, shift, alt } }`), so a host can offer
+   * "open elsewhere" gestures without listening to the click itself — the
+   * widget stops the click from propagating.
    */
   class FileLinkWidget extends WidgetType {
     /**
@@ -57290,7 +57306,10 @@ var mrmdDocument = (function (exports) {
 
         view.dom.dispatchEvent(
           new CustomEvent('file-link-navigate', {
-            detail: { path: this.path },
+            detail: {
+              path: this.path,
+              modifiers: { ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey, alt: e.altKey },
+            },
             bubbles: true,
           })
         );
@@ -65940,6 +65959,289 @@ var mrmdDocument = (function (exports) {
   }
 
   /**
+   * Diagram Widget
+   *
+   * A fenced code block whose language the host draws (```mermaid, for
+   * instance) renders as a figure while the cursor is outside it and as source
+   * while the cursor is inside — the blur→render rule display math follows.
+   *
+   * The bundle draws nothing itself. A diagram library is large (mermaid alone
+   * outweighs this whole bundle) and a host already ships one for the rest of
+   * its pages, so the host declares which fence languages it draws and how:
+   *
+   *   createDocumentEditor(el, {
+   *     diagrams: {
+   *       languages: ['mermaid'],
+   *       render: (lang, source) => Promise<Node>,
+   *     },
+   *   });
+   *
+   * The render contract:
+   * - resolve with a DOM Node; the editor inserts a clone, so one result can
+   *   serve every place the same source appears
+   * - reject with an Error to show the source under its message
+   * - the node is inserted as returned: it comes from the host's own renderer,
+   *   so the host owns sanitization (mermaid's `securityLevel`, for instance)
+   *
+   * Results are cached per render function, keyed by language and source, so
+   * a decoration rebuild (every keystroke elsewhere in the document) never
+   * draws a diagram twice. Failures are not cached: the next blur retries.
+   *
+   * @module markdown/widgets/diagram
+   */
+
+
+  // =============================================================================
+  // Host configuration
+  // =============================================================================
+
+  /**
+   * Normalize and validate the host's `diagrams` option into the facet value.
+   * A misconfigured host fails here, at editor creation, rather than silently
+   * leaving every diagram as code.
+   *
+   * @param {{languages: string[], render: Function} | null | undefined} option
+   * @returns {{languages: Set<string>, render: Function} | null}
+   */
+  function diagramsConfig(option) {
+    if (option === null || option === undefined) return null;
+    if (typeof option !== 'object') {
+      throw new TypeError('mrmd-document: `diagrams` must be an object with `languages` and `render`');
+    }
+    if (typeof option.render !== 'function') {
+      throw new TypeError('mrmd-document: `diagrams.render` must be a function (lang, source) => Promise<Node>');
+    }
+    const languages = Array.isArray(option.languages)
+      ? option.languages.map((l) => String(l).trim().toLowerCase()).filter(Boolean)
+      : [];
+    if (languages.length === 0) {
+      throw new TypeError('mrmd-document: `diagrams.languages` must name at least one fence language');
+    }
+    return { languages: new Set(languages), render: option.render };
+  }
+
+  // =============================================================================
+  // Fence scan
+  // =============================================================================
+
+  const FENCE_OPEN = /^\s*(?:`{3,}|~{3,})\s*(\S*)/;
+  const FENCE_CLOSE = /^\s*(?:`{3,}|~{3,})\s*$/;
+
+  /**
+   * Every fenced code block in the document, in order, with its language word
+   * (lowercased, '' when bare) and body. Language-independent so the scan is
+   * shared across host configurations; callers filter by language.
+   *
+   * An open fence — the user is still typing it — has `closed: false` and no
+   * body: nothing should render until the block is whole.
+   *
+   * @param {import('@codemirror/state').EditorState} state
+   * @returns {Array<{lang: string, closed: boolean, source: string, from: number, to: number, startLine: number, endLine: number}>}
+   */
+  const findFencedBlocks = memoizeSyntaxScan(function findFencedBlocks(state) {
+    const doc = state.doc;
+    const blocks = [];
+    syntaxTree(state).iterate({
+      enter(node) {
+        if (node.name !== 'FencedCode') return;
+        const first = doc.lineAt(node.from);
+        const last = doc.lineAt(node.to);
+        const lang = ((first.text.match(FENCE_OPEN) || [])[1] || '').toLowerCase();
+        const closed = last.number > first.number && FENCE_CLOSE.test(last.text);
+        const bodyFrom = Math.min(first.to + 1, doc.length);
+        const bodyTo = closed ? Math.max(bodyFrom, last.from - 1) : bodyFrom;
+        blocks.push({
+          lang,
+          closed,
+          source: doc.sliceString(bodyFrom, bodyTo),
+          from: node.from,
+          to: node.to,
+          startLine: first.number,
+          endLine: last.number,
+        });
+        return false; // a fence's body is not markdown
+      },
+    });
+    return blocks;
+  });
+
+  /**
+   * The fenced blocks a host configuration draws: closed, non-blank, and in a
+   * declared language.
+   *
+   * @param {import('@codemirror/state').EditorState} state
+   * @param {{languages: Set<string>}} config
+   */
+  function findDiagramBlocks(state, config) {
+    return findFencedBlocks(state).filter(
+      (block) => block.closed && config.languages.has(block.lang) && block.source.trim() !== ''
+    );
+  }
+
+  // =============================================================================
+  // Render cache
+  // =============================================================================
+
+  const CACHE_LIMIT = 64;
+
+  /** @type {WeakMap<Function, Map<string, Promise<Node>>>} */
+  const caches = new WeakMap();
+
+  function cacheFor(render) {
+    let cache = caches.get(render);
+    if (!cache) {
+      cache = new Map();
+      caches.set(render, cache);
+    }
+    return cache;
+  }
+
+  /**
+   * Draw `source` through the host renderer, reusing an earlier result for the
+   * same language and source. Bounded and least-recently-used: a long document
+   * with many diagrams keeps the ones on screen.
+   *
+   * @param {Function} render
+   * @param {string} lang
+   * @param {string} source
+   * @returns {Promise<Node>}
+   */
+  function renderDiagram(render, lang, source) {
+    const cache = cacheFor(render);
+    const key = `${lang}\n${source}`;
+    const hit = cache.get(key);
+    if (hit) {
+      cache.delete(key);
+      cache.set(key, hit); // most recent at the end
+      return hit;
+    }
+    const pending = Promise.resolve()
+      .then(() => render(lang, source))
+      .then((node) => {
+        if (!(node instanceof Node)) {
+          throw new TypeError(`diagrams.render must resolve with a DOM Node, got ${node === null ? 'null' : typeof node}`);
+        }
+        return node;
+      });
+    // A failure is shown once and forgotten, so the next blur tries again — a
+    // renderer that was still loading, or a fence the user is about to fix,
+    // must not be remembered as broken.
+    pending.catch(() => {
+      if (cache.get(key) === pending) cache.delete(key);
+    });
+    cache.set(key, pending);
+    if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
+    return pending;
+  }
+
+  /**
+   * Forget every result drawn through `render`. Hosts call this when the
+   * drawing itself should change — a theme switch — before asking the editor
+   * to redraw.
+   *
+   * @param {Function} render
+   */
+  function clearDiagramCache(render) {
+    caches.delete(render);
+  }
+
+  // =============================================================================
+  // Widget
+  // =============================================================================
+
+  /** Widget DOM still owned by a live decoration. Cleared by `destroy`. */
+  const liveDoms = new WeakSet();
+
+  function sourceBlock(source) {
+    const pre = document.createElement('pre');
+    pre.className = 'cm-diagram-source';
+    pre.textContent = source;
+    return pre;
+  }
+
+  /**
+   * Renders one diagram fence. Shows the source while the host draws, then the
+   * drawing; on failure, the message above the source.
+   *
+   * `generation` is the host's redraw counter (see `refreshDiagramsEffect`):
+   * two widgets with equal source but different generations are not equal, so
+   * CodeMirror rebuilds the DOM and the diagram is drawn again.
+   */
+  class DiagramWidget extends WidgetType {
+    /**
+     * @param {string} lang
+     * @param {string} source
+     * @param {Function} render - the host renderer
+     * @param {number} generation
+     */
+    constructor(lang, source, render, generation) {
+      super();
+      this.lang = lang;
+      this.source = source;
+      this.render = render;
+      this.generation = generation;
+    }
+
+    eq(other) {
+      return (
+        other.lang === this.lang &&
+        other.source === this.source &&
+        other.render === this.render &&
+        other.generation === this.generation
+      );
+    }
+
+    toDOM(view) {
+      const dom = document.createElement('div');
+      dom.className = 'cm-diagram cm-diagram-pending';
+      dom.dataset.lang = this.lang;
+      dom.setAttribute('aria-busy', 'true');
+      dom.appendChild(sourceBlock(this.source));
+      liveDoms.add(dom);
+
+      renderDiagram(this.render, this.lang, this.source).then(
+        (node) => {
+          if (!liveDoms.has(dom)) return; // the decoration went away while drawing
+          dom.replaceChildren(node.cloneNode(true));
+          dom.classList.remove('cm-diagram-pending');
+          dom.removeAttribute('aria-busy');
+          this.settled(dom, view);
+        },
+        (error) => {
+          if (!liveDoms.has(dom)) return;
+          const message = document.createElement('div');
+          message.className = 'cm-diagram-error-message';
+          message.textContent = `⚠ ${this.lang}: ${String(error?.message || error || 'render failed').split('\n')[0]}`;
+          dom.replaceChildren(message, sourceBlock(this.source));
+          dom.classList.remove('cm-diagram-pending');
+          dom.classList.add('cm-diagram-error');
+          dom.removeAttribute('aria-busy');
+          this.settled(dom, view);
+        }
+      );
+
+      return dom;
+    }
+
+    destroy(dom) {
+      liveDoms.delete(dom);
+    }
+
+    /**
+     * The drawing (or its failure) is in the DOM. Subclasses measure here;
+     * the base widget has nothing to do.
+     *
+     * @param {HTMLElement} dom
+     * @param {import('@codemirror/view').EditorView | undefined} view
+     */
+    settled(dom, view) {} // eslint-disable-line no-unused-vars
+
+    ignoreEvent() {
+      return true; // events bubble; click-to-edit is attached by the block layer
+    }
+  }
+
+  /**
    * Linked-table workspace command/event helpers.
    */
 
@@ -67435,6 +67737,7 @@ var mrmdDocument = (function (exports) {
    * This handles:
    * - Tables (multi-line)
    * - Display math (multi-line)
+   * - Diagram fences the host draws (multi-line)
    *
    * Also implements "stable height" feature to prevent layout shift when
    * switching between rendered widgets and raw markdown.
@@ -67619,6 +67922,30 @@ var mrmdDocument = (function (exports) {
         });
       }
       return next;
+    },
+  });
+
+  // =============================================================================
+  // Diagram redraw
+  // =============================================================================
+  //
+  // A drawn diagram is content-addressed: same source, same widget, same DOM.
+  // When the host wants every diagram drawn again with identical source (its
+  // theme changed), it dispatches this effect. The generation it bumps is part
+  // of each diagram widget's identity, so CodeMirror rebuilds their DOM.
+
+  /** Redraw every diagram. Hosts clear their render cache first. */
+  const refreshDiagramsEffect = StateEffect.define();
+
+  const diagramGeneration = StateField.define({
+    create() {
+      return 0;
+    },
+    update(generation, tr) {
+      for (const effect of tr.effects) {
+        if (effect.is(refreshDiagramsEffect)) generation += 1;
+      }
+      return generation;
     },
   });
 
@@ -67856,6 +68183,48 @@ var mrmdDocument = (function (exports) {
       });
 
       return dom;
+    }
+  }
+
+  /**
+   * DiagramWidget wrapper that caches its rendered height for stable layout.
+   * The height is known only once the host has drawn, so it is cached from
+   * `settled`, not from the initial DOM.
+   */
+  class DiagramWidgetWithHeightCache extends DiagramWidget {
+    constructor(lang, source, render, generation, contentHash, sourceLineCount) {
+      super(lang, source, render, generation);
+      this.contentHash = contentHash;
+      this.sourceLineCount = sourceLineCount;
+    }
+
+    eq(other) {
+      return super.eq(other) && other.contentHash === this.contentHash;
+    }
+
+    get estimatedHeight() {
+      return getCachedHeight(this.contentHash) ??
+        Math.round((this.sourceLineCount + 1) * getLineHeight());
+    }
+
+    toDOM(view) {
+      const dom = super.toDOM(view);
+      // Land inside the fence body, not on the opening ``` line.
+      attachClickToEdit(dom, view, 1);
+      return dom;
+    }
+
+    settled(dom, view) {
+      const contentHash = this.contentHash;
+      requestAnimationFrame(() => {
+        const line = dom.closest('.cm-line');
+        const height = line ? line.offsetHeight : dom.offsetHeight;
+        if (height > 0) {
+          cacheWidgetHeight(contentHash, height);
+        }
+        // The drawing replaced the source after CodeMirror's last measure.
+        view?.requestMeasure();
+      });
     }
   }
 
@@ -68226,6 +68595,44 @@ var mrmdDocument = (function (exports) {
       }
     }
 
+    // Find and process diagram fences the host draws
+    const diagrams = state.facet(diagramsFacet);
+
+    if (diagrams) {
+      const generation = state.field(diagramGeneration, false) || 0;
+
+      for (const block of findDiagramBlocks(state, diagrams)) {
+        const cursorInDiagram = isSourceMode || (!isLocked && !isWysiwygMode && cursorLine >= block.startLine && cursorLine <= block.endLine);
+        const contentHash = `diagram-${block.lang}-` + hashContent$1(block.source);
+        const sourceLineCount = block.endLine - block.startLine + 1;
+
+        if (!cursorInDiagram) {
+          decorations.push(
+            Decoration.replace({
+              widget: new DiagramWidgetWithHeightCache(
+                block.lang,
+                block.source,
+                diagrams.render,
+                generation,
+                contentHash,
+                sourceLineCount
+              ),
+            }).range(block.from, block.to)
+          );
+        } else {
+          // Cursor inside: show the fence source, padded to the drawing's height
+          const padding = editingSpacerPadding(
+            `diagram:${block.startLine}`,
+            contentHash,
+            sourceLineCount,
+          );
+          if (padding > 0) {
+            decorations.push(editingSpacerDecoration(doc, block.endLine, padding));
+          }
+        }
+      }
+    }
+
     // Find and process raw HTML <details>/<summary> blocks.
     // These can span multiple lines and contain fenced code, so they must live in
     // this StateField rather than the line-oriented inline HTML ViewPlugin.
@@ -68295,7 +68702,7 @@ var mrmdDocument = (function (exports) {
   }
 
   /**
-   * StateField for block decorations (tables, display math)
+   * StateField for block decorations (tables, display math, diagrams)
    *
    * This MUST be a StateField (not ViewPlugin) because it uses
    * Decoration.replace across line breaks.
@@ -72441,6 +72848,50 @@ var mrmdDocument = (function (exports) {
 }
 
 /* ==========================================================================
+   DIAGRAMS (fenced blocks the host draws, such as mermaid)
+
+   Same StateField + Decoration.replace pattern as display math. The bundle
+   only frames the drawing; the host's renderer owns what is inside.
+   ========================================================================== */
+
+.cm-diagram {
+  display: block;
+  padding: 0.75em 0;
+  text-align: center;
+  overflow-x: auto;
+}
+
+.cm-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* While the host draws, and under an error, the source stays readable. */
+.cm-diagram-source {
+  margin: 0;
+  padding: 0.5em 1em;
+  text-align: left;
+  font-family: var(--widget-font-mono);
+  font-size: 0.9em;
+  color: var(--widget-text-muted);
+  background: var(--widget-surface);
+  border-radius: var(--widget-border-radius);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.cm-diagram-pending .cm-diagram-source {
+  opacity: 0.7;
+}
+
+.cm-diagram-error-message {
+  margin-bottom: 0.4em;
+  text-align: left;
+  font-size: 0.85em;
+  color: var(--widget-error);
+}
+
+/* ==========================================================================
    TASK CHECKBOXES
    ========================================================================== */
 
@@ -72897,7 +73348,7 @@ var mrmdDocument = (function (exports) {
    * Create the markdown rendering extension.
    *
    * Architecture:
-   * - blockDecorations (StateField): Tables, display math - multi-line Decoration.replace
+   * - blockDecorations (StateField): Tables, display math, diagrams - multi-line Decoration.replace
    * - markdownRenderer (ViewPlugin): Everything else - single-line decorations
    *
    * This split is required because CodeMirror only allows multi-line replacing
@@ -72915,8 +73366,9 @@ var mrmdDocument = (function (exports) {
       lineHeightTracker,          // ViewPlugin: updates line height cache (must come first!)
       fontRemeasurePlugin,        // ViewPlugin: re-measure when webfonts land (KaTeX!)
       revealedDetailsState,       // StateField: <details> blocks revealed for editing
+      diagramGeneration,          // StateField: host-requested diagram redraws
       ...createInlineEditingExtensions(),
-      blockDecorations,           // StateField: tables, display math
+      blockDecorations,           // StateField: tables, display math, diagrams
       markdownRenderer,           // ViewPlugin: everything else
       ...createWysiwygExtensions(),
     ];
@@ -93255,7 +93707,10 @@ var mrmdDocument = (function (exports) {
    * and document templates. Since 0.12.0 it carries the collaboration
    * primitives (Yjs, awareness, the y-websocket provider and the CodeMirror
    * binding) under `collab`, and both editors accept `extensions`, so a host
-   * can make any editor shared.
+   * can make any editor shared. Since 0.13.0 the document editor draws
+   * diagram fences through a host-supplied renderer (`diagrams`): the bundle
+   * frames the drawing and owns the blur→render rule; the host owns the
+   * library.
    *
    * Build: npm run build:document
    * Output: dist/mrmd-document.iife.min.js (global: mrmdDocument)
@@ -93509,6 +93964,12 @@ var mrmdDocument = (function (exports) {
    *   placeholder    empty-state text
    *   sourceMode     boolean — show all raw markdown syntax
    *   assetResolver  (url) => url — resolve relative image paths
+   *   diagrams       {languages, render} — draw fenced blocks in the named
+   *                  languages (```mermaid …) as figures when the cursor is
+   *                  outside them. render(lang, source) resolves with a DOM
+   *                  Node (inserted as a clone; the host owns sanitization)
+   *                  or rejects to show the source under the error. Results
+   *                  are cached by source; refreshDiagrams() redraws.
    *   onChange       () => void — document changed
    *   onSave         () => void — user pressed Mod-S
    *   onRunCell      ({lang, code, from, to}, {advance}) => void — the user
@@ -93535,6 +93996,7 @@ var mrmdDocument = (function (exports) {
     const readonlyCompartment = new Compartment();
     const sourceCompartment = new Compartment();
     const hostServices = documentHostServices({ ...options, lineGutter: !!options.lineGutter });
+    const diagrams = diagramsConfig(options.diagrams);
 
     const documentBase = EditorView.theme({
       '&': { height: '100%', fontSize: '16px' },
@@ -93594,6 +94056,7 @@ var mrmdDocument = (function (exports) {
       sourceCompartment.of(sourceModeFacet.of(!!options.sourceMode)),
       options.placeholder ? placeholder(options.placeholder) : [],
       typeof options.assetResolver === 'function' ? assetResolverFacet.of(options.assetResolver) : [],
+      diagrams ? diagramsFacet.of(diagrams) : [],
       markdown(),
       keymap.of([{
         key: 'Mod-s',
@@ -93643,6 +94106,18 @@ var mrmdDocument = (function (exports) {
 
       setSourceMode(value) {
         view.dispatch({ effects: sourceCompartment.reconfigure(sourceModeFacet.of(!!value)) });
+      },
+
+      /**
+       * Draw every diagram again through the host renderer — after the host's
+       * theme changed, for instance. Forgets the cached drawings first, so the
+       * renderer really runs. Nothing to do when no renderer was configured.
+       */
+      refreshDiagrams() {
+        if (!diagrams) return false;
+        clearDiagramCache(diagrams.render);
+        view.dispatch({ effects: refreshDiagramsEffect.of(null) });
+        return true;
       },
 
       /** The fenced code block at the cursor: {lang, code, from, to} or null. */
@@ -93835,7 +94310,7 @@ var mrmdDocument = (function (exports) {
       },
     };
   }
-  const version = '0.12.0-document';
+  const version = '0.13.0-document';
 
   var documentEntry = { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, version };
 

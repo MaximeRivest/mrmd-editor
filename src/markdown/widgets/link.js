@@ -127,7 +127,11 @@ export class ExternalLinkWidget extends WidgetType {
  * Widget for rendering relative file links [text](./path).
  *
  * Dispatches a custom 'file-link-navigate' event when clicked,
- * allowing the host application to handle navigation.
+ * allowing the host application to handle navigation. The event detail
+ * carries the raw link target and the modifier keys held during the click
+ * (`{ path, modifiers: { ctrl, meta, shift, alt } }`), so a host can offer
+ * "open elsewhere" gestures without listening to the click itself — the
+ * widget stops the click from propagating.
  */
 export class FileLinkWidget extends WidgetType {
   /**
@@ -157,7 +161,10 @@ export class FileLinkWidget extends WidgetType {
 
       view.dom.dispatchEvent(
         new CustomEvent('file-link-navigate', {
-          detail: { path: this.path },
+          detail: {
+            path: this.path,
+            modifiers: { ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey, alt: e.altKey },
+          },
           bubbles: true,
         })
       );

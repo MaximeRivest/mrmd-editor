@@ -35,3 +35,15 @@ export const sourceModeFacet = Facet.define({
 export const wysiwygModeFacet = Facet.define({
   combine: (values) => values.some(v => v),
 });
+
+/**
+ * Facet carrying the host's diagram renderer: which fence languages it draws
+ * and how. Null when the host draws none, in which case those fences stay
+ * highlighted code. Build values with `diagramsConfig()` from
+ * widgets/diagram.js; the last configured value wins.
+ *
+ * @type {Facet<{languages: Set<string>, render: Function}, {languages: Set<string>, render: Function} | null>}
+ */
+export const diagramsFacet = Facet.define({
+  combine: (values) => (values.length ? values[values.length - 1] : null),
+});

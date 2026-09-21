@@ -56,3 +56,11 @@ export {
   isExternalUrl,
   wikiLinkDisplayText,
 } from './link.js';
+export {
+  DiagramWidget,
+  diagramsConfig,
+  findFencedBlocks,
+  findDiagramBlocks,
+  renderDiagram,
+  clearDiagramCache,
+} from './diagram.js';

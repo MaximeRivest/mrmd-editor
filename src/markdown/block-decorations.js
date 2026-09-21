@@ -7,6 +7,7 @@
  * This handles:
  * - Tables (multi-line)
  * - Display math (multi-line)
+ * - Diagram fences the host draws (multi-line)
  *
  * Also implements "stable height" feature to prevent layout shift when
  * switching between rendered widgets and raw markdown.
@@ -18,7 +19,8 @@
 import { StateField, StateEffect } from '@codemirror/state';
 import { EditorView, Decoration, WidgetType, ViewPlugin } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
-import { sourceModeFacet, wysiwygModeFacet } from './facets.js';
+import { sourceModeFacet, wysiwygModeFacet, diagramsFacet } from './facets.js';
+import { documentText, memoizeDocumentScan, memoizeSyntaxScan } from './document-cache.js';
 
 // =============================================================================
 // Line Height Tracking for Accurate Spacing
@@ -69,8 +71,12 @@ import {
   FrontmatterWidget,
 } from './widgets/frontmatter.js';
 import {
+  DiagramWidget,
+  findDiagramBlocks,
+} from './widgets/diagram.js';
+import {
   DetailsBlockWidget,
-  extractDetailsBlocks,
+  detailsBlocksInDocument,
 } from './html-inline.js';
 import {
   LinkedTableWidget,
@@ -222,13 +228,37 @@ export const revealedDetailsState = StateField.define({
     // Expire reveals once the cursor leaves the block.
     if (next.length > 0 && (tr.selection || tr.docChanged)) {
       const head = tr.state.selection.main.head;
-      const blocks = extractDetailsBlocks(tr.state.doc.toString());
+      const blocks = detailsBlocksInDocument(tr.state.doc);
       next = next.filter((p) => {
         const block = blocks.find((b) => p >= b.start && p <= b.end);
         return block && head >= block.start && head <= block.end + 1;
       });
     }
     return next;
+  },
+});
+
+// =============================================================================
+// Diagram redraw
+// =============================================================================
+//
+// A drawn diagram is content-addressed: same source, same widget, same DOM.
+// When the host wants every diagram drawn again with identical source (its
+// theme changed), it dispatches this effect. The generation it bumps is part
+// of each diagram widget's identity, so CodeMirror rebuilds their DOM.
+
+/** Redraw every diagram. Hosts clear their render cache first. */
+export const refreshDiagramsEffect = StateEffect.define();
+
+export const diagramGeneration = StateField.define({
+  create() {
+    return 0;
+  },
+  update(generation, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(refreshDiagramsEffect)) generation += 1;
+    }
+    return generation;
   },
 });
 
@@ -513,9 +543,51 @@ class DisplayMathWidgetWithHeightCache extends DisplayMathWidget {
 }
 
 /**
+ * DiagramWidget wrapper that caches its rendered height for stable layout.
+ * The height is known only once the host has drawn, so it is cached from
+ * `settled`, not from the initial DOM.
+ */
+class DiagramWidgetWithHeightCache extends DiagramWidget {
+  constructor(lang, source, render, generation, contentHash, sourceLineCount) {
+    super(lang, source, render, generation);
+    this.contentHash = contentHash;
+    this.sourceLineCount = sourceLineCount;
+  }
+
+  eq(other) {
+    return super.eq(other) && other.contentHash === this.contentHash;
+  }
+
+  get estimatedHeight() {
+    return getCachedHeight(this.contentHash) ??
+      Math.round((this.sourceLineCount + 1) * getLineHeight());
+  }
+
+  toDOM(view) {
+    const dom = super.toDOM(view);
+    // Land inside the fence body, not on the opening ``` line.
+    attachClickToEdit(dom, view, 1);
+    return dom;
+  }
+
+  settled(dom, view) {
+    const contentHash = this.contentHash;
+    requestAnimationFrame(() => {
+      const line = dom.closest('.cm-line');
+      const height = line ? line.offsetHeight : dom.offsetHeight;
+      if (height > 0) {
+        cacheWidgetHeight(contentHash, height);
+      }
+      // The drawing replaced the source after CodeMirror's last measure.
+      view?.requestMeasure();
+    });
+  }
+}
+
+/**
  * Find all table ranges in the document using syntax tree + fallback scanner
  */
-function findTableRanges(state) {
+const findTableRanges = memoizeSyntaxScan(function findTableRanges(state) {
   const doc = state.doc;
   const ranges = [];
   const processedStarts = new Set();
@@ -549,9 +621,13 @@ function findTableRanges(state) {
   let tableStartLine = -1;
   let hasDelimiter = false;
 
+  const lineIterator = doc.iterLines();
+  let lineFrom = 0;
+  let previousLineTo = 0;
   for (let i = 1; i <= doc.lines; i++) {
-    const line = doc.line(i);
-    const text = line.text;
+    const text = lineIterator.next().value;
+    const from = lineFrom;
+    lineFrom += text.length + 1;
     const isTable = isTableLine(text);
     const isDelim = isTableDelimiter(text);
 
@@ -559,7 +635,7 @@ function findTableRanges(state) {
       // Check if already processed
       if (!processedStarts.has(i)) {
         inTable = true;
-        tableStart = line.from;
+        tableStart = from;
         tableStartLine = i;
         hasDelimiter = isDelim;
       }
@@ -568,11 +644,10 @@ function findTableRanges(state) {
     } else if (!isTable && inTable) {
       // End of table
       if (hasDelimiter && tableStartLine > 0) {
-        const prevLine = doc.line(i - 1);
         ranges.push({
           type: 'table',
           from: tableStart,
-          to: prevLine.to,
+          to: previousLineTo,
           startLine: tableStartLine,
           endLine: i - 1,
         });
@@ -582,6 +657,7 @@ function findTableRanges(state) {
       tableStartLine = -1;
       hasDelimiter = false;
     }
+    previousLineTo = from + text.length;
   }
 
   // Handle table at end of document
@@ -597,15 +673,17 @@ function findTableRanges(state) {
   }
 
   return ranges;
-}
+});
 
 /**
  * Find all display math ranges in the document
  */
-function findDisplayMathRanges(state) {
+const findDisplayMathRanges = memoizeSyntaxScan(function findDisplayMathRanges(state) {
   const doc = state.doc;
-  const text = doc.toString();
+  const text = documentText(doc);
   const ranges = [];
+  // Without an opening delimiter there is nothing to pair or exclude.
+  if (!text.includes('$$') && !text.includes('\\[')) return ranges;
 
   // Positions inside fenced/inline code must never participate in math
   // delimiter pairing. Otherwise a `$$` in a Python string or shell heredoc
@@ -677,7 +755,7 @@ function findDisplayMathRanges(state) {
   }
 
   return ranges;
-}
+});
 
 /**
  * FrontmatterWidget wrapper that caches its rendered height for stable layout.
@@ -712,8 +790,7 @@ class FrontmatterWidgetWithHeightCache extends FrontmatterWidget {
 /**
  * Find frontmatter range at the start of the document (--- ... ---)
  */
-function findFrontmatterRange(state) {
-  const doc = state.doc;
+const findFrontmatterRange = memoizeDocumentScan(function findFrontmatterRange(doc) {
   if (doc.lines < 2) return null;
 
   const firstLine = doc.line(1);
@@ -741,7 +818,7 @@ function findFrontmatterRange(state) {
     // Frontmatter can't contain blank lines followed by markdown
   }
   return null;
-}
+});
 
 /**
  * Build decorations for all block elements
@@ -874,10 +951,48 @@ function buildBlockDecorations(state) {
     }
   }
 
+  // Find and process diagram fences the host draws
+  const diagrams = state.facet(diagramsFacet);
+
+  if (diagrams) {
+    const generation = state.field(diagramGeneration, false) || 0;
+
+    for (const block of findDiagramBlocks(state, diagrams)) {
+      const cursorInDiagram = isSourceMode || (!isLocked && !isWysiwygMode && cursorLine >= block.startLine && cursorLine <= block.endLine);
+      const contentHash = `diagram-${block.lang}-` + hashContent(block.source);
+      const sourceLineCount = block.endLine - block.startLine + 1;
+
+      if (!cursorInDiagram) {
+        decorations.push(
+          Decoration.replace({
+            widget: new DiagramWidgetWithHeightCache(
+              block.lang,
+              block.source,
+              diagrams.render,
+              generation,
+              contentHash,
+              sourceLineCount
+            ),
+          }).range(block.from, block.to)
+        );
+      } else {
+        // Cursor inside: show the fence source, padded to the drawing's height
+        const padding = editingSpacerPadding(
+          `diagram:${block.startLine}`,
+          contentHash,
+          sourceLineCount,
+        );
+        if (padding > 0) {
+          decorations.push(editingSpacerDecoration(doc, block.endLine, padding));
+        }
+      }
+    }
+  }
+
   // Find and process raw HTML <details>/<summary> blocks.
   // These can span multiple lines and contain fenced code, so they must live in
   // this StateField rather than the line-oriented inline HTML ViewPlugin.
-  const detailsRanges = extractDetailsBlocks(doc.toString());
+  const detailsRanges = detailsBlocksInDocument(doc);
   for (const range of detailsRanges) {
     const startLine = doc.lineAt(range.start).number;
     const endLine = doc.lineAt(range.end).number;
@@ -908,7 +1023,7 @@ function buildBlockDecorations(state) {
   }
 
   // Find and process frontmatter
-  const fmRange = findFrontmatterRange(state);
+  const fmRange = findFrontmatterRange(doc);
 
   if (fmRange) {
     const cursorInFrontmatter = isSourceMode || (!isLocked && !isWysiwygMode && cursorLine >= fmRange.startLine && cursorLine <= fmRange.endLine);
@@ -943,7 +1058,7 @@ function buildBlockDecorations(state) {
 }
 
 /**
- * StateField for block decorations (tables, display math)
+ * StateField for block decorations (tables, display math, diagrams)
  *
  * This MUST be a StateField (not ViewPlugin) because it uses
  * Decoration.replace across line breaks.
@@ -954,10 +1069,18 @@ export const blockDecorations = StateField.define({
   },
 
   update(decorations, tr) {
-    // Rebuild on any change that could affect block elements
-    // For efficiency, we could map positions and only rebuild affected ranges,
-    // but for now, full rebuild is acceptable
-    if (tr.docChanged || tr.selection || tr.reconfigured) {
+    // Block reveal follows the anchor's line, not every caret column or
+    // moving selection head. Effects can change explicit details/linked-table
+    // reveals; parsing can also advance without a document edit.
+    const anchorLineChanged = tr.selection &&
+      tr.startState.doc.lineAt(tr.startState.selection.main.anchor).number !==
+      tr.state.doc.lineAt(tr.state.selection.main.anchor).number;
+    const beforeReveals = tr.startState.field(revealedDetailsState, false) || [];
+    const afterReveals = tr.state.field(revealedDetailsState, false) || [];
+    const revealsChanged = beforeReveals.length !== afterReveals.length ||
+      beforeReveals.some((pos, i) => pos !== afterReveals[i]);
+    if (tr.docChanged || anchorLineChanged || revealsChanged || tr.reconfigured || tr.effects.length ||
+        syntaxTree(tr.startState) !== syntaxTree(tr.state)) {
       return buildBlockDecorations(tr.state);
     }
     return decorations;

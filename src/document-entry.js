@@ -9,7 +9,10 @@
  * and document templates. Since 0.12.0 it carries the collaboration
  * primitives (Yjs, awareness, the y-websocket provider and the CodeMirror
  * binding) under `collab`, and both editors accept `extensions`, so a host
- * can make any editor shared.
+ * can make any editor shared. Since 0.13.0 the document editor draws
+ * diagram fences through a host-supplied renderer (`diagrams`): the bundle
+ * frames the drawing and owns the blur→render rule; the host owns the
+ * library.
  *
  * Build: npm run build:document
  * Output: dist/mrmd-document.iife.min.js (global: mrmdDocument)
@@ -49,7 +52,15 @@ import { indentUnit } from '@codemirror/language';
 
 // MRMD's markdown rendering: blur→render / focus→source, tables, math,
 // images, checkboxes, alerts — the document experience.
-import { markdown as markdownRendering, assetResolverFacet, sourceModeFacet } from './markdown/index.js';
+import {
+  markdown as markdownRendering,
+  assetResolverFacet,
+  sourceModeFacet,
+  diagramsFacet,
+  diagramsConfig,
+  refreshDiagramsEffect,
+  clearDiagramCache,
+} from './markdown/index.js';
 
 // MRMD themes (tokens + CodeMirror theme builder).
 import { getTheme, getThemeNames, getDefaultTokens } from './widgets/theme.js';
@@ -311,6 +322,12 @@ function resolveTheme(name, dark) {
  *   placeholder    empty-state text
  *   sourceMode     boolean — show all raw markdown syntax
  *   assetResolver  (url) => url — resolve relative image paths
+ *   diagrams       {languages, render} — draw fenced blocks in the named
+ *                  languages (```mermaid …) as figures when the cursor is
+ *                  outside them. render(lang, source) resolves with a DOM
+ *                  Node (inserted as a clone; the host owns sanitization)
+ *                  or rejects to show the source under the error. Results
+ *                  are cached by source; refreshDiagrams() redraws.
  *   onChange       () => void — document changed
  *   onSave         () => void — user pressed Mod-S
  *   onRunCell      ({lang, code, from, to}, {advance}) => void — the user
@@ -337,6 +354,7 @@ export function createDocumentEditor(target, options = {}) {
   const readonlyCompartment = new Compartment();
   const sourceCompartment = new Compartment();
   const hostServices = documentHostServices({ ...options, lineGutter: !!options.lineGutter });
+  const diagrams = diagramsConfig(options.diagrams);
 
   const documentBase = EditorView.theme({
     '&': { height: '100%', fontSize: '16px' },
@@ -396,6 +414,7 @@ export function createDocumentEditor(target, options = {}) {
     sourceCompartment.of(sourceModeFacet.of(!!options.sourceMode)),
     options.placeholder ? placeholder(options.placeholder) : [],
     typeof options.assetResolver === 'function' ? assetResolverFacet.of(options.assetResolver) : [],
+    diagrams ? diagramsFacet.of(diagrams) : [],
     markdownRendering(),
     keymap.of([{
       key: 'Mod-s',
@@ -445,6 +464,18 @@ export function createDocumentEditor(target, options = {}) {
 
     setSourceMode(value) {
       view.dispatch({ effects: sourceCompartment.reconfigure(sourceModeFacet.of(!!value)) });
+    },
+
+    /**
+     * Draw every diagram again through the host renderer — after the host's
+     * theme changed, for instance. Forgets the cached drawings first, so the
+     * renderer really runs. Nothing to do when no renderer was configured.
+     */
+    refreshDiagrams() {
+      if (!diagrams) return false;
+      clearDiagramCache(diagrams.render);
+      view.dispatch({ effects: refreshDiagramsEffect.of(null) });
+      return true;
     },
 
     /** The fenced code block at the cursor: {lang, code, from, to} or null. */
@@ -639,6 +670,6 @@ export function createCodeEditor(target, options = {}) {
 }
 
 export { getTheme, getThemeNames };
-export const version = '0.12.0-document';
+export const version = '0.13.0-document';
 
 export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, version };

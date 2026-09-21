@@ -27,7 +27,7 @@
  */
 
 import { markdownRenderer } from './renderer.js';
-import { blockDecorations, lineHeightTracker, fontRemeasurePlugin, revealedDetailsState } from './block-decorations.js';
+import { blockDecorations, lineHeightTracker, fontRemeasurePlugin, revealedDetailsState, diagramGeneration } from './block-decorations.js';
 import { createWysiwygExtensions } from './wysiwyg.js';
 import { createInlineEditingExtensions } from './inline-state.js';
 import { markdownStyles, injectMarkdownStyles } from './styles.js';
@@ -36,7 +36,7 @@ import { markdownStyles, injectMarkdownStyles } from './styles.js';
  * Create the markdown rendering extension.
  *
  * Architecture:
- * - blockDecorations (StateField): Tables, display math - multi-line Decoration.replace
+ * - blockDecorations (StateField): Tables, display math, diagrams - multi-line Decoration.replace
  * - markdownRenderer (ViewPlugin): Everything else - single-line decorations
  *
  * This split is required because CodeMirror only allows multi-line replacing
@@ -54,8 +54,9 @@ export function markdown() {
     lineHeightTracker,          // ViewPlugin: updates line height cache (must come first!)
     fontRemeasurePlugin,        // ViewPlugin: re-measure when webfonts land (KaTeX!)
     revealedDetailsState,       // StateField: <details> blocks revealed for editing
+    diagramGeneration,          // StateField: host-requested diagram redraws
     ...createInlineEditingExtensions(),
-    blockDecorations,           // StateField: tables, display math
+    blockDecorations,           // StateField: tables, display math, diagrams
     markdownRenderer,           // ViewPlugin: everything else
     ...createWysiwygExtensions(),
   ];
@@ -63,12 +64,12 @@ export function markdown() {
 
 // Export individual pieces for advanced use
 export { markdownRenderer, assetResolverFacet } from './renderer.js';
-export { sourceModeFacet, wysiwygModeFacet } from './facets.js';
+export { sourceModeFacet, wysiwygModeFacet, diagramsFacet } from './facets.js';
 export { createWysiwygExtensions, toggleInlineFormat, findDelimitedRange, findFencedCodeAt } from './wysiwyg.js';
 export { createInlineEditingExtensions, getPendingInlineSplit } from './inline-state.js';
 export { toggleInlineMark, toggleInlineMarkFromSyntax, getActiveInlineMarks, getSelectionFormattingState } from './inline-commands.js';
 export { getLineInlineModel, getCaretInlineContext, getSelectionInlineContext, inlineClassForMark, syntaxToMark, markToSyntax } from './inline-model.js';
-export { blockDecorations, lineHeightTracker, fontRemeasurePlugin, revealedDetailsState, toggleDetailsEditEffect, cacheWidgetHeight, getCachedHeight, clearHeightCache } from './block-decorations.js';
+export { blockDecorations, lineHeightTracker, fontRemeasurePlugin, revealedDetailsState, toggleDetailsEditEffect, diagramGeneration, refreshDiagramsEffect, cacheWidgetHeight, getCachedHeight, clearHeightCache } from './block-decorations.js';
 export { markdownStyles, injectMarkdownStyles } from './styles.js';
 
 // Widget exports
@@ -98,6 +99,13 @@ export {
   defaultMacros,
   getKaTeXVersion,
   injectKaTeXStyles,
+  // Diagram widgets
+  DiagramWidget,
+  diagramsConfig,
+  findFencedBlocks,
+  findDiagramBlocks,
+  renderDiagram,
+  clearDiagramCache,
 } from './widgets/index.js';
 
 // HTML inline rendering
