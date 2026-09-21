@@ -71520,6 +71520,37 @@ function findLinkedTableBlocks(markdownText) {
 }
 
 /**
+ * Cache scans by CodeMirror's immutable Text identity, not content hashes.
+ * Selection/viewport transactions share their Text; edits get a new one.
+ * Weak keys let closed editors and discarded undo states be collected.
+ */
+
+function memoizeDocumentScan(scan) {
+  const cache = new WeakMap();
+  return (doc) => {
+    if (!cache.has(doc)) cache.set(doc, scan(doc));
+    return cache.get(doc);
+  };
+}
+
+const documentText = memoizeDocumentScan(doc => doc.toString());
+
+/** Parsing can advance without a text edit. Never reuse tree-derived ranges
+ * just because Text stayed the same (background parsing/reconfiguration).
+ */
+function memoizeSyntaxScan(scan) {
+  const cache = new WeakMap();
+  return (state) => {
+    const tree = syntaxTree(state);
+    const previous = cache.get(state.doc);
+    if (previous && previous.tree === tree) return previous.value;
+    const value = scan(state);
+    cache.set(state.doc, { tree, value });
+    return value;
+  };
+}
+
+/**
  * Linked-table block parsing helpers for the editor.
  *
  * Bridges CodeMirror editor state/doc text to the pure `mrmd-table-spec`
@@ -71538,14 +71569,21 @@ function splitLines(text) {
  * @param {import('@codemirror/state').EditorState} state
  * @returns {Array<Object>}
  */
-function findLinkedTableBlocksInState(state) {
-  const text = state.doc.toString();
+const blocksInDocument = memoizeDocumentScan((doc) => {
+  const text = documentText(doc);
+  // The spec parser requires this exact header. Avoid constructing a line
+  // table for ordinary documents which cannot contain a linked table.
+  if (!text.includes('<!--mrmd:table')) return [];
   return findLinkedTableBlocks(text).map((block) => ({
     ...block,
     headerText: text.slice(block.headerFrom, block.headerTo),
     tableText: text.slice(block.tableFrom, block.tableTo),
     tableLines: splitLines(text.slice(block.tableFrom, block.tableTo)),
   }));
+});
+
+function findLinkedTableBlocksInState(state) {
+  return blocksInDocument(state.doc);
 }
 
 /**
@@ -72753,6 +72791,9 @@ class DetailsBlockWidget extends WidgetType {
     return false;
   }
 }
+
+// Text identity is shared by cursor/scroll transactions and changes on edits.
+const detailsBlocksInDocument = memoizeDocumentScan(doc => extractDetailsBlocks(documentText(doc)));
 
 const DETAILS_BLOCK_RE = /<details\b([^>]*)>([\s\S]*?)<\/details>/gi;
 const SUMMARY_RE = /<summary\b[^>]*>([\s\S]*?)<\/summary>/i;
@@ -106556,10 +106597,10 @@ function attachImageClickToEdit(dom, view) {
 let linkDefinitionCache = new Map();
 
 /**
- * Document content hash for cache invalidation
- * @type {string}
+ * Last string passed through the legacy API (Text callers use weak caches).
+ * @type {string | null}
  */
-let lastDocumentHash = '';
+let lastDocumentContent = null;
 
 /**
  * Parse all link definitions from document content.
@@ -106587,29 +106628,25 @@ function parseLinkDefinitions(content) {
   return definitions;
 }
 
+// Each immutable document gets its own lookup; no sampled hash collisions on
+// same-length edits. The legacy API below also exposes the latest lookup.
+const linkDefinitionsInDocument = memoizeDocumentScan(doc => parseLinkDefinitions(documentText(doc)));
+
 /**
  * Update link definition cache if document changed.
  *
- * @param {string} content - Full document content
+ * @param {string | import('@codemirror/state').Text} content
+ * @returns {Map<string, { url: string, title?: string }>}
  */
 function updateLinkDefinitionCache(content) {
-  // Simple hash based on length and sample characters
-  const hash = `${content.length}-${content.charCodeAt(0) || 0}-${content.charCodeAt(Math.floor(content.length / 2)) || 0}`;
-
-  if (hash !== lastDocumentHash) {
+  if (typeof content !== 'string') {
+    linkDefinitionCache = linkDefinitionsInDocument(content);
+    lastDocumentContent = null;
+  } else if (content !== lastDocumentContent) {
     linkDefinitionCache = parseLinkDefinitions(content);
-    lastDocumentHash = hash;
+    lastDocumentContent = content;
   }
-}
-
-/**
- * Resolve a reference name to its URL.
- *
- * @param {string} refName - Reference name (case-insensitive)
- * @returns {{ url: string, title?: string } | null}
- */
-function resolveLinkReference(refName) {
-  return linkDefinitionCache.get(refName.toLowerCase()) || null;
+  return linkDefinitionCache;
 }
 
 // =============================================================================
@@ -126865,7 +126902,7 @@ const revealedDetailsState = StateField.define({
     // Expire reveals once the cursor leaves the block.
     if (next.length > 0 && (tr.selection || tr.docChanged)) {
       const head = tr.state.selection.main.head;
-      const blocks = extractDetailsBlocks(tr.state.doc.toString());
+      const blocks = detailsBlocksInDocument(tr.state.doc);
       next = next.filter((p) => {
         const block = blocks.find((b) => p >= b.start && p <= b.end);
         return block && head >= block.start && head <= block.end + 1;
@@ -127115,7 +127152,7 @@ class DisplayMathWidgetWithHeightCache extends DisplayMathWidget {
 /**
  * Find all table ranges in the document using syntax tree + fallback scanner
  */
-function findTableRanges(state) {
+const findTableRanges = memoizeSyntaxScan(function findTableRanges(state) {
   const doc = state.doc;
   const ranges = [];
   const processedStarts = new Set();
@@ -127149,9 +127186,13 @@ function findTableRanges(state) {
   let tableStartLine = -1;
   let hasDelimiter = false;
 
+  const lineIterator = doc.iterLines();
+  let lineFrom = 0;
+  let previousLineTo = 0;
   for (let i = 1; i <= doc.lines; i++) {
-    const line = doc.line(i);
-    const text = line.text;
+    const text = lineIterator.next().value;
+    const from = lineFrom;
+    lineFrom += text.length + 1;
     const isTable = isTableLine(text);
     const isDelim = isTableDelimiter(text);
 
@@ -127159,7 +127200,7 @@ function findTableRanges(state) {
       // Check if already processed
       if (!processedStarts.has(i)) {
         inTable = true;
-        tableStart = line.from;
+        tableStart = from;
         tableStartLine = i;
         hasDelimiter = isDelim;
       }
@@ -127168,11 +127209,10 @@ function findTableRanges(state) {
     } else if (!isTable && inTable) {
       // End of table
       if (hasDelimiter && tableStartLine > 0) {
-        const prevLine = doc.line(i - 1);
         ranges.push({
           type: 'table',
           from: tableStart,
-          to: prevLine.to,
+          to: previousLineTo,
           startLine: tableStartLine,
           endLine: i - 1,
         });
@@ -127182,6 +127222,7 @@ function findTableRanges(state) {
       tableStartLine = -1;
       hasDelimiter = false;
     }
+    previousLineTo = from + text.length;
   }
 
   // Handle table at end of document
@@ -127197,15 +127238,17 @@ function findTableRanges(state) {
   }
 
   return ranges;
-}
+});
 
 /**
  * Find all display math ranges in the document
  */
-function findDisplayMathRanges(state) {
+const findDisplayMathRanges = memoizeSyntaxScan(function findDisplayMathRanges(state) {
   const doc = state.doc;
-  const text = doc.toString();
+  const text = documentText(doc);
   const ranges = [];
+  // Without an opening delimiter there is nothing to pair or exclude.
+  if (!text.includes('$$') && !text.includes('\\[')) return ranges;
 
   // Positions inside fenced/inline code must never participate in math
   // delimiter pairing. Otherwise a `$$` in a Python string or shell heredoc
@@ -127277,7 +127320,7 @@ function findDisplayMathRanges(state) {
   }
 
   return ranges;
-}
+});
 
 /**
  * FrontmatterWidget wrapper that caches its rendered height for stable layout.
@@ -127312,8 +127355,7 @@ class FrontmatterWidgetWithHeightCache extends FrontmatterWidget {
 /**
  * Find frontmatter range at the start of the document (--- ... ---)
  */
-function findFrontmatterRange$1(state) {
-  const doc = state.doc;
+const findFrontmatterRange$1 = memoizeDocumentScan(function findFrontmatterRange(doc) {
   if (doc.lines < 2) return null;
 
   const firstLine = doc.line(1);
@@ -127341,7 +127383,7 @@ function findFrontmatterRange$1(state) {
     // Frontmatter can't contain blank lines followed by markdown
   }
   return null;
-}
+});
 
 /**
  * Build decorations for all block elements
@@ -127477,7 +127519,7 @@ function buildBlockDecorations(state) {
   // Find and process raw HTML <details>/<summary> blocks.
   // These can span multiple lines and contain fenced code, so they must live in
   // this StateField rather than the line-oriented inline HTML ViewPlugin.
-  const detailsRanges = extractDetailsBlocks(doc.toString());
+  const detailsRanges = detailsBlocksInDocument(doc);
   for (const range of detailsRanges) {
     const startLine = doc.lineAt(range.start).number;
     const endLine = doc.lineAt(range.end).number;
@@ -127508,7 +127550,7 @@ function buildBlockDecorations(state) {
   }
 
   // Find and process frontmatter
-  const fmRange = findFrontmatterRange$1(state);
+  const fmRange = findFrontmatterRange$1(doc);
 
   if (fmRange) {
     const cursorInFrontmatter = isSourceMode || (!isLocked && !isWysiwygMode && cursorLine >= fmRange.startLine && cursorLine <= fmRange.endLine);
@@ -127554,10 +127596,18 @@ const blockDecorations = StateField.define({
   },
 
   update(decorations, tr) {
-    // Rebuild on any change that could affect block elements
-    // For efficiency, we could map positions and only rebuild affected ranges,
-    // but for now, full rebuild is acceptable
-    if (tr.docChanged || tr.selection || tr.reconfigured) {
+    // Block reveal follows the anchor's line, not every caret column or
+    // moving selection head. Effects can change explicit details/linked-table
+    // reveals; parsing can also advance without a document edit.
+    const anchorLineChanged = tr.selection &&
+      tr.startState.doc.lineAt(tr.startState.selection.main.anchor).number !==
+      tr.state.doc.lineAt(tr.state.selection.main.anchor).number;
+    const beforeReveals = tr.startState.field(revealedDetailsState, false) || [];
+    const afterReveals = tr.state.field(revealedDetailsState, false) || [];
+    const revealsChanged = beforeReveals.length !== afterReveals.length ||
+      beforeReveals.some((pos, i) => pos !== afterReveals[i]);
+    if (tr.docChanged || anchorLineChanged || revealsChanged || tr.reconfigured || tr.effects.length ||
+        syntaxTree(tr.startState) !== syntaxTree(tr.state)) {
       return buildBlockDecorations(tr.state);
     }
     return decorations;
@@ -127697,7 +127747,7 @@ function extractWikiLinks(text) {
  * We use this to suppress markdown rendering inside frontmatter since the
  * opening/closing `---` lines are parsed as HorizontalRule nodes by markdown.
  */
-function findFrontmatterRange(doc) {
+const findFrontmatterRange = memoizeDocumentScan(function findFrontmatterRange(doc) {
   if (doc.lines < 2) return null;
 
   const firstLine = doc.line(1);
@@ -127716,7 +127766,7 @@ function findFrontmatterRange(doc) {
   }
 
   return null;
-}
+});
 
 /**
  * BlockImageWidget wrapper that caches its rendered height for stable layout.
@@ -127810,12 +127860,13 @@ function normalizeAlertType(type) {
  * !!! tip
  *     indented body
  */
-function findBangAdmonitions(doc) {
+const findBangAdmonitions = memoizeDocumentScan(function findBangAdmonitions(doc) {
   const ranges = [];
+  const lines = doc.iterLines();
 
   for (let i = 1; i <= doc.lines; i++) {
-    const startLine = doc.line(i);
-    const match = startLine.text.match(/^(\s*)!!!\s+([A-Za-z][\w-]*)(?:\s+"([^"]+)")?\s*$/);
+    const text = lines.next().value;
+    const match = text.match(/^(\s*)!!!\s+([A-Za-z][\w-]*)(?:\s+"([^"]+)")?\s*$/);
     if (!match) continue;
 
     const baseIndent = match[1] || '';
@@ -127855,11 +127906,11 @@ function findBangAdmonitions(doc) {
       title: match[3] || toTitleCase(match[2]),
     });
 
-    i = endLine;
+    while (i < endLine) { lines.next(); i++; }
   }
 
   return ranges;
-}
+});
 
 /**
  * Build decorations for all markdown elements in the viewport.
@@ -127899,7 +127950,8 @@ function buildDecorations(view) {
   };
 
   // Update link definition cache for reference-style images/links
-  updateLinkDefinitionCache(doc.toString());
+  const linkDefinitions = updateLinkDefinitionCache(doc);
+  const resolveLinkReference = ref => linkDefinitions.get(ref.toLowerCase()) || null;
 
   // Note: Tables and display math are handled by StateField (block-decorations.js)
   // ViewPlugin can only handle single-line decorations
@@ -127934,6 +127986,13 @@ function buildDecorations(view) {
       // =======================================================================
       if (node.name.startsWith('ATXHeading')) {
         const level = node.name.match(/\d/)?.[0] || '1';
+
+        // Line class so hosts/themes can style the whole heading row
+        // (full-width rules, spacing). No default look ships with it.
+        decorations.push(
+          Decoration.line({ class: `cm-md-heading-line cm-md-h${level}-line` })
+            .range(doc.lineAt(node.from).from)
+        );
 
         // Find content start (after # markers and space)
         let contentStart = node.from;
@@ -128442,21 +128501,43 @@ function buildDecorations(view) {
   // ==========================================================================
   // CODE BLOCK DETECTION (shared by inline math, wiki-links, and HTML)
   // ==========================================================================
-  // Build a set of line numbers that are inside fenced code blocks
-  // This properly tracks code block boundaries using the syntax tree
-  const codeBlockLines = new Set();
+  // Visit only intersecting fences, but retain their full line ranges so
+  // headers above the viewport and first/last-line styling stay accurate.
+  const codeBlockRanges = [];
+  const inCodeBlock = line => codeBlockRanges.some(range => line >= range.from && line <= range.to);
+  const viewportStartLine = doc.lineAt(view.viewport.from).number;
+  const viewportEndLine = doc.lineAt(view.viewport.to).number;
   // Absolute-position ranges of inline code spans, keyed by line number.
   // Used to keep regex-based inline detectors (math, wiki-links) from firing
   // inside `inline code` — e.g. R's `df$col` must never render as math.
   const inlineCodeRangesByLine = new Map();
   syntaxTree(view.state).iterate({
+    from: view.viewport.from,
+    to: view.viewport.to,
     enter: (node) => {
       if (node.name === 'FencedCode') {
         const startLine = doc.lineAt(node.from).number;
         const endLine = doc.lineAt(node.to).number;
-        for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
-          codeBlockLines.add(lineNum);
+        // The fence's info string, so hosts can style languages apart
+        // (```output result blocks vs runnable code, for example).
+        const infoLang = ((doc.line(startLine).text.match(/^\s*(?:`{3,}|~{3,})\s*(\S*)/) || [])[1] || '').toLowerCase();
+        codeBlockRanges.push({ from: startLine, to: endLine });
+        for (let lineNum = Math.max(startLine, viewportStartLine); lineNum <= Math.min(endLine, viewportEndLine); lineNum++) {
+          // Line classes so hosts/themes can draw the block as one unit
+          // (box, background, borders). No default styling ships with the
+          // classes — the look is fully owned by CSS/themes.
+          const line = doc.line(lineNum);
+          const cls = ['cm-md-codeblock-line'];
+          if (lineNum === startLine) cls.push('cm-md-codeblock-first');
+          if (lineNum === endLine) cls.push('cm-md-codeblock-last');
+          decorations.push(
+            Decoration.line({
+              class: cls.join(' '),
+              attributes: infoLang ? { 'data-lang': infoLang } : undefined,
+            }).range(line.from)
+          );
         }
+        return false; // Embedded language nodes cannot contain markdown.
       } else if (node.name === 'InlineCode') {
         const lineNum = doc.lineAt(node.from).number;
         let ranges = inlineCodeRangesByLine.get(lineNum);
@@ -128485,8 +128566,6 @@ function buildDecorations(view) {
   // MKDOCS-STYLE ADMONITIONS: !!! tip / !!! warning / ...
   // ==========================================================================
   const bangAdmonitions = findBangAdmonitions(doc);
-  const viewportStartLine = doc.lineAt(view.viewport.from).number;
-  const viewportEndLine = doc.lineAt(view.viewport.to).number;
 
   for (const admonition of bangAdmonitions) {
     // Skip if out of viewport
@@ -128499,7 +128578,7 @@ function buildDecorations(view) {
       (frontmatterRange &&
         admonition.startLine >= frontmatterRange.startLine &&
         admonition.startLine <= frontmatterRange.endLine) ||
-      codeBlockLines.has(admonition.startLine)
+      inCodeBlock(admonition.startLine)
     ) {
       continue;
     }
@@ -128560,7 +128639,7 @@ function buildDecorations(view) {
     if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
 
     // Skip lines inside code blocks
-    if (codeBlockLines.has(i)) continue;
+    if (inCodeBlock(i)) continue;
 
     // Skip if this line is part of a display math block
     if (line.text.includes('$$')) continue;
@@ -128598,7 +128677,7 @@ function buildDecorations(view) {
     if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
 
     // Skip lines inside code blocks (using syntax tree detection)
-    if (codeBlockLines.has(i)) continue;
+    if (inCodeBlock(i)) continue;
 
     const wikiExclusions = inlineCodeExclusions(i, line);
     const wikiLinks = extractWikiLinks(line.text).filter(
@@ -128629,9 +128708,9 @@ function buildDecorations(view) {
   // Inline HTML - process line by line
   // ==========================================================================
   const detailsLines = new Set();
-  for (const block of extractDetailsBlocks(doc.toString())) {
-    const startLine = doc.lineAt(block.start).number;
-    const endLine = doc.lineAt(block.end).number;
+  for (const block of detailsBlocksInDocument(doc)) {
+    const startLine = Math.max(viewportStartLine, doc.lineAt(block.start).number);
+    const endLine = Math.min(viewportEndLine, doc.lineAt(block.end).number);
     for (let lineNo = startLine; lineNo <= endLine; lineNo++) detailsLines.add(lineNo);
   }
 
@@ -128651,7 +128730,7 @@ function buildDecorations(view) {
     if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
 
     // Skip lines inside code blocks (using syntax tree detection)
-    if (codeBlockLines.has(i)) continue;
+    if (inCodeBlock(i)) continue;
 
     // Skip lines inside block HTML handled by block-decorations.js
     if (detailsLines.has(i)) continue;
@@ -128704,7 +128783,9 @@ const markdownRenderer = ViewPlugin.fromClass(
     }
 
     update(update) {
-      if (update.docChanged || update.viewportChanged || update.selectionSet) {
+      if (update.docChanged || update.viewportChanged || update.selectionSet ||
+          update.transactions.some(tr => tr.reconfigured) ||
+          syntaxTree(update.startState) !== syntaxTree(update.state)) {
         this.decorations = buildDecorations(update.view);
       }
     }

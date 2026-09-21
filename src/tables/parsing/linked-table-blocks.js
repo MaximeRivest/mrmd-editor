@@ -6,6 +6,7 @@
  */
 
 import { findLinkedTableBlocks } from '../../../../mrmd-table-spec/src/index.js';
+import { documentText, memoizeDocumentScan } from '../../markdown/document-cache.js';
 
 function splitLines(text) {
   return String(text || '').split(/\r?\n/);
@@ -18,14 +19,21 @@ function splitLines(text) {
  * @param {import('@codemirror/state').EditorState} state
  * @returns {Array<Object>}
  */
-export function findLinkedTableBlocksInState(state) {
-  const text = state.doc.toString();
+const blocksInDocument = memoizeDocumentScan((doc) => {
+  const text = documentText(doc);
+  // The spec parser requires this exact header. Avoid constructing a line
+  // table for ordinary documents which cannot contain a linked table.
+  if (!text.includes('<!--mrmd:table')) return [];
   return findLinkedTableBlocks(text).map((block) => ({
     ...block,
     headerText: text.slice(block.headerFrom, block.headerTo),
     tableText: text.slice(block.tableFrom, block.tableTo),
     tableLines: splitLines(text.slice(block.tableFrom, block.tableTo)),
   }));
+});
+
+export function findLinkedTableBlocksInState(state) {
+  return blocksInDocument(state.doc);
 }
 
 /**

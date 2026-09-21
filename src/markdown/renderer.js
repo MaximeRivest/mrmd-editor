@@ -16,6 +16,7 @@ import { ViewPlugin, Decoration, WidgetType } from '@codemirror/view';
 import { Facet } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
 import { sourceModeFacet, wysiwygModeFacet } from './facets.js';
+import { memoizeDocumentScan } from './document-cache.js';
 
 // =============================================================================
 // Asset Resolver Facet
@@ -41,7 +42,6 @@ import {
   ImagePlaceholder,
   BlockImageWidget,
   updateLinkDefinitionCache,
-  resolveLinkReference,
   isBlockImage,
   generateImageId,
   extractPositionFromLine,
@@ -57,7 +57,7 @@ import {
 } from './widgets/math.js';
 import {
   extractHtmlElements,
-  extractDetailsBlocks,
+  detailsBlocksInDocument,
   InlineHtmlWidget,
 } from './html-inline.js';
 import {
@@ -130,7 +130,7 @@ function extractWikiLinks(text) {
  * We use this to suppress markdown rendering inside frontmatter since the
  * opening/closing `---` lines are parsed as HorizontalRule nodes by markdown.
  */
-function findFrontmatterRange(doc) {
+const findFrontmatterRange = memoizeDocumentScan(function findFrontmatterRange(doc) {
   if (doc.lines < 2) return null;
 
   const firstLine = doc.line(1);
@@ -149,7 +149,7 @@ function findFrontmatterRange(doc) {
   }
 
   return null;
-}
+});
 
 /**
  * BlockImageWidget wrapper that caches its rendered height for stable layout.
@@ -278,12 +278,13 @@ function normalizeAlertType(type) {
  * !!! tip
  *     indented body
  */
-function findBangAdmonitions(doc) {
+const findBangAdmonitions = memoizeDocumentScan(function findBangAdmonitions(doc) {
   const ranges = [];
+  const lines = doc.iterLines();
 
   for (let i = 1; i <= doc.lines; i++) {
-    const startLine = doc.line(i);
-    const match = startLine.text.match(/^(\s*)!!!\s+([A-Za-z][\w-]*)(?:\s+"([^"]+)")?\s*$/);
+    const text = lines.next().value;
+    const match = text.match(/^(\s*)!!!\s+([A-Za-z][\w-]*)(?:\s+"([^"]+)")?\s*$/);
     if (!match) continue;
 
     const baseIndent = match[1] || '';
@@ -323,11 +324,11 @@ function findBangAdmonitions(doc) {
       title: match[3] || toTitleCase(match[2]),
     });
 
-    i = endLine;
+    while (i < endLine) { lines.next(); i++; }
   }
 
   return ranges;
-}
+});
 
 /**
  * Build decorations for all markdown elements in the viewport.
@@ -367,7 +368,8 @@ function buildDecorations(view) {
   };
 
   // Update link definition cache for reference-style images/links
-  updateLinkDefinitionCache(doc.toString());
+  const linkDefinitions = updateLinkDefinitionCache(doc);
+  const resolveLinkReference = ref => linkDefinitions.get(ref.toLowerCase()) || null;
 
   // Note: Tables and display math are handled by StateField (block-decorations.js)
   // ViewPlugin can only handle single-line decorations
@@ -917,14 +919,19 @@ function buildDecorations(view) {
   // ==========================================================================
   // CODE BLOCK DETECTION (shared by inline math, wiki-links, and HTML)
   // ==========================================================================
-  // Build a set of line numbers that are inside fenced code blocks
-  // This properly tracks code block boundaries using the syntax tree
-  const codeBlockLines = new Set();
+  // Visit only intersecting fences, but retain their full line ranges so
+  // headers above the viewport and first/last-line styling stay accurate.
+  const codeBlockRanges = [];
+  const inCodeBlock = line => codeBlockRanges.some(range => line >= range.from && line <= range.to);
+  const viewportStartLine = doc.lineAt(view.viewport.from).number;
+  const viewportEndLine = doc.lineAt(view.viewport.to).number;
   // Absolute-position ranges of inline code spans, keyed by line number.
   // Used to keep regex-based inline detectors (math, wiki-links) from firing
   // inside `inline code` — e.g. R's `df$col` must never render as math.
   const inlineCodeRangesByLine = new Map();
   syntaxTree(view.state).iterate({
+    from: view.viewport.from,
+    to: view.viewport.to,
     enter: (node) => {
       if (node.name === 'FencedCode') {
         const startLine = doc.lineAt(node.from).number;
@@ -932,8 +939,8 @@ function buildDecorations(view) {
         // The fence's info string, so hosts can style languages apart
         // (```output result blocks vs runnable code, for example).
         const infoLang = ((doc.line(startLine).text.match(/^\s*(?:`{3,}|~{3,})\s*(\S*)/) || [])[1] || '').toLowerCase();
-        for (let lineNum = startLine; lineNum <= endLine; lineNum++) {
-          codeBlockLines.add(lineNum);
+        codeBlockRanges.push({ from: startLine, to: endLine });
+        for (let lineNum = Math.max(startLine, viewportStartLine); lineNum <= Math.min(endLine, viewportEndLine); lineNum++) {
           // Line classes so hosts/themes can draw the block as one unit
           // (box, background, borders). No default styling ships with the
           // classes — the look is fully owned by CSS/themes.
@@ -948,6 +955,7 @@ function buildDecorations(view) {
             }).range(line.from)
           );
         }
+        return false; // Embedded language nodes cannot contain markdown.
       } else if (node.name === 'InlineCode') {
         const lineNum = doc.lineAt(node.from).number;
         let ranges = inlineCodeRangesByLine.get(lineNum);
@@ -976,8 +984,6 @@ function buildDecorations(view) {
   // MKDOCS-STYLE ADMONITIONS: !!! tip / !!! warning / ...
   // ==========================================================================
   const bangAdmonitions = findBangAdmonitions(doc);
-  const viewportStartLine = doc.lineAt(view.viewport.from).number;
-  const viewportEndLine = doc.lineAt(view.viewport.to).number;
 
   for (const admonition of bangAdmonitions) {
     // Skip if out of viewport
@@ -990,7 +996,7 @@ function buildDecorations(view) {
       (frontmatterRange &&
         admonition.startLine >= frontmatterRange.startLine &&
         admonition.startLine <= frontmatterRange.endLine) ||
-      codeBlockLines.has(admonition.startLine)
+      inCodeBlock(admonition.startLine)
     ) {
       continue;
     }
@@ -1051,7 +1057,7 @@ function buildDecorations(view) {
     if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
 
     // Skip lines inside code blocks
-    if (codeBlockLines.has(i)) continue;
+    if (inCodeBlock(i)) continue;
 
     // Skip if this line is part of a display math block
     if (line.text.includes('$$')) continue;
@@ -1089,7 +1095,7 @@ function buildDecorations(view) {
     if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
 
     // Skip lines inside code blocks (using syntax tree detection)
-    if (codeBlockLines.has(i)) continue;
+    if (inCodeBlock(i)) continue;
 
     const wikiExclusions = inlineCodeExclusions(i, line);
     const wikiLinks = extractWikiLinks(line.text).filter(
@@ -1120,9 +1126,9 @@ function buildDecorations(view) {
   // Inline HTML - process line by line
   // ==========================================================================
   const detailsLines = new Set();
-  for (const block of extractDetailsBlocks(doc.toString())) {
-    const startLine = doc.lineAt(block.start).number;
-    const endLine = doc.lineAt(block.end).number;
+  for (const block of detailsBlocksInDocument(doc)) {
+    const startLine = Math.max(viewportStartLine, doc.lineAt(block.start).number);
+    const endLine = Math.min(viewportEndLine, doc.lineAt(block.end).number);
     for (let lineNo = startLine; lineNo <= endLine; lineNo++) detailsLines.add(lineNo);
   }
 
@@ -1142,7 +1148,7 @@ function buildDecorations(view) {
     if (frontmatterRange && i >= frontmatterRange.startLine && i <= frontmatterRange.endLine) continue;
 
     // Skip lines inside code blocks (using syntax tree detection)
-    if (codeBlockLines.has(i)) continue;
+    if (inCodeBlock(i)) continue;
 
     // Skip lines inside block HTML handled by block-decorations.js
     if (detailsLines.has(i)) continue;
@@ -1195,7 +1201,9 @@ export const markdownRenderer = ViewPlugin.fromClass(
     }
 
     update(update) {
-      if (update.docChanged || update.viewportChanged || update.selectionSet) {
+      if (update.docChanged || update.viewportChanged || update.selectionSet ||
+          update.transactions.some(tr => tr.reconfigured) ||
+          syntaxTree(update.startState) !== syntaxTree(update.state)) {
         this.decorations = buildDecorations(update.view);
       }
     }

@@ -7,6 +7,7 @@
  * @module markdown/html-inline
  */
 
+import { documentText, memoizeDocumentScan } from './document-cache.js';
 import { WidgetType } from '@codemirror/view';
 
 // =============================================================================
@@ -168,6 +169,9 @@ export class DetailsBlockWidget extends WidgetType {
     return false;
   }
 }
+
+// Text identity is shared by cursor/scroll transactions and changes on edits.
+export const detailsBlocksInDocument = memoizeDocumentScan(doc => extractDetailsBlocks(documentText(doc)));
 
 const DETAILS_BLOCK_RE = /<details\b([^>]*)>([\s\S]*?)<\/details>/gi;
 const SUMMARY_RE = /<summary\b[^>]*>([\s\S]*?)<\/summary>/i;

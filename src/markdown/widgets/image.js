@@ -15,6 +15,7 @@
  */
 
 import { WidgetType } from '@codemirror/view';
+import { documentText, memoizeDocumentScan } from '../document-cache.js';
 
 /**
  * Clicking a rendered image places the cursor at the image's markdown source
@@ -47,10 +48,10 @@ function attachImageClickToEdit(dom, view) {
 let linkDefinitionCache = new Map();
 
 /**
- * Document content hash for cache invalidation
- * @type {string}
+ * Last string passed through the legacy API (Text callers use weak caches).
+ * @type {string | null}
  */
-let lastDocumentHash = '';
+let lastDocumentContent = null;
 
 /**
  * Parse all link definitions from document content.
@@ -78,19 +79,25 @@ export function parseLinkDefinitions(content) {
   return definitions;
 }
 
+// Each immutable document gets its own lookup; no sampled hash collisions on
+// same-length edits. The legacy API below also exposes the latest lookup.
+export const linkDefinitionsInDocument = memoizeDocumentScan(doc => parseLinkDefinitions(documentText(doc)));
+
 /**
  * Update link definition cache if document changed.
  *
- * @param {string} content - Full document content
+ * @param {string | import('@codemirror/state').Text} content
+ * @returns {Map<string, { url: string, title?: string }>}
  */
 export function updateLinkDefinitionCache(content) {
-  // Simple hash based on length and sample characters
-  const hash = `${content.length}-${content.charCodeAt(0) || 0}-${content.charCodeAt(Math.floor(content.length / 2)) || 0}`;
-
-  if (hash !== lastDocumentHash) {
+  if (typeof content !== 'string') {
+    linkDefinitionCache = linkDefinitionsInDocument(content);
+    lastDocumentContent = null;
+  } else if (content !== lastDocumentContent) {
     linkDefinitionCache = parseLinkDefinitions(content);
-    lastDocumentHash = hash;
+    lastDocumentContent = content;
   }
+  return linkDefinitionCache;
 }
 
 /**
