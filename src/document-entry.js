@@ -12,7 +12,9 @@
  * can make any editor shared. Since 0.13.0 the document editor draws
  * diagram fences through a host-supplied renderer (`diagrams`): the bundle
  * frames the drawing and owns the blur→render rule; the host owns the
- * library.
+ * library. Since 0.14.0 `showCellRun(cell)` shows a running cell's live
+ * output and answers its input prompts in a panel under the cell that is
+ * not document text (see document-cell-run.js).
  *
  * Build: npm run build:document
  * Output: dist/mrmd-document.iife.min.js (global: mrmdDocument)
@@ -21,6 +23,7 @@
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState, Compartment, Prec } from '@codemirror/state';
 import { keymap, placeholder, layer, RectangleMarker } from '@codemirror/view';
+import { cellRunExtension, showCellRun } from './document-cell-run.js';
 import { StreamLanguage, syntaxTree } from '@codemirror/language';
 import { markdown as markdownLang, markdownLanguage } from '@codemirror/lang-markdown';
 
@@ -405,6 +408,7 @@ export function createDocumentEditor(target, options = {}) {
     selectionOverlay,
     basicSetup,
     hostServices.extension,
+    cellRunExtension,
     markdownLang({ base: markdownLanguage, codeLanguages: codeBlockLanguage }),
     EditorView.lineWrapping,
     ...(Array.isArray(options.extensions) ? options.extensions : []),
@@ -501,6 +505,19 @@ export function createDocumentEditor(target, options = {}) {
       if (!change) return false;
       if (change.changes.length) view.dispatch({ ...change, userEvent: 'output.cell' });
       return true;
+    },
+
+    /**
+     * While the host runs `cell`: a panel under it with the output as it
+     * streams (`append`) and a field for the program's input prompts
+     * (`ask({prompt, secret})`). A view decoration, never document text;
+     * the old result the cell owns is dimmed. The host writes the result
+     * with setCellOutput, then calls `dispose()`. See document-cell-run.js.
+     */
+    showCellRun(cell) {
+      const current = codeBlockAt(view.state, Math.min(cell.from, view.state.doc.length));
+      const at = current && current.from === cell.from ? current : cell;
+      return showCellRun(view, at, current ? ownedOutputBlock(view.state, current.to) : null);
     },
 
     /** Move the cursor to the next runnable cell after `cell` (Shift-Enter). */
@@ -670,6 +687,6 @@ export function createCodeEditor(target, options = {}) {
 }
 
 export { getTheme, getThemeNames };
-export const version = '0.13.0-document';
+export const version = '0.14.0-document';
 
 export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, version };
