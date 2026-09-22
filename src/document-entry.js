@@ -14,7 +14,9 @@
  * frames the drawing and owns the blur→render rule; the host owns the
  * library. Since 0.14.0 `showCellRun(cell)` shows a running cell's live
  * output and answers its input prompts in a panel under the cell that is
- * not document text (see document-cell-run.js).
+ * not document text (see document-cell-run.js). Since 0.15.0 runnable cells
+ * carry a Run button and show their run state (queued, running with elapsed
+ * time, waiting for input, last verdict) — document-cell-controls.js.
  *
  * Build: npm run build:document
  * Output: dist/mrmd-document.iife.min.js (global: mrmdDocument)
@@ -24,6 +26,7 @@ import { EditorView, basicSetup } from 'codemirror';
 import { EditorState, Compartment, Prec } from '@codemirror/state';
 import { keymap, placeholder, layer, RectangleMarker } from '@codemirror/view';
 import { cellRunExtension, showCellRun } from './document-cell-run.js';
+import { cellControls, setCellStatus, clearCellStatuses } from './document-cell-controls.js';
 import { StreamLanguage, syntaxTree } from '@codemirror/language';
 import { markdown as markdownLang, markdownLanguage } from '@codemirror/lang-markdown';
 
@@ -198,6 +201,17 @@ function codeBlockAt(state, pos) {
   return { lang, code: doc.sliceString(codeFrom, codeTo), from: found.from, to: found.to };
 }
 
+/** Which fence languages get a Run button (see createDocumentEditor). */
+function runnableLanguage(option, diagrams) {
+  if (typeof option === 'function') return lang => !!option(lang);
+  if (Array.isArray(option)) {
+    const allowed = new Set(option.map(l => String(l).toLowerCase()));
+    return lang => allowed.has(lang);
+  }
+  const drawn = new Set((diagrams && diagrams.languages) || []);
+  return lang => !!lang && lang !== 'output' && !drawn.has(lang);
+}
+
 /**
  * The language word of a fence line, lowercased ('' when bare).
  */
@@ -339,6 +353,15 @@ function resolveTheme(name, dark) {
  *                  then move on). The host owns execution; it reports the
  *                  result back through setCellOutput. The editor owns the
  *                  markdown mechanics: cells, ownership, replacement.
+ *                  With onRunCell, runnable cells also get a Run button on
+ *                  their fence row (same call, advance: false), and the
+ *                  host draws run state with setCellStatus.
+ *   runnableLanguages  string[] | (lang) => boolean — which fence languages
+ *                  get a Run button. Default: any named language except
+ *                  output and diagram languages.
+ *   onCancelCell   (cell, {state}) => void — the Stop button, on a cell that
+ *                  is 'queued', 'running' or 'waiting'. Omitted: no Stop
+ *                  button.
  * @returns editor API
  */
 export function createDocumentEditor(target, options = {}) {
@@ -409,6 +432,12 @@ export function createDocumentEditor(target, options = {}) {
     basicSetup,
     hostServices.extension,
     cellRunExtension,
+    typeof options.onRunCell === 'function' ? cellControls({
+      cellAt: codeBlockAt,
+      runnable: runnableLanguage(options.runnableLanguages, diagrams),
+      onRun: cell => options.onRunCell(cell, { advance: false }),
+      onCancel: typeof options.onCancelCell === 'function' ? (cell, info) => options.onCancelCell(cell, info) : null,
+    }) : [],
     markdownLang({ base: markdownLanguage, codeLanguages: codeBlockLanguage }),
     EditorView.lineWrapping,
     ...(Array.isArray(options.extensions) ? options.extensions : []),
@@ -517,7 +546,31 @@ export function createDocumentEditor(target, options = {}) {
     showCellRun(cell) {
       const current = codeBlockAt(view.state, Math.min(cell.from, view.state.doc.length));
       const at = current && current.from === cell.from ? current : cell;
-      return showCellRun(view, at, current ? ownedOutputBlock(view.state, current.to) : null);
+      const run = showCellRun(view, at, current ? ownedOutputBlock(view.state, current.to) : null);
+      // The run's cell, wherever edits moved it: the panel follows it, so
+      // the run (not a stale position) says what the cell is doing. Set
+      // the final verdict before dispose().
+      run.setStatus = status => {
+        const pos = run.position();
+        const cellNow = pos == null ? null : codeBlockAt(view.state, pos);
+        return cellNow ? setCellStatus(view, cellNow, status) : false;
+      };
+      return run;
+    },
+
+    /** Clear the run states drawn on cells: all, or those in `states`. */
+    clearCellStatuses(states) { clearCellStatuses(view, states); },
+
+    /**
+     * Draw `cell`'s run state on the cell: {state: 'queued' | 'running' |
+     * 'waiting' | 'ok' | 'error', startedAt, ms, label}, or null to clear.
+     * See document-cell-controls.js. False when the cell moved or changed
+     * (the same stale guard as setCellOutput).
+     */
+    setCellStatus(cell, status) {
+      const current = cell && codeBlockAt(view.state, Math.min(cell.from, view.state.doc.length));
+      if (!current || current.from !== cell.from) return false;
+      return setCellStatus(view, current, status);
     },
 
     /** Move the cursor to the next runnable cell after `cell` (Shift-Enter). */
@@ -687,6 +740,6 @@ export function createCodeEditor(target, options = {}) {
 }
 
 export { getTheme, getThemeNames };
-export const version = '0.14.0-document';
+export const version = '0.15.0-document';
 
 export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, version };

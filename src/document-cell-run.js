@@ -69,6 +69,7 @@ const cellRunTheme = EditorView.baseTheme({
     lineHeight: '1.45',
     cursor: 'auto',
   },
+  '.mrmd-cell-run[data-empty]': { display: 'none' },
   '.mrmd-cell-run-output': {
     margin: '0',
     whiteSpace: 'pre-wrap',
@@ -141,6 +142,9 @@ export function showCellRun(view, cell, ownedOutput) {
   const dom = document.createElement('div');
   dom.className = 'mrmd-cell-run';
   dom.dataset.state = 'running';
+  // Hidden while it has nothing to show (no output yet, no question): the
+  // cell's own controls already say it is running.
+  dom.dataset.empty = '';
   const pre = document.createElement('pre');
   pre.className = 'mrmd-cell-run-output';
   const form = document.createElement('form');
@@ -185,6 +189,7 @@ export function showCellRun(view, cell, ownedOutput) {
     if (disposed) return;
     const nearBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
     renderLinked(pre, text);
+    if (text) delete dom.dataset.empty;
     if (dropped) {
       const note = document.createElement('span');
       note.className = 'mrmd-cell-run-dropped';
@@ -205,6 +210,7 @@ export function showCellRun(view, cell, ownedOutput) {
     const { resolve } = pending;
     pending = null;
     form.hidden = true;
+    if (!text) dom.dataset.empty = '';
     field.value = '';
     dom.dataset.state = 'running';
     view.requestMeasure();
@@ -249,6 +255,7 @@ export function showCellRun(view, cell, ownedOutput) {
       field.type = secret ? 'password' : 'text';
       field.value = '';
       form.hidden = false;
+      delete dom.dataset.empty;
       dom.dataset.state = 'waiting';
       view.requestMeasure();
       // The reader started this run; take focus unless they are typing
@@ -258,6 +265,18 @@ export function showCellRun(view, cell, ownedOutput) {
         requestAnimationFrame(() => { if (!form.hidden) field.focus({ preventScroll: false }); });
       }
       return new Promise(resolve => { pending = { resolve }; });
+    },
+    /**
+     * Where the panel is now (the end of its cell, followed through
+     * edits), or null once disposed.
+     */
+    position() {
+      if (disposed) return null;
+      let at = null;
+      view.state.field(cellRunField).between(0, view.state.doc.length, (from, _to, d) => {
+        if (d.spec.cellRun === run && d.spec.widget) { at = from; return false; }
+      });
+      return at;
     },
     /** The program stopped waiting without this panel's answer. */
     dismissInput() { finish({ withdrawn: true }); },

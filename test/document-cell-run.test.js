@@ -18,6 +18,8 @@ try {
     window.cell = editor.listCells()[0];
     window.run = editor.showCellRun(cell);
   }, source);
+  await frame();
+  assert.equal(await page.$eval('.mrmd-cell-run', el => getComputedStyle(el).display), 'none', 'an empty panel is not drawn');
 
   // Output streams in; carriage returns redraw a progress line in place;
   // ANSI styling is dropped; links are clickable.
