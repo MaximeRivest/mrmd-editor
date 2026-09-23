@@ -78883,6 +78883,7 @@ var mrmdDocument = (function (exports) {
     });
     let view = null, service = null, destroyed = false, hoverSerial = 0;
     const requests = new Set();
+    const wordCompletionData = [{ autocomplete: c => c.explicit ? completeAnyWord(c) : null }];
     const config = new Compartment();
     function request() { const controller = new AbortController(); requests.add(controller); return controller; }
     function cancelRequests() { for (const c of requests) c.abort(); requests.clear(); }
@@ -78926,22 +78927,29 @@ var mrmdDocument = (function (exports) {
       config.of([]),
       // Native language completion sources stay enabled. Word completion is an
       // explicit Ctrl-Space fallback, not a claim of project-wide intelligence.
-      options.wordCompletion ? EditorState.languageData.of(() => [{ autocomplete: c => c.explicit ? completeAnyWord(c) : null }]) : [],
+      options.wordCompletion ? EditorState.languageData.of(() => wordCompletionData) : [],
       options.codeKeys ? keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]) : [],
     ];
+    // Completion sources must keep one identity: the editor matches a pending
+    // answer to its source by identity, and a new function per lookup made it
+    // drop every answer and ask again, forever.
     function serviceExtensions(current) {
       if (!current) return [];
       const result = [];
-      if (current.complete) result.push(EditorState.languageData.of(() => [{ autocomplete: async c => {
-        const doc = c.state.doc, controller = request(); c.addEventListener('abort', () => controller.abort(), { onDocChange: true });
-        try {
-          const response = await current.complete({ text: doc.toString(), pos: c.pos, explicit: c.explicit, filename: options.filename || '', signal: controller.signal });
-          if (destroyed || controller.signal.aborted || service !== current || view.state.doc !== doc || !response) return null;
-          if (!Number.isInteger(response.from) || response.from < 0 || response.from > c.pos || !Array.isArray(response.options)) return null;
-          if (response.to !== undefined && (!Number.isInteger(response.to) || response.to < c.pos || response.to > doc.length)) return null;
-          return { ...response, options: response.options.filter(o => o && typeof o.label === 'string').slice(0, 1000) };
-        } catch { return null; } finally { requests.delete(controller); }
-      } }]));
+      if (current.complete) {
+        const source = async c => {
+          const doc = c.state.doc, controller = request(); c.addEventListener('abort', () => controller.abort(), { onDocChange: true });
+          try {
+            const response = await current.complete({ text: doc.toString(), pos: c.pos, explicit: c.explicit, filename: options.filename || '', signal: controller.signal });
+            if (destroyed || controller.signal.aborted || service !== current || view.state.doc !== doc || !response) return null;
+            if (!Number.isInteger(response.from) || response.from < 0 || response.from > c.pos || !Array.isArray(response.options)) return null;
+            if (response.to !== undefined && (!Number.isInteger(response.to) || response.to < c.pos || response.to > doc.length)) return null;
+            return { ...response, options: response.options.filter(o => o && typeof o.label === 'string').slice(0, 1000) };
+          } catch { return null; } finally { requests.delete(controller); }
+        };
+        const data = [{ autocomplete: source }];
+        result.push(EditorState.languageData.of(() => data));
+      }
       if (current.hover) result.push(hoverTooltip(async (v, pos) => {
         const doc = v.state.doc, controller = request();
         try {
@@ -95542,7 +95550,7 @@ var mrmdDocument = (function (exports) {
       },
     };
   }
-  const version = '0.16.0-document';
+  const version = '0.16.1-document';
   var documentEntry = { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, version };
 
   exports.collab = collab;

@@ -742,7 +742,7 @@ export function createCodeEditor(target, options = {}) {
 }
 
 export { getTheme, getThemeNames };
-export const version = '0.16.0-document';
+export const version = '0.16.1-document';
 
 export { ratNotebook, createNotebookRunner };
 export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, version };

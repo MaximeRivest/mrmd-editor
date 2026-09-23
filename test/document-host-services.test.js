@@ -46,6 +46,27 @@ try {
   assert.equal(await page.evaluate(() => pending.signal.aborted), true);
   await page.keyboard.press('Escape'); await page.keyboard.press('F12');
   await page.waitForFunction(() => window.definition?.line === 3);
+  // A host completion shows as the reader types — in a document's code
+  // cell, in prose, and in a code editor. (The source must keep one
+  // identity: a new function per lookup made the editor drop every answer
+  // and ask again, forever.)
+  for (const [kind, doc] of [['cell', '# T\n\n```python\n40 + 2\nans\n```\n'], ['prose', '# T\n\nans'], ['code', '40 + 2\nans']]) {
+    await page.evaluate((kind, doc) => {
+      editor.destroy();
+      window.calls = 0;
+      window.editor = kind === 'code' ? mrmdDocument.createCodeEditor('#editor', { doc, filename: 'a.py' }) : mrmdDocument.createDocumentEditor('#editor', { doc });
+      editor.setLanguageServices({ complete: async ctx => { calls++; const w = ctx.text.slice(0, ctx.pos).match(/\w*$/)[0]; return { from: ctx.pos - w.length, options: [{ label: 'answer_from_host' }], validFor: /^\w*$/ }; } });
+      editor.view.dispatch({ selection: { anchor: doc.lastIndexOf('ans') + 3 } }); editor.focus();
+    }, kind, doc);
+    await page.keyboard.type('w');
+    await page.waitForFunction(() => /answer_from_host/.test(document.querySelector('.cm-tooltip-autocomplete')?.textContent || ''), { timeout: 3000 })
+      .catch(async () => assert.fail(kind + ': no host completion shown after ' + await page.evaluate(() => calls) + ' calls'));
+    await page.keyboard.type('e');
+    await new Promise(r => setTimeout(r, 300));
+    assert.equal(await page.evaluate(() => calls), 1, kind + ': the answer narrows locally (validFor) instead of asking again');
+    await page.keyboard.press('Enter');
+    assert.match(await page.evaluate(() => editor.getContent()), /answer_from_host/, kind + ': Enter takes the suggestion');
+  }
   await page.evaluate(() => editor.destroy());
   assert.deepEqual(errors, []);
   console.log('document host services passed');
