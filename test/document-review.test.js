@@ -75,6 +75,21 @@ try {
   assert.equal(await page.evaluate(() => resolved[1].decision), 'rejected');
   assert.equal(await content(), before);
 
+  // The cursor lands on the first changed line, not on the proposal's first
+  // (unchanged) line: that is where Alt-y acts.
+  await page.evaluate(() => { window.earlier = resolved.splice(0); });
+  const landed = await page.evaluate(() => { const p = editor.getContent().indexOf('# Doc'); editor.review.propose({ from: p, to: p + '# Doc\n\nFirst'.length, insert: '# Doc\n\nOpening' }); return editor.view.state.selection.main.head === editor.view.state.doc.lineAt(editor.getContent().indexOf('Opening')).from; });
+  assert.equal(landed, true);
+  // Two proposals a blank line apart show as one change: one Reject undoes
+  // both, and each records exactly what its own lines became.
+  await page.evaluate(() => { const p = editor.getContent().indexOf("They're"); editor.review.propose({ from: p, to: p + 7, insert: 'We are' }); const q = editor.getContent().indexOf('Opening'); editor.view.dispatch({ selection: { anchor: q } }); editor.focus(); });
+  assert.equal(await page.evaluate(() => editor.review.summary().changes), 1, 'shown as one change');
+  await key('Alt+KeyN');
+  await until(`resolved.length === 2`, 'rejecting the joined change did not resolve both');
+  assert.deepEqual(await page.evaluate(() => resolved.map(r => [r.decision, r.hunks[0].final])),
+    [['rejected', '# Doc\n\nFirst paragraph really stays.\n'], ['rejected', "They're going to the market.\n"]]);
+  await page.evaluate(() => { resolved.splice(0, resolved.length, ...earlier); });
+
   // A capture: an agent writes two places; accept all keeps both.
   await page.evaluate(() => {
     window.cap = editor.review.capture({ label: 'Agent' });

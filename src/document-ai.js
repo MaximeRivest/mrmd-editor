@@ -792,7 +792,7 @@ class AiController {
       if (review) {
         const meta = { source: 'ai-command', command: op.command.id, label: op.command.label, instruction: op.instruction, model: answer.model, op: op.id };
         this.endings.set(op.id, { decision: 'review' });
-        const proposal = proposeChange(this.view, { from, to, insert: answer.text, meta, annotations, selection: { anchor: from } });
+        const proposal = proposeChange(this.view, { from, to, insert: answer.text, meta, annotations });
         if (!proposal) {
           this.endings.delete(op.id);
           this.notify('a change is still under review there: accept or reject it first');

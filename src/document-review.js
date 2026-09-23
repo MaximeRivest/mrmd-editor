@@ -35,7 +35,7 @@ import { StateField, StateEffect, Annotation, Compartment, ChangeSet, EditorStat
 import { EditorView, ViewPlugin, keymap, showPanel } from '@codemirror/view';
 import {
   unifiedMergeView, getChunks, getOriginalDoc, originalDocChangeEffect, updateOriginalDoc,
-  acceptChunk, rejectChunk, goToNextChunk, goToPreviousChunk, presentableDiff,
+  acceptChunk, goToNextChunk, goToPreviousChunk, presentableDiff,
 } from '@codemirror/merge';
 import { formatKey } from './key-names.js';
 
@@ -344,21 +344,22 @@ export function captureChanges(view, meta = {}) {
 }
 
 /**
- * One change as a proposal: {from, to, insert, meta, annotations, selection}.
+ * One change as a proposal: {from, to, insert, meta, annotations}. The
+ * cursor goes to its first changed line (where Accept / Reject act), which
+ * need not be `from`: a replaced block often starts with unchanged lines.
  * Refused (returns null) over a change still under review: decide that one first.
  * @returns {string|null} the proposal's id
  */
-export function proposeChange(view, { from, to, insert, meta = {}, annotations = [], selection, scrollIntoView = true }) {
+export function proposeChange(view, { from, to, insert, meta = {}, annotations = [], scrollIntoView = true }) {
   const merge = getChunks(view.state);
   if (merge && merge.chunks.some(c => touchesChunk(c, from, to))) return null;
   const capture = captureChanges(view, meta);
-  view.dispatch({
-    changes: { from, to, insert },
-    annotations: [reviewProposal.of(true), ...[].concat(annotations)],
-    ...(selection ? { selection } : {}),
-    scrollIntoView,
-  });
+  view.dispatch({ changes: { from, to, insert }, annotations: [reviewProposal.of(true), ...[].concat(annotations)] });
   capture.end();
+  const end = from + insert.length;
+  const first = chunkList(view.state).find(c => c.endB >= from && c.fromB <= end);
+  const at = first ? first.fromB : from;
+  view.dispatch({ selection: { anchor: at }, ...(scrollIntoView ? { effects: EditorView.scrollIntoView(at, { y: 'nearest' }) } : {}), userEvent: 'select' });
   return capture.id;
 }
 
@@ -396,19 +397,37 @@ export function acceptAll(view) {
   return true;
 }
 
+// Undoing a change puts back, one by one, the small differences inside it
+// — not the whole region at once (the merge view's own reject does that).
+// The merge view shows changes a blank line apart as one: replacing the
+// whole region would sweep the text between them, and the places of every
+// proposal in it, into one replacement. Differences one by one leave the
+// text between untouched, so each proposal's lines, and what they end as,
+// stay exact.
+function revertSpecs(state, chunks) {
+  const orig = getOriginalDoc(state);
+  const specs = [];
+  for (const c of chunks) {
+    for (const d of c.changes) {
+      specs.push({ from: c.fromB + d.fromB, to: c.fromB + d.toB, insert: orig.sliceString(c.fromA + d.fromA, c.fromA + d.toA) });
+    }
+  }
+  return specs;
+}
+
+/** Reject the change at `pos` (default: the cursor): the text goes back to what it was there. */
+export function rejectChange(view, pos = view.state.selection.main.head) {
+  const chunk = chunkList(view.state).find(c => c.fromB <= pos && c.endB >= pos);
+  if (!chunk) return false;
+  view.dispatch({ changes: revertSpecs(view.state, [chunk]), userEvent: 'revert' });
+  return true;
+}
+
 /** Reject every change under review: the text goes back to the original there. */
 export function rejectAll(view) {
   const chunks = chunkList(view.state);
   if (!chunks.length) return false;
-  const orig = getOriginalDoc(view.state), doc = view.state.doc;
-  view.dispatch({
-    changes: chunks.map(c => {
-      let insert = orig.sliceString(c.fromA, Math.max(c.fromA, c.toA - 1));
-      if (c.fromA !== c.toA && c.toB <= doc.length) insert += view.state.lineBreak;
-      return { from: c.fromB, to: Math.min(doc.length, c.toB), insert };
-    }),
-    userEvent: 'revert',
-  });
+  view.dispatch({ changes: revertSpecs(view.state, chunks), userEvent: 'revert' });
   return true;
 }
 
@@ -446,10 +465,17 @@ function reviewButton(label, what, key, onClick, cls = '') {
 }
 
 // The Accept / Reject pair on each change (the merge view places it).
+// Reject is ours (rejectChange); the merge view's replaces a whole region.
 function chunkButton(type, action) {
-  return type === 'accept'
-    ? reviewButton('Accept', 'Keep this change', REVIEW_KEYS.accept, action, 'mrmd-review-accept')
-    : reviewButton('Reject', 'Go back to the text before this change', REVIEW_KEYS.reject, action, 'mrmd-review-reject');
+  if (type === 'accept') return reviewButton('Accept', 'Keep this change', REVIEW_KEYS.accept, action, 'mrmd-review-accept');
+  const b = reviewButton('Reject', 'Go back to the text before this change', REVIEW_KEYS.reject, e => {
+    e.preventDefault();
+    const root = b.closest('.cm-editor'); // findFromDOM looks down from the editor's root
+    const view = root && EditorView.findFromDOM(root);
+    // The buttons sit in the widget placed at the change's start.
+    if (view) rejectChange(view, view.posAtDOM(b.closest('.cm-deletedChunk') || b));
+  }, 'mrmd-review-reject');
+  return b;
 }
 
 // A panel under the text while there is something to review.
@@ -561,7 +587,7 @@ export function documentReview(host = {}) {
     reviewTheme,
     Prec.high(keymap.of([
       { key: REVIEW_KEYS.accept, run: view => reviewing(view.state) && acceptChunk(view) },
-      { key: REVIEW_KEYS.reject, run: view => reviewing(view.state) && rejectChunk(view) },
+      { key: REVIEW_KEYS.reject, run: view => reviewing(view.state) && rejectChange(view) },
       { key: REVIEW_KEYS.acceptAll, run: view => reviewing(view.state) && acceptAll(view) },
       { key: REVIEW_KEYS.rejectAll, run: view => reviewing(view.state) && rejectAll(view) },
       { key: REVIEW_KEYS.next, run: view => reviewing(view.state) && goToNextChunk(view) },

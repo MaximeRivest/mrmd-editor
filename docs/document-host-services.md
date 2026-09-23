@@ -195,6 +195,12 @@ text before, the text proposed and the text kept; `decision` is
 rejected), `mixed` over several regions, or `left` (the editor closed
 first; the text stays).
 
+The merge view shows changes a blank line apart as one change, with one
+Accept / Reject pair; deciding it decides every proposal in it. Reject puts
+back the differences one by one (not the whole region), so each proposal's
+recorded `final` is exactly what its own lines became. A new proposal puts
+the cursor on its first changed line (where the keys act).
+
 Keys: Alt-y / Alt-n accept / reject the change at the cursor, Alt-Shift-y /
 Alt-Shift-n all of them, Alt-] / Alt-[ next / previous (`keyHelp()` lists
 them). Tokens: `--mrmd-review-inserted` and `--mrmd-review-deleted` (a host
