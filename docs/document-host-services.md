@@ -86,3 +86,53 @@ to the click itself (the widget stops it from propagating).
 Run `npm run build:document` and `npm run test:document`. The latter includes
 browser tests for both editors' gutter lifecycle, tooltips, completion,
 diagnostics, definitions, search and disposal.
+
+## AI commands (document editor, 0.17.0)
+
+The bundle ships no model. A host lends one, with the commands it offers:
+
+```js
+createDocumentEditor(el, {
+  ai: {
+    commands: [
+      { id: 'grammar', label: 'Fix grammar', hint: 'minimal changes', keywords: ['spelling'],
+        scope: 'prose', target: 'selection-or-block', kind: 'replace' },
+      { id: 'edit', label: 'Change it', scope: 'any', target: 'selection-or-block', kind: 'replace', instruction: true },
+    ],
+    run: (request, { signal, onText }) => Promise<{ text, model? }>,
+    model: () => 'provider/model',          // named in the command box
+    available: () => true | 'reason',       // checked when the box opens
+    beforeAccept: event => Promise | void,  // e.g. save pending edits first; event.result() is the
+                                            // document as accepting will leave it; a rejection abandons the accept
+    onAccept: event => void,                // provenance: command, model, range, text
+    notify: message => void,                // "the text changed, so the suggestion was dropped"
+    escalate: { label: 'Ask an agent', run: text => void },
+  },
+});
+```
+
+- `scope` — `prose`, `code` (inside a code cell) or `any`. The YAML header
+  and ```output result blocks are never acted on.
+- `target` — `cursor` (insert there), `selection-or-block` (the selection,
+  else the paragraph or heading / the cell's code), `selection-or-line`.
+- `kind` — `insert` or `replace`.
+- `instruction: true` (at most one command) — the command box turns any
+  text that names no command into this command's instruction.
+
+`run` receives `{command, instruction, scope, kind, target: {from, to,
+text}, before, after, block: {type, language, from, to, text}, document}`
+and may call `onText(textSoFar)` while the answer streams; it must stop
+when `signal` aborts (the suggestion was discarded or replaced). The
+editor shapes the answer deterministically (a wrapping code fence is
+removed, a replacement keeps the target's edge whitespace, an insertion
+loses a repeat of the text before the cursor).
+
+A suggestion is not document text until accepted: nothing is saved,
+shared or undoable before that. Accepting is one transaction
+(`userEvent` `input.ai`, `aiEditAnnotation` with `{command, model,
+instruction}`, its own undo step), refused if the replaced text changed.
+Keys: Mod-j opens the box; Tab accepts with the cursor in the suggested
+range; Escape discards; Alt-] / Alt-[ step through answers (past the last,
+another is asked for). `openAiMenu()` and `runAiCommand(id, {instruction})`
+do the same from host buttons; code cells get a ✦ button when both `ai`
+and `onRunCell` are set.

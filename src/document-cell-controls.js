@@ -143,6 +143,7 @@ class CellToolbarWidget extends WidgetType {
         bar.appendChild(button('mrmd-cell-btn-stop', '■ Stop', title, cell => config.onCancel(cell, { state: status.state })));
       }
     } else {
+      if (config.onAi) bar.appendChild(button('mrmd-cell-btn-ai', '✦', 'AI commands for this cell (' + (isMac ? '⌘' : 'Ctrl') + '+J)', config.onAi));
       bar.appendChild(button('mrmd-cell-btn-run', '▶ Run', 'Run this cell (' + (isMac ? '⌘' : 'Ctrl') + '+Enter)', config.onRun));
     }
     if (status && (status.state === 'running' || status.state === 'waiting')) {
@@ -281,6 +282,7 @@ const controlsTheme = EditorView.baseTheme({
  *   cellAt(state, pos)  → the cell ({lang, code, from, to}) at pos, or null
  *   runnable(lang)      → whether a cell in this fence language gets a Run button
  *   onRun(cell)         → the Run button was pressed
+ *   onAi(cell)          → the ✦ button: AI commands for this cell (omit: no button)
  *   onCancel(cell, {state}) → the Stop button was pressed on a cell in that
  *                         state ('queued' | 'running' | 'waiting'); omit: no
  *                         Stop button

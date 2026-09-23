@@ -17,6 +17,9 @@
  * not document text (see document-cell-run.js). Since 0.15.0 runnable cells
  * carry a Run button and show their run state (queued, running with elapsed
  * time, waiting for input, last verdict) — document-cell-controls.js.
+ * Since 0.17.0 AI commands (`ai`): a command box at the cursor (Mod-j) and
+ * the answer as a suggestion beside the text until accepted; the host
+ * lends the model — document-ai.js.
  *
  * Build: npm run build:document
  * Output: dist/mrmd-document.iife.min.js (global: mrmdDocument)
@@ -30,6 +33,7 @@ import { cellControls, setCellStatus, clearCellStatuses } from './document-cell-
 import { isOutputFence, isOwnedImageLine, formatResult } from './rat-notebook.js';
 import * as ratNotebook from './rat-notebook.js';
 import { createNotebookRunner } from './notebook-runner.js';
+import { aiConfig, documentAi, aiControllerOf, aiEditAnnotation } from './document-ai.js';
 import { StreamLanguage, syntaxTree } from '@codemirror/language';
 import { markdown as markdownLang, markdownLanguage } from '@codemirror/lang-markdown';
 
@@ -361,6 +365,9 @@ function resolveTheme(name, dark) {
  *   onCancelCell   (cell, {state}) => void — the Stop button, on a cell that
  *                  is 'queued', 'running' or 'waiting'. Omitted: no Stop
  *                  button.
+ *   ai             AI commands: {commands, run, model?, available?,
+ *                  beforeAccept?, onAccept?, notify?, escalate?} — see
+ *                  document-ai.js. Code cells then also get a ✦ button.
  * @returns editor API
  */
 export function createDocumentEditor(target, options = {}) {
@@ -380,6 +387,7 @@ export function createDocumentEditor(target, options = {}) {
   const sourceCompartment = new Compartment();
   const hostServices = documentHostServices({ ...options, lineGutter: !!options.lineGutter });
   const diagrams = diagramsConfig(options.diagrams);
+  const ai = aiConfig(options.ai);
 
   const documentBase = EditorView.theme({
     '&': { height: '100%', fontSize: '16px' },
@@ -436,7 +444,9 @@ export function createDocumentEditor(target, options = {}) {
       runnable: runnableLanguage(options.runnableLanguages, diagrams),
       onRun: cell => options.onRunCell(cell, { advance: false }),
       onCancel: typeof options.onCancelCell === 'function' ? (cell, info) => options.onCancelCell(cell, info) : null,
+      onAi: ai ? cell => openAiForCell(cell) : null,
     }) : [],
+    ai ? documentAi(ai, codeBlockAt) : [],
     markdownLang({ base: markdownLanguage, codeLanguages: codeBlockLanguage }),
     EditorView.lineWrapping,
     ...(Array.isArray(options.extensions) ? options.extensions : []),
@@ -464,6 +474,17 @@ export function createDocumentEditor(target, options = {}) {
   });
   hostServices.attach(view);
   if (options.readonly) view.dom.classList.add('mrmd-readonly');
+
+  // The ✦ on a code cell: select the cell's code, then open the command
+  // box on it — the selection shows what the commands will act on.
+  function openAiForCell(cell) {
+    const current = codeBlockAt(view.state, Math.min(cell.from, view.state.doc.length));
+    if (!current) return;
+    const codeFrom = Math.min(view.state.doc.lineAt(current.from).to + 1, view.state.doc.length);
+    view.dispatch({ selection: { anchor: codeFrom, head: codeFrom + current.code.length } });
+    view.focus();
+    aiControllerOf(view)?.openMenu();
+  }
 
   return {
     view,
@@ -562,6 +583,15 @@ export function createDocumentEditor(target, options = {}) {
 
     /** Clear the run states drawn on cells: all, or those in `states`. */
     clearCellStatuses(states) { clearCellStatuses(view, states); },
+
+    /** Open the AI command box at the cursor (as Mod-j does). False when AI commands are off. */
+    openAiMenu() { return !!ai && !!aiControllerOf(view)?.openMenu(); },
+
+    /**
+     * Run an AI command on the selection or cursor, without the box:
+     * `runAiCommand('grammar')`, `runAiCommand('edit', {instruction})`.
+     */
+    runAiCommand(id, opts) { return !!ai && !!aiControllerOf(view)?.run(id, opts); },
 
     /**
      * Draw `cell`'s run state on the cell: {state: 'queued' | 'running' |
@@ -742,7 +772,7 @@ export function createCodeEditor(target, options = {}) {
 }
 
 export { getTheme, getThemeNames };
-export const version = '0.16.1-document';
+export const version = '0.17.0-document';
 
-export { ratNotebook, createNotebookRunner };
-export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, version };
+export { ratNotebook, createNotebookRunner, aiEditAnnotation };
+export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, version };

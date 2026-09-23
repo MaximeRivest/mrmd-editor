@@ -788,9 +788,10 @@ class FrontmatterWidgetWithHeightCache extends FrontmatterWidget {
 }
 
 /**
- * Find frontmatter range at the start of the document (--- ... ---)
+ * Find frontmatter range at the start of the document (--- ... ---).
+ * Exported for features that must leave the YAML header alone (AI commands).
  */
-const findFrontmatterRange = memoizeDocumentScan(function findFrontmatterRange(doc) {
+export const findFrontmatterRange = memoizeDocumentScan(function findFrontmatterRange(doc) {
   if (doc.lines < 2) return null;
 
   const firstLine = doc.line(1);
