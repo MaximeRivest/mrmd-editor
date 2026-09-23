@@ -27,6 +27,9 @@ import { EditorState, Compartment, Prec } from '@codemirror/state';
 import { keymap, placeholder, layer, RectangleMarker } from '@codemirror/view';
 import { cellRunExtension, showCellRun } from './document-cell-run.js';
 import { cellControls, setCellStatus, clearCellStatuses } from './document-cell-controls.js';
+import { isOutputFence, isOwnedImageLine, formatResult } from './rat-notebook.js';
+import * as ratNotebook from './rat-notebook.js';
+import { createNotebookRunner } from './notebook-runner.js';
 import { StreamLanguage, syntaxTree } from '@codemirror/language';
 import { markdown as markdownLang, markdownLanguage } from '@codemirror/lang-markdown';
 
@@ -209,14 +212,7 @@ function runnableLanguage(option, diagrams) {
     return lang => allowed.has(lang);
   }
   const drawn = new Set((diagrams && diagrams.languages) || []);
-  return lang => !!lang && lang !== 'output' && !drawn.has(lang);
-}
-
-/**
- * The language word of a fence line, lowercased ('' when bare).
- */
-function fenceLang(lineText) {
-  return ((lineText.match(/^\s*(?:`{3,}|~{3,})\s*(\S*)/) || [])[1] || '').toLowerCase();
+  return lang => !!lang && lang !== 'output' && !lang.startsWith('output:') && !drawn.has(lang);
 }
 
 /**
@@ -229,7 +225,7 @@ function listCodeCells(state) {
     enter(node) {
       if (node.name !== 'FencedCode') return;
       const cell = codeBlockAt(state, node.from);
-      if (cell && cell.lang && cell.lang.toLowerCase() !== 'output') cells.push(cell);
+      if (cell && cell.lang && !isOutputFence('```' + cell.lang)) cells.push(cell);
       return false;
     },
   });
@@ -237,66 +233,69 @@ function listCodeCells(state) {
 }
 
 /**
- * The output block OWNED by the cell ending at `cellTo`, or null.
+ * The result OWNED by the cell ending at `cellTo`: {from, to}, or null.
  *
- * Ownership rule (the MRMD convention): an ```output fence belongs to the
- * cell above it only when nothing but whitespace separates the cell's
- * closing fence line from the output's opening fence line. Anything else
- * between them — prose, another cell, a moved block — breaks ownership,
- * and a rerun must never touch it.
+ * Ownership rule: a result is an output block (```output in any of its
+ * spellings — output:<execId>, output | status) and/or the plot images a
+ * run made (rat-notebook's isOwnedImageLine), each separated from the cell
+ * and from each other by nothing but blank lines. Anything else in
+ * between — prose, another cell, a person's own image — ends the result,
+ * and a rerun never touches what follows.
  */
 function ownedOutputBlock(state, cellTo) {
   const doc = state.doc;
-  const afterLineNum = doc.lineAt(cellTo).number + 1;
-  let openLine = null;
-  for (let n = afterLineNum; n <= doc.lines; n++) {
-    const line = doc.line(n);
-    if (!line.text.trim()) continue;           // whitespace — keep looking
-    if (fenceLang(line.text) === 'output') openLine = line;
-    break;                                     // first non-blank decides
+  let n = doc.lineAt(cellTo).number + 1;
+  const nextContent = from => { let i = from; while (i <= doc.lines && !doc.line(i).text.trim()) i++; return i; };
+  let from = null, to = null;
+  n = nextContent(n);
+  if (n <= doc.lines && isOutputFence(doc.line(n).text)) {
+    const open = doc.line(n);
+    let block = null;
+    syntaxTree(state).iterate({
+      from: open.from, to: open.from + 1,
+      enter(node) {
+        if (node.name === 'FencedCode' && doc.lineAt(node.from).number === open.number) {
+          block = { from: node.from, to: node.to };
+          return false;
+        }
+      },
+    });
+    if (!block) return null;
+    from = block.from; to = block.to;
+    n = doc.lineAt(block.to).number + 1;
   }
-  if (!openLine) return null;
-  // The block is the FencedCode node starting at that line.
-  let block = null;
-  syntaxTree(state).iterate({
-    from: openLine.from, to: openLine.from + 1,
-    enter(node) {
-      if (node.name === 'FencedCode' && doc.lineAt(node.from).number === openLine.number) {
-        block = { from: node.from, to: node.to };
-        return false;
-      }
-    },
-  });
-  return block;
+  for (;;) {
+    const i = nextContent(n);
+    if (i > doc.lines || !isOwnedImageLine(doc.line(i).text)) break;
+    const line = doc.line(i);
+    if (from === null) from = line.from;
+    to = line.to;
+    n = i + 1;
+  }
+  return from === null ? null : { from, to };
 }
 
 /**
- * Replace, insert, or remove the output block under one cell.
- * Returns the change spec (host dispatches through the view, so undo,
- * autosave, and collaboration all see one ordinary edit), or null when
- * the document no longer contains the cell as given (stale-run guard).
+ * Replace, insert, or remove the result under one cell: the output block
+ * for `outputText` and the images (each {src, alt}) after it, in the
+ * format of rat-notebook's formatResult. Returns the change spec (the host
+ * dispatches through the view, so undo, autosave and collaboration all
+ * see one ordinary edit), or null when the document no longer contains
+ * the cell as given (stale-run guard).
  */
-function cellOutputChange(state, cell, outputText) {
+function cellOutputChange(state, cell, outputText, images = []) {
   // Stale guard: the cell must still sit at [from,to) with the same code.
   const current = codeBlockAt(state, Math.min(cell.from, state.doc.length));
   if (!current || current.from !== cell.from || current.code !== cell.code) return null;
-  const doc = state.doc;
-  const text = String(outputText ?? '').replace(/\s+$/, '');
-  // Inner text must not contain a ``` fence line — indent such lines by
-  // one space so they cannot terminate the block (rare; keeps it valid).
-  const safe = text.split('\n').map(l => (/^\s*(?:`{3,}|~{3,})/.test(l) ? ' ' + l : l)).join('\n');
+  const result = formatResult(outputText, images);
   const owned = ownedOutputBlock(state, current.to);
-  if (!text) {
+  if (!result) {
     if (!owned) return { changes: [] };        // nothing to write, nothing owned
-    // Remove the owned block plus the blank line that separated it.
-    const removeFrom = Math.min(current.to + 1, owned.from > 0 ? owned.from : current.to);
-    const after = doc.lineAt(owned.to).number < doc.lines ? doc.line(doc.lineAt(owned.to).number + 1) : null;
-    const removeTo = after && !after.text.trim() ? after.to : owned.to;
-    return { changes: [{ from: Math.min(removeFrom, owned.from), to: Math.min(removeTo + 1, doc.length) }] };
+    // The gap and the result go; what followed the result stays.
+    return { changes: [{ from: current.to, to: owned.to }] };
   }
-  const blockText = '```output\n' + safe + '\n```';
-  if (owned) return { changes: [{ from: owned.from, to: owned.to, insert: blockText }] };
-  return { changes: [{ from: current.to, insert: '\n\n' + blockText }] };
+  if (owned) return { changes: [{ from: owned.from, to: owned.to, insert: result }] };
+  return { changes: [{ from: current.to, insert: '\n\n' + result }] };
 }
 
 /**
@@ -415,7 +414,7 @@ export function createDocumentEditor(target, options = {}) {
       key: 'Mod-Enter',
       run: (v) => {
         const cell = codeBlockAt(v.state, v.state.selection.main.head);
-        if (!cell || !cell.code.trim() || cell.lang.toLowerCase() === 'output') return false;
+        if (!cell || !cell.code.trim() || isOutputFence('```' + cell.lang)) return false;
         options.onRunCell(cell, { advance: false });
         return true;
       },
@@ -423,7 +422,7 @@ export function createDocumentEditor(target, options = {}) {
       key: 'Shift-Enter',
       run: (v) => {
         const cell = codeBlockAt(v.state, v.state.selection.main.head);
-        if (!cell || !cell.code.trim() || cell.lang.toLowerCase() === 'output') return false;
+        if (!cell || !cell.code.trim() || isOutputFence('```' + cell.lang)) return false;
         options.onRunCell(cell, { advance: true });
         return true;
       },
@@ -529,8 +528,8 @@ export function createDocumentEditor(target, options = {}) {
      * Returns false when the cell moved or changed since the run (the
      * stale guard) — the host should show the result elsewhere then.
      */
-    setCellOutput(cell, outputText) {
-      const change = cellOutputChange(view.state, cell, outputText);
+    setCellOutput(cell, outputText, { images = [] } = {}) {
+      const change = cellOutputChange(view.state, cell, outputText, images);
       if (!change) return false;
       if (change.changes.length) view.dispatch({ ...change, userEvent: 'output.cell' });
       return true;
@@ -543,16 +542,19 @@ export function createDocumentEditor(target, options = {}) {
      * the old result the cell owns is dimmed. The host writes the result
      * with setCellOutput, then calls `dispose()`. See document-cell-run.js.
      */
-    showCellRun(cell) {
+    showCellRun(cell, { dimResult = true } = {}) {
       const current = codeBlockAt(view.state, Math.min(cell.from, view.state.doc.length));
       const at = current && current.from === cell.from ? current : cell;
-      const run = showCellRun(view, at, current ? ownedOutputBlock(view.state, current.to) : null);
+      const run = showCellRun(view, at, current ? ownedOutputBlock(view.state, current.to) : null, { dimResult });
       // The run's cell, wherever edits moved it: the panel follows it, so
-      // the run (not a stale position) says what the cell is doing. Set
-      // the final verdict before dispose().
-      run.setStatus = status => {
+      // the run (not a stale position) says what the cell is doing and
+      // where its result goes. Set the final verdict before dispose().
+      run.cell = () => {
         const pos = run.position();
-        const cellNow = pos == null ? null : codeBlockAt(view.state, pos);
+        return pos == null ? null : codeBlockAt(view.state, pos);
+      };
+      run.setStatus = status => {
+        const cellNow = run.cell();
         return cellNow ? setCellStatus(view, cellNow, status) : false;
       };
       return run;
@@ -740,6 +742,7 @@ export function createCodeEditor(target, options = {}) {
 }
 
 export { getTheme, getThemeNames };
-export const version = '0.15.0-document';
+export const version = '0.16.0-document';
 
-export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, version };
+export { ratNotebook, createNotebookRunner };
+export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, version };

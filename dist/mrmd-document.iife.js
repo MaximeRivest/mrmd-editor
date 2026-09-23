@@ -26516,6 +26516,11 @@ var mrmdDocument = (function (exports) {
    *     // {withdrawn: true}  the question went away: dismissInput(), a newer
    *     //                    ask(), or dispose() — nothing to do
    *   run.dispose();                             // after setCellOutput
+   *
+   *   run.appendImage(url, alt)   // a plot, as it is made (shown under the text,
+   *                               // where the finished result will put it)
+   *   run.finish({note})          // someone else's run ended: keep what it showed,
+   *                               // with a note and a close button
    */
 
 
@@ -26574,6 +26579,12 @@ var mrmdDocument = (function (exports) {
       background: 'transparent',
     },
     '.mrmd-cell-run-output:empty': { display: 'none' },
+    '.mrmd-cell-run-images:empty': { display: 'none' },
+    '.mrmd-cell-run-images img': { display: 'block', maxWidth: '100%', margin: '6px 0', background: '#fff' },
+    '.mrmd-cell-run-footer': { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', color: 'var(--mrmd-fg-muted, inherit)', fontSize: '0.85em' },
+    '.mrmd-cell-run-footer[hidden]': { display: 'none' },
+    '.mrmd-cell-run-footer span': { flex: '1' },
+    '.mrmd-cell-run .mrmd-cell-run-close': { font: 'inherit', minHeight: '0', height: '18px', margin: '0', padding: '0 6px', lineHeight: '16px', color: 'inherit', background: 'transparent', border: '1px solid var(--mrmd-border, currentColor)', borderRadius: '3px', cursor: 'pointer' },
     '.mrmd-cell-run-output a': { color: 'var(--md-link-color, var(--mrmd-accent, inherit))' },
     '.mrmd-cell-run-dropped': { color: 'var(--mrmd-fg-muted, inherit)', fontStyle: 'italic' },
     '.mrmd-cell-run-input': { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px', flexWrap: 'wrap' },
@@ -26632,7 +26643,7 @@ var mrmdDocument = (function (exports) {
    * `ownedOutput` is the {from, to} of the result block the cell owns, if
    * any — dimmed until the run ends.
    */
-  function showCellRun(view, cell, ownedOutput) {
+  function showCellRun(view, cell, ownedOutput, { dimResult = true } = {}) {
     const dom = document.createElement('div');
     dom.className = 'mrmd-cell-run';
     dom.dataset.state = 'running';
@@ -26656,7 +26667,12 @@ var mrmdDocument = (function (exports) {
     hint.textContent = 'Enter sends · Esc stops the run';
     label.htmlFor = field.id = 'mrmd-cell-run-' + Math.random().toString(36).slice(2);
     form.append(label, field, hint);
-    dom.append(pre, form);
+    const images = document.createElement('div');
+    images.className = 'mrmd-cell-run-images';
+    const footer = document.createElement('div');
+    footer.className = 'mrmd-cell-run-footer';
+    footer.hidden = true;
+    dom.append(pre, images, form, footer);
 
     let text = '';
     let dropped = false;
@@ -26668,7 +26684,7 @@ var mrmdDocument = (function (exports) {
     const doc = view.state.doc;
     const lineEnd = doc.lineAt(Math.min(cell.to, doc.length)).to;
     const ranges = [Decoration.widget({ widget: new CellRunWidget(run), block: true, side: 1, cellRun: run }).range(lineEnd)];
-    if (ownedOutput) {
+    if (ownedOutput && dimResult) {
       for (let pos = ownedOutput.from; pos <= ownedOutput.to;) {
         const line = doc.lineAt(pos);
         ranges.push(Decoration.line({ class: 'mrmd-cell-output-stale', cellRun: run }).range(line.from));
@@ -26704,7 +26720,7 @@ var mrmdDocument = (function (exports) {
       const { resolve } = pending;
       pending = null;
       form.hidden = true;
-      if (!text) dom.dataset.empty = '';
+      if (!text && !images.childElementCount) dom.dataset.empty = '';
       field.value = '';
       dom.dataset.state = 'running';
       view.requestMeasure();
@@ -26774,6 +26790,41 @@ var mrmdDocument = (function (exports) {
       },
       /** The program stopped waiting without this panel's answer. */
       dismissInput() { finish({ withdrawn: true }); },
+      appendImage(url, alt = 'plot') {
+        if (disposed || !url) return;
+        const img = document.createElement('img');
+        img.src = url;
+        img.alt = alt;
+        img.addEventListener('load', () => view.requestMeasure());
+        images.appendChild(img);
+        delete dom.dataset.empty;
+        view.requestMeasure();
+      },
+      /**
+       * The run ended and nothing will be written for it (someone else's
+       * run): keep its output visible, say whose it was, offer to close.
+       */
+      finish({ note = '' } = {}) {
+        if (disposed) return;
+        finish({ withdrawn: true });
+        dom.dataset.state = 'done';
+        footer.textContent = '';
+        const span = document.createElement('span');
+        span.textContent = note;
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'mrmd-cell-run-close';
+        close.textContent = '×';
+        close.title = 'Close';
+        close.setAttribute('aria-label', 'Close');
+        close.addEventListener('mousedown', e => e.preventDefault());
+        close.addEventListener('click', e => { e.preventDefault(); run.dispose(); });
+        footer.append(span, close);
+        footer.hidden = false;
+        if (text || images.childElementCount) delete dom.dataset.empty;
+        else dom.dataset.empty = '';
+        view.requestMeasure();
+      },
       get text() { return text; },
       dispose() {
         if (disposed) return;
@@ -27105,6 +27156,507 @@ var mrmdDocument = (function (exports) {
     const value = status ? { from: cell.from, codeFrom, codeTo, status: { ...status } } : { from: cell.from, status: null };
     view.dispatch({ effects: setStatusEffect.of(value) });
     return true;
+  }
+
+  /**
+   * rat-notebook — what a Markdown notebook run on rat means, as plain
+   * functions: no editor, no DOM, no transport. Every host (Chattering, the
+   * VS Code extension, a test) uses these, so a notebook behaves the same
+   * wherever it is run.
+   *
+   * The result format a run leaves in the document:
+   *
+   *   ```python
+   *   plt.plot(x); plt.show()
+   *   ```
+   *
+   *   ```output
+   *   what the program printed
+   *   ```
+   *
+   *   ![plot](../_assets/generated/3f9a1c2b7d4e.png)
+   *
+   * - Program output only: no timing or status (they change on every run and
+   *   would show in Git when the output did not). A fence longer than any
+   *   backtick run in the output keeps the output byte-for-byte.
+   * - Plots are images after the block, saved in the project's
+   *   `_assets/generated/`, named by content. A result owns only the images
+   *   the runner made (alt `plot`, a path inside `_assets/`): an image a
+   *   person placed there is never replaced.
+   * - Older forms are read and replaced: ```output:<execId> (MRMD) and
+   *   ```output | ✓ 1.5s | 1 var (VS Code before this module).
+   */
+
+  /** Where generated images go, relative to the project root. */
+  const GENERATED_ASSETS_DIR = '_assets/generated';
+
+  const PLOT_MARKER = '__RAT_PLOT__:';
+  const PLOT_LINE = /^__RAT_PLOT__:(.+?)\s*$/;
+  const BANNER_LINE = /^[a-z0-9@._-]+ (?:started|restarted) on http[^\n]*\n?/im;
+  const STATUS_TAIL = /\n?[✓✗] \d+(?:\.\d+)?m?s( \| \d+ vars?)?\s*$/;
+  const OWNED_IMAGE = /^!\[plot(?:-\d+)?\]\(([^)\s]*_assets\/[^)\s]*)\)\s*$/;
+
+  /** A fence line's language word, lowercased ('' when bare). */
+  function fenceLanguage(line) {
+    return ((String(line).match(/^\s{0,3}(?:`{3,}|~{3,})\s*([^\s|]*)/) || [])[1] || '').toLowerCase();
+  }
+
+  /** True for every spelling of a result fence: output, output:<id>, output | … */
+  function isOutputFence(line) {
+    const lang = fenceLanguage(line);
+    return lang === 'output' || lang.startsWith('output:');
+  }
+
+  /** True for an image line a run made (and a rerun may replace). */
+  function isOwnedImageLine(line) {
+    return OWNED_IMAGE.test(String(line));
+  }
+
+  /**
+   * rat's final text for a run, as a document keeps it: without rat's
+   * kernel-start banner and its "✓ 21ms | 1 var" status line.
+   */
+  function cleanRunOutput(out) {
+    return String(out || '').replace(BANNER_LINE, '').replace(STATUS_TAIL, '').replace(/\s+$/, '');
+  }
+
+  /** Split plot markers out of finished output: {text, plots: [path]}. */
+  function splitPlots(text) {
+    const plots = [];
+    const kept = [];
+    for (const line of String(text || '').split('\n')) {
+      const m = line.match(PLOT_LINE);
+      if (m) plots.push(m[1]);
+      else kept.push(line);
+    }
+    return { text: kept.join('\n').replace(/\s+$/, ''), plots };
+  }
+
+  /**
+   * The same, for output that arrives in chunks: a marker may be split
+   * across chunks, so a partial last line is held back — but only while it
+   * could still become a marker (a prompt like "Name: " passes at once).
+   * feed(chunk) → {text, plots}; flush() → the rest.
+   */
+  function createLiveOutputFilter() {
+    let pending = '';
+    const take = (final) => {
+      const out = { text: '', plots: [] };
+      let start = 0;
+      for (;;) {
+        const nl = pending.indexOf('\n', start);
+        if (nl < 0) break;
+        const line = pending.slice(start, nl);
+        const m = line.match(PLOT_LINE);
+        if (m) out.plots.push(m[1]);
+        else out.text += line + '\n';
+        start = nl + 1;
+      }
+      let rest = pending.slice(start);
+      if (rest && (final || !PLOT_MARKER.startsWith(rest.slice(0, PLOT_MARKER.length)))) {
+        const m = final && rest.match(PLOT_LINE);
+        if (m) out.plots.push(m[1]);
+        else out.text += rest;
+        rest = '';
+      }
+      pending = rest;
+      return out;
+    };
+    return {
+      feed(chunk) { pending += String(chunk ?? ''); return take(false); },
+      flush() { return take(true); },
+    };
+  }
+
+  /** Backticks for a fence around `text`: longer than any run inside it. */
+  function fenceFor(text) {
+    let longest = 0;
+    for (const m of String(text).matchAll(/`+/g)) longest = Math.max(longest, m[0].length);
+    return '`'.repeat(Math.max(3, longest + 1));
+  }
+
+  /**
+   * The Markdown a run leaves under its cell: the output block (when there
+   * is output) and the plot images (each `{src, alt}`), or '' for neither.
+   */
+  function formatResult(text, images = []) {
+    const body = String(text ?? '').replace(/\s+$/, '');
+    const parts = [];
+    if (body) {
+      const ticks = fenceFor(body);
+      parts.push(ticks + 'output\n' + body + '\n' + ticks);
+    }
+    for (const img of images) parts.push('![' + (img.alt || 'plot') + '](' + img.src + ')');
+    return parts.join('\n\n');
+  }
+
+  /**
+   * The run's output as a finished document keeps it, given what rat
+   * reported at the end: {text, plots}. `ok`=false keeps the error text.
+   */
+  function finishedOutput(out) {
+    return splitPlots(cleanRunOutput(out));
+  }
+
+  /**
+   * Which cell another client's run belongs to: the only cell whose code is
+   * the run's code (trailing whitespace aside). Two identical cells, or
+   * none: null — a guess would draw someone's run on the wrong cell.
+   */
+  function cellForCode(cells, code) {
+    const norm = s => String(s ?? '').replace(/\s+$/, '').replace(/\r\n/g, '\n');
+    const want = norm(code);
+    if (!want) return null;
+    const hits = cells.filter(c => norm(c.code) === want);
+    return hits.length === 1 ? hits[0] : null;
+  }
+
+  /**
+   * Follows other clients' runs from `rat events` (run_started/output/
+   * waiting/input_done/ended, as parsed JSON). Live chunks are a preview
+   * sent every 50 ms — a quick run has none — so the end event's whole
+   * output fills in what the chunks did not. Returns per event what changed:
+   * {run, kind, text?, plots?} — the host draws it.
+   */
+  function createRunFollower() {
+    const runs = new Map();
+    return {
+      runs,
+      apply(ev) {
+        const kind = ev.event || ev.kind;
+        const id = ev.run_id;
+        if (!id) return { kind, run: null };
+        if (kind === 'run_started') {
+          const run = { id, caller: ev.caller || 'rat', code: ev.code || '', startedAt: Date.now(), seen: '', filter: createLiveOutputFilter(), waiting: null, replay: !!ev.replay };
+          runs.set(id, run);
+          return { kind, run };
+        }
+        const run = runs.get(id);
+        if (!run) return { kind, run: null };
+        if (kind === 'run_output') {
+          run.seen += ev.text || '';
+          return { kind, run, ...run.filter.feed(ev.text || '') };
+        }
+        if (kind === 'run_waiting') { run.waiting = { prompt: ev.prompt || '', secret: !!ev.secret }; return { kind, run }; }
+        if (kind === 'run_input_done') { run.waiting = null; return { kind, run }; }
+        if (kind === 'run_ended') {
+          runs.delete(id);
+          run.waiting = null;
+          const tail = run.filter.flush();
+          const full = ev.ok === false && ev.error ? String(ev.error) : String(ev.output || '');
+          const seen = run.seen.replace(/\s+$/, '');
+          let rest = '';
+          if (!seen) rest = full;
+          else if (full.startsWith(seen)) rest = full.slice(seen.length).replace(/^\n/, '');
+          const more = splitPlots(rest);
+          run.ok = ev.ok !== false;
+          run.ms = typeof ev.duration_ms === 'number' ? ev.duration_ms : Date.now() - run.startedAt;
+          return { kind, run, text: tail.text + (more.text ? (tail.text && !tail.text.endsWith('\n') ? '\n' : '') + more.text + '\n' : ''), plots: [...tail.plots, ...more.plots] };
+        }
+        return { kind, run };
+      },
+    };
+  }
+
+  var ratNotebook = /*#__PURE__*/Object.freeze({
+    __proto__: null,
+    GENERATED_ASSETS_DIR: GENERATED_ASSETS_DIR,
+    cellForCode: cellForCode,
+    cleanRunOutput: cleanRunOutput,
+    createLiveOutputFilter: createLiveOutputFilter,
+    createRunFollower: createRunFollower,
+    fenceFor: fenceFor,
+    fenceLanguage: fenceLanguage,
+    finishedOutput: finishedOutput,
+    formatResult: formatResult,
+    isOutputFence: isOutputFence,
+    isOwnedImageLine: isOwnedImageLine,
+    splitPlots: splitPlots
+  });
+
+  /**
+   * The notebook runner: running cells of a document editor on rat, the
+   * same way in every host. It owns the run's life on the page — the cell's
+   * status, the live panel, input prompts, plots, the result written under
+   * the cell, run-all's queue — and other clients' runs followed through
+   * `rat events`. The host lends only the transport (how its page reaches
+   * rat) and draws its own chrome from the hooks.
+   *
+   *   const runner = mrmdDocument.createNotebookRunner(editor, {
+   *     transport: {
+   *       run({lang, code, runId}, onEvent) → Promise<result>
+   *           onEvent: {type:'started', ratRunId} | {type:'output', text}
+   *                  | {type:'input_request', prompt, secret} | {type:'input_done'}
+   *           result:  {code, out, ms, cancelled?, error?}  (error: it did not run)
+   *       answer(runId, text) → Promise<{error?}>
+   *       cancel(runId) → Promise
+   *       interrupt?() → Promise              interrupt whatever runs on the kernel
+   *                                           (Stop on a cell another client runs)
+   *       plotUrl(path) → string              a URL to show a plot while running
+   *       savePlots(paths) → Promise<[{src, alt}]>  make them durable; src relative to the document
+   *       prepare?(cell) → Promise<{ok, error?, label?}>   before a run (prerequisites)
+   *     },
+   *     runnable(lang) → boolean,
+   *     hooks: { onRunStart, onRunState, onRunEnd, onExternal, onKernelEvent },
+   *   });
+   *   runner.run(cell, {advance})   runner.runAll()   runner.cancel()
+   *   runner.cancelCell(state)      runner.external(event)   runner.running
+   *
+   * See rat-notebook.js for what a run leaves in the document.
+   */
+
+
+  const norm = s => String(s ?? '').replace(/\s+$/, '').replace(/\r\n/g, '\n');
+
+  function createNotebookRunner(editor, options = {}) {
+    const transport = options.transport;
+    if (!transport || typeof transport.run !== 'function') throw new TypeError('createNotebookRunner: transport.run is required');
+    const hooks = options.hooks || {};
+    const runnable = typeof options.runnable === 'function' ? options.runnable : () => true;
+    const call = (name, ...args) => { try { return hooks[name] && hooks[name](...args); } catch (e) { console.error('[notebook-runner]', name, e); } };
+    const setStatus = (panel, cell, status) => {
+      if (panel && panel.setStatus && panel.setStatus(status)) return;
+      if (cell && editor.setCellStatus) editor.setCellStatus(cell, status);
+    };
+
+    let seq = 0;
+    let current = null;            // the run this page started: {runId, ratRunId, cell, panel, cancel}
+    const ownRatRuns = new Set();  // rat run ids of this page's runs
+    const others = new Map();      // rat run id → {panel, run} for other clients' runs
+    const follower = createRunFollower();
+    let stopQueue = false;
+
+    function closeOther(id) {
+      const o = others.get(id);
+      if (!o) return;
+      others.delete(id);
+      try { o.panel && o.panel.dispose(); } catch {}
+    }
+    function closeOthersOn(cell) {
+      for (const [id, o] of others) {
+        const at = o.panel && o.panel.cell && o.panel.cell();
+        if (at && at.from === cell.from) closeOther(id);
+      }
+    }
+
+    async function run(cell, { advance = false } = {}) {
+      if (!cell || !norm(cell.code)) return { ok: false };
+      if (current) return { ok: false, busy: true };
+      const runId = 'run-' + (++seq) + '-' + Date.now();
+      const t0 = Date.now();
+      closeOthersOn(cell);
+      const panel = editor.showCellRun ? editor.showCellRun(cell) : null;
+      const state = { runId, ratRunId: null, cell, panel, t0, waiting: false };
+      current = state;
+      state.cancel = () => transport.cancel(runId);
+      const statusNow = extra => setStatus(panel, cell, { state: state.waiting ? 'waiting' : 'running', startedAt: t0, ...extra });
+      statusNow();
+      call('onRunStart', { cell, runId, cancel: state.cancel });
+
+      const end = (result, extra = {}) => {
+        current = null;
+        const ok = !result.error && result.code === 0;
+        const verdict = result.error ? { state: 'error', ms: Date.now() - t0, label: extra.label || 'not run' }
+          : { state: ok ? 'ok' : 'error', ms: result.ms ?? Date.now() - t0, label: result.cancelled ? 'stopped' : undefined };
+        setStatus(panel, cell, verdict);
+        return ok;
+      };
+
+      if (typeof transport.prepare === 'function') {
+        statusNow({ label: 'preparing' });
+        let prep;
+        try { prep = await transport.prepare(cell); } catch (e) { prep = { ok: false, error: String(e && e.message || e) }; }
+        if (!prep || !prep.ok) {
+          const result = { error: (prep && prep.error) || 'could not prepare the run' };
+          end(result, { label: (prep && prep.label) || 'not run' });
+          try { panel && panel.dispose(); } catch {}
+          call('onRunEnd', { cell, runId, result, ok: false, wrote: false });
+          return { ok: false, result };
+        }
+        statusNow();
+      }
+
+      const live = createLiveOutputFilter();
+      const showLive = ({ text, plots }) => {
+        if (!panel) return;
+        if (text) panel.append(text);
+        for (const p of plots) panel.appendImage(transport.plotUrl ? transport.plotUrl(p) : '', 'plot');
+      };
+      const onEvent = ev => {
+        if (current !== state) return;
+        if (ev.type === 'started' && ev.ratRunId) {
+          state.ratRunId = ev.ratRunId;
+          ownRatRuns.add(ev.ratRunId);
+          closeOther(ev.ratRunId); // `rat events` may have reported it first
+        } else if (ev.type === 'output') {
+          showLive(live.feed(ev.text));
+        } else if (ev.type === 'input_request') {
+          state.waiting = true;
+          statusNow();
+          call('onRunState', { cell, runId, waiting: true });
+          const asked = panel ? panel.ask({ prompt: ev.prompt, secret: ev.secret }) : Promise.resolve({ withdrawn: true });
+          asked.then(async reply => {
+            if (current !== state) return;
+            if (typeof reply.text === 'string') {
+              const r = await transport.answer(runId, reply.text);
+              if (r && r.error) call('onRunState', { cell, runId, error: r.error });
+            } else if (reply.dismissed) state.cancel();
+          });
+        } else if (ev.type === 'input_done') {
+          state.waiting = false;
+          statusNow();
+          if (panel) panel.dismissInput();
+          call('onRunState', { cell, runId, waiting: false });
+        }
+      };
+
+      let result;
+      try { result = await transport.run({ lang: cell.lang, code: cell.code, runId }, onEvent); }
+      catch (e) { result = { error: String(e && e.message || e) }; }
+      result = result || { error: 'no result' };
+      showLive(live.flush());
+      const ok = end(result);
+      if (result.error) {
+        try { panel && panel.dispose(); } catch {}
+        call('onRunEnd', { cell, runId, result, ok: false, wrote: false });
+        return { ok: false, result };
+      }
+
+      // The result goes under the cell where it is now (edits above it move
+      // it; the panel followed), and only if its code is still what ran.
+      const { text, plots } = finishedOutput(result.out);
+      let images = [];
+      let saveError = null;
+      if (plots.length && transport.savePlots) {
+        try { images = await transport.savePlots(plots); } catch (e) { saveError = String(e && e.message || e); }
+      }
+      const note = saveError ? '\n[plots not saved: ' + saveError + ']' : '';
+      const cellNow = (panel && panel.cell && panel.cell()) || cell;
+      const wrote = !!cellNow && norm(cellNow.code) === norm(cell.code) && editor.setCellOutput(cellNow, text + note, { images });
+      try { panel && panel.dispose(); } catch {}
+      call('onRunEnd', { cell: cellNow || cell, runId, result, ok, wrote, text, images });
+      if (advance && ok && cellNow) editor.advanceToNextCell(cellNow);
+      return { ok, result, wrote };
+    }
+
+    function runnableCells() {
+      return editor.listCells().filter(c => runnable(String(c.lang || '').toLowerCase()));
+    }
+
+    async function runAll() {
+      if (current) return { ok: false, busy: true };
+      const cells = runnableCells();
+      if (!cells.length) return { ok: false, empty: true };
+      stopQueue = false;
+      for (const c of cells) editor.setCellStatus && editor.setCellStatus(c, { state: 'queued' });
+      const clearQueue = () => { stopQueue = false; try { editor.clearCellStatuses && editor.clearCellStatuses(['queued']); } catch {} };
+      for (let i = 0; i < cells.length; i++) {
+        // Re-list before each run: earlier results moved the later cells.
+        const fresh = runnableCells();
+        if (i >= fresh.length) break;
+        if (stopQueue) { clearQueue(); return { ok: false, stoppedBefore: i, total: fresh.length }; }
+        const r = await run(fresh[i]);
+        if (!r.ok) { clearQueue(); return { ok: false, failedAt: i, total: fresh.length, result: r.result }; }
+      }
+      clearQueue();
+      return { ok: true, total: cells.length };
+    }
+
+    function cancel() { if (current) return current.cancel(); }
+
+    /**
+     * Stop pressed on a cell: run all's queue, this page's run, or another
+     * client's run on that cell (an interrupt: the kernel keeps its
+     * variables; a person may stop an agent).
+     */
+    function cancelCell(state, cell) {
+      if (state === 'queued') {
+        stopQueue = true;
+        try { editor.clearCellStatuses && editor.clearCellStatuses(['queued']); } catch {}
+        return 'queue';
+      }
+      if (current && (!cell || current.cell.from === cell.from || (current.panel && current.panel.cell && current.panel.cell()?.from === cell.from))) {
+        cancel();
+        return 'run';
+      }
+      if (cell && transport.interrupt) {
+        for (const o of others.values()) {
+          const at = o.panel && o.panel.cell && o.panel.cell();
+          if (at && at.from === cell.from) { transport.interrupt(); return 'other'; }
+        }
+      }
+      return null;
+    }
+
+    /**
+     * One event from `rat events --json`. Runs this page started are
+     * ignored (the page shows them already); other clients' runs are drawn
+     * on the cell whose code they ran, when exactly one cell has it.
+     */
+    function external(ev) {
+      const kind = ev && (ev.event || ev.kind);
+      if (!kind) return;
+      if (kind === 'kernel' || kind === 'gap' || kind === 'ctl_called' || kind === 'look_called') {
+        if (kind === 'kernel' && (ev.state === 'stopped' || ev.restarted)) {
+          for (const [id, o] of others) {
+            setStatus(o.panel, null, { state: 'error', ms: Date.now() - o.run.startedAt, label: o.run.caller + ' · ' + (ev.state === 'stopped' ? 'kernel stopped' : 'kernel restarted') });
+            try { o.panel.finish({ note: o.run.caller + '\u2019s run did not finish' }); } catch {}
+            others.delete(id);
+          }
+          follower.runs.clear();
+        }
+        call('onKernelEvent', ev);
+        return;
+      }
+      const id = ev.run_id;
+      if (!id || ownRatRuns.has(id)) return;
+      if (kind === 'run_started' && current && !current.ratRunId && norm(ev.code) === norm(current.cell.code)) {
+        // Our own run, reported by `rat events` before `rat run` said its id.
+        current.ratRunId = id;
+        ownRatRuns.add(id);
+        return;
+      }
+      const change = follower.apply(ev);
+      const r = change.run;
+      if (!r) return;
+      if (kind === 'run_started') {
+        if (typeof ev.ts === 'number') r.startedAt = ev.ts;
+        const cell = cellForCode(runnableCells(), r.code);
+        let panel = null;
+        if (cell && !(current && current.cell.from === cell.from)) {
+          closeOthersOn(cell);
+          panel = editor.showCellRun ? editor.showCellRun(cell, { dimResult: false }) : null;
+          if (panel) {
+            others.set(id, { panel, run: r });
+            setStatus(panel, cell, { state: 'running', startedAt: r.startedAt, label: r.caller + ' · running' });
+          }
+        }
+        call('onExternal', { kind, run: r, cell, shown: !!panel });
+        return;
+      }
+      const o = others.get(id);
+      if (o) {
+        if (change.text) o.panel.append(change.text);
+        for (const p of change.plots || []) o.panel.appendImage(transport.plotUrl ? transport.plotUrl(p) : '', 'plot');
+        if (kind === 'run_waiting') setStatus(o.panel, null, { state: 'waiting', startedAt: r.startedAt, label: r.caller + ' · waiting for input' });
+        if (kind === 'run_input_done') setStatus(o.panel, null, { state: 'running', startedAt: r.startedAt, label: r.caller + ' · running' });
+        if (kind === 'run_ended') {
+          setStatus(o.panel, null, { state: r.ok ? 'ok' : 'error', ms: r.ms, label: r.caller });
+          o.panel.finish({ note: r.caller + '\u2019s run \u2014 shown here, not saved in the document' });
+          others.delete(id);
+        }
+      }
+      call('onExternal', { kind, run: r, text: change.text, plots: change.plots, shown: !!o });
+    }
+
+    function destroy() {
+      for (const id of [...others.keys()]) closeOther(id);
+    }
+
+    return {
+      run, runAll, cancel, cancelCell, external, destroy,
+      get running() { return current ? { cell: current.cell, runId: current.runId, waiting: current.waiting } : null; },
+    };
   }
 
   class CompositeBlock {
@@ -94462,14 +95014,7 @@ var mrmdDocument = (function (exports) {
       return lang => allowed.has(lang);
     }
     const drawn = new Set((diagrams && diagrams.languages) || []);
-    return lang => !!lang && lang !== 'output' && !drawn.has(lang);
-  }
-
-  /**
-   * The language word of a fence line, lowercased ('' when bare).
-   */
-  function fenceLang(lineText) {
-    return ((lineText.match(/^\s*(?:`{3,}|~{3,})\s*(\S*)/) || [])[1] || '').toLowerCase();
+    return lang => !!lang && lang !== 'output' && !lang.startsWith('output:') && !drawn.has(lang);
   }
 
   /**
@@ -94482,7 +95027,7 @@ var mrmdDocument = (function (exports) {
       enter(node) {
         if (node.name !== 'FencedCode') return;
         const cell = codeBlockAt(state, node.from);
-        if (cell && cell.lang && cell.lang.toLowerCase() !== 'output') cells.push(cell);
+        if (cell && cell.lang && !isOutputFence('```' + cell.lang)) cells.push(cell);
         return false;
       },
     });
@@ -94490,66 +95035,69 @@ var mrmdDocument = (function (exports) {
   }
 
   /**
-   * The output block OWNED by the cell ending at `cellTo`, or null.
+   * The result OWNED by the cell ending at `cellTo`: {from, to}, or null.
    *
-   * Ownership rule (the MRMD convention): an ```output fence belongs to the
-   * cell above it only when nothing but whitespace separates the cell's
-   * closing fence line from the output's opening fence line. Anything else
-   * between them — prose, another cell, a moved block — breaks ownership,
-   * and a rerun must never touch it.
+   * Ownership rule: a result is an output block (```output in any of its
+   * spellings — output:<execId>, output | status) and/or the plot images a
+   * run made (rat-notebook's isOwnedImageLine), each separated from the cell
+   * and from each other by nothing but blank lines. Anything else in
+   * between — prose, another cell, a person's own image — ends the result,
+   * and a rerun never touches what follows.
    */
   function ownedOutputBlock(state, cellTo) {
     const doc = state.doc;
-    const afterLineNum = doc.lineAt(cellTo).number + 1;
-    let openLine = null;
-    for (let n = afterLineNum; n <= doc.lines; n++) {
-      const line = doc.line(n);
-      if (!line.text.trim()) continue;           // whitespace — keep looking
-      if (fenceLang(line.text) === 'output') openLine = line;
-      break;                                     // first non-blank decides
+    let n = doc.lineAt(cellTo).number + 1;
+    const nextContent = from => { let i = from; while (i <= doc.lines && !doc.line(i).text.trim()) i++; return i; };
+    let from = null, to = null;
+    n = nextContent(n);
+    if (n <= doc.lines && isOutputFence(doc.line(n).text)) {
+      const open = doc.line(n);
+      let block = null;
+      syntaxTree(state).iterate({
+        from: open.from, to: open.from + 1,
+        enter(node) {
+          if (node.name === 'FencedCode' && doc.lineAt(node.from).number === open.number) {
+            block = { from: node.from, to: node.to };
+            return false;
+          }
+        },
+      });
+      if (!block) return null;
+      from = block.from; to = block.to;
+      n = doc.lineAt(block.to).number + 1;
     }
-    if (!openLine) return null;
-    // The block is the FencedCode node starting at that line.
-    let block = null;
-    syntaxTree(state).iterate({
-      from: openLine.from, to: openLine.from + 1,
-      enter(node) {
-        if (node.name === 'FencedCode' && doc.lineAt(node.from).number === openLine.number) {
-          block = { from: node.from, to: node.to };
-          return false;
-        }
-      },
-    });
-    return block;
+    for (;;) {
+      const i = nextContent(n);
+      if (i > doc.lines || !isOwnedImageLine(doc.line(i).text)) break;
+      const line = doc.line(i);
+      if (from === null) from = line.from;
+      to = line.to;
+      n = i + 1;
+    }
+    return from === null ? null : { from, to };
   }
 
   /**
-   * Replace, insert, or remove the output block under one cell.
-   * Returns the change spec (host dispatches through the view, so undo,
-   * autosave, and collaboration all see one ordinary edit), or null when
-   * the document no longer contains the cell as given (stale-run guard).
+   * Replace, insert, or remove the result under one cell: the output block
+   * for `outputText` and the images (each {src, alt}) after it, in the
+   * format of rat-notebook's formatResult. Returns the change spec (the host
+   * dispatches through the view, so undo, autosave and collaboration all
+   * see one ordinary edit), or null when the document no longer contains
+   * the cell as given (stale-run guard).
    */
-  function cellOutputChange(state, cell, outputText) {
+  function cellOutputChange(state, cell, outputText, images = []) {
     // Stale guard: the cell must still sit at [from,to) with the same code.
     const current = codeBlockAt(state, Math.min(cell.from, state.doc.length));
     if (!current || current.from !== cell.from || current.code !== cell.code) return null;
-    const doc = state.doc;
-    const text = String(outputText ?? '').replace(/\s+$/, '');
-    // Inner text must not contain a ``` fence line — indent such lines by
-    // one space so they cannot terminate the block (rare; keeps it valid).
-    const safe = text.split('\n').map(l => (/^\s*(?:`{3,}|~{3,})/.test(l) ? ' ' + l : l)).join('\n');
+    const result = formatResult(outputText, images);
     const owned = ownedOutputBlock(state, current.to);
-    if (!text) {
+    if (!result) {
       if (!owned) return { changes: [] };        // nothing to write, nothing owned
-      // Remove the owned block plus the blank line that separated it.
-      const removeFrom = Math.min(current.to + 1, owned.from > 0 ? owned.from : current.to);
-      const after = doc.lineAt(owned.to).number < doc.lines ? doc.line(doc.lineAt(owned.to).number + 1) : null;
-      const removeTo = after && !after.text.trim() ? after.to : owned.to;
-      return { changes: [{ from: Math.min(removeFrom, owned.from), to: Math.min(removeTo + 1, doc.length) }] };
+      // The gap and the result go; what followed the result stays.
+      return { changes: [{ from: current.to, to: owned.to }] };
     }
-    const blockText = '```output\n' + safe + '\n```';
-    if (owned) return { changes: [{ from: owned.from, to: owned.to, insert: blockText }] };
-    return { changes: [{ from: current.to, insert: '\n\n' + blockText }] };
+    if (owned) return { changes: [{ from: owned.from, to: owned.to, insert: result }] };
+    return { changes: [{ from: current.to, insert: '\n\n' + result }] };
   }
 
   /**
@@ -94668,7 +95216,7 @@ var mrmdDocument = (function (exports) {
         key: 'Mod-Enter',
         run: (v) => {
           const cell = codeBlockAt(v.state, v.state.selection.main.head);
-          if (!cell || !cell.code.trim() || cell.lang.toLowerCase() === 'output') return false;
+          if (!cell || !cell.code.trim() || isOutputFence('```' + cell.lang)) return false;
           options.onRunCell(cell, { advance: false });
           return true;
         },
@@ -94676,7 +95224,7 @@ var mrmdDocument = (function (exports) {
         key: 'Shift-Enter',
         run: (v) => {
           const cell = codeBlockAt(v.state, v.state.selection.main.head);
-          if (!cell || !cell.code.trim() || cell.lang.toLowerCase() === 'output') return false;
+          if (!cell || !cell.code.trim() || isOutputFence('```' + cell.lang)) return false;
           options.onRunCell(cell, { advance: true });
           return true;
         },
@@ -94782,8 +95330,8 @@ var mrmdDocument = (function (exports) {
        * Returns false when the cell moved or changed since the run (the
        * stale guard) — the host should show the result elsewhere then.
        */
-      setCellOutput(cell, outputText) {
-        const change = cellOutputChange(view.state, cell, outputText);
+      setCellOutput(cell, outputText, { images = [] } = {}) {
+        const change = cellOutputChange(view.state, cell, outputText, images);
         if (!change) return false;
         if (change.changes.length) view.dispatch({ ...change, userEvent: 'output.cell' });
         return true;
@@ -94796,16 +95344,19 @@ var mrmdDocument = (function (exports) {
        * the old result the cell owns is dimmed. The host writes the result
        * with setCellOutput, then calls `dispose()`. See document-cell-run.js.
        */
-      showCellRun(cell) {
+      showCellRun(cell, { dimResult = true } = {}) {
         const current = codeBlockAt(view.state, Math.min(cell.from, view.state.doc.length));
         const at = current && current.from === cell.from ? current : cell;
-        const run = showCellRun(view, at, current ? ownedOutputBlock(view.state, current.to) : null);
+        const run = showCellRun(view, at, current ? ownedOutputBlock(view.state, current.to) : null, { dimResult });
         // The run's cell, wherever edits moved it: the panel follows it, so
-        // the run (not a stale position) says what the cell is doing. Set
-        // the final verdict before dispose().
-        run.setStatus = status => {
+        // the run (not a stale position) says what the cell is doing and
+        // where its result goes. Set the final verdict before dispose().
+        run.cell = () => {
           const pos = run.position();
-          const cellNow = pos == null ? null : codeBlockAt(view.state, pos);
+          return pos == null ? null : codeBlockAt(view.state, pos);
+        };
+        run.setStatus = status => {
+          const cellNow = run.cell();
           return cellNow ? setCellStatus(view, cellNow, status) : false;
         };
         return run;
@@ -94991,17 +95542,18 @@ var mrmdDocument = (function (exports) {
       },
     };
   }
-  const version = '0.15.0-document';
-
-  var documentEntry = { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, version };
+  const version = '0.16.0-document';
+  var documentEntry = { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, version };
 
   exports.collab = collab;
   exports.createCodeEditor = createCodeEditor;
   exports.createDocumentEditor = createDocumentEditor;
+  exports.createNotebookRunner = createNotebookRunner;
   exports.default = documentEntry;
   exports.fileLanguage = fileLanguage;
   exports.getTheme = getTheme;
   exports.getThemeNames = getThemeNames;
+  exports.ratNotebook = ratNotebook;
   exports.version = version;
 
   Object.defineProperty(exports, '__esModule', { value: true });

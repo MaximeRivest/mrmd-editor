@@ -20,6 +20,11 @@
  *     // {withdrawn: true}  the question went away: dismissInput(), a newer
  *     //                    ask(), or dispose() — nothing to do
  *   run.dispose();                             // after setCellOutput
+ *
+ *   run.appendImage(url, alt)   // a plot, as it is made (shown under the text,
+ *                               // where the finished result will put it)
+ *   run.finish({note})          // someone else's run ended: keep what it showed,
+ *                               // with a note and a close button
  */
 
 import { StateField, StateEffect } from '@codemirror/state';
@@ -80,6 +85,12 @@ const cellRunTheme = EditorView.baseTheme({
     background: 'transparent',
   },
   '.mrmd-cell-run-output:empty': { display: 'none' },
+  '.mrmd-cell-run-images:empty': { display: 'none' },
+  '.mrmd-cell-run-images img': { display: 'block', maxWidth: '100%', margin: '6px 0', background: '#fff' },
+  '.mrmd-cell-run-footer': { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', color: 'var(--mrmd-fg-muted, inherit)', fontSize: '0.85em' },
+  '.mrmd-cell-run-footer[hidden]': { display: 'none' },
+  '.mrmd-cell-run-footer span': { flex: '1' },
+  '.mrmd-cell-run .mrmd-cell-run-close': { font: 'inherit', minHeight: '0', height: '18px', margin: '0', padding: '0 6px', lineHeight: '16px', color: 'inherit', background: 'transparent', border: '1px solid var(--mrmd-border, currentColor)', borderRadius: '3px', cursor: 'pointer' },
   '.mrmd-cell-run-output a': { color: 'var(--md-link-color, var(--mrmd-accent, inherit))' },
   '.mrmd-cell-run-dropped': { color: 'var(--mrmd-fg-muted, inherit)', fontStyle: 'italic' },
   '.mrmd-cell-run-input': { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px', flexWrap: 'wrap' },
@@ -138,7 +149,7 @@ function renderLinked(pre, text) {
  * `ownedOutput` is the {from, to} of the result block the cell owns, if
  * any — dimmed until the run ends.
  */
-export function showCellRun(view, cell, ownedOutput) {
+export function showCellRun(view, cell, ownedOutput, { dimResult = true } = {}) {
   const dom = document.createElement('div');
   dom.className = 'mrmd-cell-run';
   dom.dataset.state = 'running';
@@ -162,7 +173,12 @@ export function showCellRun(view, cell, ownedOutput) {
   hint.textContent = 'Enter sends · Esc stops the run';
   label.htmlFor = field.id = 'mrmd-cell-run-' + Math.random().toString(36).slice(2);
   form.append(label, field, hint);
-  dom.append(pre, form);
+  const images = document.createElement('div');
+  images.className = 'mrmd-cell-run-images';
+  const footer = document.createElement('div');
+  footer.className = 'mrmd-cell-run-footer';
+  footer.hidden = true;
+  dom.append(pre, images, form, footer);
 
   let text = '';
   let dropped = false;
@@ -174,7 +190,7 @@ export function showCellRun(view, cell, ownedOutput) {
   const doc = view.state.doc;
   const lineEnd = doc.lineAt(Math.min(cell.to, doc.length)).to;
   const ranges = [Decoration.widget({ widget: new CellRunWidget(run), block: true, side: 1, cellRun: run }).range(lineEnd)];
-  if (ownedOutput) {
+  if (ownedOutput && dimResult) {
     for (let pos = ownedOutput.from; pos <= ownedOutput.to;) {
       const line = doc.lineAt(pos);
       ranges.push(Decoration.line({ class: 'mrmd-cell-output-stale', cellRun: run }).range(line.from));
@@ -210,7 +226,7 @@ export function showCellRun(view, cell, ownedOutput) {
     const { resolve } = pending;
     pending = null;
     form.hidden = true;
-    if (!text) dom.dataset.empty = '';
+    if (!text && !images.childElementCount) dom.dataset.empty = '';
     field.value = '';
     dom.dataset.state = 'running';
     view.requestMeasure();
@@ -280,6 +296,41 @@ export function showCellRun(view, cell, ownedOutput) {
     },
     /** The program stopped waiting without this panel's answer. */
     dismissInput() { finish({ withdrawn: true }); },
+    appendImage(url, alt = 'plot') {
+      if (disposed || !url) return;
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = alt;
+      img.addEventListener('load', () => view.requestMeasure());
+      images.appendChild(img);
+      delete dom.dataset.empty;
+      view.requestMeasure();
+    },
+    /**
+     * The run ended and nothing will be written for it (someone else's
+     * run): keep its output visible, say whose it was, offer to close.
+     */
+    finish({ note = '' } = {}) {
+      if (disposed) return;
+      finish({ withdrawn: true });
+      dom.dataset.state = 'done';
+      footer.textContent = '';
+      const span = document.createElement('span');
+      span.textContent = note;
+      const close = document.createElement('button');
+      close.type = 'button';
+      close.className = 'mrmd-cell-run-close';
+      close.textContent = '×';
+      close.title = 'Close';
+      close.setAttribute('aria-label', 'Close');
+      close.addEventListener('mousedown', e => e.preventDefault());
+      close.addEventListener('click', e => { e.preventDefault(); run.dispose(); });
+      footer.append(span, close);
+      footer.hidden = false;
+      if (text || images.childElementCount) delete dom.dataset.empty;
+      else dom.dataset.empty = '';
+      view.requestMeasure();
+    },
     get text() { return text; },
     dispose() {
       if (disposed) return;
