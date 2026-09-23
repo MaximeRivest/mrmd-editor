@@ -83,6 +83,7 @@ try {
   });
   assert.equal(await page.evaluate(() => capEnded), true);
   assert.equal(await page.evaluate(() => editor.review.summary().changes), 2);
+  assert.equal(await page.evaluate(() => (editor.view.dispatch({ selection: { anchor: editor.getContent().length } }), editor.review.first(), editor.view.state.selection.main.head)), 0, 'first() goes to the first change, even on line 1');
   await page.click('.mrmd-review-panel .mrmd-review-accept');
   await until(`resolved.length === 3`, 'accept all did not resolve');
   assert.deepEqual(await page.evaluate(() => [resolved[2].decision, resolved[2].hunks.length]), ['accepted', 2]);

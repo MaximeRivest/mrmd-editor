@@ -59791,6 +59791,14 @@ var mrmdDocument = (function (exports) {
 
   const reviewing = state => reviewState(state).active && chunkList(state).length > 0;
 
+  /** Put the cursor on the first change under review, scrolled into view. */
+  function goToFirstChange(view) {
+    const first = chunkList(view.state)[0];
+    if (!first) return false;
+    view.dispatch({ selection: { anchor: first.fromB }, effects: EditorView.scrollIntoView(first.fromB, { y: 'center' }), userEvent: 'select.byChunk' });
+    return true;
+  }
+
   // ─── look ───────────────────────────────────────────────────────────
 
   function kbd$1(name) {
@@ -98837,6 +98845,7 @@ var mrmdDocument = (function (exports) {
         summary() { return reviewSummary(view.state); },
         acceptAll() { return acceptAll(view); },
         rejectAll() { return rejectAll(view); },
+        first() { return goToFirstChange(view); },
         next() { return goToNextChunk(view); },
         previous() { return goToPreviousChunk(view); },
       },

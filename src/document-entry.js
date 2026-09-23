@@ -41,7 +41,7 @@ import { isOutputFence, isOwnedImageLine, formatResult } from './rat-notebook.js
 import * as ratNotebook from './rat-notebook.js';
 import { createNotebookRunner } from './notebook-runner.js';
 import { aiConfig, documentAi, aiControllerOf, aiEditAnnotation, aiKeyHelp } from './document-ai.js';
-import { documentReview, captureChanges, proposeChange, minimalChanges, acceptAll, rejectAll, reviewSummary, reviewKeyHelp } from './document-review.js';
+import { documentReview, captureChanges, proposeChange, minimalChanges, acceptAll, rejectAll, reviewSummary, reviewKeyHelp, goToFirstChange } from './document-review.js';
 import { goToNextChunk, goToPreviousChunk } from '@codemirror/merge';
 import { formatKey } from './key-names.js';
 import { StreamLanguage, syntaxTree } from '@codemirror/language';
@@ -713,6 +713,7 @@ function reviewApi(view) {
       summary() { return reviewSummary(view.state); },
       acceptAll() { return acceptAll(view); },
       rejectAll() { return rejectAll(view); },
+      first() { return goToFirstChange(view); },
       next() { return goToNextChunk(view); },
       previous() { return goToPreviousChunk(view); },
     },

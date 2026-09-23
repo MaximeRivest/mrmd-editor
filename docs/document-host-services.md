@@ -181,7 +181,7 @@ editor.review.propose({ from, to, insert, meta });   // one change; null over a 
 const c = editor.review.capture(meta);                // every change until c.end() is one proposal
 editor.updateContent(text);                           // smallest changes to reach text (keeps cursor, marks, review)
 c.end();                                              // false when nothing changed
-editor.review.summary(); editor.review.acceptAll(); editor.review.rejectAll();
+editor.review.summary(); editor.review.first(); editor.review.acceptAll(); editor.review.rejectAll();
 ```
 
 Only proposals are reviewed: any other edit (typing elsewhere, a
