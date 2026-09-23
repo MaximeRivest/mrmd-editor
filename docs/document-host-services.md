@@ -160,3 +160,53 @@ and `onRunCell` are set.
   keys, Mod-j). `names` are CodeMirror key names; `mrmdDocument.formatKey(
   name, {mac?})` spells one as it reads (`Ctrl+J`, `⌘J`). Keys the host
   binds itself (save, search, completion) are the host's to list.
+
+## Reviewing changes in the text (both editors, 0.19.0)
+
+`editor.review` shows proposed changes in the text against what it was
+before — the old lines struck through above the new ones, which are
+ordinary text: rendered, and editable before they are accepted — with
+Accept / Reject on each change and a panel under the text (count, next /
+previous, Accept all, Reject all). Built on `@codemirror/merge`'s unified
+view (document-review.js).
+
+```js
+const editor = createDocumentEditor(el, {        // or createCodeEditor
+  review: {
+    onResolved: outcome => {},  // a proposal was decided (see below)
+    onChange: summary => {},    // {changes, proposals, capturing}
+  },
+});
+editor.review.propose({ from, to, insert, meta });   // one change; null over a change still under review
+const c = editor.review.capture(meta);                // every change until c.end() is one proposal
+editor.updateContent(text);                           // smallest changes to reach text (keeps cursor, marks, review)
+c.end();                                              // false when nothing changed
+editor.review.summary(); editor.review.acceptAll(); editor.review.rejectAll();
+```
+
+Only proposals are reviewed: any other edit (typing elsewhere, a
+collaborator, a cell result) is copied into the review's original as it
+happens, so it never shows as a change. Editing inside a change edits the
+proposal. The outcome of a proposal: `{id, meta, startedAt, resolvedAt,
+how: 'reviewed' | 'closed', decision, hunks: [{before, proposed, final,
+decision}]}` — per changed region (whole lines, line breaks included) the
+text before, the text proposed and the text kept; `decision` is
+`accepted`, `rejected`, `edited` (changed before accepting, or partly
+rejected), `mixed` over several regions, or `left` (the editor closed
+first; the text stays).
+
+Keys: Alt-y / Alt-n accept / reject the change at the cursor, Alt-Shift-y /
+Alt-Shift-n all of them, Alt-] / Alt-[ next / previous (`keyHelp()` lists
+them). Tokens: `--mrmd-review-inserted` and `--mrmd-review-deleted` (a host
+without half-tones sets both to `transparent`; bars, strike-through and
+underline remain).
+
+AI commands (`ai.mode: {get, set}`): 'suggest' (beside the text, Tab
+accepts) or 'review' (the answer goes into the text as a proposal whose
+`meta` is `{source: 'ai-command', command, label, instruction, model, op}`);
+the command box switches it. In suggest mode "Edit in text" moves one
+answer in. `ai.onOutcome(outcome)` reports every command's end: `{op,
+command, label, instruction, scope, kind, language, target, before, after,
+answers: [{text, model, status, error}], shown, decision, final, mode, ms}`
+with `decision` one of accepted, discarded, stopped, stale, replaced,
+closed, review.

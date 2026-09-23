@@ -16,6 +16,9 @@
  *                                               event.result() is the document as it will be.
  *                                               A rejection abandons the accept (and is notified).
  *       onAccept?(event)                        after it was applied (provenance)
+ *       onOutcome?(outcome)                     every command's end: what was asked, every
+ *                                               answer, and what became of it (see below)
+ *       mode?: { get() → 'suggest'|'review', set(mode) }
  *       notify?(message)                        a short message for the person
  *       escalate?: { label, run(text) }         hand a request to something bigger
  *     },
@@ -27,6 +30,19 @@
  * refused if the text it replaces changed meanwhile. Editing inside the
  * suggested range discards the suggestion — it would describe text that
  * no longer exists; edits elsewhere only move it.
+ *
+ * Two modes (`mode`, switched in the command box): 'suggest' shows the
+ * answer beside the text as above; 'review' puts it into the text as a
+ * change to review (document-review.js) — old text struck through, the new
+ * text rendered and editable, Accept / Reject on it. In suggest mode,
+ * "Edit in text" does the same for one answer.
+ *
+ * Every command ends in an outcome for the host (onOutcome): the command,
+ * the text it acted on, every answer it got, the one shown, and the
+ * decision — 'accepted', 'discarded', 'stopped' (discarded while it was
+ * being written), 'stale' (the text changed under it), 'replaced' (another
+ * command took its place), 'closed', or 'review' (in the text as a change
+ * to review; the review's outcome follows, its `meta.op` naming this `op`).
  *
  * One suggestion at a time: a new command replaces the current one, as in
  * every mainstream editor. Several answers to the same command ("Another")
@@ -51,6 +67,7 @@ import { isolateHistory } from '@codemirror/commands';
 import { AI_SCOPES, AI_TARGETS, AI_KINDS, aiPlaceAt, describeAiPlace, resolveAiTarget, shapeAiAnswer } from './document-ai-targets.js';
 import { wordDiff } from './word-diff.js';
 import { formatKey } from './key-names.js';
+import { proposeChange } from './document-review.js';
 
 /** The keys of AI commands, in CodeMirror notation. Labels spell them with formatKey. */
 export const AI_KEYS = Object.freeze({
@@ -101,7 +118,8 @@ export function aiConfig(option) {
   if (commands.filter(c => c.instruction).length > 1) throw new TypeError('mrmd-document: at most one ai command takes an instruction');
   const escalate = option.escalate && typeof option.escalate.run === 'function'
     ? { label: String(option.escalate.label || 'Hand it to an agent'), run: option.escalate.run } : null;
-  return { ...option, commands, escalate };
+  const mode = option.mode && typeof option.mode.get === 'function' && typeof option.mode.set === 'function' ? option.mode : null;
+  return { ...option, commands, escalate, mode };
 }
 
 // ─── state ──────────────────────────────────────────────────────────
@@ -291,7 +309,10 @@ class ProposalWidget extends WidgetType {
         button('›', 'Next answer', () => ctl?.step(1), { cls: 'mrmd-ai-step', key: AI_KEYS.next }),
       );
     }
-    if (answer.status === 'ready') foot.appendChild(button('Accept', 'Accept', () => ctl?.accept(), { cls: 'mrmd-ai-accept', key: AI_KEYS.accept }));
+    if (answer.status === 'ready') {
+      foot.appendChild(button('Edit in text', 'Put it in the text as a change to review: edit it there, then accept or reject it', () => ctl?.accept({ review: true })));
+      foot.appendChild(button('Accept', 'Accept', () => ctl?.accept(), { cls: 'mrmd-ai-accept', key: AI_KEYS.accept }));
+    }
     // Alt-] asks again only from the last answer (before it, it steps on):
     // the key is shown only where it does what the button does.
     if (answer.status !== 'loading') {
@@ -381,7 +402,7 @@ class AiMenuView {
     this.list = document.createElement('div');
     this.list.className = 'mrmd-ai-menu-list';
     this.list.setAttribute('role', 'listbox');
-    dom.append(head, input, this.list, this.foot(state.field(aiState).menu));
+    dom.append(head, input, this.list, this.footOf(state.field(aiState).menu));
 
     input.addEventListener('input', () => { ctl.menuDraft = input.value; this.active = 0; this.render(); });
     input.addEventListener('keydown', e => this.key(e));
@@ -403,7 +424,7 @@ class AiMenuView {
    * than its key (the ✦, a button) also names that key: the next time is
    * one keystroke.
    */
-  foot(menu) {
+  footOf(menu) {
     const foot = document.createElement('div');
     foot.className = 'mrmd-ai-menu-foot';
     const model = typeof this.ctl.config.model === 'function' ? this.ctl.config.model() : '';
@@ -412,6 +433,18 @@ class AiMenuView {
     if (!menu || !menu.byKey) parts.push([kbd(AI_KEYS.open), ' opens this box']);
     parts.push([kbd('Enter'), ' runs'], [kbd('Escape'), ' closes']);
     parts.forEach((part, i) => foot.append(...(i ? [' · '] : []), ...part));
+    const mode = this.ctl.config.mode;
+    if (mode) {
+      // How answers arrive, switched here and remembered by the host.
+      const review = mode.get() === 'review';
+      const toggle = button(review ? 'answers: review in the text' : 'answers: suggest beside it',
+        review ? 'Answers go into the text as changes to review (edit, then accept or reject). Click: suggest beside the text instead'
+          : 'Answers show beside the text; Tab accepts. Click: put them into the text as changes to review instead',
+        () => { mode.set(review ? 'suggest' : 'review'); this.dom.replaceChild(this.footOf(menu), this.dom.lastChild); this.input.focus(); },
+        { cls: 'mrmd-ai-mode' });
+      toggle.setAttribute('aria-pressed', String(review));
+      foot.append(' · ', toggle);
+    }
     return foot;
   }
 
@@ -517,19 +550,53 @@ class AiController {
     this.requests = new Map(); // "opId:index" → AbortController
     this.menuDraft = '';
     this.accepting = false;
+    this.endings = new Map(); // op id → {decision, final?}: how it is ending, set just before
   }
 
   get config() { return this.view.state.facet(aiHostFacet).config; }
   get cellAt() { return this.view.state.facet(aiHostFacet).cellAt; }
 
   update(update) {
-    // An operation that went away (discarded, stale, replaced) stops asking.
+    // An operation that went away (discarded, stale, replaced) stops asking,
+    // and its outcome goes to the host.
     const before = update.startState.field(aiState).op;
     const after = update.state.field(aiState).op;
-    if (before && (!after || after.id !== before.id)) this.abort(before.id);
+    if (before && (!after || after.id !== before.id)) {
+      this.abort(before.id);
+      const ending = this.endings.get(before.id) || { decision: after ? 'replaced' : 'stale' };
+      this.endings.delete(before.id);
+      this.emitOutcome(before, ending);
+    }
   }
 
-  destroy() { for (const c of this.requests.values()) c.abort(); this.requests.clear(); }
+  destroy() {
+    for (const c of this.requests.values()) c.abort();
+    this.requests.clear();
+    const { op } = this.view.state.field(aiState);
+    if (op) this.emitOutcome(op, { decision: 'closed' });
+  }
+
+  /** The host's record of a command: what it acted on, every answer, and what became of it. */
+  emitOutcome(op, { decision, final = null }) {
+    const { onOutcome, mode } = this.config;
+    if (typeof onOutcome !== 'function') return;
+    const shown = op.answers[op.index];
+    const outcome = {
+      op: op.id,
+      command: op.command.id, label: op.command.label, instruction: op.instruction,
+      scope: op.request.scope, kind: op.command.kind, language: op.request.block ? op.request.block.language : null,
+      target: op.target.text,
+      // Enough of the surroundings to see what the model saw near the target.
+      before: op.request.before.slice(-2000), after: op.request.after.slice(0, 1000),
+      answers: op.answers.map(a => ({ text: a.text, model: a.model, status: a.status, error: a.error })),
+      shown: op.index,
+      decision: decision === 'discarded' && shown && shown.status === 'loading' ? 'stopped' : decision,
+      final,
+      mode: mode ? mode.get() : 'suggest',
+      ms: Date.now() - op.startedAt,
+    };
+    try { onOutcome(outcome); } catch (e) { console.error('AI command outcome', e); }
+  }
 
   notify(message) {
     const { notify } = this.config;
@@ -568,8 +635,11 @@ class AiController {
     const state = this.view.state;
     const resolved = resolveAiTarget(state, command, this.cellAt);
     if (resolved.error) { this.notify(resolved.error); return false; }
+    const replaced = this.view.state.field(aiState).op;
+    if (replaced) this.endings.set(replaced.id, { decision: 'replaced' });
     const op = {
       id: 'ai-' + (++opSeq),
+      startedAt: Date.now(),
       command,
       instruction: command.instruction ? text : '',
       target: resolved.target,
@@ -618,7 +688,12 @@ class AiController {
         const model = result && result.model ? String(result.model) : null;
         if (!text.trim()) settle({ status: 'error', model, error: op.command.kind === 'insert' ? 'The model had nothing to add here.' : 'The model returned no text.' });
         else if (op.command.kind === 'replace' && text === op.target.text) settle({ status: 'error', model, error: 'The model found nothing to change.' });
-        else settle({ status: 'ready', text, model, error: null });
+        else {
+          settle({ status: 'ready', text, model, error: null });
+          // Review mode: a ready answer goes into the text as a change to review.
+          const cur = this.current();
+          if (this.config.mode && this.config.mode.get() === 'review' && cur && cur.op.id === op.id && cur.op.index === index) void this.accept({ review: true });
+        }
       })
       .catch(error => settle({ status: 'error', error: error && error.message ? error.message : String(error) }));
   }
@@ -635,7 +710,9 @@ class AiController {
   }
 
   discard() {
-    if (!this.view.state.field(aiState).op) return false;
+    const { op } = this.view.state.field(aiState);
+    if (!op) return false;
+    this.endings.set(op.id, { decision: 'discarded' });
     this.view.dispatch({ effects: setOp.of(null) });
     return true;
   }
@@ -667,8 +744,12 @@ class AiController {
     return true;
   }
 
-  /** Apply the shown answer: one transaction, its own undo step. */
-  async accept() {
+  /**
+   * Apply the shown answer: one transaction, its own undo step. With
+   * `review`, as a change to review in the text instead (document-review.js):
+   * the person can edit it there, then accept or reject it.
+   */
+  async accept({ review = false } = {}) {
     const cur = this.current();
     if (!cur || cur.answer.status !== 'ready' || this.accepting) return false;
     const { op, answer } = cur;
@@ -703,18 +784,32 @@ class AiController {
         this.notify('the text changed, so the suggestion was dropped');
         return false;
       }
-      this.view.dispatch({
-        changes: { from, to, insert: answer.text },
-        selection: { anchor: from + answer.text.length },
-        effects: setOp.of(null),
-        annotations: [
-          aiEditAnnotation.of({ command: op.command.id, model: answer.model, instruction: op.instruction }),
-          Transaction.userEvent.of('input.ai'),
-          isolateHistory.of('full'),
-        ],
-        scrollIntoView: true,
-      });
-      if (typeof this.config.onAccept === 'function') this.config.onAccept({ ...event, from, to: from + answer.text.length });
+      const annotations = [
+        aiEditAnnotation.of({ command: op.command.id, model: answer.model, instruction: op.instruction }),
+        Transaction.userEvent.of('input.ai'),
+        isolateHistory.of('full'),
+      ];
+      if (review) {
+        const meta = { source: 'ai-command', command: op.command.id, label: op.command.label, instruction: op.instruction, model: answer.model, op: op.id };
+        this.endings.set(op.id, { decision: 'review' });
+        const proposal = proposeChange(this.view, { from, to, insert: answer.text, meta, annotations, selection: { anchor: from } });
+        if (!proposal) {
+          this.endings.delete(op.id);
+          this.notify('a change is still under review there: accept or reject it first');
+          return false;
+        }
+        if (this.view.state.field(aiState).op) this.view.dispatch({ effects: setOp.of(null) });
+      } else {
+        this.endings.set(op.id, { decision: 'accepted', final: answer.text });
+        this.view.dispatch({
+          changes: { from, to, insert: answer.text },
+          selection: { anchor: from + answer.text.length },
+          effects: setOp.of(null),
+          annotations,
+          scrollIntoView: true,
+        });
+      }
+      if (typeof this.config.onAccept === 'function') this.config.onAccept({ ...event, from, to: from + answer.text.length, review });
       return true;
     } finally {
       this.accepting = false;

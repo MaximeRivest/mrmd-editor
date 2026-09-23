@@ -23,7 +23,10 @@
  * knowing a key: a ✦ in the margin beside the cursor's line opens the box
  * and shows what AI is doing there, buttons show their keys, and
  * `keyHelp()` tells the host which keys act here, now (`formatKey` spells
- * them).
+ * them). Since 0.19.0 both editors review proposed changes in the text
+ * (`editor.review`, document-review.js): old lines struck through, the
+ * new ones rendered and editable, Accept / Reject on each; AI commands can
+ * answer that way (`ai.mode`), and every command reports its outcome.
  *
  * Build: npm run build:document
  * Output: dist/mrmd-document.iife.min.js (global: mrmdDocument)
@@ -38,6 +41,8 @@ import { isOutputFence, isOwnedImageLine, formatResult } from './rat-notebook.js
 import * as ratNotebook from './rat-notebook.js';
 import { createNotebookRunner } from './notebook-runner.js';
 import { aiConfig, documentAi, aiControllerOf, aiEditAnnotation, aiKeyHelp } from './document-ai.js';
+import { documentReview, captureChanges, proposeChange, minimalChanges, acceptAll, rejectAll, reviewSummary, reviewKeyHelp } from './document-review.js';
+import { goToNextChunk, goToPreviousChunk } from '@codemirror/merge';
 import { formatKey } from './key-names.js';
 import { StreamLanguage, syntaxTree } from '@codemirror/language';
 import { markdown as markdownLang, markdownLanguage } from '@codemirror/lang-markdown';
@@ -375,6 +380,8 @@ function resolveTheme(name, dark) {
  *                  document-ai.js. Code cells then also get a ✦ button,
  *                  and a narrow gutter holds the ✦ beside the cursor's
  *                  line (shown even without `lineGutter`).
+ *   review         {onResolved(outcome), onChange(summary)} — reviewing
+ *                  proposed changes (editor.review, document-review.js)
  * @returns editor API
  */
 export function createDocumentEditor(target, options = {}) {
@@ -464,6 +471,7 @@ export function createDocumentEditor(target, options = {}) {
       onAi: ai ? cell => openAiForCell(cell) : null,
     }) : [],
     ai ? documentAi(ai, codeBlockAt) : [],
+    documentReview(options.review || {}),
     markdownLang({ base: markdownLanguage, codeLanguages: codeBlockLanguage }),
     EditorView.lineWrapping,
     ...(Array.isArray(options.extensions) ? options.extensions : []),
@@ -598,6 +606,8 @@ export function createDocumentEditor(target, options = {}) {
       return run;
     },
 
+    ...reviewApi(view),
+
     /** Clear the run states drawn on cells: all, or those in `states`. */
     clearCellStatuses(states) { clearCellStatuses(view, states); },
 
@@ -622,6 +632,8 @@ export function createDocumentEditor(target, options = {}) {
     keyHelp() {
       const { sections, open } = ai ? aiKeyHelp(view) : { sections: [], open: null };
       if (sections.some(s => s.exclusive)) return sections;
+      const review = reviewKeyHelp(view.state);
+      if (review) sections.push(review);
       const keys = [];
       if (runsCells && cellToRun(view.state)) {
         keys.push([[CELL_KEYS.run], 'run this cell'], [[CELL_KEYS.runAndAdvance], 'run this cell, then go to the next']);
@@ -677,6 +689,32 @@ export function createDocumentEditor(target, options = {}) {
       view.destroy();
       element.classList.remove('mrmd-root');
       delete element.dataset.mrmdThemingMode;
+    },
+  };
+}
+
+// What both editors offer for reviewing changes (document-review.js).
+function reviewApi(view) {
+  return {
+    /**
+     * Turn the text into `text` by the smallest changes, so the cursor,
+     * marks and a review keep their places (setContent replaces it all).
+     */
+    updateContent(text) {
+      const changes = minimalChanges(view.state, String(text ?? ''));
+      if (changes.length) view.dispatch({ changes });
+    },
+    review: {
+      /** Every change until end() is one proposal (an agent writing this file): {id, end()}. */
+      capture(meta) { return captureChanges(view, meta); },
+      /** One change as a proposal: {from, to, insert, meta}. The id, or null over a change still under review. */
+      propose(spec) { return proposeChange(view, spec); },
+      /** {changes, proposals: [{id, meta}], capturing} */
+      summary() { return reviewSummary(view.state); },
+      acceptAll() { return acceptAll(view); },
+      rejectAll() { return rejectAll(view); },
+      next() { return goToNextChunk(view); },
+      previous() { return goToPreviousChunk(view); },
     },
   };
 }
@@ -757,6 +795,7 @@ export function createCodeEditor(target, options = {}) {
     indentUnit.of(' '.repeat(Math.max(1, Number(options.tabSize) || 2))),
     EditorView.lineWrapping,
     ...(Array.isArray(options.extensions) ? options.extensions : []),
+    documentReview(options.review || {}),
     codeBase,
     themeCompartment.of(createCodemirrorTheme(theme)),
     readonlyCompartment.of(options.readonly ? EditorState.readOnly.of(true) : []),
@@ -775,6 +814,9 @@ export function createCodeEditor(target, options = {}) {
     element,
     getContent() { return view.state.doc.toString(); },
     setContent(text) { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: String(text ?? '') } }); },
+    ...reviewApi(view),
+    /** The editor's keys that act here, now (the review's), as the document editor's keyHelp(). */
+    keyHelp() { const review = reviewKeyHelp(view.state); return review ? [review] : []; },
     setTheme(name) {
       theme = resolveTheme(name, systemDark);
       themeName = theme.name;
@@ -811,7 +853,7 @@ export function createCodeEditor(target, options = {}) {
 }
 
 export { getTheme, getThemeNames };
-export const version = '0.18.0-document';
+export const version = '0.19.0-document';
 
 export { ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey };
 export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey, version };

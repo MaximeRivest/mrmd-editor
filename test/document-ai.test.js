@@ -114,7 +114,7 @@ try {
   await page.evaluate(() => { window.hold = false; release(); });
   await until(`document.querySelector('.mrmd-ai-panel')?.dataset.state === 'ready'`, 'no ready suggestion');
   assert.equal(await sparkMode(), 'ready');
-  assert.deepEqual(await page.$$eval('.mrmd-ai-panel-foot .mrmd-ai-btn', els => els.map(b => b.textContent)), ['AcceptTab', 'AnotherAlt+]', 'DiscardEsc']);
+  assert.deepEqual(await page.$$eval('.mrmd-ai-panel-foot .mrmd-ai-btn', els => els.map(b => b.textContent)), ['Edit in text', 'AcceptTab', 'AnotherAlt+]', 'DiscardEsc']);
   assert.deepEqual((await keyHelp())[0], { label: 'AI suggestion', keys: [['Tab', 'accept'], ['Alt-]', 'another answer'], ['Escape', 'discard']] });
   assert.equal(await page.$$eval('.mrmd-ai-menu', els => els.length), 0, 'the box closed');
   assert.equal(await page.evaluate(() => asked.at(-1).target.text), 'Their going to the store.');

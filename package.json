@@ -18,7 +18,7 @@
     "serve": "npx serve .",
     "test": "node test/math-extraction.test.js && node --test test/frontmatter-template.test.js test/tables-controller.test.js test/tables-import-command.test.js test/tables-shell.test.js test/tables-state.test.js test/markdown-cache.test.js test/rat-notebook.test.js test/word-diff.test.js test/key-names.test.js",
     "test:render": "node test/render-smoke.test.js",
-    "test:document": "node test/document-render.test.js && node test/document-host-services.test.js && node test/document-cell-run.test.js && node test/document-cell-controls.test.js && node test/notebook-runner.test.js && node test/document-ai.test.js",
+    "test:document": "node test/document-render.test.js && node test/document-host-services.test.js && node test/document-cell-run.test.js && node test/document-cell-controls.test.js && node test/notebook-runner.test.js && node test/document-ai.test.js && node test/document-review.test.js",
     "bench:document": "node test/document-performance.js",
     "test:node": "node -e \"const m = require('./dist/mrmd.cjs'); console.log('Loaded:', m.version, Object.keys(m))\"",
     "prepublishOnly": "npm run build"
@@ -58,6 +58,7 @@
     "@codemirror/language": "^6.10.2",
     "@codemirror/legacy-modes": "^6.5.2",
     "@codemirror/lint": "^6.8.0",
+    "@codemirror/merge": "^6.12.2",
     "@codemirror/search": "^6.5.6",
     "@codemirror/state": "^6.4.1",
     "@codemirror/theme-one-dark": "^6.1.3",

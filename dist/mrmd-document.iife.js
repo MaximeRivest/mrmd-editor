@@ -2560,14 +2560,14 @@ var mrmdDocument = (function (exports) {
       CharCategory[CharCategory["Other"] = 2] = "Other";
   return CharCategory})(CharCategory || (CharCategory = {}));
   const nonASCIISingleCaseWordChar = /[\u00df\u0587\u0590-\u05f4\u0600-\u06ff\u3040-\u309f\u30a0-\u30ff\u3400-\u4db5\u4e00-\u9fcc\uac00-\ud7af]/;
-  let wordChar;
+  let wordChar$1;
   try {
-      wordChar = /*@__PURE__*/new RegExp("[\\p{Alphabetic}\\p{Number}_]", "u");
+      wordChar$1 = /*@__PURE__*/new RegExp("[\\p{Alphabetic}\\p{Number}_]", "u");
   }
   catch (_) { }
   function hasWordChar(str) {
-      if (wordChar)
-          return wordChar.test(str);
+      if (wordChar$1)
+          return wordChar$1.test(str);
       for (let i = 0; i < str.length; i++) {
           let ch = str[i];
           if (/\w/.test(ch) || ch > "\x80" && (ch.toUpperCase() != ch.toLowerCase() || nonASCIISingleCaseWordChar.test(ch)))
@@ -3126,7 +3126,7 @@ var mrmdDocument = (function (exports) {
   function cmpRange(a, b) {
       return a.from - b.from || a.value.startSide - b.value.startSide;
   }
-  class Chunk {
+  let Chunk$1 = class Chunk {
       constructor(from, to, value, 
       // Chunks are marked with the largest point that occurs
       // in them (or -1 for no points), so that scans that are
@@ -3194,7 +3194,7 @@ var mrmdDocument = (function (exports) {
           }
           return { mapped: value.length ? new Chunk(from, to, value, maxPoint) : null, pos: newPos };
       }
-  }
+  };
   /**
   A range set stores a collection of [ranges](https://codemirror.net/6/docs/ref/#state.Range) in a
   way that makes them efficient to [map](https://codemirror.net/6/docs/ref/#state.RangeSet.map) and
@@ -3493,7 +3493,7 @@ var mrmdDocument = (function (exports) {
   */
   class RangeSetBuilder {
       finishChunk(newArrays) {
-          this.chunks.push(new Chunk(this.from, this.to, this.value, this.maxPoint));
+          this.chunks.push(new Chunk$1(this.from, this.to, this.value, this.maxPoint));
           this.chunkPos.push(this.chunkStart);
           this.chunkStart = -1;
           this.setMaxPoint = Math.max(this.setMaxPoint, this.maxPoint);
@@ -8352,7 +8352,7 @@ var mrmdDocument = (function (exports) {
               preferredPos = sel.to;
               preferredSide = "end";
           }
-          let diff = findDiff(view.state.doc.sliceString(from, to, LineBreakPlaceholder), domChange.text, preferredPos - from, preferredSide);
+          let diff = findDiff$1(view.state.doc.sliceString(from, to, LineBreakPlaceholder), domChange.text, preferredPos - from, preferredSide);
           if (diff) {
               // Chrome inserts two newlines when pressing shift-enter at the
               // end of a line. DomChange drops one of those.
@@ -8538,7 +8538,7 @@ var mrmdDocument = (function (exports) {
       }
       return startState.update(tr, { userEvent, scrollIntoView: true });
   }
-  function findDiff(a, b, preferredPos, preferredSide) {
+  function findDiff$1(a, b, preferredPos, preferredSide) {
       let minLen = Math.min(a.length, b.length);
       let from = 0;
       while (from < minLen && a.charCodeAt(from) == b.charCodeAt(from))
@@ -11652,7 +11652,7 @@ var mrmdDocument = (function (exports) {
                   from = anchor;
               else if (to == this.to && anchor > this.to)
                   to = anchor;
-              let diff = findDiff(view.state.sliceDoc(from, to), e.text, (deletes ? main.from : main.to) - from, deletes ? "end" : null);
+              let diff = findDiff$1(view.state.sliceDoc(from, to), e.text, (deletes ? main.from : main.to) - from, deletes ? "end" : null);
               // Edit contexts sometimes fire empty changes
               if (!diff) {
                   let newSel = EditorSelection.single(this.toEditorPos(e.selectionStart), this.toEditorPos(e.selectionEnd));
@@ -13538,7 +13538,7 @@ var mrmdDocument = (function (exports) {
           nativeSelectionHidden.of(true)
       ];
   }
-  function configChanged(update) {
+  function configChanged$1(update) {
       return update.startState.facet(selectionConfig) != update.state.facet(selectionConfig);
   }
   const cursorLayer = /*@__PURE__*/layer({
@@ -13560,7 +13560,7 @@ var mrmdDocument = (function (exports) {
       update(update, dom) {
           if (update.transactions.some(tr => tr.selection))
               dom.style.animationName = dom.style.animationName == "cm-blink" ? "cm-blink2" : "cm-blink";
-          let confChange = configChanged(update);
+          let confChange = configChanged$1(update);
           if (confChange)
               setBlinkRate(update.state, dom);
           return update.docChanged || update.selectionSet || confChange;
@@ -13580,7 +13580,7 @@ var mrmdDocument = (function (exports) {
               .reduce((a, b) => a.concat(b));
       },
       update(update, dom) {
-          return update.docChanged || update.selectionSet || update.viewportChanged || configChanged(update);
+          return update.docChanged || update.selectionSet || update.viewportChanged || configChanged$1(update);
       },
       class: "cm-selectionLayer"
   });
@@ -14503,7 +14503,7 @@ var mrmdDocument = (function (exports) {
       if (isNaN(current) || Math.abs(value - current) > 1)
           elt.style.left = value + "px";
   }
-  const baseTheme$4 = /*@__PURE__*/EditorView.baseTheme({
+  const baseTheme$5 = /*@__PURE__*/EditorView.baseTheme({
       ".cm-tooltip": {
           zIndex: 500,
           boxSizing: "border-box"
@@ -14570,7 +14570,7 @@ var mrmdDocument = (function (exports) {
   Facet to which an extension can add a value to show a tooltip.
   */
   const showTooltip = /*@__PURE__*/Facet.define({
-      enables: [tooltipPlugin, baseTheme$4]
+      enables: [tooltipPlugin, baseTheme$5]
   });
   const showHoverTooltip = /*@__PURE__*/Facet.define({
       combine: inputs => inputs.reduce((a, i) => a.concat(i), [])
@@ -20254,6 +20254,26 @@ var mrmdDocument = (function (exports) {
           ext.push(highlighterFacet.of(highlighter));
       return ext;
   }
+  /**
+  Returns the CSS classes (if any) that the highlighters active in
+  the state would assign to the given style
+  [tags](https://lezer.codemirror.net/docs/ref#highlight.Tag) and
+  (optional) language
+  [scope](https://codemirror.net/6/docs/ref/#language.HighlightStyle^define^options.scope).
+  */
+  function highlightingFor(state, tags, scope) {
+      let highlighters = getHighlighters(state);
+      let result = null;
+      if (highlighters)
+          for (let highlighter of highlighters) {
+              if (!highlighter.scope || scope) {
+                  let cls = highlighter.style(tags);
+                  if (cls)
+                      result = result ? result + " " + cls : cls;
+              }
+          }
+      return result;
+  }
   class TreeHighlighter {
       constructor(view) {
           this.markCache = Object.create(null);
@@ -20335,7 +20355,7 @@ var mrmdDocument = (function (exports) {
           color: "#f00" }
   ]);
 
-  const baseTheme$3 = /*@__PURE__*/EditorView.baseTheme({
+  const baseTheme$4 = /*@__PURE__*/EditorView.baseTheme({
       "&.cm-focused .cm-matchingBracket": { backgroundColor: "#328c8252" },
       "&.cm-focused .cm-nonmatchingBracket": { backgroundColor: "#bb555544" }
   });
@@ -20383,7 +20403,7 @@ var mrmdDocument = (function (exports) {
   });
   const bracketMatchingUnique = [
       bracketMatchingState,
-      baseTheme$3
+      baseTheme$4
   ];
   /**
   Create an extension that enables bracket matching. Whenever the
@@ -23733,7 +23753,7 @@ var mrmdDocument = (function (exports) {
       }
       return EditorView.announce.of(`${view.state.phrase("current match")}. ${text} ${view.state.phrase("on line")} ${line.number}.`);
   }
-  const baseTheme$2 = /*@__PURE__*/EditorView.baseTheme({
+  const baseTheme$3 = /*@__PURE__*/EditorView.baseTheme({
       ".cm-panel.cm-search": {
           padding: "2px 6px 4px",
           position: "relative",
@@ -23766,7 +23786,7 @@ var mrmdDocument = (function (exports) {
   const searchExtensions = [
       searchState,
       /*@__PURE__*/Prec.low(searchHighlighter),
-      baseTheme$2
+      baseTheme$3
   ];
 
   /**
@@ -25048,7 +25068,7 @@ var mrmdDocument = (function (exports) {
       }
   }));
 
-  const baseTheme$1 = /*@__PURE__*/EditorView.baseTheme({
+  const baseTheme$2 = /*@__PURE__*/EditorView.baseTheme({
       ".cm-tooltip.cm-tooltip-autocomplete": {
           "& > ul": {
               fontFamily: "monospace",
@@ -25356,7 +25376,7 @@ var mrmdDocument = (function (exports) {
               let active = new ActiveSnippet(ranges, 0);
               let effects = spec.effects = [setActive.of(active)];
               if (editor.state.field(snippetState, false) === undefined)
-                  effects.push(StateEffect.appendConfig.of([snippetState, addSnippetKeymap, snippetPointerHandler, baseTheme$1]));
+                  effects.push(StateEffect.appendConfig.of([snippetState, addSnippetKeymap, snippetPointerHandler, baseTheme$2]));
           }
           editor.dispatch(editor.state.update(spec));
       };
@@ -25766,7 +25786,7 @@ var mrmdDocument = (function (exports) {
           completionConfig.of(config),
           completionPlugin,
           completionKeymapExt,
-          baseTheme$1
+          baseTheme$2
       ];
   }
   /**
@@ -26309,7 +26329,7 @@ var mrmdDocument = (function (exports) {
   function underline(color) {
       return svg(`<path d="m0 2.5 l2 -1.5 l1 0 l2 1.5 l1 0" stroke="${color}" fill="none" stroke-width=".7"/>`, `width="6" height="3"`);
   }
-  const baseTheme = /*@__PURE__*/EditorView.baseTheme({
+  const baseTheme$1 = /*@__PURE__*/EditorView.baseTheme({
       ".cm-diagnostic": {
           padding: "3px 6px 3px 8px",
           marginLeft: "-1px",
@@ -26423,7 +26443,7 @@ var mrmdDocument = (function (exports) {
           ]);
       }),
       /*@__PURE__*/hoverTooltip(lintTooltip, { hideOn: hideTooltip }),
-      baseTheme
+      baseTheme$1
   ];
 
   // (The superfluous function calls around the list of extensions work
@@ -58050,6 +58070,1890 @@ var mrmdDocument = (function (exports) {
     return out;
   }
 
+  // This algorithm was heavily inspired by Neil Fraser's
+  // diff-match-patch library. See https://github.com/google/diff-match-patch/
+  /**
+  A changed range.
+  */
+  class Change {
+      constructor(
+      /**
+      The start of the change in document A.
+      */
+      fromA, 
+      /**
+      The end of the change in document A. This is equal to `fromA`
+      in case of insertions.
+      */
+      toA, 
+      /**
+      The start of the change in document B.
+      */
+      fromB, 
+      /**
+      The end of the change in document B. This is equal to `fromB`
+      for deletions.
+      */
+      toB) {
+          this.fromA = fromA;
+          this.toA = toA;
+          this.fromB = fromB;
+          this.toB = toB;
+      }
+      /**
+      @internal
+      */
+      offset(offA, offB = offA) {
+          return new Change(this.fromA + offA, this.toA + offA, this.fromB + offB, this.toB + offB);
+      }
+  }
+  function findDiff(a, fromA, toA, b, fromB, toB) {
+      if (a == b)
+          return [];
+      // Remove identical prefix and suffix
+      let prefix = commonPrefix(a, fromA, toA, b, fromB, toB);
+      let suffix = commonSuffix(a, fromA + prefix, toA, b, fromB + prefix, toB);
+      fromA += prefix;
+      toA -= suffix;
+      fromB += prefix;
+      toB -= suffix;
+      let lenA = toA - fromA, lenB = toB - fromB;
+      // Nothing left in one of them
+      if (!lenA || !lenB)
+          return [new Change(fromA, toA, fromB, toB)];
+      // Try to find one string in the other to cover cases with just 2
+      // deletions/insertions.
+      if (lenA > lenB) {
+          let found = a.slice(fromA, toA).indexOf(b.slice(fromB, toB));
+          if (found > -1)
+              return [
+                  new Change(fromA, fromA + found, fromB, fromB),
+                  new Change(fromA + found + lenB, toA, toB, toB)
+              ];
+      }
+      else if (lenB > lenA) {
+          let found = b.slice(fromB, toB).indexOf(a.slice(fromA, toA));
+          if (found > -1)
+              return [
+                  new Change(fromA, fromA, fromB, fromB + found),
+                  new Change(toA, toA, fromB + found + lenA, toB)
+              ];
+      }
+      // Only one character left on one side, does not occur in other
+      // string.
+      if (lenA == 1 || lenB == 1)
+          return [new Change(fromA, toA, fromB, toB)];
+      // Try to split the problem in two by finding a substring of one of
+      // the strings in the other.
+      let half = halfMatch(a, fromA, toA, b, fromB, toB);
+      if (half) {
+          let [sharedA, sharedB, sharedLen] = half;
+          return findDiff(a, fromA, sharedA, b, fromB, sharedB)
+              .concat(findDiff(a, sharedA + sharedLen, toA, b, sharedB + sharedLen, toB));
+      }
+      // Fall back to more expensive general search for a shared
+      // subsequence.
+      return findSnake(a, fromA, toA, b, fromB, toB);
+  }
+  let scanLimit = 1e9;
+  let timeout = 0;
+  let crude = false;
+  // Implementation of Myers 1986 "An O(ND) Difference Algorithm and Its Variations"
+  function findSnake(a, fromA, toA, b, fromB, toB) {
+      let lenA = toA - fromA, lenB = toB - fromB;
+      if (scanLimit < 1e9 && Math.min(lenA, lenB) > scanLimit * 16 ||
+          timeout > 0 && Date.now() > timeout) {
+          if (Math.min(lenA, lenB) > scanLimit * 64)
+              return [new Change(fromA, toA, fromB, toB)];
+          return crudeMatch(a, fromA, toA, b, fromB, toB);
+      }
+      let off = Math.ceil((lenA + lenB) / 2);
+      frontier1.reset(off);
+      frontier2.reset(off);
+      let match1 = (x, y) => a.charCodeAt(fromA + x) == b.charCodeAt(fromB + y);
+      let match2 = (x, y) => a.charCodeAt(toA - x - 1) == b.charCodeAt(toB - y - 1);
+      let test1 = (lenA - lenB) % 2 != 0 ? frontier2 : null, test2 = test1 ? null : frontier1;
+      for (let depth = 0; depth < off; depth++) {
+          if (depth > scanLimit || timeout > 0 && !(depth & 63) && Date.now() > timeout)
+              return crudeMatch(a, fromA, toA, b, fromB, toB);
+          let done = frontier1.advance(depth, lenA, lenB, off, test1, false, match1) ||
+              frontier2.advance(depth, lenA, lenB, off, test2, true, match2);
+          if (done)
+              return bisect(a, fromA, toA, fromA + done[0], b, fromB, toB, fromB + done[1]);
+      }
+      // No commonality at all.
+      return [new Change(fromA, toA, fromB, toB)];
+  }
+  class Frontier {
+      constructor() {
+          this.vec = [];
+      }
+      reset(off) {
+          this.len = off << 1;
+          for (let i = 0; i < this.len; i++)
+              this.vec[i] = -1;
+          this.vec[off + 1] = 0;
+          this.start = this.end = 0;
+      }
+      advance(depth, lenX, lenY, vOff, other, fromBack, match) {
+          for (let k = -depth + this.start; k <= depth - this.end; k += 2) {
+              let off = vOff + k;
+              let x = k == -depth || (k != depth && this.vec[off - 1] < this.vec[off + 1])
+                  ? this.vec[off + 1] : this.vec[off - 1] + 1;
+              let y = x - k;
+              while (x < lenX && y < lenY && match(x, y)) {
+                  x++;
+                  y++;
+              }
+              this.vec[off] = x;
+              if (x > lenX) {
+                  this.end += 2;
+              }
+              else if (y > lenY) {
+                  this.start += 2;
+              }
+              else if (other) {
+                  let offOther = vOff + (lenX - lenY) - k;
+                  if (offOther >= 0 && offOther < this.len && other.vec[offOther] != -1) {
+                      if (!fromBack) {
+                          let xOther = lenX - other.vec[offOther];
+                          if (x >= xOther)
+                              return [x, y];
+                      }
+                      else {
+                          let xOther = other.vec[offOther];
+                          if (xOther >= lenX - x)
+                              return [xOther, vOff + xOther - offOther];
+                      }
+                  }
+              }
+          }
+          return null;
+      }
+  }
+  // Reused across calls to avoid growing the vectors again and again
+  const frontier1 = /*@__PURE__*/new Frontier, frontier2 = /*@__PURE__*/new Frontier;
+  // Given a position in both strings, recursively call `findDiff` with
+  // the sub-problems before and after that position. Make sure cut
+  // points lie on character boundaries.
+  function bisect(a, fromA, toA, splitA, b, fromB, toB, splitB) {
+      let stop = false;
+      if (!validIndex(a, splitA) && ++splitA == toA)
+          stop = true;
+      if (!validIndex(b, splitB) && ++splitB == toB)
+          stop = true;
+      if (stop)
+          return [new Change(fromA, toA, fromB, toB)];
+      return findDiff(a, fromA, splitA, b, fromB, splitB).concat(findDiff(a, splitA, toA, b, splitB, toB));
+  }
+  function chunkSize(lenA, lenB) {
+      let size = 1, max = Math.min(lenA, lenB);
+      while (size < max)
+          size = size << 1;
+      return size;
+  }
+  // Common prefix length of the given ranges. Because string comparison
+  // is so much faster than a JavaScript by-character loop, this
+  // compares whole chunks at a time.
+  function commonPrefix(a, fromA, toA, b, fromB, toB) {
+      if (fromA == toA || fromA == toB || a.charCodeAt(fromA) != b.charCodeAt(fromB))
+          return 0;
+      let chunk = chunkSize(toA - fromA, toB - fromB);
+      for (let pA = fromA, pB = fromB;;) {
+          let endA = pA + chunk, endB = pB + chunk;
+          if (endA > toA || endB > toB || a.slice(pA, endA) != b.slice(pB, endB)) {
+              if (chunk == 1)
+                  return pA - fromA - (validIndex(a, pA) ? 0 : 1);
+              chunk = chunk >> 1;
+          }
+          else if (endA == toA || endB == toB) {
+              return endA - fromA;
+          }
+          else {
+              pA = endA;
+              pB = endB;
+          }
+      }
+  }
+  // Common suffix length
+  function commonSuffix(a, fromA, toA, b, fromB, toB) {
+      if (fromA == toA || fromB == toB || a.charCodeAt(toA - 1) != b.charCodeAt(toB - 1))
+          return 0;
+      let chunk = chunkSize(toA - fromA, toB - fromB);
+      for (let pA = toA, pB = toB;;) {
+          let sA = pA - chunk, sB = pB - chunk;
+          if (sA < fromA || sB < fromB || a.slice(sA, pA) != b.slice(sB, pB)) {
+              if (chunk == 1)
+                  return toA - pA - (validIndex(a, pA) ? 0 : 1);
+              chunk = chunk >> 1;
+          }
+          else if (sA == fromA || sB == fromB) {
+              return toA - sA;
+          }
+          else {
+              pA = sA;
+              pB = sB;
+          }
+      }
+  }
+  // a assumed to be be longer than b
+  function findMatch(a, fromA, toA, b, fromB, toB, size, divideTo) {
+      let rangeB = b.slice(fromB, toB);
+      // Try some substrings of A of length `size` and see if they exist
+      // in B.
+      let best = null;
+      for (;;) {
+          if (best || size < divideTo)
+              return best;
+          for (let start = fromA + size;;) {
+              if (!validIndex(a, start))
+                  start++;
+              let end = start + size;
+              if (!validIndex(a, end))
+                  end += end == start + 1 ? 1 : -1;
+              if (end >= toA)
+                  break;
+              let seed = a.slice(start, end);
+              let found = -1;
+              while ((found = rangeB.indexOf(seed, found + 1)) != -1) {
+                  let prefixAfter = commonPrefix(a, end, toA, b, fromB + found + seed.length, toB);
+                  let suffixBefore = commonSuffix(a, fromA, start, b, fromB, fromB + found);
+                  let length = seed.length + prefixAfter + suffixBefore;
+                  if (!best || best[2] < length)
+                      best = [start - suffixBefore, fromB + found - suffixBefore, length];
+              }
+              start = end;
+          }
+          if (divideTo < 0)
+              return best;
+          size = size >> 1;
+      }
+  }
+  // Find a shared substring that is at least half the length of the
+  // longer range. Returns an array describing the substring [startA,
+  // startB, len], or null.
+  function halfMatch(a, fromA, toA, b, fromB, toB) {
+      let lenA = toA - fromA, lenB = toB - fromB;
+      if (lenA < lenB) {
+          let result = halfMatch(b, fromB, toB, a, fromA, toA);
+          return result && [result[1], result[0], result[2]];
+      }
+      // From here a is known to be at least as long as b
+      if (lenA < 4 || lenB * 2 < lenA)
+          return null;
+      return findMatch(a, fromA, toA, b, fromB, toB, Math.floor(lenA / 4), -1);
+  }
+  function crudeMatch(a, fromA, toA, b, fromB, toB) {
+      crude = true;
+      let lenA = toA - fromA, lenB = toB - fromB;
+      let result;
+      if (lenA < lenB) {
+          let inv = findMatch(b, fromB, toB, a, fromA, toA, Math.floor(lenA / 6), 50);
+          result = inv && [inv[1], inv[0], inv[2]];
+      }
+      else {
+          result = findMatch(a, fromA, toA, b, fromB, toB, Math.floor(lenB / 6), 50);
+      }
+      if (!result)
+          return [new Change(fromA, toA, fromB, toB)];
+      let [sharedA, sharedB, sharedLen] = result;
+      return findDiff(a, fromA, sharedA, b, fromB, sharedB)
+          .concat(findDiff(a, sharedA + sharedLen, toA, b, sharedB + sharedLen, toB));
+  }
+  function mergeAdjacent(changes, minGap) {
+      for (let i = 1; i < changes.length; i++) {
+          let prev = changes[i - 1], cur = changes[i];
+          if (prev.toA > cur.fromA - minGap && prev.toB > cur.fromB - minGap) {
+              changes[i - 1] = new Change(prev.fromA, cur.toA, prev.fromB, cur.toB);
+              changes.splice(i--, 1);
+          }
+      }
+  }
+  // Reorder and merge changes
+  function normalize(a, b, changes) {
+      for (;;) {
+          mergeAdjacent(changes, 1);
+          let moved = false;
+          // Move unchanged ranges that can be fully moved across an
+          // adjacent insertion/deletion, to simplify the diff.
+          for (let i = 0; i < changes.length; i++) {
+              let ch = changes[i], pre, post;
+              // The half-match heuristic sometimes produces non-minimal
+              // diffs. Strip matching pre- and post-fixes again here.
+              if (pre = commonPrefix(a, ch.fromA, ch.toA, b, ch.fromB, ch.toB))
+                  ch = changes[i] = new Change(ch.fromA + pre, ch.toA, ch.fromB + pre, ch.toB);
+              if (post = commonSuffix(a, ch.fromA, ch.toA, b, ch.fromB, ch.toB))
+                  ch = changes[i] = new Change(ch.fromA, ch.toA - post, ch.fromB, ch.toB - post);
+              let lenA = ch.toA - ch.fromA, lenB = ch.toB - ch.fromB;
+              // Only look at plain insertions/deletions
+              if (lenA && lenB)
+                  continue;
+              let beforeLen = ch.fromA - (i ? changes[i - 1].toA : 0);
+              let afterLen = (i < changes.length - 1 ? changes[i + 1].fromA : a.length) - ch.toA;
+              if (!beforeLen || !afterLen)
+                  continue;
+              let text = lenA ? a.slice(ch.fromA, ch.toA) : b.slice(ch.fromB, ch.toB);
+              if (beforeLen <= text.length &&
+                  a.slice(ch.fromA - beforeLen, ch.fromA) == text.slice(text.length - beforeLen)) {
+                  // Text before matches the end of the change
+                  changes[i] = new Change(ch.fromA - beforeLen, ch.toA - beforeLen, ch.fromB - beforeLen, ch.toB - beforeLen);
+                  moved = true;
+              }
+              else if (afterLen <= text.length &&
+                  a.slice(ch.toA, ch.toA + afterLen) == text.slice(0, afterLen)) {
+                  // Text after matches the start of the change
+                  changes[i] = new Change(ch.fromA + afterLen, ch.toA + afterLen, ch.fromB + afterLen, ch.toB + afterLen);
+                  moved = true;
+              }
+          }
+          if (!moved)
+              break;
+      }
+      return changes;
+  }
+  // Process a change set to make it suitable for presenting to users.
+  function makePresentable(changes, a, b) {
+      for (let posA = 0, i = 0; i < changes.length; i++) {
+          let change = changes[i];
+          let lenA = change.toA - change.fromA, lenB = change.toB - change.fromB;
+          // Don't touch short insertions or deletions.
+          if (lenA && lenB || lenA > 3 || lenB > 3) {
+              let nextChangeA = i == changes.length - 1 ? a.length : changes[i + 1].fromA;
+              let maxScanBefore = change.fromA - posA, maxScanAfter = nextChangeA - change.toA;
+              let boundBefore = findWordBoundaryBefore(a, change.fromA, maxScanBefore);
+              let boundAfter = findWordBoundaryAfter(a, change.toA, maxScanAfter);
+              let lenBefore = change.fromA - boundBefore, lenAfter = boundAfter - change.toA;
+              // An insertion or deletion that falls inside words on both
+              // sides can maybe be moved to align with word boundaries.
+              if ((!lenA || !lenB) && lenBefore && lenAfter) {
+                  let changeLen = Math.max(lenA, lenB);
+                  let [changeText, changeFrom, changeTo] = lenA ? [a, change.fromA, change.toA] : [b, change.fromB, change.toB];
+                  if (changeLen > lenBefore &&
+                      a.slice(boundBefore, change.fromA) == changeText.slice(changeTo - lenBefore, changeTo)) {
+                      change = changes[i] = new Change(boundBefore, boundBefore + lenA, change.fromB - lenBefore, change.toB - lenBefore);
+                      boundBefore = change.fromA;
+                      boundAfter = findWordBoundaryAfter(a, change.toA, nextChangeA - change.toA);
+                  }
+                  else if (changeLen > lenAfter &&
+                      a.slice(change.toA, boundAfter) == changeText.slice(changeFrom, changeFrom + lenAfter)) {
+                      change = changes[i] = new Change(boundAfter - lenA, boundAfter, change.fromB + lenAfter, change.toB + lenAfter);
+                      boundAfter = change.toA;
+                      boundBefore = findWordBoundaryBefore(a, change.fromA, change.fromA - posA);
+                  }
+                  lenBefore = change.fromA - boundBefore;
+                  lenAfter = boundAfter - change.toA;
+              }
+              if (lenBefore || lenAfter) {
+                  // Expand the change to cover the entire word
+                  change = changes[i] = new Change(change.fromA - lenBefore, change.toA + lenAfter, change.fromB - lenBefore, change.toB + lenAfter);
+              }
+              else if (!lenA) {
+                  // Align insertion to line boundary, when possible
+                  let first = findLineBreakAfter(b, change.fromB, change.toB), len;
+                  let last = first < 0 ? -1 : findLineBreakBefore(b, change.toB, change.fromB);
+                  if (first > -1 && (len = first - change.fromB) <= maxScanAfter &&
+                      b.slice(change.fromB, first) == b.slice(change.toB, change.toB + len))
+                      change = changes[i] = change.offset(len);
+                  else if (last > -1 && (len = change.toB - last) <= maxScanBefore &&
+                      b.slice(change.fromB - len, change.fromB) == b.slice(last, change.toB))
+                      change = changes[i] = change.offset(-len);
+              }
+              else if (!lenB) {
+                  // Align deletion to line boundary
+                  let first = findLineBreakAfter(a, change.fromA, change.toA), len;
+                  let last = first < 0 ? -1 : findLineBreakBefore(a, change.toA, change.fromA);
+                  if (first > -1 && (len = first - change.fromA) <= maxScanAfter &&
+                      a.slice(change.fromA, first) == a.slice(change.toA, change.toA + len))
+                      change = changes[i] = change.offset(len);
+                  else if (last > -1 && (len = change.toA - last) <= maxScanBefore &&
+                      a.slice(change.fromA - len, change.fromA) == a.slice(last, change.toA))
+                      change = changes[i] = change.offset(-len);
+              }
+          }
+          posA = change.toA;
+      }
+      mergeAdjacent(changes, 3);
+      return changes;
+  }
+  let wordChar;
+  try {
+      wordChar = /*@__PURE__*/new RegExp("[\\p{Alphabetic}\\p{Number}]", "u");
+  }
+  catch (_) { }
+  function asciiWordChar(code) {
+      return code > 48 && code < 58 || code > 64 && code < 91 || code > 96 && code < 123;
+  }
+  function wordCharAfter(s, pos) {
+      if (pos == s.length)
+          return 0;
+      let next = s.charCodeAt(pos);
+      if (next < 192)
+          return asciiWordChar(next) ? 1 : 0;
+      if (!wordChar)
+          return 0;
+      if (!isSurrogate1(next) || pos == s.length - 1)
+          return wordChar.test(String.fromCharCode(next)) ? 1 : 0;
+      return wordChar.test(s.slice(pos, pos + 2)) ? 2 : 0;
+  }
+  function wordCharBefore(s, pos) {
+      if (!pos)
+          return 0;
+      let prev = s.charCodeAt(pos - 1);
+      if (prev < 192)
+          return asciiWordChar(prev) ? 1 : 0;
+      if (!wordChar)
+          return 0;
+      if (!isSurrogate2(prev) || pos == 1)
+          return wordChar.test(String.fromCharCode(prev)) ? 1 : 0;
+      return wordChar.test(s.slice(pos - 2, pos)) ? 2 : 0;
+  }
+  const MAX_SCAN = 8;
+  function findWordBoundaryAfter(s, pos, max) {
+      if (pos == s.length || !wordCharBefore(s, pos))
+          return pos;
+      for (let cur = pos, end = pos + max, i = 0; i < MAX_SCAN; i++) {
+          let size = wordCharAfter(s, cur);
+          if (!size || cur + size > end)
+              return cur;
+          cur += size;
+      }
+      return pos;
+  }
+  function findWordBoundaryBefore(s, pos, max) {
+      if (!pos || !wordCharAfter(s, pos))
+          return pos;
+      for (let cur = pos, end = pos - max, i = 0; i < MAX_SCAN; i++) {
+          let size = wordCharBefore(s, cur);
+          if (!size || cur - size < end)
+              return cur;
+          cur -= size;
+      }
+      return pos;
+  }
+  function findLineBreakBefore(s, pos, stop) {
+      for (; pos != stop; pos--)
+          if (s.charCodeAt(pos - 1) == 10)
+              return pos;
+      return -1;
+  }
+  function findLineBreakAfter(s, pos, stop) {
+      for (; pos != stop; pos++)
+          if (s.charCodeAt(pos) == 10)
+              return pos;
+      return -1;
+  }
+  const isSurrogate1 = (code) => code >= 0xD800 && code <= 0xDBFF;
+  const isSurrogate2 = (code) => code >= 0xDC00 && code <= 0xDFFF;
+  // Returns false if index looks like it is in the middle of a
+  // surrogate pair.
+  function validIndex(s, index) {
+      return !index || index == s.length || !isSurrogate1(s.charCodeAt(index - 1)) || !isSurrogate2(s.charCodeAt(index));
+  }
+  /**
+  Compute the difference between two strings.
+  */
+  function diff$1(a, b, config) {
+      var _a;
+      let override = config === null || config === void 0 ? void 0 : config.override;
+      if (override)
+          return override(a, b);
+      scanLimit = ((_a = config === null || config === void 0 ? void 0 : config.scanLimit) !== null && _a !== void 0 ? _a : 1e9) >> 1;
+      timeout = (config === null || config === void 0 ? void 0 : config.timeout) ? Date.now() + config.timeout : 0;
+      crude = false;
+      return normalize(a, b, findDiff(a, 0, a.length, b, 0, b.length));
+  }
+  // Return whether the last diff fell back to the imprecise algorithm.
+  function diffIsPrecise() { return !crude; }
+  /**
+  Compute the difference between the given strings, and clean up the
+  resulting diff for presentation to users by dropping short
+  unchanged ranges, and aligning changes to word boundaries when
+  appropriate.
+  */
+  function presentableDiff(a, b, config) {
+      return makePresentable(diff$1(a, b, config), a, b);
+  }
+
+  const mergeConfig = /*@__PURE__*/Facet.define({
+      combine: values => values[0]
+  });
+  const setChunks = /*@__PURE__*/StateEffect.define();
+  const computeChunks = /*@__PURE__*/Facet.define();
+  const ChunkField = /*@__PURE__*/StateField.define({
+      create(state) {
+          return null;
+      },
+      update(current, tr) {
+          for (let e of tr.effects)
+              if (e.is(setChunks))
+                  current = e.value;
+          for (let comp of tr.state.facet(computeChunks))
+              current = comp(current, tr);
+          return current;
+      }
+  });
+  /**
+  Get the changed chunks for the merge view that this editor is part
+  of, plus the side it is on if it is part of a `MergeView`. Returns
+  null if the editor doesn't have a merge extension active or the
+  merge view hasn't finished initializing yet.
+  */
+  function getChunks(state) {
+      let field = state.field(ChunkField, false);
+      if (!field)
+          return null;
+      let conf = state.facet(mergeConfig);
+      return { chunks: field, side: conf ? conf.side : null };
+  }
+  let moveByChunk = (dir) => ({ state, dispatch }) => {
+      let chunks = state.field(ChunkField, false), conf = state.facet(mergeConfig);
+      if (!chunks || !chunks.length || !conf)
+          return false;
+      let { head } = state.selection.main, pos = 0;
+      for (let i = chunks.length - 1; i >= 0; i--) {
+          let chunk = chunks[i];
+          let [from, to] = conf.side == "b" ? [chunk.fromB, chunk.toB] : [chunk.fromA, chunk.toA];
+          if (to < head) {
+              pos = i + 1;
+              break;
+          }
+          if (from <= head) {
+              if (chunks.length == 1)
+                  return false;
+              pos = i + (dir < 0 ? 0 : 1);
+              break;
+          }
+      }
+      let next = chunks[(pos + (dir < 0 ? chunks.length - 1 : 0)) % chunks.length];
+      let [from, to] = conf.side == "b" ? [next.fromB, next.toB] : [next.fromA, next.toA];
+      dispatch(state.update({
+          selection: { anchor: from },
+          userEvent: "select.byChunk",
+          effects: EditorView.scrollIntoView(EditorSelection.range(to, from))
+      }));
+      return true;
+  };
+  /**
+  Move the selection to the next changed chunk.
+  */
+  const goToNextChunk = /*@__PURE__*/moveByChunk(1);
+  /**
+  Move the selection to the previous changed chunk.
+  */
+  const goToPreviousChunk = /*@__PURE__*/moveByChunk(-1);
+
+  /**
+  A chunk describes a range of lines which have changed content in
+  them. Either side (a/b) may either be empty (when its `to` is
+  equal to its `from`), or points at a range starting at the start
+  of the first changed line, to 1 past the end of the last changed
+  line. Note that `to` positions may point past the end of the
+  document. Use `endA`/`endB` if you need an end position that is
+  certain to be a valid document position.
+  */
+  class Chunk {
+      constructor(
+      /**
+      The individual changes inside this chunk. These are stored
+      relative to the start of the chunk, so you have to add
+      `chunk.fromA`/`fromB` to get document positions.
+      */
+      changes, 
+      /**
+      The start of the chunk in document A.
+      */
+      fromA, 
+      /**
+      The end of the chunk in document A. This is equal to `fromA`
+      when the chunk covers no lines in document A, or is one unit
+      past the end of the last line in the chunk if it does. (Note
+      that this may point outside the document if the chunk ends at
+      the end of the last line. See also `endA`.)
+      */
+      toA, 
+      /**
+      The start of the chunk in document B.
+      */
+      fromB, 
+      /**
+      The end of the chunk in document A.
+      */
+      toB, 
+      /**
+      This is set to false when the diff used to compute this chunk
+      fell back to fast, imprecise diffing.
+      */
+      precise = true) {
+          this.changes = changes;
+          this.fromA = fromA;
+          this.toA = toA;
+          this.fromB = fromB;
+          this.toB = toB;
+          this.precise = precise;
+      }
+      /**
+      @internal
+      */
+      offset(offA, offB) {
+          return offA || offB
+              ? new Chunk(this.changes, this.fromA + offA, this.toA + offA, this.fromB + offB, this.toB + offB, this.precise)
+              : this;
+      }
+      /**
+      Returns `fromA` if the chunk is empty in A, or the end of the
+      last line in the chunk otherwise.
+      */
+      get endA() { return Math.max(this.fromA, this.toA - 1); }
+      /**
+      Returns `fromB` if the chunk is empty in B, or the end of the
+      last line in the chunk otherwise.
+      */
+      get endB() { return Math.max(this.fromB, this.toB - 1); }
+      /**
+      Build a set of changed chunks for the given documents.
+      */
+      static build(a, b, conf) {
+          let diff = presentableDiff(a.toString(), b.toString(), conf);
+          return toChunks(diff, a, b, 0, 0, diffIsPrecise());
+      }
+      /**
+      Update a set of chunks for changes in document A. `a` should
+      hold the updated document A.
+      */
+      static updateA(chunks, a, b, changes, conf) {
+          return updateChunks(findRangesForChange(chunks, changes, true, b.length), chunks, a, b, conf);
+      }
+      /**
+      Update a set of chunks for changes in document B.
+      */
+      static updateB(chunks, a, b, changes, conf) {
+          return updateChunks(findRangesForChange(chunks, changes, false, a.length), chunks, a, b, conf);
+      }
+  }
+  function fromLine(fromA, fromB, a, b) {
+      let lineA = a.lineAt(fromA), lineB = b.lineAt(fromB);
+      return lineA.to == fromA && lineB.to == fromB && fromA < a.length && fromB < b.length
+          ? [fromA + 1, fromB + 1] : [lineA.from, lineB.from];
+  }
+  function toLine(toA, toB, a, b) {
+      let lineA = a.lineAt(toA), lineB = b.lineAt(toB);
+      return lineA.from == toA && lineB.from == toB ? [toA, toB] : [lineA.to + 1, lineB.to + 1];
+  }
+  function toChunks(changes, a, b, offA, offB, precise) {
+      let chunks = [];
+      for (let i = 0; i < changes.length; i++) {
+          let change = changes[i];
+          let [fromA, fromB] = fromLine(change.fromA + offA, change.fromB + offB, a, b);
+          let [toA, toB] = toLine(change.toA + offA, change.toB + offB, a, b);
+          let chunk = [change.offset(-fromA + offA, -fromB + offB)];
+          while (i < changes.length - 1) {
+              let next = changes[i + 1];
+              let [nextA, nextB] = fromLine(next.fromA + offA, next.fromB + offB, a, b);
+              if (nextA > toA + 1 && nextB > toB + 1)
+                  break;
+              chunk.push(next.offset(-fromA + offA, -fromB + offB));
+              [toA, toB] = toLine(next.toA + offA, next.toB + offB, a, b);
+              i++;
+          }
+          chunks.push(new Chunk(chunk, fromA, Math.max(fromA, toA), fromB, Math.max(fromB, toB), precise));
+      }
+      return chunks;
+  }
+  const updateMargin = 1000;
+  // Finds the given position in the chunks. Returns the extent of the
+  // chunk it overlaps with if it overlaps, or a position corresponding
+  // to that position on both sides otherwise.
+  function findPos(chunks, pos, isA, start) {
+      let lo = 0, hi = chunks.length;
+      for (;;) {
+          if (lo == hi) {
+              let refA = 0, refB = 0;
+              if (lo)
+                  ({ toA: refA, toB: refB } = chunks[lo - 1]);
+              let off = pos - (isA ? refA : refB);
+              return [refA + off, refB + off];
+          }
+          let mid = (lo + hi) >> 1, chunk = chunks[mid];
+          let [from, to] = isA ? [chunk.fromA, chunk.toA] : [chunk.fromB, chunk.toB];
+          if (from > pos)
+              hi = mid;
+          else if (to <= pos)
+              lo = mid + 1;
+          else
+              return start ? [chunk.fromA, chunk.fromB] : [chunk.toA, chunk.toB];
+      }
+  }
+  function findRangesForChange(chunks, changes, isA, otherLen) {
+      let ranges = [];
+      changes.iterChangedRanges((cFromA, cToA, cFromB, cToB) => {
+          let fromA = 0, toA = isA ? changes.length : otherLen;
+          let fromB = 0, toB = isA ? otherLen : changes.length;
+          if (cFromA > updateMargin)
+              [fromA, fromB] = findPos(chunks, cFromA - updateMargin, isA, true);
+          if (cToA < changes.length - updateMargin)
+              [toA, toB] = findPos(chunks, cToA + updateMargin, isA, false);
+          let lenDiff = (cToB - cFromB) - (cToA - cFromA), last;
+          let [diffA, diffB] = isA ? [lenDiff, 0] : [0, lenDiff];
+          if (ranges.length && (last = ranges[ranges.length - 1]).toA >= fromA)
+              ranges[ranges.length - 1] = { fromA: last.fromA, fromB: last.fromB, toA, toB,
+                  diffA: last.diffA + diffA, diffB: last.diffB + diffB };
+          else
+              ranges.push({ fromA, toA, fromB, toB, diffA, diffB });
+      });
+      return ranges;
+  }
+  function updateChunks(ranges, chunks, a, b, conf) {
+      if (!ranges.length)
+          return chunks;
+      let result = [];
+      for (let i = 0, offA = 0, offB = 0, chunkI = 0;; i++) {
+          let range = i == ranges.length ? null : ranges[i];
+          let fromA = range ? range.fromA + offA : a.length, fromB = range ? range.fromB + offB : b.length;
+          while (chunkI < chunks.length) {
+              let next = chunks[chunkI];
+              if (range && (next.toA + offA > fromA || next.toB + offB > fromB))
+                  break;
+              result.push(next.offset(offA, offB));
+              chunkI++;
+          }
+          if (!range)
+              break;
+          let toA = range.toA + offA + range.diffA, toB = range.toB + offB + range.diffB;
+          let diff = presentableDiff(a.sliceString(fromA, toA), b.sliceString(fromB, toB), conf);
+          for (let chunk of toChunks(diff, a, b, fromA, fromB, diffIsPrecise()))
+              result.push(chunk);
+          offA += range.diffA;
+          offB += range.diffB;
+          while (chunkI < chunks.length) {
+              let next = chunks[chunkI];
+              if (next.fromA + offA > toA && next.fromB + offB > toB)
+                  break;
+              chunkI++;
+          }
+      }
+      return result;
+  }
+  const defaultDiffConfig = { scanLimit: 500 };
+
+  const decorateChunks = /*@__PURE__*/ViewPlugin.fromClass(class {
+      constructor(view) {
+          ({ deco: this.deco, gutter: this.gutter } = getChunkDeco(view));
+      }
+      update(update) {
+          if (update.docChanged || update.viewportChanged || chunksChanged(update.startState, update.state) ||
+              configChanged(update.startState, update.state))
+              ({ deco: this.deco, gutter: this.gutter } = getChunkDeco(update.view));
+      }
+  }, {
+      decorations: d => d.deco
+  });
+  function chunksChanged(s1, s2) {
+      return s1.field(ChunkField, false) != s2.field(ChunkField, false);
+  }
+  function configChanged(s1, s2) {
+      return s1.facet(mergeConfig) != s2.facet(mergeConfig);
+  }
+  const changedLine = /*@__PURE__*/Decoration.line({ class: "cm-changedLine" });
+  const changedText = /*@__PURE__*/Decoration.mark({ class: "cm-changedText" });
+  const inserted = /*@__PURE__*/Decoration.mark({ tagName: "ins", class: "cm-insertedLine" });
+  const deleted = /*@__PURE__*/Decoration.mark({ tagName: "del", class: "cm-deletedLine" });
+  const changedLineGutterMarker = /*@__PURE__*/new class extends GutterMarker {
+      constructor() {
+          super(...arguments);
+          this.elementClass = "cm-changedLineGutter";
+      }
+  };
+  function buildChunkDeco(chunk, doc, isA, highlight, builder, gutterBuilder) {
+      let from = isA ? chunk.fromA : chunk.fromB, to = isA ? chunk.toA : chunk.toB;
+      let changeI = 0;
+      if (from != to) {
+          builder.add(from, from, changedLine);
+          builder.add(from, to, isA ? deleted : inserted);
+          if (gutterBuilder)
+              gutterBuilder.add(from, from, changedLineGutterMarker);
+          for (let iter = doc.iterRange(from, to - 1), pos = from; !iter.next().done;) {
+              if (iter.lineBreak) {
+                  pos++;
+                  builder.add(pos, pos, changedLine);
+                  if (gutterBuilder)
+                      gutterBuilder.add(pos, pos, changedLineGutterMarker);
+                  continue;
+              }
+              let lineEnd = pos + iter.value.length;
+              if (highlight)
+                  while (changeI < chunk.changes.length) {
+                      let nextChange = chunk.changes[changeI];
+                      let nextFrom = from + (isA ? nextChange.fromA : nextChange.fromB);
+                      let nextTo = from + (isA ? nextChange.toA : nextChange.toB);
+                      let chFrom = Math.max(pos, nextFrom), chTo = Math.min(lineEnd, nextTo);
+                      if (chFrom < chTo)
+                          builder.add(chFrom, chTo, changedText);
+                      if (nextTo < lineEnd)
+                          changeI++;
+                      else
+                          break;
+                  }
+              pos = lineEnd;
+          }
+      }
+  }
+  function getChunkDeco(view) {
+      let chunks = view.state.field(ChunkField);
+      let { side, highlightChanges, markGutter, overrideChunk } = view.state.facet(mergeConfig), isA = side == "a";
+      let builder = new RangeSetBuilder();
+      let gutterBuilder = markGutter ? new RangeSetBuilder() : null;
+      let { from, to } = view.viewport;
+      for (let chunk of chunks) {
+          if ((isA ? chunk.fromA : chunk.fromB) >= to)
+              break;
+          if ((isA ? chunk.toA : chunk.toB) > from) {
+              if (!overrideChunk || !overrideChunk(view.state, chunk, builder, gutterBuilder))
+                  buildChunkDeco(chunk, view.state.doc, isA, highlightChanges, builder, gutterBuilder);
+          }
+      }
+      return { deco: builder.finish(), gutter: gutterBuilder && gutterBuilder.finish() };
+  }
+  /**
+  A state effect that expands the section of collapsed unchanged
+  code starting at the given position.
+  */
+  const uncollapseUnchanged = /*@__PURE__*/StateEffect.define({
+      map: (value, change) => change.mapPos(value)
+  });
+  class CollapseWidget extends WidgetType {
+      constructor(lines) {
+          super();
+          this.lines = lines;
+      }
+      eq(other) { return this.lines == other.lines; }
+      toDOM(view) {
+          let outer = document.createElement("div");
+          outer.className = "cm-collapsedLines";
+          outer.textContent = view.state.phrase("$ unchanged lines", this.lines);
+          outer.addEventListener("click", e => {
+              let pos = view.posAtDOM(e.target);
+              view.dispatch({ effects: uncollapseUnchanged.of(pos) });
+              let { side, sibling } = view.state.facet(mergeConfig);
+              if (sibling)
+                  sibling().dispatch({ effects: uncollapseUnchanged.of(mapPos(pos, view.state.field(ChunkField), side == "a")) });
+          });
+          return outer;
+      }
+      ignoreEvent(e) { return e instanceof MouseEvent; }
+      get estimatedHeight() { return 27; }
+      get type() { return "collapsed-unchanged-code"; }
+  }
+  function mapPos(pos, chunks, isA) {
+      let startOur = 0, startOther = 0;
+      for (let i = 0;; i++) {
+          let next = i < chunks.length ? chunks[i] : null;
+          if (!next || (isA ? next.fromA : next.fromB) >= pos)
+              return startOther + (pos - startOur);
+          [startOur, startOther] = isA ? [next.toA, next.toB] : [next.toB, next.toA];
+      }
+  }
+  const CollapsedRanges = /*@__PURE__*/StateField.define({
+      create(state) { return Decoration.none; },
+      update(deco, tr) {
+          deco = deco.map(tr.changes);
+          for (let e of tr.effects)
+              if (e.is(uncollapseUnchanged))
+                  deco = deco.update({ filter: from => from != e.value });
+          if (deco.size && tr.state.field(ChunkField) != tr.startState.field(ChunkField, false)) {
+              let sideA = tr.state.facet(mergeConfig).side == "a", touchingChange = [];
+              for (let chunk of tr.state.field(ChunkField)) {
+                  deco.between(sideA ? chunk.fromA : chunk.fromB, sideA ? chunk.toA : chunk.toB, from => { touchingChange.push(from); });
+              }
+              if (touchingChange.length)
+                  deco = deco.update({ filter: from => touchingChange.indexOf(from) < 0 });
+          }
+          return deco;
+      },
+      provide: f => EditorView.decorations.from(f)
+  });
+  function collapseUnchanged({ margin = 3, minSize = 4 }) {
+      return CollapsedRanges.init(state => buildCollapsedRanges(state, margin, minSize));
+  }
+  function buildCollapsedRanges(state, margin, minLines) {
+      let builder = new RangeSetBuilder();
+      let isA = state.facet(mergeConfig).side == "a";
+      let chunks = state.field(ChunkField);
+      let prevLine = 1;
+      for (let i = 0;; i++) {
+          let chunk = i < chunks.length ? chunks[i] : null;
+          let collapseFrom = i ? prevLine + margin : 1;
+          let collapseTo = chunk ? state.doc.lineAt(isA ? chunk.fromA : chunk.fromB).number - 1 - margin : state.doc.lines;
+          let lines = collapseTo - collapseFrom + 1;
+          if (lines >= minLines) {
+              builder.add(state.doc.line(collapseFrom).from, state.doc.line(collapseTo).to, Decoration.replace({
+                  widget: new CollapseWidget(lines),
+                  block: true
+              }));
+          }
+          if (!chunk)
+              break;
+          prevLine = state.doc.lineAt(Math.min(state.doc.length, isA ? chunk.toA : chunk.toB)).number;
+      }
+      return builder.finish();
+  }
+  const baseTheme = /*@__PURE__*/EditorView.baseTheme({
+      ".cm-mergeView & .cm-scroller, .cm-mergeView &": {
+          height: "auto !important",
+          overflowY: "visible !important"
+      },
+      "&.cm-merge-a .cm-changedLine, .cm-deletedChunk": {
+          backgroundColor: "rgba(160, 128, 100, .08)"
+      },
+      "&.cm-merge-b .cm-changedLine, .cm-inlineChangedLine": {
+          backgroundColor: "rgba(100, 160, 128, .08)"
+      },
+      "&light.cm-merge-a .cm-changedText, &light .cm-deletedChunk .cm-deletedText": {
+          background: "linear-gradient(#ee443366, #ee443366) bottom/100% 2px no-repeat",
+      },
+      "&dark.cm-merge-a .cm-changedText, &dark .cm-deletedChunk .cm-deletedText": {
+          background: "linear-gradient(#ffaa9966, #ffaa9966) bottom/100% 2px no-repeat",
+      },
+      "&light.cm-merge-b .cm-changedText": {
+          background: "linear-gradient(#22bb22aa, #22bb22aa) bottom/100% 2px no-repeat",
+      },
+      "&dark.cm-merge-b .cm-changedText": {
+          background: "linear-gradient(#88ff88aa, #88ff88aa) bottom/100% 2px no-repeat",
+      },
+      "&.cm-merge-b .cm-deletedText": {
+          background: "#ff000033"
+      },
+      ".cm-insertedLine, .cm-deletedLine, .cm-deletedLine del": {
+          textDecoration: "none"
+      },
+      ".cm-deletedChunk": {
+          paddingLeft: "6px",
+          "& .cm-chunkButtons": {
+              position: "absolute",
+              insetInlineEnd: "5px"
+          },
+          "& button": {
+              border: "none",
+              cursor: "pointer",
+              color: "white",
+              margin: "0 2px",
+              borderRadius: "3px",
+              "&[name=accept]": { background: "#2a2" },
+              "&[name=reject]": { background: "#d43" }
+          },
+      },
+      ".cm-collapsedLines": {
+          padding: "5px 5px 5px 10px",
+          cursor: "pointer",
+          "&:before": {
+              content: '"⦚"',
+              marginInlineEnd: "7px"
+          },
+          "&:after": {
+              content: '"⦚"',
+              marginInlineStart: "7px"
+          },
+      },
+      "&light .cm-collapsedLines": {
+          color: "#444",
+          background: "linear-gradient(to bottom, transparent 0, #f3f3f3 30%, #f3f3f3 70%, transparent 100%)"
+      },
+      "&dark .cm-collapsedLines": {
+          color: "#ddd",
+          background: "linear-gradient(to bottom, transparent 0, #222 30%, #222 70%, transparent 100%)"
+      },
+      ".cm-changeGutter": { width: "3px", paddingLeft: "1px" },
+      "&light.cm-merge-a .cm-changedLineGutter, &light .cm-deletedLineGutter": { background: "#e43" },
+      "&dark.cm-merge-a .cm-changedLineGutter, &dark .cm-deletedLineGutter": { background: "#fa9" },
+      "&light.cm-merge-b .cm-changedLineGutter": { background: "#2b2" },
+      "&dark.cm-merge-b .cm-changedLineGutter": { background: "#8f8" },
+      ".cm-inlineChangedLineGutter": { background: "#75d" }
+  });
+
+  const deletedChunkGutterMarker = /*@__PURE__*/new class extends GutterMarker {
+      constructor() {
+          super(...arguments);
+          this.elementClass = "cm-deletedLineGutter";
+      }
+  };
+  const unifiedChangeGutter = /*@__PURE__*/Prec.low(/*@__PURE__*/gutter({
+      class: "cm-changeGutter",
+      markers: view => { var _a; return ((_a = view.plugin(decorateChunks)) === null || _a === void 0 ? void 0 : _a.gutter) || RangeSet.empty; },
+      widgetMarker: (view, widget) => widget instanceof DeletionWidget ? deletedChunkGutterMarker : null
+  }));
+  /**
+  Create an extension that causes the editor to display changes
+  between its content and the given original document. Changed
+  chunks will be highlighted, with uneditable widgets displaying the
+  original text displayed above the new text.
+  */
+  function unifiedMergeView(config) {
+      var _a;
+      let orig = typeof config.original == "string" ? Text.of(config.original.split(/\r?\n/)) : config.original;
+      let diffConf = config.diffConfig || defaultDiffConfig;
+      return [
+          Prec.low(decorateChunks),
+          deletedChunks,
+          baseTheme,
+          EditorView.editorAttributes.of({ class: "cm-merge-b" }),
+          computeChunks.of((chunks, tr) => {
+              let updateDoc = tr.effects.find(e => e.is(updateOriginalDoc));
+              if (updateDoc)
+                  chunks = Chunk.updateA(chunks, updateDoc.value.doc, tr.startState.doc, updateDoc.value.changes, diffConf);
+              if (tr.docChanged)
+                  chunks = Chunk.updateB(chunks, tr.state.field(originalDoc), tr.newDoc, tr.changes, diffConf);
+              return chunks;
+          }),
+          mergeConfig.of({
+              highlightChanges: config.highlightChanges !== false,
+              markGutter: config.gutter !== false,
+              syntaxHighlightDeletions: config.syntaxHighlightDeletions !== false,
+              syntaxHighlightDeletionsMaxLength: 3000,
+              mergeControls: (_a = config.mergeControls) !== null && _a !== void 0 ? _a : true,
+              overrideChunk: config.allowInlineDiffs ? overrideChunkInline : undefined,
+              side: "b"
+          }),
+          originalDoc.init(() => orig),
+          config.gutter !== false ? unifiedChangeGutter : [],
+          config.collapseUnchanged ? collapseUnchanged(config.collapseUnchanged) : [],
+          ChunkField.init(state => Chunk.build(orig, state.doc, diffConf))
+      ];
+  }
+  /**
+  The state effect used to signal changes in the original doc in a
+  unified merge view.
+  */
+  const updateOriginalDoc = /*@__PURE__*/StateEffect.define();
+  /**
+  Create an effect that, when added to a transaction on a unified
+  merge view, will update the original document that's being compared against.
+  */
+  function originalDocChangeEffect(state, changes) {
+      return updateOriginalDoc.of({ doc: changes.apply(getOriginalDoc(state)), changes });
+  }
+  const originalDoc = /*@__PURE__*/StateField.define({
+      create: () => Text.empty,
+      update(doc, tr) {
+          for (let e of tr.effects)
+              if (e.is(updateOriginalDoc))
+                  doc = e.value.doc;
+          return doc;
+      }
+  });
+  /**
+  Get the original document from a unified merge editor's state.
+  */
+  function getOriginalDoc(state) {
+      return state.field(originalDoc);
+  }
+  const DeletionWidgets = /*@__PURE__*/new WeakMap;
+  class DeletionWidget extends WidgetType {
+      constructor(buildDOM) {
+          super();
+          this.buildDOM = buildDOM;
+          this.dom = null;
+      }
+      eq(other) { return this.dom == other.dom; }
+      toDOM(view) { return this.dom || (this.dom = this.buildDOM(view)); }
+  }
+  function deletionWidget(state, chunk, hideContent) {
+      let known = DeletionWidgets.get(chunk.changes);
+      if (known)
+          return known;
+      let buildDOM = (view) => {
+          let { highlightChanges, syntaxHighlightDeletions, syntaxHighlightDeletionsMaxLength, mergeControls } = state.facet(mergeConfig);
+          let dom = document.createElement("div");
+          dom.className = "cm-deletedChunk";
+          if (mergeControls) {
+              let buttons = dom.appendChild(document.createElement("div"));
+              buttons.className = "cm-chunkButtons";
+              let onAccept = (e) => { e.preventDefault(); acceptChunk(view, view.posAtDOM(dom)); };
+              let onReject = (e) => { e.preventDefault(); rejectChunk(view, view.posAtDOM(dom)); };
+              if (typeof mergeControls == "function") {
+                  buttons.appendChild(mergeControls("accept", onAccept));
+                  buttons.appendChild(mergeControls("reject", onReject));
+              }
+              else {
+                  let accept = buttons.appendChild(document.createElement("button"));
+                  accept.name = "accept";
+                  accept.textContent = state.phrase("Accept");
+                  accept.onmousedown = onAccept;
+                  let reject = buttons.appendChild(document.createElement("button"));
+                  reject.name = "reject";
+                  reject.textContent = state.phrase("Reject");
+                  reject.onmousedown = onReject;
+              }
+          }
+          if (hideContent || chunk.fromA >= chunk.toA)
+              return dom;
+          let text = view.state.field(originalDoc).sliceString(chunk.fromA, chunk.endA);
+          let lang = syntaxHighlightDeletions && state.facet(language);
+          let line = makeLine();
+          let changes = chunk.changes, changeI = 0, inside = false;
+          function makeLine() {
+              let div = dom.appendChild(document.createElement("div"));
+              div.className = "cm-deletedLine";
+              return div.appendChild(document.createElement("del"));
+          }
+          function add(from, to, cls) {
+              for (let at = from; at < to;) {
+                  if (text.charAt(at) == "\n") {
+                      if (!line.firstChild)
+                          line.appendChild(document.createElement("br"));
+                      line = makeLine();
+                      at++;
+                      continue;
+                  }
+                  let nextStop = to, nodeCls = cls + (inside ? " cm-deletedText" : ""), flip = false;
+                  let newline = text.indexOf("\n", at);
+                  if (newline > -1 && newline < to)
+                      nextStop = newline;
+                  if (highlightChanges && changeI < changes.length) {
+                      let nextBound = Math.max(0, inside ? changes[changeI].toA : changes[changeI].fromA);
+                      if (nextBound <= nextStop) {
+                          nextStop = nextBound;
+                          if (inside)
+                              changeI++;
+                          flip = true;
+                      }
+                  }
+                  if (nextStop > at) {
+                      let node = document.createTextNode(text.slice(at, nextStop));
+                      if (nodeCls) {
+                          let span = line.appendChild(document.createElement("span"));
+                          span.className = nodeCls;
+                          span.appendChild(node);
+                      }
+                      else {
+                          line.appendChild(node);
+                      }
+                      at = nextStop;
+                  }
+                  if (flip)
+                      inside = !inside;
+              }
+          }
+          if (lang && chunk.toA - chunk.fromA <= syntaxHighlightDeletionsMaxLength) {
+              let tree = lang.parser.parse(text), pos = 0;
+              highlightTree(tree, { style: tags => highlightingFor(state, tags) }, (from, to, cls) => {
+                  if (from > pos)
+                      add(pos, from, "");
+                  add(from, to, cls);
+                  pos = to;
+              });
+              add(pos, text.length, "");
+          }
+          else {
+              add(0, text.length, "");
+          }
+          if (!line.firstChild)
+              line.appendChild(document.createElement("br"));
+          return dom;
+      };
+      let deco = Decoration.widget({
+          block: true,
+          side: -1,
+          widget: new DeletionWidget(buildDOM)
+      });
+      DeletionWidgets.set(chunk.changes, deco);
+      return deco;
+  }
+  /**
+  In a [unified](https://codemirror.net/6/docs/ref/#merge.unifiedMergeView) merge view, accept the
+  chunk under the given position or the cursor. This chunk will no
+  longer be highlighted unless it is edited again.
+  */
+  function acceptChunk(view, pos) {
+      let { state } = view, at = pos !== null && pos !== void 0 ? pos : state.selection.main.head;
+      let chunk = view.state.field(ChunkField).find(ch => ch.fromB <= at && ch.endB >= at);
+      if (!chunk)
+          return false;
+      let insert = view.state.sliceDoc(chunk.fromB, Math.max(chunk.fromB, chunk.toB - 1));
+      let orig = view.state.field(originalDoc);
+      if (chunk.fromB != chunk.toB && chunk.toA <= orig.length)
+          insert += view.state.lineBreak;
+      let changes = ChangeSet.of({ from: chunk.fromA, to: Math.min(orig.length, chunk.toA), insert }, orig.length);
+      view.dispatch({
+          effects: updateOriginalDoc.of({ doc: changes.apply(orig), changes }),
+          userEvent: "accept"
+      });
+      return true;
+  }
+  /**
+  In a [unified](https://codemirror.net/6/docs/ref/#merge.unifiedMergeView) merge view, reject the
+  chunk under the given position or the cursor. Reverts that range
+  to the content it has in the original document.
+  */
+  function rejectChunk(view, pos) {
+      let { state } = view, at = pos !== null && pos !== void 0 ? pos : state.selection.main.head;
+      let chunk = state.field(ChunkField).find(ch => ch.fromB <= at && ch.endB >= at);
+      if (!chunk)
+          return false;
+      let orig = state.field(originalDoc);
+      let insert = orig.sliceString(chunk.fromA, Math.max(chunk.fromA, chunk.toA - 1));
+      if (chunk.fromA != chunk.toA && chunk.toB <= state.doc.length)
+          insert += state.lineBreak;
+      view.dispatch({
+          changes: { from: chunk.fromB, to: Math.min(state.doc.length, chunk.toB), insert },
+          userEvent: "revert"
+      });
+      return true;
+  }
+  function buildDeletedChunks(state) {
+      let builder = new RangeSetBuilder();
+      for (let ch of state.field(ChunkField)) {
+          let hide = state.facet(mergeConfig).overrideChunk && chunkCanDisplayInline(state, ch);
+          builder.add(ch.fromB, ch.fromB, deletionWidget(state, ch, !!hide));
+      }
+      return builder.finish();
+  }
+  const deletedChunks = /*@__PURE__*/StateField.define({
+      create: state => buildDeletedChunks(state),
+      update(deco, tr) {
+          return tr.state.field(ChunkField, false) != tr.startState.field(ChunkField, false) ? buildDeletedChunks(tr.state) : deco;
+      },
+      provide: f => EditorView.decorations.from(f)
+  });
+  const InlineChunkCache = /*@__PURE__*/new WeakMap();
+  function chunkCanDisplayInline(state, chunk) {
+      let result = InlineChunkCache.get(chunk);
+      if (result !== undefined)
+          return result;
+      result = null;
+      let a = state.field(originalDoc), b = state.doc;
+      let linesA = a.lineAt(chunk.endA).number - a.lineAt(chunk.fromA).number + 1;
+      let linesB = b.lineAt(chunk.endB).number - b.lineAt(chunk.fromB).number + 1;
+      abort: if (linesA == linesB && linesA < 10) {
+          let deco = [], deleteCount = 0;
+          let bA = chunk.fromA, bB = chunk.fromB;
+          for (let ch of chunk.changes) {
+              if (ch.fromA < ch.toA) {
+                  deleteCount += ch.toA - ch.fromA;
+                  let deleted = a.sliceString(bA + ch.fromA, bA + ch.toA);
+                  if (/\n/.test(deleted))
+                      break abort;
+                  deco.push(Decoration.widget({ widget: new InlineDeletion(deleted), side: -1 }).range(bB + ch.fromB));
+              }
+              if (ch.fromB < ch.toB) {
+                  deco.push(changedText.range(bB + ch.fromB, bB + ch.toB));
+              }
+          }
+          if (deleteCount < (chunk.endA - chunk.fromA - linesA * 2))
+              result = deco;
+      }
+      InlineChunkCache.set(chunk, result);
+      return result;
+  }
+  class InlineDeletion extends WidgetType {
+      constructor(text) {
+          super();
+          this.text = text;
+      }
+      eq(other) { return this.text == other.text; }
+      toDOM(view) {
+          let elt = document.createElement("del");
+          elt.className = "cm-deletedText";
+          elt.textContent = this.text;
+          return elt;
+      }
+  }
+  const inlineChangedLineGutterMarker = /*@__PURE__*/new class extends GutterMarker {
+      constructor() {
+          super(...arguments);
+          this.elementClass = "cm-inlineChangedLineGutter";
+      }
+  };
+  const inlineChangedLine = /*@__PURE__*/Decoration.line({ class: "cm-inlineChangedLine" });
+  function overrideChunkInline(state, chunk, builder, gutterBuilder) {
+      let inline = chunkCanDisplayInline(state, chunk), i = 0;
+      if (!inline)
+          return false;
+      for (let line = state.doc.lineAt(chunk.fromB);;) {
+          if (gutterBuilder)
+              gutterBuilder.add(line.from, line.from, inlineChangedLineGutterMarker);
+          builder.add(line.from, line.from, inlineChangedLine);
+          while (i < inline.length && inline[i].to <= line.to) {
+              let r = inline[i++];
+              builder.add(r.from, r.to, r.value);
+          }
+          if (line.to >= chunk.endB)
+              break;
+          line = state.doc.lineAt(line.to + 1);
+      }
+      return true;
+  }
+
+  /**
+   * Reviewing changes in the text: proposed changes are applied to the
+   * document and shown against what the text was before — the old lines
+   * struck through above the new ones, with Accept and Reject on each
+   * change — until the person decides. The proposed text is ordinary
+   * document text meanwhile: rendered like the rest, and editable, so a
+   * change can be corrected before it is accepted.
+   *
+   * Built on @codemirror/merge's unified merge view. The review holds an
+   * "original" document; every difference between it and the text is a
+   * change to review. Accepting a change copies it into the original,
+   * rejecting it copies the original back into the text.
+   *
+   * Only proposals are reviewed. A change becomes a proposal when it is
+   * made through proposeChange(), or while a capture is open
+   * (captureChanges(): an agent writing the file). Every other edit — the
+   * person typing elsewhere, a collaborator, a cell's result being written —
+   * is copied into the original as it happens, so it never shows as a
+   * change to review. An edit inside a change under review is an edit of
+   * that proposal.
+   *
+   * Each proposal remembers, per changed region (lines), the text before,
+   * the text proposed and — once no change to review is left in the region
+   * — the text the person kept. The host gets that as the proposal's
+   * outcome (onResolved): what was accepted, rejected or edited, for
+   * provenance and for improving what proposed it.
+   *
+   * Keys (REVIEW_KEYS): Alt-y accepts the change at the cursor, Alt-n
+   * rejects it, Alt-Shift-y / Alt-Shift-n all of them, Alt-] / Alt-[ go to
+   * the next / previous change. A panel under the text counts the changes
+   * and carries the same actions.
+   */
+
+
+  /** The keys of a review, in CodeMirror notation. */
+  const REVIEW_KEYS = Object.freeze({
+    accept: 'Alt-y',
+    reject: 'Alt-n',
+    acceptAll: 'Alt-Shift-y',
+    rejectAll: 'Alt-Shift-n',
+    next: 'Alt-]',
+    previous: 'Alt-[',
+  });
+
+  /** On a transaction whose changes are a proposal (proposeChange sets it). */
+  const reviewProposal = Annotation.define();
+
+  // The host's callbacks: {onResolved(outcome), onChange(summary)}.
+  const reviewHost = Facet.define({ combine: values => values[values.length - 1] || {} });
+
+  const beginCapture = StateEffect.define();   // {id, meta}
+  const endCapture = StateEffect.define();     // id
+  const closeReview = StateEffect.define();    // null — the review is over
+  const dropProposal = StateEffect.define();   // id — its outcome was reported
+
+  /**
+   * @typedef {{from: number, to: number, before: string, proposed: string}} Hunk
+   *   a changed region: whole lines with their line breaks, [from, to) in the current text
+   * @typedef {{id: string, meta: object, startedAt: number, hunks: Hunk[]}} Proposal
+   * @typedef {{active: boolean, capture: null | {id: string, meta: object, startDoc: import('@codemirror/state').Text, changes: ChangeSet, startedAt: number},
+   *   proposals: Proposal[]}} ReviewState
+   */
+
+  // Line-aligned regions of what `changes` did to `startDoc` (giving `endDoc`):
+  // each changed range widened to whole lines, their line break included, on
+  // both sides; touching ones merged. Whole lines are what the merge view
+  // shows as one change and what Accept / Reject act on.
+  const lineEnd$1 = (doc, pos) => Math.min(doc.length, doc.lineAt(pos).to + 1);
+  function hunksOf(changes, startDoc, endDoc) {
+    const out = [];
+    changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+      const a0 = startDoc.lineAt(fromA).from, a1 = lineEnd$1(startDoc, toA);
+      const b0 = endDoc.lineAt(fromB).from, b1 = lineEnd$1(endDoc, toB);
+      const last = out[out.length - 1];
+      if (last && b0 <= last.to) {
+        last.to = Math.max(last.to, b1);
+        last.a1 = Math.max(last.a1, a1);
+      } else {
+        out.push({ from: b0, to: b1, a0, a1 });
+      }
+    });
+    return out
+      .map(h => ({ from: h.from, to: h.to, before: startDoc.sliceString(h.a0, h.a1), proposed: endDoc.sliceString(h.from, h.to) }))
+      .filter(h => h.before !== h.proposed);
+  }
+
+  const reviewField = StateField.define({
+    create: () => ({ active: false, capture: null, proposals: [] }),
+    update(value, tr) {
+      let { active, capture, proposals } = value;
+      if (tr.docChanged) {
+        if (capture) capture = { ...capture, changes: capture.changes.compose(tr.changes) };
+        // Typing at the start of a region's first line belongs to it (the
+        // merge view counts it in the change too); typing at the start of the
+        // line after it does not. A replacement of the whole region (Reject)
+        // maps its end to the end of the new text.
+        proposals = proposals.map(p => ({
+          ...p,
+          hunks: p.hunks.map(h => {
+            const from = tr.changes.mapPos(h.from, -1);
+            return { ...h, from, to: Math.max(from, tr.changes.mapPos(h.to, -1)) };
+          }),
+        }));
+      }
+      for (const e of tr.effects) {
+        if (e.is(beginCapture)) {
+          active = true;
+          capture = { id: e.value.id, meta: e.value.meta, startDoc: tr.startState.doc, changes: ChangeSet.empty(tr.startState.doc.length), startedAt: Date.now() };
+          if (tr.docChanged) capture.changes = tr.changes; // a change made in the same transaction is part of it
+        } else if (e.is(endCapture) && capture && capture.id === e.value) {
+          const hunks = hunksOf(capture.changes, capture.startDoc, tr.state.doc);
+          if (hunks.length) proposals = [...proposals, { id: capture.id, meta: capture.meta, startedAt: capture.startedAt, hunks }];
+          capture = null;
+        } else if (e.is(dropProposal)) {
+          proposals = proposals.filter(p => p.id !== e.value);
+        } else if (e.is(closeReview)) {
+          active = false; capture = null; proposals = [];
+        }
+      }
+      return active === value.active && capture === value.capture && proposals === value.proposals ? value : { active, capture, proposals };
+    },
+  });
+
+  /** The review state of an editor state: {active, capture, proposals} (read-only). */
+  function reviewState(state) {
+    return state.field(reviewField, false) || { active: false, capture: null, proposals: [] };
+  }
+
+  // ─── keeping the person's own edits out of the review ───────────────
+
+  // A change in the text [from, to] (positions before it) touches a change
+  // under review when it overlaps its lines, or sits where lines were removed.
+  function touchesChunk(chunk, from, to) {
+    if (chunk.fromB === chunk.toB) return from <= chunk.fromB && to >= chunk.fromB;
+    return from < chunk.toB && to >= chunk.fromB;
+  }
+
+  // Edits that are not proposals are copied into the original, at the same
+  // place: outside changes under review the two texts align, shifted by the
+  // length difference of the changes before.
+  const keepOwnEditsOutOfReview = EditorState.transactionExtender.of(tr => {
+    if (!tr.docChanged || tr.annotation(reviewProposal)) return null;
+    const review = tr.startState.field(reviewField, false);
+    if (!review || !review.active || review.capture) return null;
+    const merge = getChunks(tr.startState);
+    if (!merge) return null;
+    const chunks = merge.chunks;
+    const original = getOriginalDoc(tr.startState);
+    const specs = [];
+    tr.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+      if (chunks.some(c => touchesChunk(c, from, to))) return; // an edit of a proposal
+      let shift = 0;
+      for (const c of chunks) {
+        const before = c.fromB === c.toB ? c.fromB < from : c.toB <= from;
+        if (!before) break;
+        shift += (c.toA - c.fromA) - (c.toB - c.fromB);
+      }
+      specs.push({ from: from + shift, to: to + shift, insert: inserted });
+    });
+    if (!specs.length) return null;
+    const valid = specs.every(s => s.from >= 0 && s.to <= original.length && s.from <= s.to);
+    if (!valid) return null; // cannot happen with consistent chunks; never corrupt the original
+    return { effects: originalDocChangeEffect(tr.startState, ChangeSet.of(specs, original.length)) };
+  });
+
+  // ─── outcomes ───────────────────────────────────────────────────────
+
+  function hunkDecision(h, final) {
+    if (final === h.proposed) return 'accepted';
+    if (final === h.before) return 'rejected';
+    return 'edited';
+  }
+
+  function proposalDecision(hunks) {
+    const kinds = new Set(hunks.map(h => h.decision));
+    return kinds.size === 1 ? [...kinds][0] : 'mixed';
+  }
+
+  // Whether a change under review lies in the region [from, to).
+  function hunkPending(chunks, h) {
+    return chunks.some(c => c.fromB === c.toB ? c.fromB >= h.from && c.fromB <= h.to : c.fromB < Math.max(h.to, h.from + 1) && c.toB > h.from);
+  }
+
+  let proposalSeq = 0;
+
+  // Watches the review: records each region's final text the moment nothing
+  // is left to review in it, reports a proposal once all of its regions are,
+  // and ends the review when no proposal is left.
+  const reviewWatcher = ViewPlugin.fromClass(class {
+    constructor(view) {
+      this.view = view;
+      this.finals = new Map();   // proposal id → Map(hunk index → final text)
+      this.reported = new Set();
+      this.scheduled = false;
+      this.destroyed = false;
+    }
+
+    update(update) {
+      this.check(update.state);
+      const host = update.state.facet(reviewHost);
+      if (typeof host.onChange === 'function' && this.summaryChanged(update)) host.onChange(reviewSummary(update.state));
+    }
+
+    summaryChanged(update) {
+      const a = getChunks(update.startState), b = getChunks(update.state);
+      return update.startState.field(reviewField) !== update.state.field(reviewField) || (a && a.chunks.length) !== (b && b.chunks.length);
+    }
+
+    check(state) {
+      const review = state.field(reviewField);
+      if (!review.active) return;
+      const merge = getChunks(state);
+      const chunks = merge ? merge.chunks : [];
+      const done = [];
+      for (const p of review.proposals) {
+        if (this.reported.has(p.id)) continue;
+        let finals = this.finals.get(p.id);
+        if (!finals) this.finals.set(p.id, finals = new Map());
+        p.hunks.forEach((h, i) => {
+          if (!finals.has(i) && !hunkPending(chunks, h)) finals.set(i, state.doc.sliceString(h.from, h.to));
+        });
+        if (finals.size === p.hunks.length) done.push(p);
+      }
+      for (const p of done) this.report(state, p, 'reviewed');
+      const remaining = review.proposals.filter(p => !this.reported.has(p.id));
+      if (done.length || (!remaining.length && !review.capture)) this.schedule();
+    }
+
+    report(state, p, how) {
+      this.reported.add(p.id);
+      const finals = this.finals.get(p.id) || new Map();
+      const hunks = p.hunks.map((h, i) => {
+        const final = finals.has(i) ? finals.get(i) : state.doc.sliceString(h.from, h.to);
+        return { before: h.before, proposed: h.proposed, final, decision: finals.has(i) ? hunkDecision(h, final) : 'left' };
+      });
+      this.finals.delete(p.id);
+      const outcome = { id: p.id, meta: p.meta, startedAt: p.startedAt, resolvedAt: Date.now(), how, hunks,
+        decision: how === 'reviewed' ? proposalDecision(hunks) : 'left' };
+      const host = state.facet(reviewHost);
+      if (typeof host.onResolved === 'function') {
+        try { host.onResolved(outcome); } catch (e) { console.error('review outcome', e); }
+      }
+    }
+
+    // Drop reported proposals and, with none left, end the review — after
+    // this update (an update cannot dispatch).
+    schedule() {
+      if (this.scheduled) return;
+      this.scheduled = true;
+      queueMicrotask(() => {
+        this.scheduled = false;
+        if (this.destroyed) return;
+        const view = this.view;
+        const review = view.state.field(reviewField, false);
+        if (!review || !review.active) return;
+        const effects = review.proposals.filter(p => this.reported.has(p.id)).map(p => dropProposal.of(p.id));
+        const left = review.proposals.filter(p => !this.reported.has(p.id));
+        if (!left.length && !review.capture) effects.push(closeReview.of(null), reviewCompartment.reconfigure([]));
+        if (effects.length) view.dispatch({ effects });
+      });
+    }
+
+    // The editor goes away with changes still under review: they stay in the
+    // text; their outcome says so.
+    destroy() {
+      this.destroyed = true;
+      const state = this.view.state;
+      const review = state.field(reviewField, false);
+      if (!review) return;
+      for (const p of review.proposals) if (!this.reported.has(p.id)) this.report(state, p, 'closed');
+    }
+  });
+
+  /** What is under review now: {changes: count, proposals: [{id, meta}], capturing}. */
+  function reviewSummary(state) {
+    const review = state.field(reviewField, false);
+    if (!review || !review.active) return { changes: 0, proposals: [], capturing: false };
+    const merge = getChunks(state);
+    return { changes: merge ? merge.chunks.length : 0, proposals: review.proposals.map(p => ({ id: p.id, meta: p.meta })), capturing: !!review.capture };
+  }
+
+  // ─── starting a review, proposing, capturing ───────────────────────
+
+  const reviewCompartment = new Compartment();
+
+  function mergeExtension(original) {
+    return [
+      unifiedMergeView({
+        original,
+        gutter: true,
+        highlightChanges: true,
+        syntaxHighlightDeletions: true,
+        mergeControls: chunkButton,
+        // Proposals come in whole: a line-based diff that gives up on huge
+        // texts is still correct, only coarser.
+        diffConfig: { scanLimit: 5000, timeout: 300 },
+      }),
+      EditorView.editorAttributes.of({ class: 'mrmd-review' }),
+    ];
+  }
+
+  // Effects that open a capture, starting the review when none is going on
+  // (the original is the text as it is now).
+  function beginEffects(state, id, meta) {
+    const review = state.field(reviewField, false);
+    if (!review) throw new Error('mrmd-document: the editor has no review extension');
+    const effects = [];
+    if (!review.active) effects.push(reviewCompartment.reconfigure(mergeExtension(state.doc)));
+    effects.push(beginCapture.of({ id, meta }));
+    return effects;
+  }
+
+  /**
+   * Open a capture: every change until end() is one proposal (an agent
+   * writing this file). Changes made by anyone meanwhile are part of it.
+   * @returns {{id: string, end(): boolean}} end() registers the proposal;
+   *   false when nothing changed.
+   */
+  function captureChanges(view, meta = {}) {
+    const review = view.state.field(reviewField);
+    if (review.capture) throw new Error('mrmd-document: a capture is already open');
+    const id = 'proposal-' + (++proposalSeq);
+    view.dispatch({ effects: beginEffects(view.state, id, meta) });
+    let open = true;
+    return {
+      id,
+      end() {
+        if (!open) return false;
+        open = false;
+        const current = view.state.field(reviewField, false);
+        if (!current || !current.capture || current.capture.id !== id) return false;
+        // Nothing proposed: a review opened for this alone closes (the watcher sees it).
+        view.dispatch({ effects: endCapture.of(id) });
+        return view.state.field(reviewField).proposals.some(p => p.id === id);
+      },
+    };
+  }
+
+  /**
+   * One change as a proposal: {from, to, insert, meta, annotations, selection}.
+   * Refused (returns null) over a change still under review: decide that one first.
+   * @returns {string|null} the proposal's id
+   */
+  function proposeChange(view, { from, to, insert, meta = {}, annotations = [], selection, scrollIntoView = true }) {
+    const merge = getChunks(view.state);
+    if (merge && merge.chunks.some(c => touchesChunk(c, from, to))) return null;
+    const capture = captureChanges(view, meta);
+    view.dispatch({
+      changes: { from, to, insert },
+      annotations: [reviewProposal.of(true), ...[].concat(annotations)],
+      ...(selection ? { selection } : {}),
+      scrollIntoView,
+    });
+    capture.end();
+    return capture.id;
+  }
+
+  /**
+   * The smallest changes that turn the text into `text` (a character diff),
+   * so the cursor, marks and a review keep their places.
+   */
+  function minimalChanges(state, text) {
+    const current = state.doc.toString();
+    if (current === text) return [];
+    return presentableDiff(current, text, { scanLimit: 5000, timeout: 300 })
+      .map(c => ({ from: c.fromA, to: c.toA, insert: text.slice(c.fromB, c.toB) }));
+  }
+
+  // ─── deciding ───────────────────────────────────────────────────────
+
+  function chunkList(state) {
+    const merge = getChunks(state);
+    return merge ? merge.chunks : [];
+  }
+
+  /** Accept every change under review. */
+  function acceptAll(view) {
+    const chunks = chunkList(view.state);
+    if (!chunks.length) return false;
+    const orig = getOriginalDoc(view.state), doc = view.state.doc;
+    // As acceptChunk does, for all of them at once.
+    const specs = chunks.map(c => {
+      let insert = doc.sliceString(c.fromB, Math.max(c.fromB, c.toB - 1));
+      if (c.fromB !== c.toB && c.toA <= orig.length) insert += view.state.lineBreak;
+      return { from: c.fromA, to: Math.min(orig.length, c.toA), insert };
+    });
+    const changes = ChangeSet.of(specs, orig.length);
+    view.dispatch({ effects: updateOriginalDoc.of({ doc: changes.apply(orig), changes }), userEvent: 'accept' });
+    return true;
+  }
+
+  /** Reject every change under review: the text goes back to the original there. */
+  function rejectAll(view) {
+    const chunks = chunkList(view.state);
+    if (!chunks.length) return false;
+    const orig = getOriginalDoc(view.state), doc = view.state.doc;
+    view.dispatch({
+      changes: chunks.map(c => {
+        let insert = orig.sliceString(c.fromA, Math.max(c.fromA, c.toA - 1));
+        if (c.fromA !== c.toA && c.toB <= doc.length) insert += view.state.lineBreak;
+        return { from: c.fromB, to: Math.min(doc.length, c.toB), insert };
+      }),
+      userEvent: 'revert',
+    });
+    return true;
+  }
+
+  const reviewing = state => reviewState(state).active && chunkList(state).length > 0;
+
+  // ─── look ───────────────────────────────────────────────────────────
+
+  function kbd$1(name) {
+    const k = document.createElement('kbd');
+    k.className = 'mrmd-review-kbd';
+    k.textContent = formatKey(name);
+    return k;
+  }
+
+  function reviewButton(label, what, key, onClick, cls = '') {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'mrmd-review-btn' + (cls ? ' ' + cls : '');
+    b.append(label);
+    if (key) b.appendChild(kbd$1(key));
+    b.title = key ? `${what} (${formatKey(key)})` : what;
+    b.setAttribute('aria-label', b.title);
+    // Keep the editor's focus and selection.
+    b.addEventListener('mousedown', e => e.preventDefault());
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  // The Accept / Reject pair on each change (the merge view places it).
+  function chunkButton(type, action) {
+    return type === 'accept'
+      ? reviewButton('Accept', 'Keep this change', REVIEW_KEYS.accept, action, 'mrmd-review-accept')
+      : reviewButton('Reject', 'Go back to the text before this change', REVIEW_KEYS.reject, action, 'mrmd-review-reject');
+  }
+
+  // A panel under the text while there is something to review.
+  function reviewPanel(view) {
+    const dom = document.createElement('div');
+    dom.className = 'mrmd-review-panel';
+    dom.setAttribute('role', 'region');
+    dom.setAttribute('aria-label', 'Changes to review');
+    const label = document.createElement('span');
+    label.className = 'mrmd-review-label';
+    label.setAttribute('aria-live', 'polite');
+    const actions = document.createElement('span');
+    actions.className = 'mrmd-review-actions';
+    const go = cmd => () => { cmd(view); view.focus(); };
+    actions.append(
+      reviewButton('‹', 'Previous change', REVIEW_KEYS.previous, go(v => goToPreviousChunk(v)), 'mrmd-review-step'),
+      reviewButton('›', 'Next change', REVIEW_KEYS.next, go(v => goToNextChunk(v)), 'mrmd-review-step'),
+      reviewButton('Accept all', 'Keep every change', REVIEW_KEYS.acceptAll, go(acceptAll), 'mrmd-review-accept'),
+      reviewButton('Reject all', 'Go back to the text before every change', REVIEW_KEYS.rejectAll, go(rejectAll), 'mrmd-review-reject'),
+    );
+    dom.append(label, actions);
+    const paint = state => {
+      const { changes, proposals, capturing } = reviewSummary(state);
+      const what = [...new Set(proposals.map(p => p.meta && p.meta.label).filter(Boolean))];
+      label.textContent = '✦ ' + (capturing && !changes ? 'watching for changes…'
+        : `${changes} change${changes === 1 ? '' : 's'} to review`) + (what.length ? ' · ' + what.join(' · ') : '');
+      actions.hidden = !changes;
+    };
+    paint(view.state);
+    return { dom, bottom: true, update: u => paint(u.state) };
+  }
+
+  const reviewPanelShown = showPanel.compute([reviewField], state => (reviewState(state).active ? reviewPanel : null));
+
+  let keyframesInstalled$2 = false;
+  function installStyles() {
+    if (keyframesInstalled$2 || typeof document === 'undefined') return;
+    keyframesInstalled$2 = true;
+    const style = document.createElement('style');
+    style.dataset.mrmd = 'document-review';
+    style.textContent = '@media (prefers-reduced-motion: reduce) { .mrmd-review-panel * { transition: none !important; } }';
+    document.head.appendChild(style);
+  }
+
+  // Colors are tokens: a host without half-tones (e-ink) sets the two
+  // backgrounds to transparent; the bars, strike-through and underline still
+  // say what changed.
+  const reviewTheme = EditorView.baseTheme({
+    '&.mrmd-review.cm-merge-b .cm-changedLine': {
+      backgroundColor: 'var(--mrmd-review-inserted, color-mix(in srgb, var(--mrmd-accent, #2a2) 9%, transparent))',
+      boxShadow: 'inset 2px 0 0 var(--mrmd-accent, #2a2)',
+    },
+    '&.mrmd-review.cm-merge-b .cm-changedText': {
+      background: 'none', textDecoration: 'underline', textDecorationColor: 'var(--mrmd-accent, #2a2)', textDecorationThickness: '2px', textUnderlineOffset: '3px',
+    },
+    '&.mrmd-review .cm-deletedChunk': {
+      position: 'relative', margin: '2px 0', padding: '22px 8px 4px', boxShadow: 'inset 2px 0 0 var(--mrmd-error, #d43)',
+      backgroundColor: 'var(--mrmd-review-deleted, color-mix(in srgb, var(--mrmd-error, #d43) 7%, transparent))',
+      color: 'var(--mrmd-fg-muted, inherit)', fontFamily: 'var(--md-marker-font, ui-monospace, monospace)', fontSize: '0.85em',
+    },
+    // A pure insertion has no old lines: only the buttons, on a thin rule.
+    '&.mrmd-review .cm-deletedChunk:not(:has(.cm-deletedLine))': { padding: '20px 8px 0', backgroundColor: 'transparent', boxShadow: 'inset 0 -1px 0 var(--mrmd-accent, #2a2)' },
+    '&.mrmd-review .cm-deletedChunk .cm-deletedLine del': { textDecoration: 'line-through', textDecorationColor: 'var(--mrmd-error, #d43)' },
+    '&.mrmd-review .cm-deletedChunk .cm-deletedText': { background: 'none', color: 'var(--mrmd-error, inherit)' },
+    '&.mrmd-review .cm-deletedChunk .cm-chunkButtons': { position: 'absolute', top: '2px', right: '4px', left: 'auto', display: 'flex', gap: '4px' },
+    '&.mrmd-review .cm-changeGutter': { width: '3px', paddingLeft: '0' },
+    '&.mrmd-review .cm-changedLineGutter': { background: 'var(--mrmd-accent, #2a2)' },
+    '&.mrmd-review .cm-deletedLineGutter': { background: 'var(--mrmd-error, #d43)' },
+    '.mrmd-review-btn': {
+      font: '11px/1 var(--mrmd-font-ui, system-ui, sans-serif)', boxSizing: 'border-box', height: '19px', minHeight: '0', margin: '0',
+      padding: '0 7px', display: 'inline-flex', alignItems: 'center', gap: '5px', fontStyle: 'normal', cursor: 'pointer',
+      color: 'var(--mrmd-fg, currentColor)', background: 'var(--mrmd-button-bg, transparent)',
+      border: '1px solid var(--mrmd-button-border, var(--mrmd-border, currentColor))', borderRadius: '3px',
+    },
+    '.mrmd-review-btn:hover, .mrmd-review-btn:focus-visible': { background: 'var(--mrmd-hover-bg, transparent)' },
+    '.mrmd-review-btn.mrmd-review-accept': { borderColor: 'var(--mrmd-accent, currentColor)', color: 'var(--mrmd-accent, currentColor)' },
+    '.mrmd-review-btn.mrmd-review-reject': { color: 'var(--mrmd-error, currentColor)' },
+    '.mrmd-review-kbd': {
+      font: '10px/1 var(--mrmd-font-ui, system-ui, sans-serif)', padding: '1px 3px', color: 'var(--mrmd-fg-muted, currentColor)',
+      border: '1px solid var(--mrmd-border, currentColor)', borderRadius: '2px',
+    },
+    '.mrmd-review-panel': {
+      display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '6px 10px',
+      font: '12px/1.4 var(--mrmd-font-ui, system-ui, sans-serif)', color: 'var(--mrmd-fg, inherit)',
+      background: 'var(--mrmd-popup-bg, var(--mrmd-bg, Canvas))', borderTop: '1px solid var(--mrmd-accent, currentColor)',
+    },
+    '.mrmd-review-label': { flex: '1 1 auto', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+    '.mrmd-review-actions': { display: 'flex', gap: '6px', flexWrap: 'wrap' },
+    '.mrmd-review-actions[hidden]': { display: 'none' },
+  });
+
+  // ─── the extension ──────────────────────────────────────────────────
+
+  /**
+   * Review of proposed changes. `host`: {onResolved(outcome), onChange(summary)}.
+   * The outcome: {id, meta, startedAt, resolvedAt, how: 'reviewed' | 'closed',
+   * decision: 'accepted' | 'rejected' | 'edited' | 'mixed' | 'left',
+   * hunks: [{before, proposed, final, decision}]}.
+   */
+  function documentReview(host = {}) {
+    installStyles();
+    return [
+      reviewHost.of(host),
+      reviewField,
+      reviewCompartment.of([]),
+      keepOwnEditsOutOfReview,
+      reviewWatcher,
+      reviewPanelShown,
+      reviewTheme,
+      Prec.high(keymap.of([
+        { key: REVIEW_KEYS.accept, run: view => reviewing(view.state) && acceptChunk(view) },
+        { key: REVIEW_KEYS.reject, run: view => reviewing(view.state) && rejectChunk(view) },
+        { key: REVIEW_KEYS.acceptAll, run: view => reviewing(view.state) && acceptAll(view) },
+        { key: REVIEW_KEYS.rejectAll, run: view => reviewing(view.state) && rejectAll(view) },
+        { key: REVIEW_KEYS.next, run: view => reviewing(view.state) && goToNextChunk(view) },
+        { key: REVIEW_KEYS.previous, run: view => reviewing(view.state) && goToPreviousChunk(view) },
+      ])),
+    ];
+  }
+
+  /** The review's keys that act here, now, for a host's key help (or null). */
+  function reviewKeyHelp(state) {
+    if (!reviewing(state)) return null;
+    const head = state.selection.main.head;
+    const atChange = chunkList(state).some(c => c.fromB <= head && c.endB >= head);
+    const keys = [];
+    if (atChange) keys.push([[REVIEW_KEYS.accept], 'accept this change'], [[REVIEW_KEYS.reject], 'reject this change']);
+    keys.push(
+      [[REVIEW_KEYS.acceptAll], 'accept every change'],
+      [[REVIEW_KEYS.rejectAll], 'reject every change'],
+      [[REVIEW_KEYS.next, REVIEW_KEYS.previous], 'next / previous change'],
+    );
+    return { label: 'AI changes to review', keys };
+  }
+
   /**
    * AI commands for the document editor: a command box at the cursor, and
    * the answer shown as a suggestion beside the text until it is accepted.
@@ -58068,6 +59972,9 @@ var mrmdDocument = (function (exports) {
    *                                               event.result() is the document as it will be.
    *                                               A rejection abandons the accept (and is notified).
    *       onAccept?(event)                        after it was applied (provenance)
+   *       onOutcome?(outcome)                     every command's end: what was asked, every
+   *                                               answer, and what became of it (see below)
+   *       mode?: { get() → 'suggest'|'review', set(mode) }
    *       notify?(message)                        a short message for the person
    *       escalate?: { label, run(text) }         hand a request to something bigger
    *     },
@@ -58079,6 +59986,19 @@ var mrmdDocument = (function (exports) {
    * refused if the text it replaces changed meanwhile. Editing inside the
    * suggested range discards the suggestion — it would describe text that
    * no longer exists; edits elsewhere only move it.
+   *
+   * Two modes (`mode`, switched in the command box): 'suggest' shows the
+   * answer beside the text as above; 'review' puts it into the text as a
+   * change to review (document-review.js) — old text struck through, the new
+   * text rendered and editable, Accept / Reject on it. In suggest mode,
+   * "Edit in text" does the same for one answer.
+   *
+   * Every command ends in an outcome for the host (onOutcome): the command,
+   * the text it acted on, every answer it got, the one shown, and the
+   * decision — 'accepted', 'discarded', 'stopped' (discarded while it was
+   * being written), 'stale' (the text changed under it), 'replaced' (another
+   * command took its place), 'closed', or 'review' (in the text as a change
+   * to review; the review's outcome follows, its `meta.op` naming this `op`).
    *
    * One suggestion at a time: a new command replaces the current one, as in
    * every mainstream editor. Several answers to the same command ("Another")
@@ -58147,7 +60067,8 @@ var mrmdDocument = (function (exports) {
     if (commands.filter(c => c.instruction).length > 1) throw new TypeError('mrmd-document: at most one ai command takes an instruction');
     const escalate = option.escalate && typeof option.escalate.run === 'function'
       ? { label: String(option.escalate.label || 'Hand it to an agent'), run: option.escalate.run } : null;
-    return { ...option, commands, escalate };
+    const mode = option.mode && typeof option.mode.get === 'function' && typeof option.mode.set === 'function' ? option.mode : null;
+    return { ...option, commands, escalate, mode };
   }
 
   // ─── state ──────────────────────────────────────────────────────────
@@ -58337,7 +60258,10 @@ var mrmdDocument = (function (exports) {
           button('›', 'Next answer', () => ctl?.step(1), { cls: 'mrmd-ai-step', key: AI_KEYS.next }),
         );
       }
-      if (answer.status === 'ready') foot.appendChild(button('Accept', 'Accept', () => ctl?.accept(), { cls: 'mrmd-ai-accept', key: AI_KEYS.accept }));
+      if (answer.status === 'ready') {
+        foot.appendChild(button('Edit in text', 'Put it in the text as a change to review: edit it there, then accept or reject it', () => ctl?.accept({ review: true })));
+        foot.appendChild(button('Accept', 'Accept', () => ctl?.accept(), { cls: 'mrmd-ai-accept', key: AI_KEYS.accept }));
+      }
       // Alt-] asks again only from the last answer (before it, it steps on):
       // the key is shown only where it does what the button does.
       if (answer.status !== 'loading') {
@@ -58427,7 +60351,7 @@ var mrmdDocument = (function (exports) {
       this.list = document.createElement('div');
       this.list.className = 'mrmd-ai-menu-list';
       this.list.setAttribute('role', 'listbox');
-      dom.append(head, input, this.list, this.foot(state.field(aiState).menu));
+      dom.append(head, input, this.list, this.footOf(state.field(aiState).menu));
 
       input.addEventListener('input', () => { ctl.menuDraft = input.value; this.active = 0; this.render(); });
       input.addEventListener('keydown', e => this.key(e));
@@ -58449,7 +60373,7 @@ var mrmdDocument = (function (exports) {
      * than its key (the ✦, a button) also names that key: the next time is
      * one keystroke.
      */
-    foot(menu) {
+    footOf(menu) {
       const foot = document.createElement('div');
       foot.className = 'mrmd-ai-menu-foot';
       const model = typeof this.ctl.config.model === 'function' ? this.ctl.config.model() : '';
@@ -58458,6 +60382,18 @@ var mrmdDocument = (function (exports) {
       if (!menu || !menu.byKey) parts.push([kbd(AI_KEYS.open), ' opens this box']);
       parts.push([kbd('Enter'), ' runs'], [kbd('Escape'), ' closes']);
       parts.forEach((part, i) => foot.append(...(i ? [' · '] : []), ...part));
+      const mode = this.ctl.config.mode;
+      if (mode) {
+        // How answers arrive, switched here and remembered by the host.
+        const review = mode.get() === 'review';
+        const toggle = button(review ? 'answers: review in the text' : 'answers: suggest beside it',
+          review ? 'Answers go into the text as changes to review (edit, then accept or reject). Click: suggest beside the text instead'
+            : 'Answers show beside the text; Tab accepts. Click: put them into the text as changes to review instead',
+          () => { mode.set(review ? 'suggest' : 'review'); this.dom.replaceChild(this.footOf(menu), this.dom.lastChild); this.input.focus(); },
+          { cls: 'mrmd-ai-mode' });
+        toggle.setAttribute('aria-pressed', String(review));
+        foot.append(' · ', toggle);
+      }
       return foot;
     }
 
@@ -58563,19 +60499,53 @@ var mrmdDocument = (function (exports) {
       this.requests = new Map(); // "opId:index" → AbortController
       this.menuDraft = '';
       this.accepting = false;
+      this.endings = new Map(); // op id → {decision, final?}: how it is ending, set just before
     }
 
     get config() { return this.view.state.facet(aiHostFacet).config; }
     get cellAt() { return this.view.state.facet(aiHostFacet).cellAt; }
 
     update(update) {
-      // An operation that went away (discarded, stale, replaced) stops asking.
+      // An operation that went away (discarded, stale, replaced) stops asking,
+      // and its outcome goes to the host.
       const before = update.startState.field(aiState).op;
       const after = update.state.field(aiState).op;
-      if (before && (!after || after.id !== before.id)) this.abort(before.id);
+      if (before && (!after || after.id !== before.id)) {
+        this.abort(before.id);
+        const ending = this.endings.get(before.id) || { decision: after ? 'replaced' : 'stale' };
+        this.endings.delete(before.id);
+        this.emitOutcome(before, ending);
+      }
     }
 
-    destroy() { for (const c of this.requests.values()) c.abort(); this.requests.clear(); }
+    destroy() {
+      for (const c of this.requests.values()) c.abort();
+      this.requests.clear();
+      const { op } = this.view.state.field(aiState);
+      if (op) this.emitOutcome(op, { decision: 'closed' });
+    }
+
+    /** The host's record of a command: what it acted on, every answer, and what became of it. */
+    emitOutcome(op, { decision, final = null }) {
+      const { onOutcome, mode } = this.config;
+      if (typeof onOutcome !== 'function') return;
+      const shown = op.answers[op.index];
+      const outcome = {
+        op: op.id,
+        command: op.command.id, label: op.command.label, instruction: op.instruction,
+        scope: op.request.scope, kind: op.command.kind, language: op.request.block ? op.request.block.language : null,
+        target: op.target.text,
+        // Enough of the surroundings to see what the model saw near the target.
+        before: op.request.before.slice(-2e3), after: op.request.after.slice(0, 1000),
+        answers: op.answers.map(a => ({ text: a.text, model: a.model, status: a.status, error: a.error })),
+        shown: op.index,
+        decision: decision === 'discarded' && shown && shown.status === 'loading' ? 'stopped' : decision,
+        final,
+        mode: mode ? mode.get() : 'suggest',
+        ms: Date.now() - op.startedAt,
+      };
+      try { onOutcome(outcome); } catch (e) { console.error('AI command outcome', e); }
+    }
 
     notify(message) {
       const { notify } = this.config;
@@ -58614,8 +60584,11 @@ var mrmdDocument = (function (exports) {
       const state = this.view.state;
       const resolved = resolveAiTarget(state, command, this.cellAt);
       if (resolved.error) { this.notify(resolved.error); return false; }
+      const replaced = this.view.state.field(aiState).op;
+      if (replaced) this.endings.set(replaced.id, { decision: 'replaced' });
       const op = {
         id: 'ai-' + (++opSeq),
+        startedAt: Date.now(),
         command,
         instruction: command.instruction ? text : '',
         target: resolved.target,
@@ -58664,7 +60637,12 @@ var mrmdDocument = (function (exports) {
           const model = result && result.model ? String(result.model) : null;
           if (!text.trim()) settle({ status: 'error', model, error: op.command.kind === 'insert' ? 'The model had nothing to add here.' : 'The model returned no text.' });
           else if (op.command.kind === 'replace' && text === op.target.text) settle({ status: 'error', model, error: 'The model found nothing to change.' });
-          else settle({ status: 'ready', text, model, error: null });
+          else {
+            settle({ status: 'ready', text, model, error: null });
+            // Review mode: a ready answer goes into the text as a change to review.
+            const cur = this.current();
+            if (this.config.mode && this.config.mode.get() === 'review' && cur && cur.op.id === op.id && cur.op.index === index) void this.accept({ review: true });
+          }
         })
         .catch(error => settle({ status: 'error', error: error && error.message ? error.message : String(error) }));
     }
@@ -58681,7 +60659,9 @@ var mrmdDocument = (function (exports) {
     }
 
     discard() {
-      if (!this.view.state.field(aiState).op) return false;
+      const { op } = this.view.state.field(aiState);
+      if (!op) return false;
+      this.endings.set(op.id, { decision: 'discarded' });
       this.view.dispatch({ effects: setOp.of(null) });
       return true;
     }
@@ -58713,8 +60693,12 @@ var mrmdDocument = (function (exports) {
       return true;
     }
 
-    /** Apply the shown answer: one transaction, its own undo step. */
-    async accept() {
+    /**
+     * Apply the shown answer: one transaction, its own undo step. With
+     * `review`, as a change to review in the text instead (document-review.js):
+     * the person can edit it there, then accept or reject it.
+     */
+    async accept({ review = false } = {}) {
       const cur = this.current();
       if (!cur || cur.answer.status !== 'ready' || this.accepting) return false;
       const { op, answer } = cur;
@@ -58749,18 +60733,32 @@ var mrmdDocument = (function (exports) {
           this.notify('the text changed, so the suggestion was dropped');
           return false;
         }
-        this.view.dispatch({
-          changes: { from, to, insert: answer.text },
-          selection: { anchor: from + answer.text.length },
-          effects: setOp.of(null),
-          annotations: [
-            aiEditAnnotation.of({ command: op.command.id, model: answer.model, instruction: op.instruction }),
-            Transaction$1.userEvent.of('input.ai'),
-            isolateHistory.of('full'),
-          ],
-          scrollIntoView: true,
-        });
-        if (typeof this.config.onAccept === 'function') this.config.onAccept({ ...event, from, to: from + answer.text.length });
+        const annotations = [
+          aiEditAnnotation.of({ command: op.command.id, model: answer.model, instruction: op.instruction }),
+          Transaction$1.userEvent.of('input.ai'),
+          isolateHistory.of('full'),
+        ];
+        if (review) {
+          const meta = { source: 'ai-command', command: op.command.id, label: op.command.label, instruction: op.instruction, model: answer.model, op: op.id };
+          this.endings.set(op.id, { decision: 'review' });
+          const proposal = proposeChange(this.view, { from, to, insert: answer.text, meta, annotations, selection: { anchor: from } });
+          if (!proposal) {
+            this.endings.delete(op.id);
+            this.notify('a change is still under review there: accept or reject it first');
+            return false;
+          }
+          if (this.view.state.field(aiState).op) this.view.dispatch({ effects: setOp.of(null) });
+        } else {
+          this.endings.set(op.id, { decision: 'accepted', final: answer.text });
+          this.view.dispatch({
+            changes: { from, to, insert: answer.text },
+            selection: { anchor: from + answer.text.length },
+            effects: setOp.of(null),
+            annotations,
+            scrollIntoView: true,
+          });
+        }
+        if (typeof this.config.onAccept === 'function') this.config.onAccept({ ...event, from, to: from + answer.text.length, review });
         return true;
       } finally {
         this.accepting = false;
@@ -96214,7 +98212,10 @@ var mrmdDocument = (function (exports) {
    * knowing a key: a ✦ in the margin beside the cursor's line opens the box
    * and shows what AI is doing there, buttons show their keys, and
    * `keyHelp()` tells the host which keys act here, now (`formatKey` spells
-   * them).
+   * them). Since 0.19.0 both editors review proposed changes in the text
+   * (`editor.review`, document-review.js): old lines struck through, the
+   * new ones rendered and editable, Accept / Reject on each; AI commands can
+   * answer that way (`ai.mode`), and every command reports its outcome.
    *
    * Build: npm run build:document
    * Output: dist/mrmd-document.iife.min.js (global: mrmdDocument)
@@ -96503,6 +98504,8 @@ var mrmdDocument = (function (exports) {
    *                  document-ai.js. Code cells then also get a ✦ button,
    *                  and a narrow gutter holds the ✦ beside the cursor's
    *                  line (shown even without `lineGutter`).
+   *   review         {onResolved(outcome), onChange(summary)} — reviewing
+   *                  proposed changes (editor.review, document-review.js)
    * @returns editor API
    */
   function createDocumentEditor(target, options = {}) {
@@ -96592,6 +98595,7 @@ var mrmdDocument = (function (exports) {
         onAi: ai ? cell => openAiForCell(cell) : null,
       }) : [],
       ai ? documentAi(ai, codeBlockAt) : [],
+      documentReview(options.review || {}),
       markdown$1({ base: markdownLanguage, codeLanguages: codeBlockLanguage }),
       EditorView.lineWrapping,
       ...(Array.isArray(options.extensions) ? options.extensions : []),
@@ -96726,6 +98730,8 @@ var mrmdDocument = (function (exports) {
         return run;
       },
 
+      ...reviewApi(view),
+
       /** Clear the run states drawn on cells: all, or those in `states`. */
       clearCellStatuses(states) { clearCellStatuses(view, states); },
 
@@ -96750,6 +98756,8 @@ var mrmdDocument = (function (exports) {
       keyHelp() {
         const { sections, open } = ai ? aiKeyHelp(view) : { sections: [], open: null };
         if (sections.some(s => s.exclusive)) return sections;
+        const review = reviewKeyHelp(view.state);
+        if (review) sections.push(review);
         const keys = [];
         if (runsCells && cellToRun(view.state)) {
           keys.push([[CELL_KEYS.run], 'run this cell'], [[CELL_KEYS.runAndAdvance], 'run this cell, then go to the next']);
@@ -96805,6 +98813,32 @@ var mrmdDocument = (function (exports) {
         view.destroy();
         element.classList.remove('mrmd-root');
         delete element.dataset.mrmdThemingMode;
+      },
+    };
+  }
+
+  // What both editors offer for reviewing changes (document-review.js).
+  function reviewApi(view) {
+    return {
+      /**
+       * Turn the text into `text` by the smallest changes, so the cursor,
+       * marks and a review keep their places (setContent replaces it all).
+       */
+      updateContent(text) {
+        const changes = minimalChanges(view.state, String(text ?? ''));
+        if (changes.length) view.dispatch({ changes });
+      },
+      review: {
+        /** Every change until end() is one proposal (an agent writing this file): {id, end()}. */
+        capture(meta) { return captureChanges(view, meta); },
+        /** One change as a proposal: {from, to, insert, meta}. The id, or null over a change still under review. */
+        propose(spec) { return proposeChange(view, spec); },
+        /** {changes, proposals: [{id, meta}], capturing} */
+        summary() { return reviewSummary(view.state); },
+        acceptAll() { return acceptAll(view); },
+        rejectAll() { return rejectAll(view); },
+        next() { return goToNextChunk(view); },
+        previous() { return goToPreviousChunk(view); },
       },
     };
   }
@@ -96885,6 +98919,7 @@ var mrmdDocument = (function (exports) {
       indentUnit.of(' '.repeat(Math.max(1, Number(options.tabSize) || 2))),
       EditorView.lineWrapping,
       ...(Array.isArray(options.extensions) ? options.extensions : []),
+      documentReview(options.review || {}),
       codeBase,
       themeCompartment.of(createCodemirrorTheme(theme)),
       readonlyCompartment.of(options.readonly ? EditorState.readOnly.of(true) : []),
@@ -96903,6 +98938,9 @@ var mrmdDocument = (function (exports) {
       element,
       getContent() { return view.state.doc.toString(); },
       setContent(text) { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: String(text ?? '') } }); },
+      ...reviewApi(view),
+      /** The editor's keys that act here, now (the review's), as the document editor's keyHelp(). */
+      keyHelp() { const review = reviewKeyHelp(view.state); return review ? [review] : []; },
       setTheme(name) {
         theme = resolveTheme(name, systemDark);
         themeName = theme.name;
@@ -96937,7 +98975,7 @@ var mrmdDocument = (function (exports) {
       },
     };
   }
-  const version = '0.18.0-document';
+  const version = '0.19.0-document';
   var documentEntry = { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey, version };
 
   exports.aiEditAnnotation = aiEditAnnotation;
