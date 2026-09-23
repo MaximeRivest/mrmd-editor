@@ -98363,7 +98363,8 @@ var mrmdDocument = (function (exports) {
    * knowing a key: a ✦ in the margin beside the cursor's line opens the box
    * and shows what AI is doing there, buttons show their keys, and
    * `keyHelp()` tells the host which keys act here, now (`formatKey` spells
-   * them). Since 0.20.0 the whole-file editor has AI commands too (`ai`,
+   * them). Since 0.21.0 long lines wrap or not as the host says (`lineWrapping`,
+   * `setLineWrapping`), in both editors. Since 0.20.0 the whole-file editor has AI commands too (`ai`,
    * with `scope` and `language`: a source file's block is the construct at
    * the cursor, a plain-text file's the paragraph). Since 0.19.0 both editors review proposed changes in the text
    * (`editor.review`, document-review.js): old lines struck through, the
@@ -98659,6 +98660,8 @@ var mrmdDocument = (function (exports) {
    *                  line (shown even without `lineGutter`).
    *   review         {onResolved(outcome), onChange(summary)} — reviewing
    *                  proposed changes (editor.review, document-review.js)
+   *   lineWrapping   boolean, default true — long lines wrap at the edge;
+   *                  setLineWrapping(on) changes it
    * @returns editor API
    */
   function createDocumentEditor(target, options = {}) {
@@ -98676,6 +98679,7 @@ var mrmdDocument = (function (exports) {
     const themeCompartment = new Compartment();
     const readonlyCompartment = new Compartment();
     const sourceCompartment = new Compartment();
+    const wrapping = lineWrappingControl(options.lineWrapping);
     const hostServices = documentHostServices({ ...options, lineGutter: !!options.lineGutter });
     const diagrams = diagramsConfig(options.diagrams);
     const ai = aiConfig(options.ai);
@@ -98750,7 +98754,7 @@ var mrmdDocument = (function (exports) {
       ai ? documentAi(ai, (state, pos) => documentPlaceAt(state, pos, codeBlockAt)) : [],
       documentReview(options.review || {}),
       markdown$1({ base: markdownLanguage, codeLanguages: codeBlockLanguage }),
-      EditorView.lineWrapping,
+      wrapping.extension,
       ...(Array.isArray(options.extensions) ? options.extensions : []),
       documentBase,
       themeCompartment.of(createCodemirrorTheme(theme)),
@@ -98820,6 +98824,9 @@ var mrmdDocument = (function (exports) {
       setSourceMode(value) {
         view.dispatch({ effects: sourceCompartment.reconfigure(sourceModeFacet.of(!!value)) });
       },
+
+      /** Wrap long lines at the edge (true) or scroll sideways (false). */
+      setLineWrapping(on) { wrapping.set(view, on); },
 
       /**
        * Draw every diagram again through the host renderer — after the host's
@@ -98970,6 +98977,17 @@ var mrmdDocument = (function (exports) {
     };
   }
 
+  // Whether long lines wrap, switchable: an initial value (default on) and a
+  // setter. The view re-measures itself when the compartment changes.
+  function lineWrappingControl(initial) {
+    const compartment = new Compartment();
+    const ext = on => (on ? EditorView.lineWrapping : []);
+    return {
+      extension: compartment.of(ext(initial !== false)),
+      set(view, on) { view.dispatch({ effects: compartment.reconfigure(ext(!!on)) }); },
+    };
+  }
+
   // What both editors offer for reviewing changes (document-review.js).
   function reviewApi(view) {
     return {
@@ -99023,8 +99041,8 @@ var mrmdDocument = (function (exports) {
    *
    * @param {string|HTMLElement} target
    * @param {Object} options
-   *   doc, filename, theme, dark, readonly, onChange, onSave, review — as for
-   *   the document editor. tabSize (default 2).
+   *   doc, filename, theme, dark, readonly, onChange, onSave, review,
+   *   lineWrapping — as for the document editor. tabSize (default 2).
    *   ai   AI commands, as for the document editor, plus
    *          scope: 'code' (default: a source file; without a selection a
    *                 command acts on the construct at the cursor — function,
@@ -99047,6 +99065,7 @@ var mrmdDocument = (function (exports) {
     const themeCompartment = new Compartment();
     const readonlyCompartment = new Compartment();
     const languageCompartment = new Compartment();
+    const wrapping = lineWrappingControl(options.lineWrapping);
     const saveHandlers = [];
     const changeHandlers = [];
     if (typeof options.onSave === 'function') saveHandlers.push(options.onSave);
@@ -99080,7 +99099,7 @@ var mrmdDocument = (function (exports) {
       search({ top: true }),
       keymap.of(searchKeymap),
       indentUnit.of(' '.repeat(Math.max(1, Number(options.tabSize) || 2))),
-      EditorView.lineWrapping,
+      wrapping.extension,
       ...(Array.isArray(options.extensions) ? options.extensions : []),
       documentReview(options.review || {}),
       // After the gutters above: the ✦ sits next to the text.
@@ -99103,6 +99122,8 @@ var mrmdDocument = (function (exports) {
       element,
       getContent() { return view.state.doc.toString(); },
       setContent(text) { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: String(text ?? '') } }); },
+      /** Wrap long lines at the edge (true) or scroll sideways (false). */
+      setLineWrapping(on) { wrapping.set(view, on); },
       ...reviewApi(view),
       /** Open the AI command box at the cursor (as Mod-j does). False when AI commands are off. */
       openAiMenu() { return !!ai && !!aiControllerOf(view)?.openMenu(); },
@@ -99151,7 +99172,7 @@ var mrmdDocument = (function (exports) {
       },
     };
   }
-  const version = '0.20.0-document';
+  const version = '0.21.0-document';
   var documentEntry = { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey, version };
 
   exports.aiEditAnnotation = aiEditAnnotation;

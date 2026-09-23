@@ -237,3 +237,13 @@ outcomes, `openAiMenu()`, `runAiCommand()`, and `keyHelp()`.
 Only the host's commands with that scope (or `any`) are offered. Internally
 places are found by a place finder (`documentPlaceAt` for documents,
 `filePlaceFinder(scope, language)` here); see document-ai-targets.js.
+
+## Line wrapping (both editors, 0.21.0)
+
+`lineWrapping: false` makes long lines scroll sideways instead of wrapping
+at the edge (default: wrap). `editor.setLineWrapping(on)` switches it
+while the editor is open. Font family and size follow the host theme's
+`--editor-font-family` / `--editor-font-size`, which may be `var()`
+references: a host that changes the custom properties they name changes
+the text, and calls `editor.view.requestMeasure()` when the size of a
+fixed-height editor's content changed.
