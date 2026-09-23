@@ -27390,8 +27390,8 @@ var mrmdDocument = (function (exports) {
    *           result:  {code, out, ms, cancelled?, error?}  (error: it did not run)
    *       answer(runId, text) → Promise<{error?}>
    *       cancel(runId) → Promise
-   *       interrupt?() → Promise              interrupt whatever runs on the kernel
-   *                                           (Stop on a cell another client runs)
+   *       interrupt?(cell) → Promise          interrupt whatever runs on that cell's
+   *                                           kernel (Stop on a cell another client runs)
    *       plotUrl(path) → string              a URL to show a plot while running
    *       savePlots(paths) → Promise<[{src, alt}]>  make them durable; src relative to the document
    *       prepare?(cell) → Promise<{ok, error?, label?}>   before a run (prerequisites)
@@ -27582,7 +27582,7 @@ var mrmdDocument = (function (exports) {
       if (cell && transport.interrupt) {
         for (const o of others.values()) {
           const at = o.panel && o.panel.cell && o.panel.cell();
-          if (at && at.from === cell.from) { transport.interrupt(); return 'other'; }
+          if (at && at.from === cell.from) { transport.interrupt(at); return 'other'; }
         }
       }
       return null;
