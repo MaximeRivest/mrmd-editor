@@ -103,6 +103,13 @@ try {
   await until(`resolved.length === 3`, 'accept all did not resolve');
   assert.deepEqual(await page.evaluate(() => [resolved[2].decision, resolved[2].hunks.length]), ['accepted', 2]);
 
+  // The change at the cursor, from a program (voice commands).
+  await page.evaluate(() => { const p = editor.getContent().indexOf('Last'); editor.review.propose({ from: p, to: p + 4, insert: 'Final' }); });
+  assert.equal(await page.evaluate(() => editor.review.accept(0)), false, 'no change there');
+  assert.equal(await page.evaluate(() => editor.review.reject()), true);
+  await until(`resolved.length === 4 && resolved[3].decision === 'rejected'`, 'reject() did not resolve');
+  await page.evaluate(() => resolved.pop());
+
   // A capture in which nothing changed proposes nothing and leaves no review.
   assert.equal(await page.evaluate(() => editor.review.capture({}).end()), false);
   await until(`!document.querySelector('.mrmd-review-panel')`, 'an empty capture left a review open');

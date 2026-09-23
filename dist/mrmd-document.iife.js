@@ -99008,6 +99008,9 @@ var mrmdDocument = (function (exports) {
         summary() { return reviewSummary(view.state); },
         acceptAll() { return acceptAll(view); },
         rejectAll() { return rejectAll(view); },
+        /** Accept / reject the change at `pos` (default: the cursor). False when there is none. */
+        accept(pos) { return acceptChunk(view, pos); },
+        reject(pos) { return rejectChange(view, pos); },
         first() { return goToFirstChange(view); },
         next() { return goToNextChunk(view); },
         previous() { return goToPreviousChunk(view); },
@@ -99172,7 +99175,7 @@ var mrmdDocument = (function (exports) {
       },
     };
   }
-  const version = '0.21.0-document';
+  const version = '0.22.0-document';
   var documentEntry = { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey, version };
 
   exports.aiEditAnnotation = aiEditAnnotation;

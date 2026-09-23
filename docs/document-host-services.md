@@ -182,6 +182,7 @@ const c = editor.review.capture(meta);                // every change until c.en
 editor.updateContent(text);                           // smallest changes to reach text (keeps cursor, marks, review)
 c.end();                                              // false when nothing changed
 editor.review.summary(); editor.review.first(); editor.review.acceptAll(); editor.review.rejectAll();
+editor.review.accept(pos); editor.review.reject(pos);       // the change at pos (default: the cursor) — 0.22.0
 ```
 
 Only proposals are reviewed: any other edit (typing elsewhere, a

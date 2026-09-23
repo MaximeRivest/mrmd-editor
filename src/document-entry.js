@@ -44,8 +44,8 @@ import { isOutputFence, isOwnedImageLine, formatResult } from './rat-notebook.js
 import * as ratNotebook from './rat-notebook.js';
 import { createNotebookRunner } from './notebook-runner.js';
 import { aiConfig, documentAi, aiControllerOf, aiEditAnnotation, aiKeyHelp } from './document-ai.js';
-import { documentReview, captureChanges, proposeChange, minimalChanges, acceptAll, rejectAll, reviewSummary, reviewKeyHelp, goToFirstChange } from './document-review.js';
-import { goToNextChunk, goToPreviousChunk } from '@codemirror/merge';
+import { documentReview, captureChanges, proposeChange, minimalChanges, acceptAll, rejectAll, rejectChange, reviewSummary, reviewKeyHelp, goToFirstChange } from './document-review.js';
+import { goToNextChunk, goToPreviousChunk, acceptChunk } from '@codemirror/merge';
 import { formatKey } from './key-names.js';
 import { documentPlaceAt, filePlaceFinder } from './document-ai-targets.js';
 import { StreamLanguage, syntaxTree } from '@codemirror/language';
@@ -734,6 +734,9 @@ function reviewApi(view) {
       summary() { return reviewSummary(view.state); },
       acceptAll() { return acceptAll(view); },
       rejectAll() { return rejectAll(view); },
+      /** Accept / reject the change at `pos` (default: the cursor). False when there is none. */
+      accept(pos) { return acceptChunk(view, pos); },
+      reject(pos) { return rejectChange(view, pos); },
       first() { return goToFirstChange(view); },
       next() { return goToNextChunk(view); },
       previous() { return goToPreviousChunk(view); },
@@ -900,7 +903,7 @@ export function createCodeEditor(target, options = {}) {
 }
 
 export { getTheme, getThemeNames };
-export const version = '0.21.0-document';
+export const version = '0.22.0-document';
 
 export { ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey };
 export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey, version };
