@@ -64,7 +64,7 @@
 import { StateField, StateEffect, Annotation, Transaction, Facet, Prec, RangeSet } from '@codemirror/state';
 import { EditorView, Decoration, WidgetType, ViewPlugin, keymap, showTooltip, gutter, GutterMarker } from '@codemirror/view';
 import { isolateHistory } from '@codemirror/commands';
-import { AI_SCOPES, AI_TARGETS, AI_KINDS, aiPlaceAt, describeAiPlace, resolveAiTarget, shapeAiAnswer } from './document-ai-targets.js';
+import { AI_SCOPES, AI_TARGETS, AI_KINDS, describeAiPlace, resolveAiTarget, shapeAiAnswer } from './document-ai-targets.js';
 import { wordDiff } from './word-diff.js';
 import { formatKey } from './key-names.js';
 import { proposeChange } from './document-review.js';
@@ -84,7 +84,7 @@ export const aiEditAnnotation = Annotation.define();
 // The host's configuration and the editor's cell finder, for the
 // controller and the command box (they belong to the editor, not to a state).
 const aiHostFacet = Facet.define({
-  combine: values => values[values.length - 1] || { config: null, cellAt: () => null },
+  combine: values => values[values.length - 1] || { config: null, placeAt: () => ({ kind: 'none', reason: 'AI commands are off' }) },
 });
 
 // Short answers without a line break read best inline, as ghost text; the
@@ -379,7 +379,7 @@ class AiMenuView {
     this.view = view;
     this.ctl = ctl;
     const state = view.state;
-    this.place = aiPlaceAt(state, state.selection.main.head, ctl.cellAt);
+    this.place = ctl.placeAt(state, state.selection.main.head);
     this.commands = this.place.kind === 'none' ? [] : ctl.config.commands.filter(c => c.scope === 'any' || c.scope === this.place.kind);
     this.instructionCommand = this.commands.find(c => c.instruction) || null;
     this.active = 0;
@@ -554,7 +554,7 @@ class AiController {
   }
 
   get config() { return this.view.state.facet(aiHostFacet).config; }
-  get cellAt() { return this.view.state.facet(aiHostFacet).cellAt; }
+  get placeAt() { return this.view.state.facet(aiHostFacet).placeAt; }
 
   update(update) {
     // An operation that went away (discarded, stale, replaced) stops asking,
@@ -633,7 +633,7 @@ class AiController {
     const text = String(instruction).trim();
     if (command.instruction && !text) { this.notify('say what to change'); return false; }
     const state = this.view.state;
-    const resolved = resolveAiTarget(state, command, this.cellAt);
+    const resolved = resolveAiTarget(state, command, this.placeAt);
     if (resolved.error) { this.notify(resolved.error); return false; }
     const replaced = this.view.state.field(aiState).op;
     if (replaced) this.endings.set(replaced.id, { decision: 'replaced' });
@@ -903,7 +903,7 @@ function sparkMarkers(view) {
   let set = RangeSet.empty;
   if (shown) {
     const head = state.selection.main.head;
-    if (aiPlaceAt(state, head, ctl.cellAt).kind !== 'none') {
+    if (ctl.placeAt(state, head).kind !== 'none') {
       set = RangeSet.of([sparkMarkerOf[sparkMode(state)].range(state.doc.lineAt(head).from)]);
     }
   }
@@ -971,7 +971,7 @@ export function aiKeyHelp(view) {
   }
   let open = null;
   if (!ctl.unavailable()) {
-    const place = aiPlaceAt(state, state.selection.main.head, ctl.cellAt);
+    const place = ctl.placeAt(state, state.selection.main.head);
     if (place.kind !== 'none') open = [[AI_KEYS.open], `AI commands: ${describeAiPlace(state, place)} — or click the ✦ beside the line`];
   }
   return { sections, open };
@@ -1072,12 +1072,13 @@ const aiTheme = EditorView.baseTheme({
 
 /**
  * The AI-commands extension. `config` is the validated `ai` option
- * (aiConfig); `cellAt(state, pos)` finds the fenced block at pos.
+ * (aiConfig); `placeAt(state, pos)` says where commands act at pos
+ * (document-ai-targets.js: documentPlaceAt, filePlaceFinder).
  */
-export function documentAi(config, cellAt) {
+export function documentAi(config, placeAt) {
   installKeyframes();
   return [
-    aiHostFacet.of({ config, cellAt }),
+    aiHostFacet.of({ config, placeAt }),
     aiState,
     aiDecorations,
     aiController,

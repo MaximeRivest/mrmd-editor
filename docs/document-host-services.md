@@ -210,3 +210,24 @@ command, label, instruction, scope, kind, language, target, before, after,
 answers: [{text, model, status, error}], shown, decision, final, mode, ms}`
 with `decision` one of accepted, discarded, stopped, stale, replaced,
 closed, review.
+
+## AI commands in the whole-file editor (0.20.0)
+
+`createCodeEditor(el, { ai: { …as for the document editor, scope, language } })`
+gives source and plain-text files the same AI surface: the command box
+(Mod-j), the ✦ beside the cursor's line, suggestions or review (`mode`),
+outcomes, `openAiMenu()`, `runAiCommand()`, and `keyHelp()`.
+
+- `scope: 'code'` (default): a source file. Without a selection, a
+  `selection-or-block` command acts on the outermost syntax construct at the
+  cursor that fits 12 000 characters (a function or class; in a huge one,
+  the construct inside it), in whole lines, with the comment lines right
+  above it. A one-line construct (or a language whose parser gives only
+  tokens) gives way to the lines around it up to blank lines. On a blank
+  line between blocks there is no block. The selection may be anywhere.
+- `scope: 'prose'`: plain text; the block is the paragraph (blank lines).
+- `language`: the name given to the model (`block.language` in requests).
+
+Only the host's commands with that scope (or `any`) are offered. Internally
+places are found by a place finder (`documentPlaceAt` for documents,
+`filePlaceFinder(scope, language)` here); see document-ai-targets.js.

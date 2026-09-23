@@ -23,7 +23,9 @@
  * knowing a key: a ✦ in the margin beside the cursor's line opens the box
  * and shows what AI is doing there, buttons show their keys, and
  * `keyHelp()` tells the host which keys act here, now (`formatKey` spells
- * them). Since 0.19.0 both editors review proposed changes in the text
+ * them). Since 0.20.0 the whole-file editor has AI commands too (`ai`,
+ * with `scope` and `language`: a source file's block is the construct at
+ * the cursor, a plain-text file's the paragraph). Since 0.19.0 both editors review proposed changes in the text
  * (`editor.review`, document-review.js): old lines struck through, the
  * new ones rendered and editable, Accept / Reject on each; AI commands can
  * answer that way (`ai.mode`), and every command reports its outcome.
@@ -44,6 +46,7 @@ import { aiConfig, documentAi, aiControllerOf, aiEditAnnotation, aiKeyHelp } fro
 import { documentReview, captureChanges, proposeChange, minimalChanges, acceptAll, rejectAll, reviewSummary, reviewKeyHelp, goToFirstChange } from './document-review.js';
 import { goToNextChunk, goToPreviousChunk } from '@codemirror/merge';
 import { formatKey } from './key-names.js';
+import { documentPlaceAt, filePlaceFinder } from './document-ai-targets.js';
 import { StreamLanguage, syntaxTree } from '@codemirror/language';
 import { markdown as markdownLang, markdownLanguage } from '@codemirror/lang-markdown';
 
@@ -470,7 +473,7 @@ export function createDocumentEditor(target, options = {}) {
       onCancel: typeof options.onCancelCell === 'function' ? (cell, info) => options.onCancelCell(cell, info) : null,
       onAi: ai ? cell => openAiForCell(cell) : null,
     }) : [],
-    ai ? documentAi(ai, codeBlockAt) : [],
+    ai ? documentAi(ai, (state, pos) => documentPlaceAt(state, pos, codeBlockAt)) : [],
     documentReview(options.review || {}),
     markdownLang({ base: markdownLanguage, codeLanguages: codeBlockLanguage }),
     EditorView.lineWrapping,
@@ -746,8 +749,14 @@ function gotoLine(view, n) {
  *
  * @param {string|HTMLElement} target
  * @param {Object} options
- *   doc, filename, theme, dark, readonly, onChange, onSave — as for the
- *   document editor. tabSize (default 2).
+ *   doc, filename, theme, dark, readonly, onChange, onSave, review — as for
+ *   the document editor. tabSize (default 2).
+ *   ai   AI commands, as for the document editor, plus
+ *          scope: 'code' (default: a source file; without a selection a
+ *                 command acts on the construct at the cursor — function,
+ *                 class, statement group) or 'prose' (plain text: the
+ *                 paragraph), deciding which of `commands` apply;
+ *          language: the file's language, named for the model ('python').
  * @returns editor API (+ setLineMarks(map) — {line: {glyph, title, cls}})
  */
 export function createCodeEditor(target, options = {}) {
@@ -770,6 +779,9 @@ export function createCodeEditor(target, options = {}) {
   if (typeof options.onChange === 'function') changeHandlers.push(options.onChange);
 
   const hostServices = documentHostServices({ ...options, lineGutter: true, wordCompletion: true, codeKeys: true });
+  const ai = aiConfig(options.ai);
+  const aiScope = options.ai && options.ai.scope === 'prose' ? 'prose' : 'code';
+  const aiLanguage = options.ai && typeof options.ai.language === 'string' && options.ai.language ? options.ai.language : 'text';
 
   const codeBase = EditorView.theme({
     '&': { height: '100%', fontSize: '13px' },
@@ -797,6 +809,8 @@ export function createCodeEditor(target, options = {}) {
     EditorView.lineWrapping,
     ...(Array.isArray(options.extensions) ? options.extensions : []),
     documentReview(options.review || {}),
+    // After the gutters above: the ✦ sits next to the text.
+    ai ? documentAi(ai, filePlaceFinder(aiScope, aiLanguage)) : [],
     codeBase,
     themeCompartment.of(createCodemirrorTheme(theme)),
     readonlyCompartment.of(options.readonly ? EditorState.readOnly.of(true) : []),
@@ -816,8 +830,19 @@ export function createCodeEditor(target, options = {}) {
     getContent() { return view.state.doc.toString(); },
     setContent(text) { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: String(text ?? '') } }); },
     ...reviewApi(view),
-    /** The editor's keys that act here, now (the review's), as the document editor's keyHelp(). */
-    keyHelp() { const review = reviewKeyHelp(view.state); return review ? [review] : []; },
+    /** Open the AI command box at the cursor (as Mod-j does). False when AI commands are off. */
+    openAiMenu() { return !!ai && !!aiControllerOf(view)?.openMenu(); },
+    /** Run an AI command on the selection or cursor, without the box. */
+    runAiCommand(id, opts) { return !!ai && !!aiControllerOf(view)?.run(id, opts); },
+    /** The editor's keys that act here, now (AI commands, the review), as the document editor's keyHelp(). */
+    keyHelp() {
+      const { sections, open } = ai ? aiKeyHelp(view) : { sections: [], open: null };
+      if (sections.some(s => s.exclusive)) return sections;
+      const review = reviewKeyHelp(view.state);
+      if (review) sections.push(review);
+      if (open) sections.push({ label: aiScope === 'prose' ? 'text' : aiLanguage + ' file', keys: [open] });
+      return sections;
+    },
     setTheme(name) {
       theme = resolveTheme(name, systemDark);
       themeName = theme.name;
@@ -854,7 +879,7 @@ export function createCodeEditor(target, options = {}) {
 }
 
 export { getTheme, getThemeNames };
-export const version = '0.19.0-document';
+export const version = '0.20.0-document';
 
 export { ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey };
 export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey, version };

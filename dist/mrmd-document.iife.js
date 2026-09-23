@@ -18829,6 +18829,22 @@ var mrmdDocument = (function (exports) {
       return field ? field.tree : Tree.empty;
   }
   /**
+  Try to get a parse tree that spans at least up to `upto`. The
+  method will do at most `timeout` milliseconds of work to parse
+  up to that point if the tree isn't already available.
+  */
+  function ensureSyntaxTree(state, upto, timeout = 50) {
+      var _a;
+      let parse = (_a = state.field(Language.state, false)) === null || _a === void 0 ? void 0 : _a.context;
+      if (!parse)
+          return null;
+      let oldVieport = parse.viewport;
+      parse.updateViewport({ from: 0, to: upto });
+      let result = parse.isDone(upto) || parse.work(timeout, upto) ? parse.tree : null;
+      parse.updateViewport(oldVieport);
+      return result;
+  }
+  /**
   Lezer-style
   [`Input`](https://lezer.codemirror.net/docs/ref#common.Input)
   object for a [`Text`](https://codemirror.net/6/docs/ref/#state.Text) object.
@@ -57815,6 +57831,18 @@ var mrmdDocument = (function (exports) {
    * What an AI command acts on, and what goes along with it — pure functions
    * of the editor state, no DOM, no model.
    *
+   * Where commands act is a place, found by the editor's place finder:
+   *   {kind: 'prose', block: {from, to} | null}        a paragraph or heading
+   *   {kind: 'code', language, bounds: {from, to},     code: a document's cell
+   *    block: {from, to} | null, label}                 (bounds = block = its
+   *                                                     code), or a source file
+   *                                                     (bounds = the file,
+   *                                                     block = the construct
+   *                                                     at the cursor)
+   *   {kind: 'none', reason}                           nothing to act on here
+   * documentPlaceAt is the document editor's (Markdown with cells);
+   * filePlaceFinder(scope, language) the whole-file editor's.
+   *
    * A command declares
    *   scope:  'prose' | 'code' | 'any'   where it makes sense
    *   target: 'cursor'                   insert at the cursor
@@ -57845,16 +57873,14 @@ var mrmdDocument = (function (exports) {
   const PROSE_BLOCK = /^(?:Paragraph|ATXHeading[1-6]|SetextHeading[12]|HTMLBlock)$/;
 
   /**
-   * Where a position is, for AI commands.
+   * Where a position is in a Markdown document, for AI commands: never the
+   * YAML header or a result block; in a cell, its code; else prose.
    * @param {import('@codemirror/state').EditorState} state
    * @param {number} pos
    * @param {(state, pos) => ({lang: string, code: string, from: number, to: number} | null)} cellAt
    *   the fenced block at pos (document-entry's codeBlockAt)
-   * @returns {{kind: 'prose', block: {from: number, to: number} | null}
-   *   | {kind: 'code', cell: {from: number, to: number, codeFrom: number, codeTo: number, language: string}}
-   *   | {kind: 'none', reason: string}}
    */
-  function aiPlaceAt(state, pos, cellAt) {
+  function documentPlaceAt(state, pos, cellAt) {
     const header = findFrontmatterRange$1(state.doc);
     if (header && pos >= header.from && pos <= header.to) {
       return { kind: 'none', reason: 'AI commands leave the document header alone' };
@@ -57863,12 +57889,97 @@ var mrmdDocument = (function (exports) {
     if (cell) {
       if (isOutputFence('```' + cell.lang)) return { kind: 'none', reason: 'a result block is rewritten by the next run' };
       const codeFrom = Math.min(state.doc.lineAt(cell.from).to + 1, state.doc.length);
-      return {
-        kind: 'code',
-        cell: { from: cell.from, to: cell.to, codeFrom, codeTo: codeFrom + cell.code.length, language: (cell.lang || 'text').toLowerCase() },
-      };
+      const code = { from: codeFrom, to: codeFrom + cell.code.length };
+      const language = (cell.lang || 'text').toLowerCase();
+      return { kind: 'code', language, bounds: code, block: code, label: language + ' cell' };
     }
     return { kind: 'prose', block: proseBlockAt(state, pos) };
+  }
+
+  // A block a command acts on without a selection is at most this long: past
+  // it, a smaller one is taken (the answer is slower and costlier than the
+  // person expects from "this block").
+  const FILE_BLOCK_MAX = 12000;
+
+  /**
+   * The place finder of a whole-file editor. `scope` 'code' (a source file:
+   * the block is the construct at the cursor) or 'prose' (plain text: the
+   * block is the paragraph); `language` names the code for the model.
+   */
+  function filePlaceFinder(scope, language = 'text') {
+    if (scope === 'prose') return (state, pos) => ({ kind: 'prose', block: paragraphAround(state, pos) });
+    return (state, pos) => {
+      const block = codeBlockAround(state, pos);
+      const label = block ? linesLabel(state, block) : 'at the cursor';
+      return { kind: 'code', language, bounds: { from: 0, to: state.doc.length }, block, label };
+    };
+  }
+
+  function linesLabel(state, range) {
+    const a = state.doc.lineAt(range.from).number, b = state.doc.lineAt(Math.max(range.from, range.to)).number;
+    return a === b ? 'line ' + a : `lines ${a}\u2013${b}`;
+  }
+
+  const isBlank = line => !line.text.trim();
+
+  /** The lines around pos up to the nearest blank lines, or null on a blank line. */
+  function paragraphAround(state, pos) {
+    const doc = state.doc;
+    let first = doc.lineAt(pos);
+    if (isBlank(first)) return null;
+    let last = first;
+    while (first.number > 1 && !isBlank(doc.line(first.number - 1))) first = doc.line(first.number - 1);
+    while (last.number < doc.lines && !isBlank(doc.line(last.number + 1))) last = doc.line(last.number + 1);
+    return { from: first.from, to: last.to };
+  }
+
+  /**
+   * The code a command without a selection acts on in a source file: the
+   * outermost syntax construct at the cursor that fits FILE_BLOCK_MAX (a
+   * function, a class, a statement; in a huge one, the construct inside it),
+   * whole lines, with the comment lines right above it. A construct on one
+   * line (or a language without a real parser, whose tree holds only tokens)
+   * gives way to the lines around it up to blank lines. Null on a blank line
+   * between blocks.
+   */
+  function codeBlockAround(state, pos) {
+    const doc = state.doc;
+    const tree = ensureSyntaxTree(state, Math.min(doc.length, pos + 2000), 50) || syntaxTree(state);
+    let range = null;
+    for (const side of [1, -1]) {
+      let node = tree.resolveInner(pos, side);
+      const chain = [];
+      for (; node && node.parent; node = node.parent) chain.push(node);
+      // chain: innermost … child of the top node; take the outermost that fits.
+      for (let i = chain.length - 1; i >= 0; i--) {
+        const n = chain[i];
+        // A node that ends after a line break (Python's bodies do) ends on the line before.
+        const end = n.to > n.from && doc.lineAt(n.to).from === n.to ? n.to - 1 : n.to;
+        const from = doc.lineAt(n.from).from, to = doc.lineAt(end).to;
+        if (to - from <= FILE_BLOCK_MAX && n.from <= pos && n.to >= pos) { range = { from, to }; break; }
+      }
+      if (range) break;
+    }
+    if (range && doc.lineAt(range.from).number !== doc.lineAt(range.to).number) {
+      // Comments right above belong to what they describe.
+      let first = doc.lineAt(range.from);
+      while (first.number > 1) {
+        const above = doc.line(first.number - 1);
+        if (isBlank(above) || !isCommentLine(tree, above)) break;
+        first = above;
+      }
+      return { from: first.from, to: range.to };
+    }
+    const paragraph = paragraphAround(state, pos);
+    if (paragraph && paragraph.to - paragraph.from <= FILE_BLOCK_MAX) return paragraph;
+    return range || (isBlank(doc.lineAt(pos)) ? null : { from: doc.lineAt(pos).from, to: doc.lineAt(pos).to });
+  }
+
+  // A line that is only a comment: the syntax at its first non-space character is one.
+  function isCommentLine(tree, line) {
+    const indent = line.text.length - line.text.trimStart().length;
+    const node = tree.resolveInner(line.from + indent, 1);
+    return /comment/i.test(node.name) && node.to >= line.to - (line.text.length - line.text.trimEnd().length);
   }
 
   /** The paragraph or heading around pos, else its non-blank line, else null. */
@@ -57888,38 +57999,43 @@ var mrmdDocument = (function (exports) {
    * The range a command acts on, and the request a host needs to answer it.
    * @param {import('@codemirror/state').EditorState} state
    * @param {{id: string, scope: string, target: string, kind: string}} command
-   * @param {Function} cellAt
+   * @param {(state, pos) => object} placeAt  the editor's place finder
    * @returns {{error: string}
    *   | {scope: 'prose'|'code', kind: string,
    *      target: {from: number, to: number, text: string},
    *      before: string, after: string,
    *      block: {type: 'prose'|'code', language: string|null, from: number, to: number, text: string}}}
    */
-  function resolveAiTarget(state, command, cellAt) {
+  function resolveAiTarget(state, command, placeAt) {
     const doc = state.doc;
     const sel = state.selection.main;
-    const place = aiPlaceAt(state, sel.head, cellAt);
+    const place = placeAt(state, sel.head);
     if (place.kind === 'none') return { error: place.reason };
     if (command.scope !== 'any' && command.scope !== place.kind) {
-      return { error: place.kind === 'code' ? 'this command is for prose, not code' : 'this command works inside a code cell' };
+      return { error: place.kind === 'code' ? 'this command is for prose, not code' : 'this command works on code' };
     }
 
     let from, to, block;
     if (place.kind === 'code') {
-      const { codeFrom, codeTo, language } = place.cell;
-      block = { type: 'code', language, from: codeFrom, to: codeTo };
-      if (!sel.empty && (sel.from < codeFrom || sel.to > codeTo)) return { error: 'the selection goes beyond this cell' };
-      const head = Math.min(Math.max(sel.head, codeFrom), codeTo);
+      const { bounds, language } = place;
+      if (!sel.empty && (sel.from < bounds.from || sel.to > bounds.to)) return { error: 'the selection goes beyond this cell' };
+      const head = Math.min(Math.max(sel.head, bounds.from), bounds.to);
+      const line = doc.lineAt(head);
+      const lineRange = { from: Math.max(line.from, bounds.from), to: Math.min(line.to, bounds.to) };
+      // What goes along as "the block": the construct, else the cursor's line.
+      const around = place.block || lineRange;
+      block = { type: 'code', language, from: around.from, to: around.to };
       if (command.target === 'cursor') {
         from = to = head;
       } else if (!sel.empty) {
         ({ from, to } = sel);
       } else if (command.target === 'selection-or-line') {
-        if (sel.head < codeFrom || sel.head > codeTo) return { error: 'put the cursor on a line of code' };
-        const line = doc.lineAt(head);
-        from = Math.max(line.from, codeFrom); to = Math.min(line.to, codeTo);
+        if (sel.head < bounds.from || sel.head > bounds.to) return { error: 'put the cursor on a line of code' };
+        ({ from, to } = lineRange);
+      } else if (place.block) {
+        ({ from, to } = place.block);
       } else {
-        from = codeFrom; to = codeTo;
+        return { error: 'put the cursor in the code, or select some' };
       }
     } else {
       const around = place.block || { from: doc.lineAt(sel.head).from, to: doc.lineAt(sel.head).to };
@@ -57955,7 +58071,7 @@ var mrmdDocument = (function (exports) {
     const sel = state.selection.main;
     if (place.kind === 'none') return place.reason;
     const selected = sel.empty ? '' : `selection · ${sel.to - sel.from} characters`;
-    if (place.kind === 'code') return selected || `${place.cell.language} cell`;
+    if (place.kind === 'code') return selected || place.label;
     return selected || (place.block ? 'this paragraph' : 'at the cursor');
   }
 
@@ -60041,7 +60157,7 @@ var mrmdDocument = (function (exports) {
   // The host's configuration and the editor's cell finder, for the
   // controller and the command box (they belong to the editor, not to a state).
   const aiHostFacet = Facet.define({
-    combine: values => values[values.length - 1] || { config: null, cellAt: () => null },
+    combine: values => values[values.length - 1] || { config: null, placeAt: () => ({ kind: 'none', reason: 'AI commands are off' }) },
   });
 
   // Short answers without a line break read best inline, as ghost text; the
@@ -60336,7 +60452,7 @@ var mrmdDocument = (function (exports) {
       this.view = view;
       this.ctl = ctl;
       const state = view.state;
-      this.place = aiPlaceAt(state, state.selection.main.head, ctl.cellAt);
+      this.place = ctl.placeAt(state, state.selection.main.head);
       this.commands = this.place.kind === 'none' ? [] : ctl.config.commands.filter(c => c.scope === 'any' || c.scope === this.place.kind);
       this.instructionCommand = this.commands.find(c => c.instruction) || null;
       this.active = 0;
@@ -60511,7 +60627,7 @@ var mrmdDocument = (function (exports) {
     }
 
     get config() { return this.view.state.facet(aiHostFacet).config; }
-    get cellAt() { return this.view.state.facet(aiHostFacet).cellAt; }
+    get placeAt() { return this.view.state.facet(aiHostFacet).placeAt; }
 
     update(update) {
       // An operation that went away (discarded, stale, replaced) stops asking,
@@ -60590,7 +60706,7 @@ var mrmdDocument = (function (exports) {
       const text = String(instruction).trim();
       if (command.instruction && !text) { this.notify('say what to change'); return false; }
       const state = this.view.state;
-      const resolved = resolveAiTarget(state, command, this.cellAt);
+      const resolved = resolveAiTarget(state, command, this.placeAt);
       if (resolved.error) { this.notify(resolved.error); return false; }
       const replaced = this.view.state.field(aiState).op;
       if (replaced) this.endings.set(replaced.id, { decision: 'replaced' });
@@ -60860,7 +60976,7 @@ var mrmdDocument = (function (exports) {
     let set = RangeSet.empty;
     if (shown) {
       const head = state.selection.main.head;
-      if (aiPlaceAt(state, head, ctl.cellAt).kind !== 'none') {
+      if (ctl.placeAt(state, head).kind !== 'none') {
         set = RangeSet.of([sparkMarkerOf[sparkMode(state)].range(state.doc.lineAt(head).from)]);
       }
     }
@@ -60928,7 +61044,7 @@ var mrmdDocument = (function (exports) {
     }
     let open = null;
     if (!ctl.unavailable()) {
-      const place = aiPlaceAt(state, state.selection.main.head, ctl.cellAt);
+      const place = ctl.placeAt(state, state.selection.main.head);
       if (place.kind !== 'none') open = [[AI_KEYS.open], `AI commands: ${describeAiPlace(state, place)} — or click the ✦ beside the line`];
     }
     return { sections, open };
@@ -61029,12 +61145,13 @@ var mrmdDocument = (function (exports) {
 
   /**
    * The AI-commands extension. `config` is the validated `ai` option
-   * (aiConfig); `cellAt(state, pos)` finds the fenced block at pos.
+   * (aiConfig); `placeAt(state, pos)` says where commands act at pos
+   * (document-ai-targets.js: documentPlaceAt, filePlaceFinder).
    */
-  function documentAi(config, cellAt) {
+  function documentAi(config, placeAt) {
     installKeyframes$1();
     return [
-      aiHostFacet.of({ config, cellAt }),
+      aiHostFacet.of({ config, placeAt }),
       aiState,
       aiDecorations,
       aiController,
@@ -98220,7 +98337,9 @@ var mrmdDocument = (function (exports) {
    * knowing a key: a ✦ in the margin beside the cursor's line opens the box
    * and shows what AI is doing there, buttons show their keys, and
    * `keyHelp()` tells the host which keys act here, now (`formatKey` spells
-   * them). Since 0.19.0 both editors review proposed changes in the text
+   * them). Since 0.20.0 the whole-file editor has AI commands too (`ai`,
+   * with `scope` and `language`: a source file's block is the construct at
+   * the cursor, a plain-text file's the paragraph). Since 0.19.0 both editors review proposed changes in the text
    * (`editor.review`, document-review.js): old lines struck through, the
    * new ones rendered and editable, Accept / Reject on each; AI commands can
    * answer that way (`ai.mode`), and every command reports its outcome.
@@ -98602,7 +98721,7 @@ var mrmdDocument = (function (exports) {
         onCancel: typeof options.onCancelCell === 'function' ? (cell, info) => options.onCancelCell(cell, info) : null,
         onAi: ai ? cell => openAiForCell(cell) : null,
       }) : [],
-      ai ? documentAi(ai, codeBlockAt) : [],
+      ai ? documentAi(ai, (state, pos) => documentPlaceAt(state, pos, codeBlockAt)) : [],
       documentReview(options.review || {}),
       markdown$1({ base: markdownLanguage, codeLanguages: codeBlockLanguage }),
       EditorView.lineWrapping,
@@ -98878,8 +98997,14 @@ var mrmdDocument = (function (exports) {
    *
    * @param {string|HTMLElement} target
    * @param {Object} options
-   *   doc, filename, theme, dark, readonly, onChange, onSave — as for the
-   *   document editor. tabSize (default 2).
+   *   doc, filename, theme, dark, readonly, onChange, onSave, review — as for
+   *   the document editor. tabSize (default 2).
+   *   ai   AI commands, as for the document editor, plus
+   *          scope: 'code' (default: a source file; without a selection a
+   *                 command acts on the construct at the cursor — function,
+   *                 class, statement group) or 'prose' (plain text: the
+   *                 paragraph), deciding which of `commands` apply;
+   *          language: the file's language, named for the model ('python').
    * @returns editor API (+ setLineMarks(map) — {line: {glyph, title, cls}})
    */
   function createCodeEditor(target, options = {}) {
@@ -98902,6 +99027,9 @@ var mrmdDocument = (function (exports) {
     if (typeof options.onChange === 'function') changeHandlers.push(options.onChange);
 
     const hostServices = documentHostServices({ ...options, lineGutter: true, wordCompletion: true, codeKeys: true });
+    const ai = aiConfig(options.ai);
+    const aiScope = options.ai && options.ai.scope === 'prose' ? 'prose' : 'code';
+    const aiLanguage = options.ai && typeof options.ai.language === 'string' && options.ai.language ? options.ai.language : 'text';
 
     const codeBase = EditorView.theme({
       '&': { height: '100%', fontSize: '13px' },
@@ -98929,6 +99057,8 @@ var mrmdDocument = (function (exports) {
       EditorView.lineWrapping,
       ...(Array.isArray(options.extensions) ? options.extensions : []),
       documentReview(options.review || {}),
+      // After the gutters above: the ✦ sits next to the text.
+      ai ? documentAi(ai, filePlaceFinder(aiScope, aiLanguage)) : [],
       codeBase,
       themeCompartment.of(createCodemirrorTheme(theme)),
       readonlyCompartment.of(options.readonly ? EditorState.readOnly.of(true) : []),
@@ -98948,8 +99078,19 @@ var mrmdDocument = (function (exports) {
       getContent() { return view.state.doc.toString(); },
       setContent(text) { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: String(text ?? '') } }); },
       ...reviewApi(view),
-      /** The editor's keys that act here, now (the review's), as the document editor's keyHelp(). */
-      keyHelp() { const review = reviewKeyHelp(view.state); return review ? [review] : []; },
+      /** Open the AI command box at the cursor (as Mod-j does). False when AI commands are off. */
+      openAiMenu() { return !!ai && !!aiControllerOf(view)?.openMenu(); },
+      /** Run an AI command on the selection or cursor, without the box. */
+      runAiCommand(id, opts) { return !!ai && !!aiControllerOf(view)?.run(id, opts); },
+      /** The editor's keys that act here, now (AI commands, the review), as the document editor's keyHelp(). */
+      keyHelp() {
+        const { sections, open } = ai ? aiKeyHelp(view) : { sections: [], open: null };
+        if (sections.some(s => s.exclusive)) return sections;
+        const review = reviewKeyHelp(view.state);
+        if (review) sections.push(review);
+        if (open) sections.push({ label: aiScope === 'prose' ? 'text' : aiLanguage + ' file', keys: [open] });
+        return sections;
+      },
       setTheme(name) {
         theme = resolveTheme(name, systemDark);
         themeName = theme.name;
@@ -98984,7 +99125,7 @@ var mrmdDocument = (function (exports) {
       },
     };
   }
-  const version = '0.19.0-document';
+  const version = '0.20.0-document';
   var documentEntry = { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey, version };
 
   exports.aiEditAnnotation = aiEditAnnotation;
