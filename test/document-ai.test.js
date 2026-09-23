@@ -50,7 +50,7 @@ try {
   const SPARK = `document.querySelector('.mrmd-ai-spark-gutter .cm-gutterElement:not([style*="visibility"]) .mrmd-ai-spark')`;
   const sparkMode = () => page.evaluate(`${SPARK}?.dataset.mode ?? null`);
   const keyHelp = () => page.evaluate(() => editor.keyHelp().map(s => ({ ...s, keys: s.keys.map(([names, what]) => [names.join(' '), what]) })));
-  await page.bringToFront(); // the spark shows while the editor has focus, in a focused page
+  await page.emulateFocusedPage(true); // the spark shows while the editor has focus, in a focused page
 
   // The spark: a ✦ in the margin of the cursor's line, faint at rest; lit
   // for a selection. It is not document text.
