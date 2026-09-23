@@ -19,7 +19,11 @@
  * time, waiting for input, last verdict) — document-cell-controls.js.
  * Since 0.17.0 AI commands (`ai`): a command box at the cursor (Mod-j) and
  * the answer as a suggestion beside the text until accepted; the host
- * lends the model — document-ai.js.
+ * lends the model — document-ai.js. Since 0.18.0 they can be found without
+ * knowing a key: a ✦ in the margin beside the cursor's line opens the box
+ * and shows what AI is doing there, buttons show their keys, and
+ * `keyHelp()` tells the host which keys act here, now (`formatKey` spells
+ * them).
  *
  * Build: npm run build:document
  * Output: dist/mrmd-document.iife.min.js (global: mrmdDocument)
@@ -29,11 +33,12 @@ import { EditorView, basicSetup } from 'codemirror';
 import { EditorState, Compartment, Prec } from '@codemirror/state';
 import { keymap, placeholder, layer, RectangleMarker } from '@codemirror/view';
 import { cellRunExtension, showCellRun } from './document-cell-run.js';
-import { cellControls, setCellStatus, clearCellStatuses } from './document-cell-controls.js';
+import { cellControls, setCellStatus, clearCellStatuses, CELL_KEYS } from './document-cell-controls.js';
 import { isOutputFence, isOwnedImageLine, formatResult } from './rat-notebook.js';
 import * as ratNotebook from './rat-notebook.js';
 import { createNotebookRunner } from './notebook-runner.js';
-import { aiConfig, documentAi, aiControllerOf, aiEditAnnotation } from './document-ai.js';
+import { aiConfig, documentAi, aiControllerOf, aiEditAnnotation, aiKeyHelp } from './document-ai.js';
+import { formatKey } from './key-names.js';
 import { StreamLanguage, syntaxTree } from '@codemirror/language';
 import { markdown as markdownLang, markdownLanguage } from '@codemirror/lang-markdown';
 
@@ -367,7 +372,9 @@ function resolveTheme(name, dark) {
  *                  button.
  *   ai             AI commands: {commands, run, model?, available?,
  *                  beforeAccept?, onAccept?, notify?, escalate?} — see
- *                  document-ai.js. Code cells then also get a ✦ button.
+ *                  document-ai.js. Code cells then also get a ✦ button,
+ *                  and a narrow gutter holds the ✦ beside the cursor's
+ *                  line (shown even without `lineGutter`).
  * @returns editor API
  */
 export function createDocumentEditor(target, options = {}) {
@@ -388,6 +395,15 @@ export function createDocumentEditor(target, options = {}) {
   const hostServices = documentHostServices({ ...options, lineGutter: !!options.lineGutter });
   const diagrams = diagramsConfig(options.diagrams);
   const ai = aiConfig(options.ai);
+  const runsCells = typeof options.onRunCell === 'function';
+
+  // The cell Mod-Enter and Shift-Enter run: the fenced block at the
+  // cursor, unless it is empty or a result block. The keys fall through
+  // (their default behavior) everywhere else.
+  const cellToRun = state => {
+    const cell = codeBlockAt(state, state.selection.main.head);
+    return cell && cell.code.trim() && !isOutputFence('```' + cell.lang) ? cell : null;
+  };
 
   const documentBase = EditorView.theme({
     '&': { height: '100%', fontSize: '16px' },
@@ -397,7 +413,8 @@ export function createDocumentEditor(target, options = {}) {
       lineHeight: '1.6',
     },
     '.cm-content': { padding: '0', maxWidth: 'none' },
-    '.cm-gutters': { display: options.lineGutter ? 'flex' : 'none' },
+    // The host's marker gutter, and the AI spark's (document-ai.js).
+    '.cm-gutters': { display: options.lineGutter || ai ? 'flex' : 'none' },
     // CM's gutter base theme forces display:flex !important. Prose keeps only
     // the opt-in host marker gutter, not code-editor line/fold gutters.
     '.cm-gutter.cm-lineNumbers': { display: 'none !important' },
@@ -418,19 +435,19 @@ export function createDocumentEditor(target, options = {}) {
     // Highest precedence: Mod-Enter must win over basicSetup's insertBlankLine,
     // but only when the cursor sits in a fenced code block AND the host wired
     // a handler. Otherwise the key falls through to its default behavior.
-    typeof options.onRunCell === 'function' ? Prec.highest(keymap.of([{
-      key: 'Mod-Enter',
+    runsCells ? Prec.highest(keymap.of([{
+      key: CELL_KEYS.run,
       run: (v) => {
-        const cell = codeBlockAt(v.state, v.state.selection.main.head);
-        if (!cell || !cell.code.trim() || isOutputFence('```' + cell.lang)) return false;
+        const cell = cellToRun(v.state);
+        if (!cell) return false;
         options.onRunCell(cell, { advance: false });
         return true;
       },
     }, {
-      key: 'Shift-Enter',
+      key: CELL_KEYS.runAndAdvance,
       run: (v) => {
-        const cell = codeBlockAt(v.state, v.state.selection.main.head);
-        if (!cell || !cell.code.trim() || isOutputFence('```' + cell.lang)) return false;
+        const cell = cellToRun(v.state);
+        if (!cell) return false;
         options.onRunCell(cell, { advance: true });
         return true;
       },
@@ -439,7 +456,7 @@ export function createDocumentEditor(target, options = {}) {
     basicSetup,
     hostServices.extension,
     cellRunExtension,
-    typeof options.onRunCell === 'function' ? cellControls({
+    runsCells ? cellControls({
       cellAt: codeBlockAt,
       runnable: runnableLanguage(options.runnableLanguages, diagrams),
       onRun: cell => options.onRunCell(cell, { advance: false }),
@@ -592,6 +609,28 @@ export function createDocumentEditor(target, options = {}) {
      * `runAiCommand('grammar')`, `runAiCommand('edit', {instruction})`.
      */
     runAiCommand(id, opts) { return !!ai && !!aiControllerOf(view)?.run(id, opts); },
+
+    /**
+     * The editor's keys that act here, now — for the host's keyboard help.
+     * Sections {label, keys: [[names, what]], exclusive?}, most local
+     * first: the open AI command box (exclusive: it owns the keyboard), a
+     * suggestion, then the cell or document at the cursor (run keys, the
+     * AI command box). `names` are CodeMirror key names; the bundle's
+     * `formatKey` spells them. Keys the host binds itself (save, search,
+     * completion) are the host's to list.
+     */
+    keyHelp() {
+      const { sections, open } = ai ? aiKeyHelp(view) : { sections: [], open: null };
+      if (sections.some(s => s.exclusive)) return sections;
+      const keys = [];
+      if (runsCells && cellToRun(view.state)) {
+        keys.push([[CELL_KEYS.run], 'run this cell'], [[CELL_KEYS.runAndAdvance], 'run this cell, then go to the next']);
+      }
+      if (open) keys.push(open);
+      const here = codeBlockAt(view.state, view.state.selection.main.head);
+      if (keys.length) sections.push({ label: here ? `${here.lang || 'code'} cell` : 'document', keys });
+      return sections;
+    },
 
     /**
      * Draw `cell`'s run state on the cell: {state: 'queued' | 'running' |
@@ -772,7 +811,7 @@ export function createCodeEditor(target, options = {}) {
 }
 
 export { getTheme, getThemeNames };
-export const version = '0.17.0-document';
+export const version = '0.18.0-document';
 
-export { ratNotebook, createNotebookRunner, aiEditAnnotation };
-export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, version };
+export { ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey };
+export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey, version };

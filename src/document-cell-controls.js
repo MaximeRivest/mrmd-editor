@@ -25,6 +25,14 @@
 import { StateField, StateEffect, MapMode } from '@codemirror/state';
 import { EditorView, Decoration, WidgetType, ViewPlugin } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
+import { formatKey } from './key-names.js';
+import { AI_KEYS } from './document-ai.js';
+
+/** The keys that run the cell at the cursor (bound by the document editor), in CodeMirror notation. */
+export const CELL_KEYS = Object.freeze({
+  run: 'Mod-Enter',
+  runAndAdvance: 'Shift-Enter',
+});
 
 const setStatusEffect = StateEffect.define();
 
@@ -97,8 +105,6 @@ function statusText(status) {
   }
 }
 
-const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
-
 class CellToolbarWidget extends WidgetType {
   constructor(status, config) {
     super();
@@ -143,8 +149,8 @@ class CellToolbarWidget extends WidgetType {
         bar.appendChild(button('mrmd-cell-btn-stop', '■ Stop', title, cell => config.onCancel(cell, { state: status.state })));
       }
     } else {
-      if (config.onAi) bar.appendChild(button('mrmd-cell-btn-ai', '✦', 'AI commands for this cell (' + (isMac ? '⌘' : 'Ctrl') + '+J)', config.onAi));
-      bar.appendChild(button('mrmd-cell-btn-run', '▶ Run', 'Run this cell (' + (isMac ? '⌘' : 'Ctrl') + '+Enter)', config.onRun));
+      if (config.onAi) bar.appendChild(button('mrmd-cell-btn-ai', '✦', `AI commands for this cell (${formatKey(AI_KEYS.open)})`, config.onAi));
+      bar.appendChild(button('mrmd-cell-btn-run', '▶ Run', `Run this cell (${formatKey(CELL_KEYS.run)})`, config.onRun));
     }
     if (status && (status.state === 'running' || status.state === 'waiting')) {
       bar._timer = setInterval(() => { text.textContent = statusText(status); }, 1000);

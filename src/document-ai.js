@@ -32,17 +32,34 @@
  * every mainstream editor. Several answers to the same command ("Another")
  * are kept side by side and can be stepped through.
  *
- * Keys: Mod-j opens the command box. Tab accepts (with the cursor in the
- * suggested range; elsewhere Tab keeps its meaning), Escape discards,
- * Alt-] and Alt-[ step through the answers (Alt-] past the last asks for
- * another).
+ * Keys (AI_KEYS): Mod-j opens the command box. Tab accepts (with the
+ * cursor in the suggested range; elsewhere Tab keeps its meaning), Escape
+ * discards, Alt-] and Alt-[ step through the answers (Alt-] past the last
+ * asks for another).
+ *
+ * Finding them without knowing them: a ✦ in the margin beside the
+ * cursor's line opens the box on a click, and says what it is doing — at
+ * rest, lit for a selection or an open box, pulsing while an answer is
+ * written. Every button that has a key shows it, the box opened any other
+ * way than its key names that key, and aiKeyHelp() tells the host which
+ * keys act here, now (editor.keyHelp()).
  */
 
-import { StateField, StateEffect, Annotation, Transaction, Facet, Prec } from '@codemirror/state';
-import { EditorView, Decoration, WidgetType, ViewPlugin, keymap, showTooltip } from '@codemirror/view';
+import { StateField, StateEffect, Annotation, Transaction, Facet, Prec, RangeSet } from '@codemirror/state';
+import { EditorView, Decoration, WidgetType, ViewPlugin, keymap, showTooltip, gutter, GutterMarker } from '@codemirror/view';
 import { isolateHistory } from '@codemirror/commands';
 import { AI_SCOPES, AI_TARGETS, AI_KINDS, aiPlaceAt, describeAiPlace, resolveAiTarget, shapeAiAnswer } from './document-ai-targets.js';
 import { wordDiff } from './word-diff.js';
+import { formatKey } from './key-names.js';
+
+/** The keys of AI commands, in CodeMirror notation. Labels spell them with formatKey. */
+export const AI_KEYS = Object.freeze({
+  open: 'Mod-j',
+  accept: 'Tab',
+  discard: 'Escape',
+  next: 'Alt-]',
+  previous: 'Alt-[',
+});
 
 /** On an accepted suggestion's transaction: {command, model, instruction}. */
 export const aiEditAnnotation = Annotation.define();
@@ -89,7 +106,7 @@ export function aiConfig(option) {
 
 // ─── state ──────────────────────────────────────────────────────────
 
-const setMenu = StateEffect.define();        // {pos} | null
+const setMenu = StateEffect.define();        // {pos, byKey} | null — byKey: opened with AI_KEYS.open
 const setOp = StateEffect.define();          // Operation | null
 const patchAnswer = StateEffect.define();    // {opId, index, text?, model?, status?, error?}
 const addAnswer = StateEffect.define();      // {opId}
@@ -109,7 +126,7 @@ const aiState = StateField.define({
     if (tr.docChanged) {
       if (menu) {
         const pos = tr.changes.mapPos(menu.pos);
-        if (pos !== menu.pos) menu = { pos };
+        if (pos !== menu.pos) menu = { ...menu, pos };
       }
       if (op) {
         const { from, to } = op.target;
@@ -141,11 +158,35 @@ const aiState = StateField.define({
 
 // ─── the suggestion on screen ───────────────────────────────────────
 
-function button(label, title, onClick, cls = '') {
+/** A key as it reads, for a label. */
+function kbd(name) {
+  const k = document.createElement('kbd');
+  k.className = 'mrmd-ai-kbd';
+  k.textContent = formatKey(name);
+  return k;
+}
+
+/** The glyph of AI commands; `busy` makes it pulse (an answer is being written). */
+function glyph(busy = false) {
+  const g = document.createElement('span');
+  g.className = 'mrmd-ai-glyph' + (busy ? ' mrmd-ai-glyph-busy' : '');
+  g.textContent = '✦';
+  g.setAttribute('aria-hidden', 'true');
+  return g;
+}
+
+/**
+ * A button that keeps the editor's selection. With `key`, the key that does
+ * the same shows on the button and in its title: using the mouse teaches
+ * the keyboard.
+ */
+function button(label, what, onClick, { cls = '', key = null } = {}) {
+  const title = key ? `${what} (${formatKey(key)})` : what;
   const b = document.createElement('button');
   b.type = 'button';
   b.className = 'mrmd-ai-btn' + (cls ? ' ' + cls : '');
   b.textContent = label;
+  if (key) b.appendChild(kbd(key));
   b.title = title;
   b.setAttribute('aria-label', title);
   // Keep the editor's selection where it is.
@@ -174,12 +215,12 @@ class GhostWidget extends WidgetType {
     chip.className = 'mrmd-ai-chip';
     const ctl = controllerOf(view);
     if (this.answer.status === 'loading') {
-      const dots = document.createElement('span');
-      dots.className = 'mrmd-ai-dots';
-      dots.textContent = '…';
-      chip.append(dots, button('×', 'Stop (Esc)', () => ctl?.discard()));
+      chip.append(glyph(true), button('×', 'Stop', () => ctl?.discard(), { key: AI_KEYS.discard }));
     } else {
-      chip.append(button('✓', 'Accept (Tab)', () => ctl?.accept()), button('×', 'Discard (Esc)', () => ctl?.discard()));
+      chip.append(
+        button('✓', 'Accept', () => ctl?.accept(), { cls: 'mrmd-ai-accept', key: AI_KEYS.accept }),
+        button('×', 'Discard', () => ctl?.discard(), { key: AI_KEYS.discard }),
+      );
     }
     wrap.appendChild(chip);
     return wrap;
@@ -208,7 +249,7 @@ class ProposalWidget extends WidgetType {
     head.className = 'mrmd-ai-panel-head';
     const title = document.createElement('span');
     title.className = 'mrmd-ai-panel-title';
-    title.textContent = '✦ ' + op.command.label + (op.instruction ? ' — “' + op.instruction + '”' : '');
+    title.append(glyph(answer.status === 'loading'), ' ' + op.command.label + (op.instruction ? ' — “' + op.instruction + '”' : ''));
     head.appendChild(title);
     const meta = document.createElement('span');
     meta.className = 'mrmd-ai-panel-meta';
@@ -246,13 +287,19 @@ class ProposalWidget extends WidgetType {
     foot.className = 'mrmd-ai-panel-foot';
     if (op.answers.length > 1) {
       foot.append(
-        button('‹', 'Previous answer (Alt-[)', () => ctl?.step(-1), 'mrmd-ai-step'),
-        button('›', 'Next answer (Alt-])', () => ctl?.step(1), 'mrmd-ai-step'),
+        button('‹', 'Previous answer', () => ctl?.step(-1), { cls: 'mrmd-ai-step', key: AI_KEYS.previous }),
+        button('›', 'Next answer', () => ctl?.step(1), { cls: 'mrmd-ai-step', key: AI_KEYS.next }),
       );
     }
-    if (answer.status === 'ready') foot.appendChild(button('Accept ⇥', 'Accept (Tab)', () => ctl?.accept(), 'mrmd-ai-accept'));
-    if (answer.status !== 'loading') foot.appendChild(button(answer.status === 'error' ? 'Try again' : 'Another', 'Ask for another answer (Alt-])', () => ctl?.another()));
-    foot.appendChild(button(answer.status === 'loading' ? 'Stop' : 'Discard', answer.status === 'loading' ? 'Stop (Esc)' : 'Discard (Esc)', () => ctl?.discard()));
+    if (answer.status === 'ready') foot.appendChild(button('Accept', 'Accept', () => ctl?.accept(), { cls: 'mrmd-ai-accept', key: AI_KEYS.accept }));
+    // Alt-] asks again only from the last answer (before it, it steps on):
+    // the key is shown only where it does what the button does.
+    if (answer.status !== 'loading') {
+      const last = op.index === op.answers.length - 1;
+      foot.appendChild(button(answer.status === 'error' ? 'Try again' : 'Another', 'Ask for another answer', () => ctl?.another(), { key: last ? AI_KEYS.next : null }));
+    }
+    const stop = answer.status === 'loading' ? 'Stop' : 'Discard';
+    foot.appendChild(button(stop, stop, () => ctl?.discard(), { key: AI_KEYS.discard }));
     panel.appendChild(foot);
     return panel;
   }
@@ -334,11 +381,7 @@ class AiMenuView {
     this.list = document.createElement('div');
     this.list.className = 'mrmd-ai-menu-list';
     this.list.setAttribute('role', 'listbox');
-    const foot = document.createElement('div');
-    foot.className = 'mrmd-ai-menu-foot';
-    const model = typeof ctl.config.model === 'function' ? ctl.config.model() : '';
-    foot.textContent = [model ? 'model: ' + model : '', 'Enter runs · Esc closes'].filter(Boolean).join(' · ');
-    dom.append(head, input, this.list, foot);
+    dom.append(head, input, this.list, this.foot(state.field(aiState).menu));
 
     input.addEventListener('input', () => { ctl.menuDraft = input.value; this.active = 0; this.render(); });
     input.addEventListener('keydown', e => this.key(e));
@@ -353,6 +396,23 @@ class AiMenuView {
       }, 0);
     });
     this.render();
+  }
+
+  /**
+   * The model that answers and the box's keys. A box opened any other way
+   * than its key (the ✦, a button) also names that key: the next time is
+   * one keystroke.
+   */
+  foot(menu) {
+    const foot = document.createElement('div');
+    foot.className = 'mrmd-ai-menu-foot';
+    const model = typeof this.ctl.config.model === 'function' ? this.ctl.config.model() : '';
+    const parts = [];
+    if (model) parts.push(['model: ' + model]);
+    if (!menu || !menu.byKey) parts.push([kbd(AI_KEYS.open), ' opens this box']);
+    parts.push([kbd('Enter'), ' runs'], [kbd('Escape'), ' closes']);
+    parts.forEach((part, i) => foot.append(...(i ? [' · '] : []), ...part));
+    return foot;
   }
 
   /** The rows for the current query. */
@@ -483,10 +543,11 @@ class AiController {
     return answer === true ? null : String(answer || 'AI commands are off');
   }
 
-  openMenu() {
+  /** Open the command box at the cursor. `byKey`: opened with AI_KEYS.open (the box then does not teach it). */
+  openMenu({ byKey = false } = {}) {
     const reason = this.unavailable();
     if (reason) { this.notify(reason); return false; }
-    this.view.dispatch({ effects: setMenu.of({ pos: this.view.state.selection.main.head }) });
+    this.view.dispatch({ effects: setMenu.of({ pos: this.view.state.selection.main.head, byKey }) });
     return true;
   }
 
@@ -673,6 +734,154 @@ class AiController {
 
 const aiController = ViewPlugin.fromClass(AiController);
 
+// ─── the spark: AI commands, beside the cursor's line ───────────────
+//
+// A ✦ in its own narrow gutter, on the line of the cursor, while the
+// editor has focus and AI commands can act there. In the margin, not in
+// the text: it never moves a character, covers one, or stands between
+// two for the cursor. A click opens the command box. Its look says what
+// is happening here:
+//   rest       faint — commands are available
+//   selection  lit   — there is a selection to act on
+//   open       lit   — the command box is open
+//   busy       pulsing — an answer for the text at the cursor is being written
+//   ready      lit   — that answer is ready (the cursor is on it: Tab accepts)
+//   error      in the error color — that command failed
+
+function sparkTitle(mode) {
+  switch (mode) {
+    case 'busy': return `An AI answer is being written here (${formatKey(AI_KEYS.discard)} stops it)`;
+    case 'ready': return `A suggestion is ready: ${formatKey(AI_KEYS.accept)} accepts, ${formatKey(AI_KEYS.discard)} discards`;
+    case 'error': return `The AI command failed: ${formatKey(AI_KEYS.next)} tries again`;
+    case 'selection': return `AI commands for the selection (${formatKey(AI_KEYS.open)})`;
+    default: return `AI commands (${formatKey(AI_KEYS.open)})`;
+  }
+}
+
+class SparkMarker extends GutterMarker {
+  constructor(mode) { super(); this.mode = mode; }
+  eq(other) { return other.mode === this.mode; }
+  toDOM() {
+    const el = document.createElement('span');
+    el.className = 'mrmd-ai-spark';
+    el.dataset.mode = this.mode;
+    el.textContent = '✦';
+    el.title = sparkTitle(this.mode);
+    // A pointer's way to the box. The keyboard has AI_KEYS.open (named by
+    // the host's key help); a screen reader need not read a margin glyph.
+    el.setAttribute('aria-hidden', 'true');
+    return el;
+  }
+}
+
+const sparkMarkerOf = Object.fromEntries(['rest', 'selection', 'open', 'busy', 'ready', 'error'].map(m => [m, new SparkMarker(m)]));
+
+/** The suggestion the cursor is on (the range Tab accepts from), or null. */
+function opAtCursor(state) {
+  const { op } = state.field(aiState);
+  const head = state.selection.main.head;
+  return op && head >= op.target.from && head <= op.target.to ? op : null;
+}
+
+function sparkMode(state) {
+  const { menu } = state.field(aiState);
+  if (menu) return 'open';
+  const op = opAtCursor(state);
+  if (op) {
+    const { status } = op.answers[op.index];
+    return status === 'loading' ? 'busy' : status;
+  }
+  return state.selection.main.empty ? 'rest' : 'selection';
+}
+
+// Markers are asked for on every view update; the answer changes only with
+// the state, focus, or the host's availability.
+const sparkMemo = new WeakMap(); // view → {state, shown, set}
+
+function sparkMarkers(view) {
+  const ctl = controllerOf(view);
+  if (!ctl) return RangeSet.empty;
+  const state = view.state;
+  const shown = (view.hasFocus || !!state.field(aiState).menu) && !ctl.unavailable();
+  const memo = sparkMemo.get(view);
+  if (memo && memo.state === state && memo.shown === shown) return memo.set;
+  let set = RangeSet.empty;
+  if (shown) {
+    const head = state.selection.main.head;
+    if (aiPlaceAt(state, head, ctl.cellAt).kind !== 'none') {
+      set = RangeSet.of([sparkMarkerOf[sparkMode(state)].range(state.doc.lineAt(head).from)]);
+    }
+  }
+  sparkMemo.set(view, { state, shown, set });
+  return set;
+}
+
+const aiSparkGutter = gutter({
+  class: 'mrmd-ai-spark-gutter',
+  markers: sparkMarkers,
+  // The gutter keeps its width while no line shows the spark: the text
+  // never shifts when it comes and goes.
+  initialSpacer: () => sparkMarkerOf.rest,
+  domEventHandlers: {
+    mousedown(view, _line, event) {
+      if (!(event.target instanceof Element) || !event.target.closest('.mrmd-ai-spark')) return false;
+      // Keep the editor's focus and selection: the box acts on them.
+      event.preventDefault();
+      controllerOf(view)?.openMenu();
+      return true;
+    },
+  },
+});
+
+// ─── key help for the host ─────────────────────────────────────────────────
+
+/**
+ * The AI keys that act in `view` now, for a host's keyboard help.
+ *
+ * `sections` — [{label, keys: [[names, what]], exclusive?}], most local
+ * first; `names` are CodeMirror key names (formatKey spells them). An
+ * `exclusive` section owns the keyboard: while the command box is open no
+ * other key reaches the editor or the page.
+ * `open` — the entry for the key that opens the box here, or null where AI
+ * commands are off or cannot act; the host places it among its own keys.
+ *
+ * @param {EditorView} view
+ * @returns {{sections: Array<{label: string, keys: Array<[string[], string]>, exclusive?: boolean}>, open: [string[], string] | null}}
+ */
+export function aiKeyHelp(view) {
+  const ctl = controllerOf(view);
+  if (!ctl) return { sections: [], open: null };
+  const state = view.state;
+  const { menu, op } = state.field(aiState);
+  if (menu) {
+    return {
+      sections: [{ label: 'AI command box', exclusive: true, keys: [
+        [['ArrowUp', 'ArrowDown'], 'choose a command'],
+        [['Enter'], 'run it'],
+        [[AI_KEYS.discard], 'close the box'],
+      ] }],
+      open: null,
+    };
+  }
+  const sections = [];
+  if (op) {
+    const { status } = op.answers[op.index];
+    const last = op.index === op.answers.length - 1;
+    const keys = [];
+    if (status === 'ready') keys.push([[AI_KEYS.accept], opAtCursor(state) ? 'accept' : 'accept, with the cursor on the suggestion']);
+    if (status !== 'loading' || !last) keys.push([[AI_KEYS.next], !last ? 'next answer' : status === 'error' ? 'try again' : 'another answer']);
+    if (op.index > 0) keys.push([[AI_KEYS.previous], 'previous answer']);
+    keys.push([[AI_KEYS.discard], status === 'loading' ? 'stop' : status === 'error' ? 'close' : 'discard']);
+    sections.push({ label: 'AI suggestion', keys });
+  }
+  let open = null;
+  if (!ctl.unavailable()) {
+    const place = aiPlaceAt(state, state.selection.main.head, ctl.cellAt);
+    if (place.kind !== 'none') open = [[AI_KEYS.open], `AI commands: ${describeAiPlace(state, place)} — or click the ✦ beside the line`];
+  }
+  return { sections, open };
+}
+
 // ─── look ───────────────────────────────────────────────────────────
 
 let keyframesInstalled = false;
@@ -684,8 +893,12 @@ function installKeyframes() {
   style.textContent = `
 @keyframes mrmd-ai-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @keyframes mrmd-ai-blink { from { opacity: 1; } to { opacity: .3; } }
+@keyframes mrmd-ai-pulse { from { opacity: 1; transform: scale(1); } to { opacity: .35; transform: scale(.72); } }
 @media (prefers-reduced-motion: reduce) {
-  .mrmd-ai-target-busy, .mrmd-ai-dots, .mrmd-ai-waiting::after { animation: none !important; }
+  .mrmd-ai-target-busy, .mrmd-ai-glyph-busy, .mrmd-ai-spark, .mrmd-ai-waiting::after { animation: none !important; }
+}
+@media (pointer: coarse) {
+  .cm-editor .cm-gutter .mrmd-ai-spark { padding: 0 8px; }
 }`;
   document.head.appendChild(style);
 }
@@ -700,12 +913,32 @@ const aiTheme = EditorView.baseTheme({
   '.mrmd-ai-ghost': { whiteSpace: 'pre-wrap' },
   '.mrmd-ai-ghost-text': { color: 'var(--mrmd-fg-muted, currentColor)', fontStyle: 'italic', opacity: '.8' },
   '.mrmd-ai-chip': { display: 'inline-flex', alignItems: 'center', gap: '2px', marginLeft: '6px', verticalAlign: 'baseline' },
-  '.mrmd-ai-dots': { animation: 'mrmd-ai-blink .8s ease-in-out infinite alternate', color: 'var(--mrmd-accent, currentColor)' },
+  // ✦ is the mark of AI commands everywhere: the spark, the box, the
+  // suggestion. Pulsing, it means an answer is being written.
+  '.mrmd-ai-glyph': { display: 'inline-block', color: 'var(--mrmd-accent, currentColor)', fontStyle: 'normal' },
+  '.mrmd-ai-glyph-busy': { animation: 'mrmd-ai-pulse .9s ease-in-out infinite alternate' },
+  '.mrmd-ai-chip > .mrmd-ai-glyph': { margin: '0 3px' },
   '.mrmd-ai-btn': {
     font: '11px/1 var(--mrmd-font-ui, system-ui, sans-serif)', boxSizing: 'border-box', minHeight: '0', height: '19px', margin: '0',
     padding: '0 7px', lineHeight: '17px', color: 'var(--mrmd-fg, currentColor)', background: 'var(--mrmd-button-bg, transparent)',
     border: '1px solid var(--mrmd-button-border, var(--mrmd-border, currentColor))', borderRadius: '3px', cursor: 'pointer',
+    display: 'inline-flex', alignItems: 'center', gap: '5px', fontStyle: 'normal',
   },
+  // A key on a button or in the box: quieter than the label it follows.
+  '.mrmd-ai-kbd': {
+    font: '10px/1 var(--mrmd-font-ui, system-ui, sans-serif)', padding: '1px 3px', color: 'var(--mrmd-fg-muted, currentColor)',
+    border: '1px solid var(--mrmd-border, currentColor)', borderRadius: '2px', background: 'transparent',
+  },
+  // The spark in the margin (see "the spark" above). Its rest opacity is a
+  // token: a host without half-tones (e-ink) sets --mrmd-ai-spark-rest: 1.
+  '.mrmd-ai-spark-gutter .cm-gutterElement': { textAlign: 'center' },
+  '.mrmd-ai-spark': {
+    display: 'inline-block', padding: '0 4px', fontSize: '0.8em', fontStyle: 'normal', cursor: 'pointer', userSelect: 'none',
+    color: 'var(--mrmd-accent, currentColor)', opacity: 'var(--mrmd-ai-spark-rest, .38)', transition: 'opacity .15s',
+  },
+  '.mrmd-ai-spark:hover, .mrmd-ai-spark[data-mode="selection"], .mrmd-ai-spark[data-mode="open"], .mrmd-ai-spark[data-mode="ready"], .mrmd-ai-spark[data-mode="busy"]': { opacity: '1' },
+  '.mrmd-ai-spark[data-mode="busy"]': { animation: 'mrmd-ai-pulse .9s ease-in-out infinite alternate' },
+  '.mrmd-ai-spark[data-mode="error"]': { opacity: '1', color: 'var(--mrmd-error, currentColor)' },
   '.mrmd-ai-btn:hover, .mrmd-ai-btn:focus-visible': { background: 'var(--mrmd-hover-bg, transparent)' },
   '.mrmd-ai-btn.mrmd-ai-accept': { borderColor: 'var(--mrmd-accent, currentColor)', color: 'var(--mrmd-accent, currentColor)' },
   '.mrmd-ai-panel': {
@@ -754,13 +987,14 @@ export function documentAi(config, cellAt) {
     aiDecorations,
     aiController,
     aiMenuTooltip,
+    aiSparkGutter,
     aiTheme,
     Prec.highest(keymap.of([
-      { key: 'Mod-j', preventDefault: true, run: view => controllerOf(view)?.openMenu() ?? false },
-      { key: 'Tab', run: view => controllerOf(view)?.acceptAtCursor() ?? false },
-      { key: 'Escape', run: view => controllerOf(view)?.discard() ?? false },
-      { key: 'Alt-]', run: view => controllerOf(view)?.step(1) ?? false },
-      { key: 'Alt-[', run: view => controllerOf(view)?.step(-1) ?? false },
+      { key: AI_KEYS.open, preventDefault: true, run: view => controllerOf(view)?.openMenu({ byKey: true }) ?? false },
+      { key: AI_KEYS.accept, run: view => controllerOf(view)?.acceptAtCursor() ?? false },
+      { key: AI_KEYS.discard, run: view => controllerOf(view)?.discard() ?? false },
+      { key: AI_KEYS.next, run: view => controllerOf(view)?.step(1) ?? false },
+      { key: AI_KEYS.previous, run: view => controllerOf(view)?.step(-1) ?? false },
     ])),
   ];
 }

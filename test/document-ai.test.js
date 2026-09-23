@@ -32,7 +32,9 @@ try {
           const text = typeof answer === 'function' ? answer(request) : answer;
           if (text instanceof Error) return reject(text);
           onText(text.slice(0, 5));
-          const t = setTimeout(() => resolve({ text, model: 'test-model' }), 60);
+          // With `hold` set, the answer waits for release(): a test can look at a command in flight.
+          const deliver = () => resolve({ text, model: 'test-model' });
+          const t = window.hold ? (window.release = deliver, 0) : setTimeout(deliver, 60);
           signal.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')); });
         }),
         model: () => 'test-model',
@@ -44,6 +46,50 @@ try {
   }, source);
   const cursorIn = (needle, offset = 0) => page.evaluate((n, o) => { editor.view.dispatch({ selection: { anchor: editor.getContent().indexOf(n) + o } }); editor.focus(); }, needle, offset);
   const openBox = async () => { await page.keyboard.down('Control'); await page.keyboard.press('j'); await page.keyboard.up('Control'); await page.waitForSelector('.mrmd-ai-menu-input'); };
+  // The spark on screen (the gutter's width spacer is a hidden copy).
+  const SPARK = `document.querySelector('.mrmd-ai-spark-gutter .cm-gutterElement:not([style*="visibility"]) .mrmd-ai-spark')`;
+  const sparkMode = () => page.evaluate(`${SPARK}?.dataset.mode ?? null`);
+  const keyHelp = () => page.evaluate(() => editor.keyHelp().map(s => ({ ...s, keys: s.keys.map(([names, what]) => [names.join(' '), what]) })));
+  await page.bringToFront(); // the spark shows while the editor has focus, in a focused page
+
+  // The spark: a ✦ in the margin of the cursor's line, faint at rest; lit
+  // for a selection. It is not document text.
+  await cursorIn('Their going', 3);
+  await until(`${SPARK}?.dataset.mode === 'rest'`, 'no spark beside the cursor');
+  assert.ok(await page.evaluate(`(() => {
+    const pos = editor.getContent().indexOf('Their going');
+    const block = editor.view.lineBlockAt(pos);
+    const top = ${SPARK}.closest('.cm-gutterElement').getBoundingClientRect().top;
+    return Math.abs(top - (editor.view.documentTop + block.top)) < 1.5;
+  })()`), 'the spark is on the line of the cursor');
+  assert.equal(await content(), source);
+  await page.evaluate(() => { const at = editor.getContent().indexOf('Their'); editor.view.dispatch({ selection: { anchor: at, head: at + 5 } }); });
+  assert.equal(await sparkMode(), 'selection');
+  assert.match(await page.evaluate(`${SPARK}.title`), /AI commands for the selection \(Ctrl\+J\)/);
+
+  // Clicking it opens the box on the selection, and the box names its key
+  // (it was not opened with it).
+  await page.evaluate(`${SPARK}.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))`);
+  await page.waitForSelector('.mrmd-ai-menu-input');
+  assert.match(await page.$eval('.mrmd-ai-menu-head', e => e.textContent), /selection · 5 characters/);
+  assert.match(await page.$eval('.mrmd-ai-menu-foot', e => e.textContent), /Ctrl\+J opens this box/);
+  assert.equal(await sparkMode(), 'open', 'the box has the focus; the spark stays, lit');
+  assert.deepEqual((await keyHelp()).map(s => [s.label, !!s.exclusive]), [['AI command box', true]], 'the open box owns the keyboard');
+  await page.keyboard.press('Escape');
+
+  // The editor's keys here, now: the box's key where commands act; the
+  // run keys in a cell; nothing where AI commands cannot act.
+  await cursorIn('Their going', 3);
+  assert.deepEqual(await keyHelp(), [{ label: 'document', keys: [['Mod-j', 'AI commands: this paragraph — or click the ✦ beside the line']] }]);
+  await cursorIn('x = 1', 1);
+  assert.deepEqual(await keyHelp(), [{ label: 'python cell', keys: [
+    ['Mod-Enter', 'run this cell'], ['Shift-Enter', 'run this cell, then go to the next'],
+    ['Mod-j', 'AI commands: python cell — or click the ✦ beside the line'],
+  ] }]);
+  await cursorIn('title: T', 2);
+  assert.deepEqual(await keyHelp(), []);
+  assert.equal(await sparkMode(), null, 'no spark on the header');
+  assert.equal(await page.evaluate(() => mrmdDocument.formatKey('Mod-j', { mac: false })), 'Ctrl+J');
 
   // The box: commands for prose here (not the code command), the model named.
   await cursorIn('Their going', 3);
@@ -53,12 +99,23 @@ try {
   assert.match(await page.$eval('.mrmd-ai-menu-head', e => e.textContent), /this paragraph/);
   assert.match(await page.$eval('.mrmd-ai-menu-foot', e => e.textContent), /model: test-model/);
 
-  // Typing filters (a keyword counts); Enter runs the first.
-  await page.evaluate(() => { answers.grammar = "They're going to the store."; });
+  assert.doesNotMatch(await page.$eval('.mrmd-ai-menu-foot', e => e.textContent), /opens this box/, 'opened with its key: no need to teach it');
+
+  // Typing filters (a keyword counts); Enter runs the first. While the
+  // answer is written the spark pulses; ready, it is lit, and the buttons
+  // show their keys.
+  await page.evaluate(() => { answers.grammar = "They're going to the store."; window.hold = true; });
   await page.keyboard.type('spell');
   assert.deepEqual(await page.$$eval('.mrmd-ai-menu-label', els => els.map(e => e.textContent)), ['Fix grammar', 'Change it: “spell”']);
   await page.keyboard.press('Enter');
+  await until(`${SPARK}?.dataset.mode === 'busy'`, 'the spark does not show the command in flight');
+  assert.equal(await page.$$eval('.mrmd-ai-panel-title .mrmd-ai-glyph-busy', els => els.length), 1);
+  assert.deepEqual((await keyHelp())[0], { label: 'AI suggestion', keys: [['Escape', 'stop']] });
+  await page.evaluate(() => { window.hold = false; release(); });
   await until(`document.querySelector('.mrmd-ai-panel')?.dataset.state === 'ready'`, 'no ready suggestion');
+  assert.equal(await sparkMode(), 'ready');
+  assert.deepEqual(await page.$$eval('.mrmd-ai-panel-foot .mrmd-ai-btn', els => els.map(b => b.textContent)), ['AcceptTab', 'AnotherAlt+]', 'DiscardEsc']);
+  assert.deepEqual((await keyHelp())[0], { label: 'AI suggestion', keys: [['Tab', 'accept'], ['Alt-]', 'another answer'], ['Escape', 'discard']] });
   assert.equal(await page.$$eval('.mrmd-ai-menu', els => els.length), 0, 'the box closed');
   assert.equal(await page.evaluate(() => asked.at(-1).target.text), 'Their going to the store.');
   assert.match(await page.$eval('.mrmd-ai-panel-body', e => e.innerHTML), /<del class="mrmd-ai-del">Their<\/del><ins class="mrmd-ai-ins">They're<\/ins>/);

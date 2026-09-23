@@ -26839,826 +26839,57 @@ var mrmdDocument = (function (exports) {
   }
 
   /**
-   * Cell controls for the document editor: a Run button on every runnable
-   * code cell, and the cell's run state drawn on the cell itself.
-   *
-   * The control sits at the right of the cell's opening fence row (the row
-   * that reads as the language label). The host owns execution and tells the
-   * editor what each cell is doing:
-   *
-   *   editor.setCellStatus(cell, { state: 'queued' | 'running' | 'waiting' | 'ok' | 'error',
-   *                                startedAt, ms, label })   // null clears
-   *
-   *   queued   — will run (run all)                      "queued"          ■ Stop
-   *   running  — computing; elapsed time ticks, a bar slides along the top
-   *              edge and pulses down the left side      "running · 12s"   ■ Stop
-   *   waiting  — blocked on the reader (an input prompt); the bar holds
-   *              still: it is the reader's turn          "waiting for input · 12s"
-   *   ok/error — the last run's verdict and duration     "✓ 1.2s"          ▶ Run
-   *              (dropped when the cell's code is edited: it no longer
-   *              describes that code)
-   *
-   * Nothing here is document text. Motion stops for readers who ask for
-   * reduced motion.
+   * Keys as a person reads them. CodeMirror names keys 'Mod-j', 'Alt-]',
+   * 'Shift-Enter'; a label says 'Ctrl+J' (⌘J on a Mac). One speller for
+   * every key the editor shows — button labels, titles, the AI command box —
+   * and for the keys it reports to its host (editor.keyHelp()), so a label
+   * never disagrees with the binding it names.
    */
 
+  const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
 
-  const setStatusEffect = StateEffect.define();
+  // CodeMirror's modifier spellings (see its normalizeKeyName), to one name each.
+  const MODIFIERS = {
+    mod: mac => (mac ? 'meta' : 'ctrl'),
+    ctrl: () => 'ctrl', control: () => 'ctrl', c: () => 'ctrl',
+    alt: () => 'alt', a: () => 'alt',
+    shift: () => 'shift', s: () => 'shift',
+    meta: () => 'meta', cmd: () => 'meta', m: () => 'meta',
+  };
+  // Printed in this order: Apple's (⌃⌥⇧⌘) and the usual one elsewhere.
+  const ORDER = ['ctrl', 'alt', 'shift', 'meta'];
+  const WORDS = { ctrl: 'Ctrl', alt: 'Alt', shift: 'Shift', meta: 'Meta' };
+  const GLYPHS = { ctrl: '⌃', alt: '⌥', shift: '⇧', meta: '⌘' };
 
-  // [{ from, codeFrom, codeTo, status }] — `from` is the cell's first
-  // character (its opening fence), mapped through every change.
-  const statusField = StateField.define({
-    create: () => [],
-    update(list, tr) {
-      let next = list;
-      if (tr.docChanged) {
-        next = [];
-        for (const entry of list) {
-          const from = tr.changes.mapPos(entry.from, 1, MapMode.TrackDel);
-          if (from == null) continue; // the cell's fence was deleted
-          const settled = entry.status.state === 'ok' || entry.status.state === 'error';
-          if (settled && entry.codeTo >= entry.codeFrom && tr.changes.touchesRange(entry.codeFrom, entry.codeTo)) continue;
-          next.push({
-            ...entry,
-            from,
-            codeFrom: tr.changes.mapPos(entry.codeFrom, -1),
-            codeTo: tr.changes.mapPos(entry.codeTo, 1),
-          });
-        }
-      }
-      for (const effect of tr.effects) {
-        if (effect.is(clearStatusesEffect)) {
-          next = effect.value ? next.filter(entry => !effect.value.has(entry.status.state)) : [];
-          continue;
-        }
-        if (!effect.is(setStatusEffect)) continue;
-        next = next.filter(entry => entry.from !== effect.value.from);
-        if (effect.value.status) next.push(effect.value);
-      }
-      return next;
-    },
-  });
-
-  const BUSY = new Set(['queued', 'running', 'waiting']);
-
-  function formatDuration(ms) {
-    if (!(ms >= 0)) return '';
-    if (ms < 1000) return Math.round(ms) + 'ms';
-    const s = ms / 1000;
-    if (s < 10) return s.toFixed(1) + 's';
-    if (s < 60) return Math.round(s) + 's';
-    const m = Math.floor(s / 60);
-    const rest = Math.round(s - m * 60);
-    if (m < 60) return m + 'm ' + String(rest).padStart(2, '0') + 's';
-    return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
-  }
-
-  // A live counter moves in whole seconds (a verdict keeps its precision).
-  function elapsed(status) {
-    const s = Math.max(0, Math.floor((Date.now() - (status.startedAt || Date.now())) / 1000));
-    if (s < 60) return s + 's';
-    const m = Math.floor(s / 60);
-    if (m < 60) return m + 'm ' + String(s % 60).padStart(2, '0') + 's';
-    return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
-  }
-
-  function statusText(status) {
-    if (!status) return '';
-    switch (status.state) {
-      case 'queued': return status.label || 'queued';
-      case 'running': return (status.label || 'running') + ' · ' + elapsed(status);
-      case 'waiting': return (status.label || 'waiting for input') + ' · ' + elapsed(status);
-      case 'ok': return '✓ ' + (status.label ? status.label + ' · ' : '') + formatDuration(status.ms);
-      case 'error': return '✗ ' + (status.label ? status.label + ' · ' : '') + formatDuration(status.ms);
-      default: return status.label || '';
-    }
-  }
-
-  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
-
-  class CellToolbarWidget extends WidgetType {
-    constructor(status, config) {
-      super();
-      this.status = status;
-      this.config = config;
-    }
-    eq(other) { return other.status === this.status && other.config === this.config; }
-    toDOM(view) {
-      const { status, config } = this;
-      const bar = document.createElement('span');
-      bar.className = 'mrmd-cell-toolbar';
-      bar.dataset.state = status ? status.state : 'idle';
-      const text = document.createElement('span');
-      text.className = 'mrmd-cell-status';
-      text.setAttribute('aria-live', 'polite');
-      text.textContent = statusText(status);
-      bar.appendChild(text);
-      const cellHere = () => {
-        const pos = view.posAtDOM(bar);
-        return config.cellAt(view.state, view.state.doc.lineAt(pos).from);
-      };
-      const button = (cls, label, title, onClick) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'mrmd-cell-btn ' + cls;
-        b.textContent = label;
-        b.title = title;
-        b.setAttribute('aria-label', title);
-        // Keep the editor's selection and focus where they are.
-        b.addEventListener('mousedown', e => e.preventDefault());
-        b.addEventListener('click', e => {
-          e.preventDefault();
-          e.stopPropagation();
-          const cell = cellHere();
-          if (cell) onClick(cell);
-        });
-        return b;
-      };
-      if (status && BUSY.has(status.state)) {
-        if (config.onCancel) {
-          const title = status.state === 'queued' ? 'Stop: do not run the cells still queued' : 'Stop this run (the kernel keeps its variables)';
-          bar.appendChild(button('mrmd-cell-btn-stop', '■ Stop', title, cell => config.onCancel(cell, { state: status.state })));
-        }
-      } else {
-        if (config.onAi) bar.appendChild(button('mrmd-cell-btn-ai', '✦', 'AI commands for this cell (' + (isMac ? '⌘' : 'Ctrl') + '+J)', config.onAi));
-        bar.appendChild(button('mrmd-cell-btn-run', '▶ Run', 'Run this cell (' + (isMac ? '⌘' : 'Ctrl') + '+Enter)', config.onRun));
-      }
-      if (status && (status.state === 'running' || status.state === 'waiting')) {
-        bar._timer = setInterval(() => { text.textContent = statusText(status); }, 1000);
-      }
-      return bar;
-    }
-    destroy(dom) { if (dom._timer) clearInterval(dom._timer); }
-    ignoreEvent() { return true; }
-  }
-
-  function buildDecorations$2(view, config) {
-    const state = view.state;
-    const doc = state.doc;
-    const statuses = state.field(statusField);
-    const byFrom = new Map(statuses.map(entry => [entry.from, entry.status]));
-    const ranges = [];
-    for (const { from, to } of view.visibleRanges) {
-      syntaxTree(state).iterate({
-        from, to,
-        enter(node) {
-          if (node.name !== 'FencedCode') return;
-          const first = doc.lineAt(node.from);
-          const last = doc.lineAt(node.to);
-          const lang = ((first.text.match(/^\s*(?:`{3,}|~{3,})\s*(\S*)/) || [])[1] || '').toLowerCase();
-          const hasClose = last.number > first.number && /^\s*(?:`{3,}|~{3,})\s*$/.test(last.text);
-          if (!hasClose || !config.runnable(lang)) return false;
-          const status = byFrom.get(node.from) || null;
-          ranges.push(Decoration.widget({ widget: new CellToolbarWidget(status, config), side: 1 }).range(first.to));
-          if (status && BUSY.has(status.state)) {
-            const cls = 'mrmd-cell-' + status.state;
-            for (let n = first.number; n <= last.number; n++) {
-              ranges.push(Decoration.line({ class: 'mrmd-cell-busy ' + cls }).range(doc.line(n).from));
-            }
-          }
-          return false;
-        },
-      });
-    }
-    return Decoration.set(ranges, true);
-  }
-
-  // Keyframes live in one document-level style element: theme rules are
-  // scoped per editor, animation names are not.
-  let keyframesInstalled$1 = false;
-  function installKeyframes$1() {
-    if (keyframesInstalled$1 || typeof document === 'undefined') return;
-    keyframesInstalled$1 = true;
-    const style = document.createElement('style');
-    style.dataset.mrmd = 'cell-controls';
-    style.textContent = `
-@keyframes mrmd-cell-slide { from { background-position: -40% 0; } to { background-position: 140% 0; } }
-@keyframes mrmd-cell-pulse { from { opacity: 1; } to { opacity: .35; } }
-@media (prefers-reduced-motion: reduce) {
-  .mrmd-cell-busy::before, .mrmd-cell-busy::after, .mrmd-cell-toolbar .mrmd-cell-status::before { animation: none !important; }
-}`;
-    document.head.appendChild(style);
-  }
-
-  const controlsTheme = EditorView.baseTheme({
-    '.cm-line.cm-md-codeblock-first': { position: 'relative' },
-    '.mrmd-cell-toolbar': {
-      position: 'absolute',
-      right: '6px',
-      top: '50%',
-      transform: 'translateY(-50%)',
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: '8px',
-      font: '11px/1 var(--mrmd-font-ui, system-ui, sans-serif)',
-      color: 'var(--mrmd-fg-muted, currentColor)',
-      whiteSpace: 'nowrap',
-      userSelect: 'none',
-      zIndex: '1',
-    },
-    '.mrmd-cell-status:empty': { display: 'none' },
-    '.mrmd-cell-toolbar[data-state="running"] .mrmd-cell-status::before, .mrmd-cell-toolbar[data-state="waiting"] .mrmd-cell-status::before': {
-      content: '""',
-      display: 'inline-block',
-      width: '7px', height: '7px',
-      borderRadius: '50%',
-      marginRight: '6px',
-      verticalAlign: '1px',
-      background: 'var(--mrmd-accent, currentColor)',
-    },
-    '.mrmd-cell-toolbar[data-state="running"] .mrmd-cell-status::before': { animation: 'mrmd-cell-pulse .8s ease-in-out infinite alternate' },
-    '.mrmd-cell-toolbar[data-state="waiting"] .mrmd-cell-status': { color: 'var(--mrmd-fg, currentColor)' },
-    '.mrmd-cell-toolbar[data-state="error"] .mrmd-cell-status': { color: 'var(--mrmd-error, currentColor)' },
-    // Sized in full: host pages often style every <button> (min-height,
-    // padding, font), and the control must fit the fence row regardless.
-    '.mrmd-cell-toolbar .mrmd-cell-btn': {
-      font: 'inherit',
-      boxSizing: 'border-box',
-      height: '19px',
-      minHeight: '0',
-      lineHeight: '17px',
-      margin: '0',
-      padding: '0 8px',
-      color: 'var(--mrmd-fg, currentColor)',
-      background: 'var(--mrmd-button-bg, transparent)',
-      border: '1px solid var(--mrmd-button-border, var(--mrmd-border, currentColor))',
-      borderRadius: '3px',
-      cursor: 'pointer',
-      opacity: '.8',
-    },
-    '.mrmd-cell-toolbar .mrmd-cell-btn:hover, .mrmd-cell-toolbar .mrmd-cell-btn:focus-visible': { opacity: '1', background: 'var(--mrmd-hover-bg, transparent)' },
-    '.mrmd-cell-toolbar .mrmd-cell-btn-stop': { color: 'var(--mrmd-error, currentColor)' },
-    // The busy cell: a bar down its left side on every row; while it
-    // computes the bar pulses and a highlight slides along the top edge.
-    '.cm-line.mrmd-cell-busy': { position: 'relative' },
-    '.cm-line.mrmd-cell-busy::before': {
-      content: '""',
-      position: 'absolute',
-      left: '0', top: '0', bottom: '0',
-      width: '3px',
-      background: 'var(--mrmd-accent, currentColor)',
-      pointerEvents: 'none',
-    },
-    '.cm-line.mrmd-cell-running::before': { animation: 'mrmd-cell-pulse 1s ease-in-out infinite alternate' },
-    '.cm-line.mrmd-cell-queued::before': { opacity: '.3' },
-    '.cm-line.mrmd-cell-running.cm-md-codeblock-first::after': {
-      content: '""',
-      position: 'absolute',
-      left: '0', right: '0', top: '-1px',
-      height: '2px',
-      backgroundImage: 'linear-gradient(90deg, transparent, var(--mrmd-accent, currentColor), transparent)',
-      backgroundSize: '40% 100%',
-      backgroundRepeat: 'no-repeat',
-      animation: 'mrmd-cell-slide 1.4s linear infinite',
-      pointerEvents: 'none',
-    },
-  });
+  const KEYS = {
+    Escape: 'Esc', Esc: 'Esc',
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+    ' ': 'Space', Space: 'Space',
+    PageUp: 'PgUp', PageDown: 'PgDn',
+  };
 
   /**
-   * The extension. `config`:
-   *   cellAt(state, pos)  → the cell ({lang, code, from, to}) at pos, or null
-   *   runnable(lang)      → whether a cell in this fence language gets a Run button
-   *   onRun(cell)         → the Run button was pressed
-   *   onAi(cell)          → the ✦ button: AI commands for this cell (omit: no button)
-   *   onCancel(cell, {state}) → the Stop button was pressed on a cell in that
-   *                         state ('queued' | 'running' | 'waiting'); omit: no
-   *                         Stop button
+   * A CodeMirror key name as a label: formatKey('Mod-j') → 'Ctrl+J' (⌘J on a
+   * Mac), formatKey('Alt-]') → 'Alt+]' (⌥]), formatKey('Escape') → 'Esc'.
+   * Throws on a modifier CodeMirror would not accept: a misspelt key name is
+   * a bug, not something to show.
+   * @param {string} name
+   * @param {{mac?: boolean}} [options] spell for a Mac (default: this device)
    */
-  function cellControls(config) {
-    installKeyframes$1();
-    const plugin = ViewPlugin.fromClass(class {
-      constructor(view) { this.decorations = buildDecorations$2(view, config); }
-      update(update) {
-        if (update.docChanged || update.viewportChanged
-          || update.startState.field(statusField) !== update.state.field(statusField)
-          || syntaxTree(update.startState) !== syntaxTree(update.state)) {
-          this.decorations = buildDecorations$2(update.view, config);
-        }
-      }
-    }, { decorations: v => v.decorations });
-    return [statusField, plugin, controlsTheme];
-  }
-
-  const clearStatusesEffect = StateEffect.define();
-
-  /** Clear every status, or those in `states` (e.g. ['queued']). */
-  function clearCellStatuses(view, states) {
-    view.dispatch({ effects: clearStatusesEffect.of(states ? new Set(states) : null) });
-  }
-
-  /** Set (or clear, with null) the run state shown on `cell`. */
-  function setCellStatus(view, cell, status) {
-    if (!cell) return false;
-    const doc = view.state.doc;
-    if (cell.from > doc.length) return false;
-    const first = doc.lineAt(cell.from);
-    const last = doc.lineAt(Math.min(cell.to, doc.length));
-    const codeFrom = Math.min(first.to + 1, doc.length);
-    const codeTo = last.number > first.number ? Math.max(codeFrom, last.from - 1) : codeFrom;
-    const value = status ? { from: cell.from, codeFrom, codeTo, status: { ...status } } : { from: cell.from, status: null };
-    view.dispatch({ effects: setStatusEffect.of(value) });
-    return true;
-  }
-
-  /**
-   * rat-notebook — what a Markdown notebook run on rat means, as plain
-   * functions: no editor, no DOM, no transport. Every host (Chattering, the
-   * VS Code extension, a test) uses these, so a notebook behaves the same
-   * wherever it is run.
-   *
-   * The result format a run leaves in the document:
-   *
-   *   ```python
-   *   plt.plot(x); plt.show()
-   *   ```
-   *
-   *   ```output
-   *   what the program printed
-   *   ```
-   *
-   *   ![plot](../_assets/generated/3f9a1c2b7d4e.png)
-   *
-   * - Program output only: no timing or status (they change on every run and
-   *   would show in Git when the output did not). A fence longer than any
-   *   backtick run in the output keeps the output byte-for-byte.
-   * - Plots are images after the block, saved in the project's
-   *   `_assets/generated/`, named by content. A result owns only the images
-   *   the runner made (alt `plot`, a path inside `_assets/`): an image a
-   *   person placed there is never replaced.
-   * - Older forms are read and replaced: ```output:<execId> (MRMD) and
-   *   ```output | ✓ 1.5s | 1 var (VS Code before this module).
-   */
-
-  /** Where generated images go, relative to the project root. */
-  const GENERATED_ASSETS_DIR = '_assets/generated';
-
-  const PLOT_MARKER = '__RAT_PLOT__:';
-  const PLOT_LINE = /^__RAT_PLOT__:(.+?)\s*$/;
-  const BANNER_LINE = /^[a-z0-9@._-]+ (?:started|restarted) on http[^\n]*\n?/im;
-  const STATUS_TAIL = /\n?[✓✗] \d+(?:\.\d+)?m?s( \| \d+ vars?)?\s*$/;
-  const OWNED_IMAGE = /^!\[plot(?:-\d+)?\]\(([^)\s]*_assets\/[^)\s]*)\)\s*$/;
-
-  /** A fence line's language word, lowercased ('' when bare). */
-  function fenceLanguage(line) {
-    return ((String(line).match(/^\s{0,3}(?:`{3,}|~{3,})\s*([^\s|]*)/) || [])[1] || '').toLowerCase();
-  }
-
-  /** True for every spelling of a result fence: output, output:<id>, output | … */
-  function isOutputFence(line) {
-    const lang = fenceLanguage(line);
-    return lang === 'output' || lang.startsWith('output:');
-  }
-
-  /** True for an image line a run made (and a rerun may replace). */
-  function isOwnedImageLine(line) {
-    return OWNED_IMAGE.test(String(line));
-  }
-
-  /**
-   * rat's final text for a run, as a document keeps it: without rat's
-   * kernel-start banner and its "✓ 21ms | 1 var" status line.
-   */
-  function cleanRunOutput(out) {
-    return String(out || '').replace(BANNER_LINE, '').replace(STATUS_TAIL, '').replace(/\s+$/, '');
-  }
-
-  /** Split plot markers out of finished output: {text, plots: [path]}. */
-  function splitPlots(text) {
-    const plots = [];
-    const kept = [];
-    for (const line of String(text || '').split('\n')) {
-      const m = line.match(PLOT_LINE);
-      if (m) plots.push(m[1]);
-      else kept.push(line);
+  function formatKey(name, { mac = MAC } = {}) {
+    const parts = String(name).split(/-(?!$)/);
+    const key = parts.pop();
+    const mods = new Set();
+    for (const part of parts) {
+      const spell = MODIFIERS[part.toLowerCase()];
+      if (!spell) throw new TypeError(`formatKey: unknown modifier "${part}" in "${name}"`);
+      mods.add(spell(mac));
     }
-    return { text: kept.join('\n').replace(/\s+$/, ''), plots };
-  }
-
-  /**
-   * The same, for output that arrives in chunks: a marker may be split
-   * across chunks, so a partial last line is held back — but only while it
-   * could still become a marker (a prompt like "Name: " passes at once).
-   * feed(chunk) → {text, plots}; flush() → the rest.
-   */
-  function createLiveOutputFilter() {
-    let pending = '';
-    const take = (final) => {
-      const out = { text: '', plots: [] };
-      let start = 0;
-      for (;;) {
-        const nl = pending.indexOf('\n', start);
-        if (nl < 0) break;
-        const line = pending.slice(start, nl);
-        const m = line.match(PLOT_LINE);
-        if (m) out.plots.push(m[1]);
-        else out.text += line + '\n';
-        start = nl + 1;
-      }
-      let rest = pending.slice(start);
-      if (rest && (final || !PLOT_MARKER.startsWith(rest.slice(0, PLOT_MARKER.length)))) {
-        const m = final && rest.match(PLOT_LINE);
-        if (m) out.plots.push(m[1]);
-        else out.text += rest;
-        rest = '';
-      }
-      pending = rest;
-      return out;
-    };
-    return {
-      feed(chunk) { pending += String(chunk ?? ''); return take(false); },
-      flush() { return take(true); },
-    };
-  }
-
-  /** Backticks for a fence around `text`: longer than any run inside it. */
-  function fenceFor(text) {
-    let longest = 0;
-    for (const m of String(text).matchAll(/`+/g)) longest = Math.max(longest, m[0].length);
-    return '`'.repeat(Math.max(3, longest + 1));
-  }
-
-  /**
-   * The Markdown a run leaves under its cell: the output block (when there
-   * is output) and the plot images (each `{src, alt}`), or '' for neither.
-   */
-  function formatResult(text, images = []) {
-    const body = String(text ?? '').replace(/\s+$/, '');
-    const parts = [];
-    if (body) {
-      const ticks = fenceFor(body);
-      parts.push(ticks + 'output\n' + body + '\n' + ticks);
-    }
-    for (const img of images) parts.push('![' + (img.alt || 'plot') + '](' + img.src + ')');
-    return parts.join('\n\n');
-  }
-
-  /**
-   * The run's output as a finished document keeps it, given what rat
-   * reported at the end: {text, plots}. `ok`=false keeps the error text.
-   */
-  function finishedOutput(out) {
-    return splitPlots(cleanRunOutput(out));
-  }
-
-  /**
-   * Which cell another client's run belongs to: the only cell whose code is
-   * the run's code (trailing whitespace aside). Two identical cells, or
-   * none: null — a guess would draw someone's run on the wrong cell.
-   */
-  function cellForCode(cells, code) {
-    const norm = s => String(s ?? '').replace(/\s+$/, '').replace(/\r\n/g, '\n');
-    const want = norm(code);
-    if (!want) return null;
-    const hits = cells.filter(c => norm(c.code) === want);
-    return hits.length === 1 ? hits[0] : null;
-  }
-
-  /**
-   * Follows other clients' runs from `rat events` (run_started/output/
-   * waiting/input_done/ended, as parsed JSON). Live chunks are a preview
-   * sent every 50 ms — a quick run has none — so the end event's whole
-   * output fills in what the chunks did not. Returns per event what changed:
-   * {run, kind, text?, plots?} — the host draws it.
-   */
-  function createRunFollower() {
-    const runs = new Map();
-    return {
-      runs,
-      apply(ev) {
-        const kind = ev.event || ev.kind;
-        const id = ev.run_id;
-        if (!id) return { kind, run: null };
-        if (kind === 'run_started') {
-          const run = { id, caller: ev.caller || 'rat', code: ev.code || '', startedAt: Date.now(), seen: '', filter: createLiveOutputFilter(), waiting: null, replay: !!ev.replay };
-          runs.set(id, run);
-          return { kind, run };
-        }
-        const run = runs.get(id);
-        if (!run) return { kind, run: null };
-        if (kind === 'run_output') {
-          run.seen += ev.text || '';
-          return { kind, run, ...run.filter.feed(ev.text || '') };
-        }
-        if (kind === 'run_waiting') { run.waiting = { prompt: ev.prompt || '', secret: !!ev.secret }; return { kind, run }; }
-        if (kind === 'run_input_done') { run.waiting = null; return { kind, run }; }
-        if (kind === 'run_ended') {
-          runs.delete(id);
-          run.waiting = null;
-          const tail = run.filter.flush();
-          const full = ev.ok === false && ev.error ? String(ev.error) : String(ev.output || '');
-          const seen = run.seen.replace(/\s+$/, '');
-          let rest = '';
-          if (!seen) rest = full;
-          else if (full.startsWith(seen)) rest = full.slice(seen.length).replace(/^\n/, '');
-          const more = splitPlots(rest);
-          run.ok = ev.ok !== false;
-          run.ms = typeof ev.duration_ms === 'number' ? ev.duration_ms : Date.now() - run.startedAt;
-          return { kind, run, text: tail.text + (more.text ? (tail.text && !tail.text.endsWith('\n') ? '\n' : '') + more.text + '\n' : ''), plots: [...tail.plots, ...more.plots] };
-        }
-        return { kind, run };
-      },
-    };
-  }
-
-  var ratNotebook = /*#__PURE__*/Object.freeze({
-    __proto__: null,
-    GENERATED_ASSETS_DIR: GENERATED_ASSETS_DIR,
-    cellForCode: cellForCode,
-    cleanRunOutput: cleanRunOutput,
-    createLiveOutputFilter: createLiveOutputFilter,
-    createRunFollower: createRunFollower,
-    fenceFor: fenceFor,
-    fenceLanguage: fenceLanguage,
-    finishedOutput: finishedOutput,
-    formatResult: formatResult,
-    isOutputFence: isOutputFence,
-    isOwnedImageLine: isOwnedImageLine,
-    splitPlots: splitPlots
-  });
-
-  /**
-   * The notebook runner: running cells of a document editor on rat, the
-   * same way in every host. It owns the run's life on the page — the cell's
-   * status, the live panel, input prompts, plots, the result written under
-   * the cell, run-all's queue — and other clients' runs followed through
-   * `rat events`. The host lends only the transport (how its page reaches
-   * rat) and draws its own chrome from the hooks.
-   *
-   *   const runner = mrmdDocument.createNotebookRunner(editor, {
-   *     transport: {
-   *       run({lang, code, runId}, onEvent) → Promise<result>
-   *           onEvent: {type:'started', ratRunId} | {type:'output', text}
-   *                  | {type:'input_request', prompt, secret} | {type:'input_done'}
-   *           result:  {code, out, ms, cancelled?, error?}  (error: it did not run)
-   *       answer(runId, text) → Promise<{error?}>
-   *       cancel(runId) → Promise
-   *       interrupt?(cell) → Promise          interrupt whatever runs on that cell's
-   *                                           kernel (Stop on a cell another client runs)
-   *       plotUrl(path) → string              a URL to show a plot while running
-   *       savePlots(paths) → Promise<[{src, alt}]>  make them durable; src relative to the document
-   *       prepare?(cell) → Promise<{ok, error?, label?}>   before a run (prerequisites)
-   *     },
-   *     runnable(lang) → boolean,
-   *     hooks: { onRunStart, onRunState, onRunEnd, onExternal, onKernelEvent },
-   *   });
-   *   runner.run(cell, {advance})   runner.runAll()   runner.cancel()
-   *   runner.cancelCell(state)      runner.external(event)   runner.running
-   *
-   * See rat-notebook.js for what a run leaves in the document.
-   */
-
-
-  const norm = s => String(s ?? '').replace(/\s+$/, '').replace(/\r\n/g, '\n');
-
-  function createNotebookRunner(editor, options = {}) {
-    const transport = options.transport;
-    if (!transport || typeof transport.run !== 'function') throw new TypeError('createNotebookRunner: transport.run is required');
-    const hooks = options.hooks || {};
-    const runnable = typeof options.runnable === 'function' ? options.runnable : () => true;
-    const call = (name, ...args) => { try { return hooks[name] && hooks[name](...args); } catch (e) { console.error('[notebook-runner]', name, e); } };
-    const setStatus = (panel, cell, status) => {
-      if (panel && panel.setStatus && panel.setStatus(status)) return;
-      if (cell && editor.setCellStatus) editor.setCellStatus(cell, status);
-    };
-
-    let seq = 0;
-    let current = null;            // the run this page started: {runId, ratRunId, cell, panel, cancel}
-    const ownRatRuns = new Set();  // rat run ids of this page's runs
-    const others = new Map();      // rat run id → {panel, run} for other clients' runs
-    const follower = createRunFollower();
-    let stopQueue = false;
-
-    function closeOther(id) {
-      const o = others.get(id);
-      if (!o) return;
-      others.delete(id);
-      try { o.panel && o.panel.dispose(); } catch {}
-    }
-    function closeOthersOn(cell) {
-      for (const [id, o] of others) {
-        const at = o.panel && o.panel.cell && o.panel.cell();
-        if (at && at.from === cell.from) closeOther(id);
-      }
-    }
-
-    async function run(cell, { advance = false } = {}) {
-      if (!cell || !norm(cell.code)) return { ok: false };
-      if (current) return { ok: false, busy: true };
-      const runId = 'run-' + (++seq) + '-' + Date.now();
-      const t0 = Date.now();
-      closeOthersOn(cell);
-      const panel = editor.showCellRun ? editor.showCellRun(cell) : null;
-      const state = { runId, ratRunId: null, cell, panel, t0, waiting: false };
-      current = state;
-      state.cancel = () => transport.cancel(runId);
-      const statusNow = extra => setStatus(panel, cell, { state: state.waiting ? 'waiting' : 'running', startedAt: t0, ...extra });
-      statusNow();
-      call('onRunStart', { cell, runId, cancel: state.cancel });
-
-      const end = (result, extra = {}) => {
-        current = null;
-        const ok = !result.error && result.code === 0;
-        const verdict = result.error ? { state: 'error', ms: Date.now() - t0, label: extra.label || 'not run' }
-          : { state: ok ? 'ok' : 'error', ms: result.ms ?? Date.now() - t0, label: result.cancelled ? 'stopped' : undefined };
-        setStatus(panel, cell, verdict);
-        return ok;
-      };
-
-      if (typeof transport.prepare === 'function') {
-        statusNow({ label: 'preparing' });
-        let prep;
-        try { prep = await transport.prepare(cell); } catch (e) { prep = { ok: false, error: String(e && e.message || e) }; }
-        if (!prep || !prep.ok) {
-          const result = { error: (prep && prep.error) || 'could not prepare the run' };
-          end(result, { label: (prep && prep.label) || 'not run' });
-          try { panel && panel.dispose(); } catch {}
-          call('onRunEnd', { cell, runId, result, ok: false, wrote: false });
-          return { ok: false, result };
-        }
-        statusNow();
-      }
-
-      const live = createLiveOutputFilter();
-      const showLive = ({ text, plots }) => {
-        if (!panel) return;
-        if (text) panel.append(text);
-        for (const p of plots) panel.appendImage(transport.plotUrl ? transport.plotUrl(p) : '', 'plot');
-      };
-      const onEvent = ev => {
-        if (current !== state) return;
-        if (ev.type === 'started' && ev.ratRunId) {
-          state.ratRunId = ev.ratRunId;
-          ownRatRuns.add(ev.ratRunId);
-          closeOther(ev.ratRunId); // `rat events` may have reported it first
-        } else if (ev.type === 'output') {
-          showLive(live.feed(ev.text));
-        } else if (ev.type === 'input_request') {
-          state.waiting = true;
-          statusNow();
-          call('onRunState', { cell, runId, waiting: true });
-          const asked = panel ? panel.ask({ prompt: ev.prompt, secret: ev.secret }) : Promise.resolve({ withdrawn: true });
-          asked.then(async reply => {
-            if (current !== state) return;
-            if (typeof reply.text === 'string') {
-              const r = await transport.answer(runId, reply.text);
-              if (r && r.error) call('onRunState', { cell, runId, error: r.error });
-            } else if (reply.dismissed) state.cancel();
-          });
-        } else if (ev.type === 'input_done') {
-          state.waiting = false;
-          statusNow();
-          if (panel) panel.dismissInput();
-          call('onRunState', { cell, runId, waiting: false });
-        }
-      };
-
-      let result;
-      try { result = await transport.run({ lang: cell.lang, code: cell.code, runId }, onEvent); }
-      catch (e) { result = { error: String(e && e.message || e) }; }
-      result = result || { error: 'no result' };
-      showLive(live.flush());
-      const ok = end(result);
-      if (result.error) {
-        try { panel && panel.dispose(); } catch {}
-        call('onRunEnd', { cell, runId, result, ok: false, wrote: false });
-        return { ok: false, result };
-      }
-
-      // The result goes under the cell where it is now (edits above it move
-      // it; the panel followed), and only if its code is still what ran.
-      const { text, plots } = finishedOutput(result.out);
-      let images = [];
-      let saveError = null;
-      if (plots.length && transport.savePlots) {
-        try { images = await transport.savePlots(plots); } catch (e) { saveError = String(e && e.message || e); }
-      }
-      const note = saveError ? '\n[plots not saved: ' + saveError + ']' : '';
-      const cellNow = (panel && panel.cell && panel.cell()) || cell;
-      const wrote = !!cellNow && norm(cellNow.code) === norm(cell.code) && editor.setCellOutput(cellNow, text + note, { images });
-      try { panel && panel.dispose(); } catch {}
-      call('onRunEnd', { cell: cellNow || cell, runId, result, ok, wrote, text, images });
-      if (advance && ok && cellNow) editor.advanceToNextCell(cellNow);
-      return { ok, result, wrote };
-    }
-
-    function runnableCells() {
-      return editor.listCells().filter(c => runnable(String(c.lang || '').toLowerCase()));
-    }
-
-    async function runAll() {
-      if (current) return { ok: false, busy: true };
-      const cells = runnableCells();
-      if (!cells.length) return { ok: false, empty: true };
-      stopQueue = false;
-      for (const c of cells) editor.setCellStatus && editor.setCellStatus(c, { state: 'queued' });
-      const clearQueue = () => { stopQueue = false; try { editor.clearCellStatuses && editor.clearCellStatuses(['queued']); } catch {} };
-      for (let i = 0; i < cells.length; i++) {
-        // Re-list before each run: earlier results moved the later cells.
-        const fresh = runnableCells();
-        if (i >= fresh.length) break;
-        if (stopQueue) { clearQueue(); return { ok: false, stoppedBefore: i, total: fresh.length }; }
-        const r = await run(fresh[i]);
-        if (!r.ok) { clearQueue(); return { ok: false, failedAt: i, total: fresh.length, result: r.result }; }
-      }
-      clearQueue();
-      return { ok: true, total: cells.length };
-    }
-
-    function cancel() { if (current) return current.cancel(); }
-
-    /**
-     * Stop pressed on a cell: run all's queue, this page's run, or another
-     * client's run on that cell (an interrupt: the kernel keeps its
-     * variables; a person may stop an agent).
-     */
-    function cancelCell(state, cell) {
-      if (state === 'queued') {
-        stopQueue = true;
-        try { editor.clearCellStatuses && editor.clearCellStatuses(['queued']); } catch {}
-        return 'queue';
-      }
-      if (current && (!cell || current.cell.from === cell.from || (current.panel && current.panel.cell && current.panel.cell()?.from === cell.from))) {
-        cancel();
-        return 'run';
-      }
-      if (cell && transport.interrupt) {
-        for (const o of others.values()) {
-          const at = o.panel && o.panel.cell && o.panel.cell();
-          if (at && at.from === cell.from) { transport.interrupt(at); return 'other'; }
-        }
-      }
-      return null;
-    }
-
-    /**
-     * One event from `rat events --json`. Runs this page started are
-     * ignored (the page shows them already); other clients' runs are drawn
-     * on the cell whose code they ran, when exactly one cell has it.
-     */
-    function external(ev) {
-      const kind = ev && (ev.event || ev.kind);
-      if (!kind) return;
-      if (kind === 'kernel' || kind === 'gap' || kind === 'ctl_called' || kind === 'look_called') {
-        if (kind === 'kernel' && (ev.state === 'stopped' || ev.restarted)) {
-          for (const [id, o] of others) {
-            setStatus(o.panel, null, { state: 'error', ms: Date.now() - o.run.startedAt, label: o.run.caller + ' · ' + (ev.state === 'stopped' ? 'kernel stopped' : 'kernel restarted') });
-            try { o.panel.finish({ note: o.run.caller + '\u2019s run did not finish' }); } catch {}
-            others.delete(id);
-          }
-          follower.runs.clear();
-        }
-        call('onKernelEvent', ev);
-        return;
-      }
-      const id = ev.run_id;
-      if (!id || ownRatRuns.has(id)) return;
-      if (kind === 'run_started' && current && !current.ratRunId && norm(ev.code) === norm(current.cell.code)) {
-        // Our own run, reported by `rat events` before `rat run` said its id.
-        current.ratRunId = id;
-        ownRatRuns.add(id);
-        return;
-      }
-      const change = follower.apply(ev);
-      const r = change.run;
-      if (!r) return;
-      if (kind === 'run_started') {
-        if (typeof ev.ts === 'number') r.startedAt = ev.ts;
-        const cell = cellForCode(runnableCells(), r.code);
-        let panel = null;
-        if (cell && !(current && current.cell.from === cell.from)) {
-          closeOthersOn(cell);
-          panel = editor.showCellRun ? editor.showCellRun(cell, { dimResult: false }) : null;
-          if (panel) {
-            others.set(id, { panel, run: r });
-            setStatus(panel, cell, { state: 'running', startedAt: r.startedAt, label: r.caller + ' · running' });
-          }
-        }
-        call('onExternal', { kind, run: r, cell, shown: !!panel });
-        return;
-      }
-      const o = others.get(id);
-      if (o) {
-        if (change.text) o.panel.append(change.text);
-        for (const p of change.plots || []) o.panel.appendImage(transport.plotUrl ? transport.plotUrl(p) : '', 'plot');
-        if (kind === 'run_waiting') setStatus(o.panel, null, { state: 'waiting', startedAt: r.startedAt, label: r.caller + ' · waiting for input' });
-        if (kind === 'run_input_done') setStatus(o.panel, null, { state: 'running', startedAt: r.startedAt, label: r.caller + ' · running' });
-        if (kind === 'run_ended') {
-          setStatus(o.panel, null, { state: r.ok ? 'ok' : 'error', ms: r.ms, label: r.caller });
-          o.panel.finish({ note: r.caller + '\u2019s run \u2014 shown here, not saved in the document' });
-          others.delete(id);
-        }
-      }
-      call('onExternal', { kind, run: r, text: change.text, plots: change.plots, shown: !!o });
-    }
-
-    function destroy() {
-      for (const id of [...others.keys()]) closeOther(id);
-    }
-
-    return {
-      run, runAll, cancel, cancelCell, external, destroy,
-      get running() { return current ? { cell: current.cell, runId: current.runId, waiting: current.waiting } : null; },
-    };
+    const shown = KEYS[key] || (key.length === 1 ? key.toUpperCase() : key);
+    const held = ORDER.filter(m => mods.has(m));
+    return mac
+      ? held.map(m => GLYPHS[m]).join('') + shown
+      : [...held.map(m => WORDS[m]), shown].join('+');
   }
 
   /**
@@ -58345,6 +57576,222 @@ var mrmdDocument = (function (exports) {
   );
 
   /**
+   * rat-notebook — what a Markdown notebook run on rat means, as plain
+   * functions: no editor, no DOM, no transport. Every host (Chattering, the
+   * VS Code extension, a test) uses these, so a notebook behaves the same
+   * wherever it is run.
+   *
+   * The result format a run leaves in the document:
+   *
+   *   ```python
+   *   plt.plot(x); plt.show()
+   *   ```
+   *
+   *   ```output
+   *   what the program printed
+   *   ```
+   *
+   *   ![plot](../_assets/generated/3f9a1c2b7d4e.png)
+   *
+   * - Program output only: no timing or status (they change on every run and
+   *   would show in Git when the output did not). A fence longer than any
+   *   backtick run in the output keeps the output byte-for-byte.
+   * - Plots are images after the block, saved in the project's
+   *   `_assets/generated/`, named by content. A result owns only the images
+   *   the runner made (alt `plot`, a path inside `_assets/`): an image a
+   *   person placed there is never replaced.
+   * - Older forms are read and replaced: ```output:<execId> (MRMD) and
+   *   ```output | ✓ 1.5s | 1 var (VS Code before this module).
+   */
+
+  /** Where generated images go, relative to the project root. */
+  const GENERATED_ASSETS_DIR = '_assets/generated';
+
+  const PLOT_MARKER = '__RAT_PLOT__:';
+  const PLOT_LINE = /^__RAT_PLOT__:(.+?)\s*$/;
+  const BANNER_LINE = /^[a-z0-9@._-]+ (?:started|restarted) on http[^\n]*\n?/im;
+  const STATUS_TAIL = /\n?[✓✗] \d+(?:\.\d+)?m?s( \| \d+ vars?)?\s*$/;
+  const OWNED_IMAGE = /^!\[plot(?:-\d+)?\]\(([^)\s]*_assets\/[^)\s]*)\)\s*$/;
+
+  /** A fence line's language word, lowercased ('' when bare). */
+  function fenceLanguage(line) {
+    return ((String(line).match(/^\s{0,3}(?:`{3,}|~{3,})\s*([^\s|]*)/) || [])[1] || '').toLowerCase();
+  }
+
+  /** True for every spelling of a result fence: output, output:<id>, output | … */
+  function isOutputFence(line) {
+    const lang = fenceLanguage(line);
+    return lang === 'output' || lang.startsWith('output:');
+  }
+
+  /** True for an image line a run made (and a rerun may replace). */
+  function isOwnedImageLine(line) {
+    return OWNED_IMAGE.test(String(line));
+  }
+
+  /**
+   * rat's final text for a run, as a document keeps it: without rat's
+   * kernel-start banner and its "✓ 21ms | 1 var" status line.
+   */
+  function cleanRunOutput(out) {
+    return String(out || '').replace(BANNER_LINE, '').replace(STATUS_TAIL, '').replace(/\s+$/, '');
+  }
+
+  /** Split plot markers out of finished output: {text, plots: [path]}. */
+  function splitPlots(text) {
+    const plots = [];
+    const kept = [];
+    for (const line of String(text || '').split('\n')) {
+      const m = line.match(PLOT_LINE);
+      if (m) plots.push(m[1]);
+      else kept.push(line);
+    }
+    return { text: kept.join('\n').replace(/\s+$/, ''), plots };
+  }
+
+  /**
+   * The same, for output that arrives in chunks: a marker may be split
+   * across chunks, so a partial last line is held back — but only while it
+   * could still become a marker (a prompt like "Name: " passes at once).
+   * feed(chunk) → {text, plots}; flush() → the rest.
+   */
+  function createLiveOutputFilter() {
+    let pending = '';
+    const take = (final) => {
+      const out = { text: '', plots: [] };
+      let start = 0;
+      for (;;) {
+        const nl = pending.indexOf('\n', start);
+        if (nl < 0) break;
+        const line = pending.slice(start, nl);
+        const m = line.match(PLOT_LINE);
+        if (m) out.plots.push(m[1]);
+        else out.text += line + '\n';
+        start = nl + 1;
+      }
+      let rest = pending.slice(start);
+      if (rest && (final || !PLOT_MARKER.startsWith(rest.slice(0, PLOT_MARKER.length)))) {
+        const m = final && rest.match(PLOT_LINE);
+        if (m) out.plots.push(m[1]);
+        else out.text += rest;
+        rest = '';
+      }
+      pending = rest;
+      return out;
+    };
+    return {
+      feed(chunk) { pending += String(chunk ?? ''); return take(false); },
+      flush() { return take(true); },
+    };
+  }
+
+  /** Backticks for a fence around `text`: longer than any run inside it. */
+  function fenceFor(text) {
+    let longest = 0;
+    for (const m of String(text).matchAll(/`+/g)) longest = Math.max(longest, m[0].length);
+    return '`'.repeat(Math.max(3, longest + 1));
+  }
+
+  /**
+   * The Markdown a run leaves under its cell: the output block (when there
+   * is output) and the plot images (each `{src, alt}`), or '' for neither.
+   */
+  function formatResult(text, images = []) {
+    const body = String(text ?? '').replace(/\s+$/, '');
+    const parts = [];
+    if (body) {
+      const ticks = fenceFor(body);
+      parts.push(ticks + 'output\n' + body + '\n' + ticks);
+    }
+    for (const img of images) parts.push('![' + (img.alt || 'plot') + '](' + img.src + ')');
+    return parts.join('\n\n');
+  }
+
+  /**
+   * The run's output as a finished document keeps it, given what rat
+   * reported at the end: {text, plots}. `ok`=false keeps the error text.
+   */
+  function finishedOutput(out) {
+    return splitPlots(cleanRunOutput(out));
+  }
+
+  /**
+   * Which cell another client's run belongs to: the only cell whose code is
+   * the run's code (trailing whitespace aside). Two identical cells, or
+   * none: null — a guess would draw someone's run on the wrong cell.
+   */
+  function cellForCode(cells, code) {
+    const norm = s => String(s ?? '').replace(/\s+$/, '').replace(/\r\n/g, '\n');
+    const want = norm(code);
+    if (!want) return null;
+    const hits = cells.filter(c => norm(c.code) === want);
+    return hits.length === 1 ? hits[0] : null;
+  }
+
+  /**
+   * Follows other clients' runs from `rat events` (run_started/output/
+   * waiting/input_done/ended, as parsed JSON). Live chunks are a preview
+   * sent every 50 ms — a quick run has none — so the end event's whole
+   * output fills in what the chunks did not. Returns per event what changed:
+   * {run, kind, text?, plots?} — the host draws it.
+   */
+  function createRunFollower() {
+    const runs = new Map();
+    return {
+      runs,
+      apply(ev) {
+        const kind = ev.event || ev.kind;
+        const id = ev.run_id;
+        if (!id) return { kind, run: null };
+        if (kind === 'run_started') {
+          const run = { id, caller: ev.caller || 'rat', code: ev.code || '', startedAt: Date.now(), seen: '', filter: createLiveOutputFilter(), waiting: null, replay: !!ev.replay };
+          runs.set(id, run);
+          return { kind, run };
+        }
+        const run = runs.get(id);
+        if (!run) return { kind, run: null };
+        if (kind === 'run_output') {
+          run.seen += ev.text || '';
+          return { kind, run, ...run.filter.feed(ev.text || '') };
+        }
+        if (kind === 'run_waiting') { run.waiting = { prompt: ev.prompt || '', secret: !!ev.secret }; return { kind, run }; }
+        if (kind === 'run_input_done') { run.waiting = null; return { kind, run }; }
+        if (kind === 'run_ended') {
+          runs.delete(id);
+          run.waiting = null;
+          const tail = run.filter.flush();
+          const full = ev.ok === false && ev.error ? String(ev.error) : String(ev.output || '');
+          const seen = run.seen.replace(/\s+$/, '');
+          let rest = '';
+          if (!seen) rest = full;
+          else if (full.startsWith(seen)) rest = full.slice(seen.length).replace(/^\n/, '');
+          const more = splitPlots(rest);
+          run.ok = ev.ok !== false;
+          run.ms = typeof ev.duration_ms === 'number' ? ev.duration_ms : Date.now() - run.startedAt;
+          return { kind, run, text: tail.text + (more.text ? (tail.text && !tail.text.endsWith('\n') ? '\n' : '') + more.text + '\n' : ''), plots: [...tail.plots, ...more.plots] };
+        }
+        return { kind, run };
+      },
+    };
+  }
+
+  var ratNotebook = /*#__PURE__*/Object.freeze({
+    __proto__: null,
+    GENERATED_ASSETS_DIR: GENERATED_ASSETS_DIR,
+    cellForCode: cellForCode,
+    cleanRunOutput: cleanRunOutput,
+    createLiveOutputFilter: createLiveOutputFilter,
+    createRunFollower: createRunFollower,
+    fenceFor: fenceFor,
+    fenceLanguage: fenceLanguage,
+    finishedOutput: finishedOutput,
+    formatResult: formatResult,
+    isOutputFence: isOutputFence,
+    isOwnedImageLine: isOwnedImageLine,
+    splitPlots: splitPlots
+  });
+
+  /**
    * What an AI command acts on, and what goes along with it — pure functions
    * of the editor state, no DOM, no model.
    *
@@ -58637,12 +58084,28 @@ var mrmdDocument = (function (exports) {
    * every mainstream editor. Several answers to the same command ("Another")
    * are kept side by side and can be stepped through.
    *
-   * Keys: Mod-j opens the command box. Tab accepts (with the cursor in the
-   * suggested range; elsewhere Tab keeps its meaning), Escape discards,
-   * Alt-] and Alt-[ step through the answers (Alt-] past the last asks for
-   * another).
+   * Keys (AI_KEYS): Mod-j opens the command box. Tab accepts (with the
+   * cursor in the suggested range; elsewhere Tab keeps its meaning), Escape
+   * discards, Alt-] and Alt-[ step through the answers (Alt-] past the last
+   * asks for another).
+   *
+   * Finding them without knowing them: a ✦ in the margin beside the
+   * cursor's line opens the box on a click, and says what it is doing — at
+   * rest, lit for a selection or an open box, pulsing while an answer is
+   * written. Every button that has a key shows it, the box opened any other
+   * way than its key names that key, and aiKeyHelp() tells the host which
+   * keys act here, now (editor.keyHelp()).
    */
 
+
+  /** The keys of AI commands, in CodeMirror notation. Labels spell them with formatKey. */
+  const AI_KEYS = Object.freeze({
+    open: 'Mod-j',
+    accept: 'Tab',
+    discard: 'Escape',
+    next: 'Alt-]',
+    previous: 'Alt-[',
+  });
 
   /** On an accepted suggestion's transaction: {command, model, instruction}. */
   const aiEditAnnotation = Annotation.define();
@@ -58689,7 +58152,7 @@ var mrmdDocument = (function (exports) {
 
   // ─── state ──────────────────────────────────────────────────────────
 
-  const setMenu = StateEffect.define();        // {pos} | null
+  const setMenu = StateEffect.define();        // {pos, byKey} | null — byKey: opened with AI_KEYS.open
   const setOp = StateEffect.define();          // Operation | null
   const patchAnswer = StateEffect.define();    // {opId, index, text?, model?, status?, error?}
   const addAnswer = StateEffect.define();      // {opId}
@@ -58709,7 +58172,7 @@ var mrmdDocument = (function (exports) {
       if (tr.docChanged) {
         if (menu) {
           const pos = tr.changes.mapPos(menu.pos);
-          if (pos !== menu.pos) menu = { pos };
+          if (pos !== menu.pos) menu = { ...menu, pos };
         }
         if (op) {
           const { from, to } = op.target;
@@ -58741,11 +58204,35 @@ var mrmdDocument = (function (exports) {
 
   // ─── the suggestion on screen ───────────────────────────────────────
 
-  function button(label, title, onClick, cls = '') {
+  /** A key as it reads, for a label. */
+  function kbd(name) {
+    const k = document.createElement('kbd');
+    k.className = 'mrmd-ai-kbd';
+    k.textContent = formatKey(name);
+    return k;
+  }
+
+  /** The glyph of AI commands; `busy` makes it pulse (an answer is being written). */
+  function glyph(busy = false) {
+    const g = document.createElement('span');
+    g.className = 'mrmd-ai-glyph' + (busy ? ' mrmd-ai-glyph-busy' : '');
+    g.textContent = '✦';
+    g.setAttribute('aria-hidden', 'true');
+    return g;
+  }
+
+  /**
+   * A button that keeps the editor's selection. With `key`, the key that does
+   * the same shows on the button and in its title: using the mouse teaches
+   * the keyboard.
+   */
+  function button(label, what, onClick, { cls = '', key = null } = {}) {
+    const title = key ? `${what} (${formatKey(key)})` : what;
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'mrmd-ai-btn' + (cls ? ' ' + cls : '');
     b.textContent = label;
+    if (key) b.appendChild(kbd(key));
     b.title = title;
     b.setAttribute('aria-label', title);
     // Keep the editor's selection where it is.
@@ -58774,12 +58261,12 @@ var mrmdDocument = (function (exports) {
       chip.className = 'mrmd-ai-chip';
       const ctl = controllerOf(view);
       if (this.answer.status === 'loading') {
-        const dots = document.createElement('span');
-        dots.className = 'mrmd-ai-dots';
-        dots.textContent = '…';
-        chip.append(dots, button('×', 'Stop (Esc)', () => ctl?.discard()));
+        chip.append(glyph(true), button('×', 'Stop', () => ctl?.discard(), { key: AI_KEYS.discard }));
       } else {
-        chip.append(button('✓', 'Accept (Tab)', () => ctl?.accept()), button('×', 'Discard (Esc)', () => ctl?.discard()));
+        chip.append(
+          button('✓', 'Accept', () => ctl?.accept(), { cls: 'mrmd-ai-accept', key: AI_KEYS.accept }),
+          button('×', 'Discard', () => ctl?.discard(), { key: AI_KEYS.discard }),
+        );
       }
       wrap.appendChild(chip);
       return wrap;
@@ -58808,7 +58295,7 @@ var mrmdDocument = (function (exports) {
       head.className = 'mrmd-ai-panel-head';
       const title = document.createElement('span');
       title.className = 'mrmd-ai-panel-title';
-      title.textContent = '✦ ' + op.command.label + (op.instruction ? ' — “' + op.instruction + '”' : '');
+      title.append(glyph(answer.status === 'loading'), ' ' + op.command.label + (op.instruction ? ' — “' + op.instruction + '”' : ''));
       head.appendChild(title);
       const meta = document.createElement('span');
       meta.className = 'mrmd-ai-panel-meta';
@@ -58846,20 +58333,26 @@ var mrmdDocument = (function (exports) {
       foot.className = 'mrmd-ai-panel-foot';
       if (op.answers.length > 1) {
         foot.append(
-          button('‹', 'Previous answer (Alt-[)', () => ctl?.step(-1), 'mrmd-ai-step'),
-          button('›', 'Next answer (Alt-])', () => ctl?.step(1), 'mrmd-ai-step'),
+          button('‹', 'Previous answer', () => ctl?.step(-1), { cls: 'mrmd-ai-step', key: AI_KEYS.previous }),
+          button('›', 'Next answer', () => ctl?.step(1), { cls: 'mrmd-ai-step', key: AI_KEYS.next }),
         );
       }
-      if (answer.status === 'ready') foot.appendChild(button('Accept ⇥', 'Accept (Tab)', () => ctl?.accept(), 'mrmd-ai-accept'));
-      if (answer.status !== 'loading') foot.appendChild(button(answer.status === 'error' ? 'Try again' : 'Another', 'Ask for another answer (Alt-])', () => ctl?.another()));
-      foot.appendChild(button(answer.status === 'loading' ? 'Stop' : 'Discard', answer.status === 'loading' ? 'Stop (Esc)' : 'Discard (Esc)', () => ctl?.discard()));
+      if (answer.status === 'ready') foot.appendChild(button('Accept', 'Accept', () => ctl?.accept(), { cls: 'mrmd-ai-accept', key: AI_KEYS.accept }));
+      // Alt-] asks again only from the last answer (before it, it steps on):
+      // the key is shown only where it does what the button does.
+      if (answer.status !== 'loading') {
+        const last = op.index === op.answers.length - 1;
+        foot.appendChild(button(answer.status === 'error' ? 'Try again' : 'Another', 'Ask for another answer', () => ctl?.another(), { key: last ? AI_KEYS.next : null }));
+      }
+      const stop = answer.status === 'loading' ? 'Stop' : 'Discard';
+      foot.appendChild(button(stop, stop, () => ctl?.discard(), { key: AI_KEYS.discard }));
       panel.appendChild(foot);
       return panel;
     }
     ignoreEvent() { return true; }
   }
 
-  function buildDecorations$1(state) {
+  function buildDecorations$2(state) {
     const { op } = state.field(aiState);
     if (!op) return Decoration.none;
     const answer = op.answers[op.index];
@@ -58881,9 +58374,9 @@ var mrmdDocument = (function (exports) {
   }
 
   const aiDecorations = StateField.define({
-    create: state => buildDecorations$1(state),
+    create: state => buildDecorations$2(state),
     update(deco, tr) {
-      if (tr.startState.field(aiState) !== tr.state.field(aiState)) return buildDecorations$1(tr.state);
+      if (tr.startState.field(aiState) !== tr.state.field(aiState)) return buildDecorations$2(tr.state);
       return tr.docChanged ? deco.map(tr.changes) : deco;
     },
     provide: f => EditorView.decorations.from(f),
@@ -58934,11 +58427,7 @@ var mrmdDocument = (function (exports) {
       this.list = document.createElement('div');
       this.list.className = 'mrmd-ai-menu-list';
       this.list.setAttribute('role', 'listbox');
-      const foot = document.createElement('div');
-      foot.className = 'mrmd-ai-menu-foot';
-      const model = typeof ctl.config.model === 'function' ? ctl.config.model() : '';
-      foot.textContent = [model ? 'model: ' + model : '', 'Enter runs · Esc closes'].filter(Boolean).join(' · ');
-      dom.append(head, input, this.list, foot);
+      dom.append(head, input, this.list, this.foot(state.field(aiState).menu));
 
       input.addEventListener('input', () => { ctl.menuDraft = input.value; this.active = 0; this.render(); });
       input.addEventListener('keydown', e => this.key(e));
@@ -58953,6 +58442,23 @@ var mrmdDocument = (function (exports) {
         }, 0);
       });
       this.render();
+    }
+
+    /**
+     * The model that answers and the box's keys. A box opened any other way
+     * than its key (the ✦, a button) also names that key: the next time is
+     * one keystroke.
+     */
+    foot(menu) {
+      const foot = document.createElement('div');
+      foot.className = 'mrmd-ai-menu-foot';
+      const model = typeof this.ctl.config.model === 'function' ? this.ctl.config.model() : '';
+      const parts = [];
+      if (model) parts.push(['model: ' + model]);
+      if (!menu || !menu.byKey) parts.push([kbd(AI_KEYS.open), ' opens this box']);
+      parts.push([kbd('Enter'), ' runs'], [kbd('Escape'), ' closes']);
+      parts.forEach((part, i) => foot.append(...(i ? [' · '] : []), ...part));
+      return foot;
     }
 
     /** The rows for the current query. */
@@ -59083,10 +58589,11 @@ var mrmdDocument = (function (exports) {
       return answer === true ? null : String(answer || 'AI commands are off');
     }
 
-    openMenu() {
+    /** Open the command box at the cursor. `byKey`: opened with AI_KEYS.open (the box then does not teach it). */
+    openMenu({ byKey = false } = {}) {
       const reason = this.unavailable();
       if (reason) { this.notify(reason); return false; }
-      this.view.dispatch({ effects: setMenu.of({ pos: this.view.state.selection.main.head }) });
+      this.view.dispatch({ effects: setMenu.of({ pos: this.view.state.selection.main.head, byKey }) });
       return true;
     }
 
@@ -59273,19 +58780,171 @@ var mrmdDocument = (function (exports) {
 
   const aiController = ViewPlugin.fromClass(AiController);
 
+  // ─── the spark: AI commands, beside the cursor's line ───────────────
+  //
+  // A ✦ in its own narrow gutter, on the line of the cursor, while the
+  // editor has focus and AI commands can act there. In the margin, not in
+  // the text: it never moves a character, covers one, or stands between
+  // two for the cursor. A click opens the command box. Its look says what
+  // is happening here:
+  //   rest       faint — commands are available
+  //   selection  lit   — there is a selection to act on
+  //   open       lit   — the command box is open
+  //   busy       pulsing — an answer for the text at the cursor is being written
+  //   ready      lit   — that answer is ready (the cursor is on it: Tab accepts)
+  //   error      in the error color — that command failed
+
+  function sparkTitle(mode) {
+    switch (mode) {
+      case 'busy': return `An AI answer is being written here (${formatKey(AI_KEYS.discard)} stops it)`;
+      case 'ready': return `A suggestion is ready: ${formatKey(AI_KEYS.accept)} accepts, ${formatKey(AI_KEYS.discard)} discards`;
+      case 'error': return `The AI command failed: ${formatKey(AI_KEYS.next)} tries again`;
+      case 'selection': return `AI commands for the selection (${formatKey(AI_KEYS.open)})`;
+      default: return `AI commands (${formatKey(AI_KEYS.open)})`;
+    }
+  }
+
+  class SparkMarker extends GutterMarker {
+    constructor(mode) { super(); this.mode = mode; }
+    eq(other) { return other.mode === this.mode; }
+    toDOM() {
+      const el = document.createElement('span');
+      el.className = 'mrmd-ai-spark';
+      el.dataset.mode = this.mode;
+      el.textContent = '✦';
+      el.title = sparkTitle(this.mode);
+      // A pointer's way to the box. The keyboard has AI_KEYS.open (named by
+      // the host's key help); a screen reader need not read a margin glyph.
+      el.setAttribute('aria-hidden', 'true');
+      return el;
+    }
+  }
+
+  const sparkMarkerOf = Object.fromEntries(['rest', 'selection', 'open', 'busy', 'ready', 'error'].map(m => [m, new SparkMarker(m)]));
+
+  /** The suggestion the cursor is on (the range Tab accepts from), or null. */
+  function opAtCursor(state) {
+    const { op } = state.field(aiState);
+    const head = state.selection.main.head;
+    return op && head >= op.target.from && head <= op.target.to ? op : null;
+  }
+
+  function sparkMode(state) {
+    const { menu } = state.field(aiState);
+    if (menu) return 'open';
+    const op = opAtCursor(state);
+    if (op) {
+      const { status } = op.answers[op.index];
+      return status === 'loading' ? 'busy' : status;
+    }
+    return state.selection.main.empty ? 'rest' : 'selection';
+  }
+
+  // Markers are asked for on every view update; the answer changes only with
+  // the state, focus, or the host's availability.
+  const sparkMemo = new WeakMap(); // view → {state, shown, set}
+
+  function sparkMarkers(view) {
+    const ctl = controllerOf(view);
+    if (!ctl) return RangeSet.empty;
+    const state = view.state;
+    const shown = (view.hasFocus || !!state.field(aiState).menu) && !ctl.unavailable();
+    const memo = sparkMemo.get(view);
+    if (memo && memo.state === state && memo.shown === shown) return memo.set;
+    let set = RangeSet.empty;
+    if (shown) {
+      const head = state.selection.main.head;
+      if (aiPlaceAt(state, head, ctl.cellAt).kind !== 'none') {
+        set = RangeSet.of([sparkMarkerOf[sparkMode(state)].range(state.doc.lineAt(head).from)]);
+      }
+    }
+    sparkMemo.set(view, { state, shown, set });
+    return set;
+  }
+
+  const aiSparkGutter = gutter({
+    class: 'mrmd-ai-spark-gutter',
+    markers: sparkMarkers,
+    // The gutter keeps its width while no line shows the spark: the text
+    // never shifts when it comes and goes.
+    initialSpacer: () => sparkMarkerOf.rest,
+    domEventHandlers: {
+      mousedown(view, _line, event) {
+        if (!(event.target instanceof Element) || !event.target.closest('.mrmd-ai-spark')) return false;
+        // Keep the editor's focus and selection: the box acts on them.
+        event.preventDefault();
+        controllerOf(view)?.openMenu();
+        return true;
+      },
+    },
+  });
+
+  // ─── key help for the host ─────────────────────────────────────────────────
+
+  /**
+   * The AI keys that act in `view` now, for a host's keyboard help.
+   *
+   * `sections` — [{label, keys: [[names, what]], exclusive?}], most local
+   * first; `names` are CodeMirror key names (formatKey spells them). An
+   * `exclusive` section owns the keyboard: while the command box is open no
+   * other key reaches the editor or the page.
+   * `open` — the entry for the key that opens the box here, or null where AI
+   * commands are off or cannot act; the host places it among its own keys.
+   *
+   * @param {EditorView} view
+   * @returns {{sections: Array<{label: string, keys: Array<[string[], string]>, exclusive?: boolean}>, open: [string[], string] | null}}
+   */
+  function aiKeyHelp(view) {
+    const ctl = controllerOf(view);
+    if (!ctl) return { sections: [], open: null };
+    const state = view.state;
+    const { menu, op } = state.field(aiState);
+    if (menu) {
+      return {
+        sections: [{ label: 'AI command box', exclusive: true, keys: [
+          [['ArrowUp', 'ArrowDown'], 'choose a command'],
+          [['Enter'], 'run it'],
+          [[AI_KEYS.discard], 'close the box'],
+        ] }],
+        open: null,
+      };
+    }
+    const sections = [];
+    if (op) {
+      const { status } = op.answers[op.index];
+      const last = op.index === op.answers.length - 1;
+      const keys = [];
+      if (status === 'ready') keys.push([[AI_KEYS.accept], opAtCursor(state) ? 'accept' : 'accept, with the cursor on the suggestion']);
+      if (status !== 'loading' || !last) keys.push([[AI_KEYS.next], !last ? 'next answer' : status === 'error' ? 'try again' : 'another answer']);
+      if (op.index > 0) keys.push([[AI_KEYS.previous], 'previous answer']);
+      keys.push([[AI_KEYS.discard], status === 'loading' ? 'stop' : status === 'error' ? 'close' : 'discard']);
+      sections.push({ label: 'AI suggestion', keys });
+    }
+    let open = null;
+    if (!ctl.unavailable()) {
+      const place = aiPlaceAt(state, state.selection.main.head, ctl.cellAt);
+      if (place.kind !== 'none') open = [[AI_KEYS.open], `AI commands: ${describeAiPlace(state, place)} — or click the ✦ beside the line`];
+    }
+    return { sections, open };
+  }
+
   // ─── look ───────────────────────────────────────────────────────────
 
-  let keyframesInstalled = false;
-  function installKeyframes() {
-    if (keyframesInstalled || typeof document === 'undefined') return;
-    keyframesInstalled = true;
+  let keyframesInstalled$1 = false;
+  function installKeyframes$1() {
+    if (keyframesInstalled$1 || typeof document === 'undefined') return;
+    keyframesInstalled$1 = true;
     const style = document.createElement('style');
     style.dataset.mrmd = 'document-ai';
     style.textContent = `
 @keyframes mrmd-ai-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @keyframes mrmd-ai-blink { from { opacity: 1; } to { opacity: .3; } }
+@keyframes mrmd-ai-pulse { from { opacity: 1; transform: scale(1); } to { opacity: .35; transform: scale(.72); } }
 @media (prefers-reduced-motion: reduce) {
-  .mrmd-ai-target-busy, .mrmd-ai-dots, .mrmd-ai-waiting::after { animation: none !important; }
+  .mrmd-ai-target-busy, .mrmd-ai-glyph-busy, .mrmd-ai-spark, .mrmd-ai-waiting::after { animation: none !important; }
+}
+@media (pointer: coarse) {
+  .cm-editor .cm-gutter .mrmd-ai-spark { padding: 0 8px; }
 }`;
     document.head.appendChild(style);
   }
@@ -59300,12 +58959,32 @@ var mrmdDocument = (function (exports) {
     '.mrmd-ai-ghost': { whiteSpace: 'pre-wrap' },
     '.mrmd-ai-ghost-text': { color: 'var(--mrmd-fg-muted, currentColor)', fontStyle: 'italic', opacity: '.8' },
     '.mrmd-ai-chip': { display: 'inline-flex', alignItems: 'center', gap: '2px', marginLeft: '6px', verticalAlign: 'baseline' },
-    '.mrmd-ai-dots': { animation: 'mrmd-ai-blink .8s ease-in-out infinite alternate', color: 'var(--mrmd-accent, currentColor)' },
+    // ✦ is the mark of AI commands everywhere: the spark, the box, the
+    // suggestion. Pulsing, it means an answer is being written.
+    '.mrmd-ai-glyph': { display: 'inline-block', color: 'var(--mrmd-accent, currentColor)', fontStyle: 'normal' },
+    '.mrmd-ai-glyph-busy': { animation: 'mrmd-ai-pulse .9s ease-in-out infinite alternate' },
+    '.mrmd-ai-chip > .mrmd-ai-glyph': { margin: '0 3px' },
     '.mrmd-ai-btn': {
       font: '11px/1 var(--mrmd-font-ui, system-ui, sans-serif)', boxSizing: 'border-box', minHeight: '0', height: '19px', margin: '0',
       padding: '0 7px', lineHeight: '17px', color: 'var(--mrmd-fg, currentColor)', background: 'var(--mrmd-button-bg, transparent)',
       border: '1px solid var(--mrmd-button-border, var(--mrmd-border, currentColor))', borderRadius: '3px', cursor: 'pointer',
+      display: 'inline-flex', alignItems: 'center', gap: '5px', fontStyle: 'normal',
     },
+    // A key on a button or in the box: quieter than the label it follows.
+    '.mrmd-ai-kbd': {
+      font: '10px/1 var(--mrmd-font-ui, system-ui, sans-serif)', padding: '1px 3px', color: 'var(--mrmd-fg-muted, currentColor)',
+      border: '1px solid var(--mrmd-border, currentColor)', borderRadius: '2px', background: 'transparent',
+    },
+    // The spark in the margin (see "the spark" above). Its rest opacity is a
+    // token: a host without half-tones (e-ink) sets --mrmd-ai-spark-rest: 1.
+    '.mrmd-ai-spark-gutter .cm-gutterElement': { textAlign: 'center' },
+    '.mrmd-ai-spark': {
+      display: 'inline-block', padding: '0 4px', fontSize: '0.8em', fontStyle: 'normal', cursor: 'pointer', userSelect: 'none',
+      color: 'var(--mrmd-accent, currentColor)', opacity: 'var(--mrmd-ai-spark-rest, .38)', transition: 'opacity .15s',
+    },
+    '.mrmd-ai-spark:hover, .mrmd-ai-spark[data-mode="selection"], .mrmd-ai-spark[data-mode="open"], .mrmd-ai-spark[data-mode="ready"], .mrmd-ai-spark[data-mode="busy"]': { opacity: '1' },
+    '.mrmd-ai-spark[data-mode="busy"]': { animation: 'mrmd-ai-pulse .9s ease-in-out infinite alternate' },
+    '.mrmd-ai-spark[data-mode="error"]': { opacity: '1', color: 'var(--mrmd-error, currentColor)' },
     '.mrmd-ai-btn:hover, .mrmd-ai-btn:focus-visible': { background: 'var(--mrmd-hover-bg, transparent)' },
     '.mrmd-ai-btn.mrmd-ai-accept': { borderColor: 'var(--mrmd-accent, currentColor)', color: 'var(--mrmd-accent, currentColor)' },
     '.mrmd-ai-panel': {
@@ -59347,20 +59026,21 @@ var mrmdDocument = (function (exports) {
    * (aiConfig); `cellAt(state, pos)` finds the fenced block at pos.
    */
   function documentAi(config, cellAt) {
-    installKeyframes();
+    installKeyframes$1();
     return [
       aiHostFacet.of({ config, cellAt }),
       aiState,
       aiDecorations,
       aiController,
       aiMenuTooltip,
+      aiSparkGutter,
       aiTheme,
       Prec.highest(keymap.of([
-        { key: 'Mod-j', preventDefault: true, run: view => controllerOf(view)?.openMenu() ?? false },
-        { key: 'Tab', run: view => controllerOf(view)?.acceptAtCursor() ?? false },
-        { key: 'Escape', run: view => controllerOf(view)?.discard() ?? false },
-        { key: 'Alt-]', run: view => controllerOf(view)?.step(1) ?? false },
-        { key: 'Alt-[', run: view => controllerOf(view)?.step(-1) ?? false },
+        { key: AI_KEYS.open, preventDefault: true, run: view => controllerOf(view)?.openMenu({ byKey: true }) ?? false },
+        { key: AI_KEYS.accept, run: view => controllerOf(view)?.acceptAtCursor() ?? false },
+        { key: AI_KEYS.discard, run: view => controllerOf(view)?.discard() ?? false },
+        { key: AI_KEYS.next, run: view => controllerOf(view)?.step(1) ?? false },
+        { key: AI_KEYS.previous, run: view => controllerOf(view)?.step(-1) ?? false },
       ])),
     ];
   }
@@ -59368,6 +59048,617 @@ var mrmdDocument = (function (exports) {
   /** The controller of a view with AI commands (for the editor API), or null. */
   function aiControllerOf(view) {
     return controllerOf(view);
+  }
+
+  /**
+   * Cell controls for the document editor: a Run button on every runnable
+   * code cell, and the cell's run state drawn on the cell itself.
+   *
+   * The control sits at the right of the cell's opening fence row (the row
+   * that reads as the language label). The host owns execution and tells the
+   * editor what each cell is doing:
+   *
+   *   editor.setCellStatus(cell, { state: 'queued' | 'running' | 'waiting' | 'ok' | 'error',
+   *                                startedAt, ms, label })   // null clears
+   *
+   *   queued   — will run (run all)                      "queued"          ■ Stop
+   *   running  — computing; elapsed time ticks, a bar slides along the top
+   *              edge and pulses down the left side      "running · 12s"   ■ Stop
+   *   waiting  — blocked on the reader (an input prompt); the bar holds
+   *              still: it is the reader's turn          "waiting for input · 12s"
+   *   ok/error — the last run's verdict and duration     "✓ 1.2s"          ▶ Run
+   *              (dropped when the cell's code is edited: it no longer
+   *              describes that code)
+   *
+   * Nothing here is document text. Motion stops for readers who ask for
+   * reduced motion.
+   */
+
+
+  /** The keys that run the cell at the cursor (bound by the document editor), in CodeMirror notation. */
+  const CELL_KEYS = Object.freeze({
+    run: 'Mod-Enter',
+    runAndAdvance: 'Shift-Enter',
+  });
+
+  const setStatusEffect = StateEffect.define();
+
+  // [{ from, codeFrom, codeTo, status }] — `from` is the cell's first
+  // character (its opening fence), mapped through every change.
+  const statusField = StateField.define({
+    create: () => [],
+    update(list, tr) {
+      let next = list;
+      if (tr.docChanged) {
+        next = [];
+        for (const entry of list) {
+          const from = tr.changes.mapPos(entry.from, 1, MapMode.TrackDel);
+          if (from == null) continue; // the cell's fence was deleted
+          const settled = entry.status.state === 'ok' || entry.status.state === 'error';
+          if (settled && entry.codeTo >= entry.codeFrom && tr.changes.touchesRange(entry.codeFrom, entry.codeTo)) continue;
+          next.push({
+            ...entry,
+            from,
+            codeFrom: tr.changes.mapPos(entry.codeFrom, -1),
+            codeTo: tr.changes.mapPos(entry.codeTo, 1),
+          });
+        }
+      }
+      for (const effect of tr.effects) {
+        if (effect.is(clearStatusesEffect)) {
+          next = effect.value ? next.filter(entry => !effect.value.has(entry.status.state)) : [];
+          continue;
+        }
+        if (!effect.is(setStatusEffect)) continue;
+        next = next.filter(entry => entry.from !== effect.value.from);
+        if (effect.value.status) next.push(effect.value);
+      }
+      return next;
+    },
+  });
+
+  const BUSY = new Set(['queued', 'running', 'waiting']);
+
+  function formatDuration(ms) {
+    if (!(ms >= 0)) return '';
+    if (ms < 1000) return Math.round(ms) + 'ms';
+    const s = ms / 1000;
+    if (s < 10) return s.toFixed(1) + 's';
+    if (s < 60) return Math.round(s) + 's';
+    const m = Math.floor(s / 60);
+    const rest = Math.round(s - m * 60);
+    if (m < 60) return m + 'm ' + String(rest).padStart(2, '0') + 's';
+    return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+  }
+
+  // A live counter moves in whole seconds (a verdict keeps its precision).
+  function elapsed(status) {
+    const s = Math.max(0, Math.floor((Date.now() - (status.startedAt || Date.now())) / 1000));
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + 'm ' + String(s % 60).padStart(2, '0') + 's';
+    return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+  }
+
+  function statusText(status) {
+    if (!status) return '';
+    switch (status.state) {
+      case 'queued': return status.label || 'queued';
+      case 'running': return (status.label || 'running') + ' · ' + elapsed(status);
+      case 'waiting': return (status.label || 'waiting for input') + ' · ' + elapsed(status);
+      case 'ok': return '✓ ' + (status.label ? status.label + ' · ' : '') + formatDuration(status.ms);
+      case 'error': return '✗ ' + (status.label ? status.label + ' · ' : '') + formatDuration(status.ms);
+      default: return status.label || '';
+    }
+  }
+
+  class CellToolbarWidget extends WidgetType {
+    constructor(status, config) {
+      super();
+      this.status = status;
+      this.config = config;
+    }
+    eq(other) { return other.status === this.status && other.config === this.config; }
+    toDOM(view) {
+      const { status, config } = this;
+      const bar = document.createElement('span');
+      bar.className = 'mrmd-cell-toolbar';
+      bar.dataset.state = status ? status.state : 'idle';
+      const text = document.createElement('span');
+      text.className = 'mrmd-cell-status';
+      text.setAttribute('aria-live', 'polite');
+      text.textContent = statusText(status);
+      bar.appendChild(text);
+      const cellHere = () => {
+        const pos = view.posAtDOM(bar);
+        return config.cellAt(view.state, view.state.doc.lineAt(pos).from);
+      };
+      const button = (cls, label, title, onClick) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'mrmd-cell-btn ' + cls;
+        b.textContent = label;
+        b.title = title;
+        b.setAttribute('aria-label', title);
+        // Keep the editor's selection and focus where they are.
+        b.addEventListener('mousedown', e => e.preventDefault());
+        b.addEventListener('click', e => {
+          e.preventDefault();
+          e.stopPropagation();
+          const cell = cellHere();
+          if (cell) onClick(cell);
+        });
+        return b;
+      };
+      if (status && BUSY.has(status.state)) {
+        if (config.onCancel) {
+          const title = status.state === 'queued' ? 'Stop: do not run the cells still queued' : 'Stop this run (the kernel keeps its variables)';
+          bar.appendChild(button('mrmd-cell-btn-stop', '■ Stop', title, cell => config.onCancel(cell, { state: status.state })));
+        }
+      } else {
+        if (config.onAi) bar.appendChild(button('mrmd-cell-btn-ai', '✦', `AI commands for this cell (${formatKey(AI_KEYS.open)})`, config.onAi));
+        bar.appendChild(button('mrmd-cell-btn-run', '▶ Run', `Run this cell (${formatKey(CELL_KEYS.run)})`, config.onRun));
+      }
+      if (status && (status.state === 'running' || status.state === 'waiting')) {
+        bar._timer = setInterval(() => { text.textContent = statusText(status); }, 1000);
+      }
+      return bar;
+    }
+    destroy(dom) { if (dom._timer) clearInterval(dom._timer); }
+    ignoreEvent() { return true; }
+  }
+
+  function buildDecorations$1(view, config) {
+    const state = view.state;
+    const doc = state.doc;
+    const statuses = state.field(statusField);
+    const byFrom = new Map(statuses.map(entry => [entry.from, entry.status]));
+    const ranges = [];
+    for (const { from, to } of view.visibleRanges) {
+      syntaxTree(state).iterate({
+        from, to,
+        enter(node) {
+          if (node.name !== 'FencedCode') return;
+          const first = doc.lineAt(node.from);
+          const last = doc.lineAt(node.to);
+          const lang = ((first.text.match(/^\s*(?:`{3,}|~{3,})\s*(\S*)/) || [])[1] || '').toLowerCase();
+          const hasClose = last.number > first.number && /^\s*(?:`{3,}|~{3,})\s*$/.test(last.text);
+          if (!hasClose || !config.runnable(lang)) return false;
+          const status = byFrom.get(node.from) || null;
+          ranges.push(Decoration.widget({ widget: new CellToolbarWidget(status, config), side: 1 }).range(first.to));
+          if (status && BUSY.has(status.state)) {
+            const cls = 'mrmd-cell-' + status.state;
+            for (let n = first.number; n <= last.number; n++) {
+              ranges.push(Decoration.line({ class: 'mrmd-cell-busy ' + cls }).range(doc.line(n).from));
+            }
+          }
+          return false;
+        },
+      });
+    }
+    return Decoration.set(ranges, true);
+  }
+
+  // Keyframes live in one document-level style element: theme rules are
+  // scoped per editor, animation names are not.
+  let keyframesInstalled = false;
+  function installKeyframes() {
+    if (keyframesInstalled || typeof document === 'undefined') return;
+    keyframesInstalled = true;
+    const style = document.createElement('style');
+    style.dataset.mrmd = 'cell-controls';
+    style.textContent = `
+@keyframes mrmd-cell-slide { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+@keyframes mrmd-cell-pulse { from { opacity: 1; } to { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) {
+  .mrmd-cell-busy::before, .mrmd-cell-busy::after, .mrmd-cell-toolbar .mrmd-cell-status::before { animation: none !important; }
+}`;
+    document.head.appendChild(style);
+  }
+
+  const controlsTheme = EditorView.baseTheme({
+    '.cm-line.cm-md-codeblock-first': { position: 'relative' },
+    '.mrmd-cell-toolbar': {
+      position: 'absolute',
+      right: '6px',
+      top: '50%',
+      transform: 'translateY(-50%)',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '8px',
+      font: '11px/1 var(--mrmd-font-ui, system-ui, sans-serif)',
+      color: 'var(--mrmd-fg-muted, currentColor)',
+      whiteSpace: 'nowrap',
+      userSelect: 'none',
+      zIndex: '1',
+    },
+    '.mrmd-cell-status:empty': { display: 'none' },
+    '.mrmd-cell-toolbar[data-state="running"] .mrmd-cell-status::before, .mrmd-cell-toolbar[data-state="waiting"] .mrmd-cell-status::before': {
+      content: '""',
+      display: 'inline-block',
+      width: '7px', height: '7px',
+      borderRadius: '50%',
+      marginRight: '6px',
+      verticalAlign: '1px',
+      background: 'var(--mrmd-accent, currentColor)',
+    },
+    '.mrmd-cell-toolbar[data-state="running"] .mrmd-cell-status::before': { animation: 'mrmd-cell-pulse .8s ease-in-out infinite alternate' },
+    '.mrmd-cell-toolbar[data-state="waiting"] .mrmd-cell-status': { color: 'var(--mrmd-fg, currentColor)' },
+    '.mrmd-cell-toolbar[data-state="error"] .mrmd-cell-status': { color: 'var(--mrmd-error, currentColor)' },
+    // Sized in full: host pages often style every <button> (min-height,
+    // padding, font), and the control must fit the fence row regardless.
+    '.mrmd-cell-toolbar .mrmd-cell-btn': {
+      font: 'inherit',
+      boxSizing: 'border-box',
+      height: '19px',
+      minHeight: '0',
+      lineHeight: '17px',
+      margin: '0',
+      padding: '0 8px',
+      color: 'var(--mrmd-fg, currentColor)',
+      background: 'var(--mrmd-button-bg, transparent)',
+      border: '1px solid var(--mrmd-button-border, var(--mrmd-border, currentColor))',
+      borderRadius: '3px',
+      cursor: 'pointer',
+      opacity: '.8',
+    },
+    '.mrmd-cell-toolbar .mrmd-cell-btn:hover, .mrmd-cell-toolbar .mrmd-cell-btn:focus-visible': { opacity: '1', background: 'var(--mrmd-hover-bg, transparent)' },
+    '.mrmd-cell-toolbar .mrmd-cell-btn-stop': { color: 'var(--mrmd-error, currentColor)' },
+    // The busy cell: a bar down its left side on every row; while it
+    // computes the bar pulses and a highlight slides along the top edge.
+    '.cm-line.mrmd-cell-busy': { position: 'relative' },
+    '.cm-line.mrmd-cell-busy::before': {
+      content: '""',
+      position: 'absolute',
+      left: '0', top: '0', bottom: '0',
+      width: '3px',
+      background: 'var(--mrmd-accent, currentColor)',
+      pointerEvents: 'none',
+    },
+    '.cm-line.mrmd-cell-running::before': { animation: 'mrmd-cell-pulse 1s ease-in-out infinite alternate' },
+    '.cm-line.mrmd-cell-queued::before': { opacity: '.3' },
+    '.cm-line.mrmd-cell-running.cm-md-codeblock-first::after': {
+      content: '""',
+      position: 'absolute',
+      left: '0', right: '0', top: '-1px',
+      height: '2px',
+      backgroundImage: 'linear-gradient(90deg, transparent, var(--mrmd-accent, currentColor), transparent)',
+      backgroundSize: '40% 100%',
+      backgroundRepeat: 'no-repeat',
+      animation: 'mrmd-cell-slide 1.4s linear infinite',
+      pointerEvents: 'none',
+    },
+  });
+
+  /**
+   * The extension. `config`:
+   *   cellAt(state, pos)  → the cell ({lang, code, from, to}) at pos, or null
+   *   runnable(lang)      → whether a cell in this fence language gets a Run button
+   *   onRun(cell)         → the Run button was pressed
+   *   onAi(cell)          → the ✦ button: AI commands for this cell (omit: no button)
+   *   onCancel(cell, {state}) → the Stop button was pressed on a cell in that
+   *                         state ('queued' | 'running' | 'waiting'); omit: no
+   *                         Stop button
+   */
+  function cellControls(config) {
+    installKeyframes();
+    const plugin = ViewPlugin.fromClass(class {
+      constructor(view) { this.decorations = buildDecorations$1(view, config); }
+      update(update) {
+        if (update.docChanged || update.viewportChanged
+          || update.startState.field(statusField) !== update.state.field(statusField)
+          || syntaxTree(update.startState) !== syntaxTree(update.state)) {
+          this.decorations = buildDecorations$1(update.view, config);
+        }
+      }
+    }, { decorations: v => v.decorations });
+    return [statusField, plugin, controlsTheme];
+  }
+
+  const clearStatusesEffect = StateEffect.define();
+
+  /** Clear every status, or those in `states` (e.g. ['queued']). */
+  function clearCellStatuses(view, states) {
+    view.dispatch({ effects: clearStatusesEffect.of(states ? new Set(states) : null) });
+  }
+
+  /** Set (or clear, with null) the run state shown on `cell`. */
+  function setCellStatus(view, cell, status) {
+    if (!cell) return false;
+    const doc = view.state.doc;
+    if (cell.from > doc.length) return false;
+    const first = doc.lineAt(cell.from);
+    const last = doc.lineAt(Math.min(cell.to, doc.length));
+    const codeFrom = Math.min(first.to + 1, doc.length);
+    const codeTo = last.number > first.number ? Math.max(codeFrom, last.from - 1) : codeFrom;
+    const value = status ? { from: cell.from, codeFrom, codeTo, status: { ...status } } : { from: cell.from, status: null };
+    view.dispatch({ effects: setStatusEffect.of(value) });
+    return true;
+  }
+
+  /**
+   * The notebook runner: running cells of a document editor on rat, the
+   * same way in every host. It owns the run's life on the page — the cell's
+   * status, the live panel, input prompts, plots, the result written under
+   * the cell, run-all's queue — and other clients' runs followed through
+   * `rat events`. The host lends only the transport (how its page reaches
+   * rat) and draws its own chrome from the hooks.
+   *
+   *   const runner = mrmdDocument.createNotebookRunner(editor, {
+   *     transport: {
+   *       run({lang, code, runId}, onEvent) → Promise<result>
+   *           onEvent: {type:'started', ratRunId} | {type:'output', text}
+   *                  | {type:'input_request', prompt, secret} | {type:'input_done'}
+   *           result:  {code, out, ms, cancelled?, error?}  (error: it did not run)
+   *       answer(runId, text) → Promise<{error?}>
+   *       cancel(runId) → Promise
+   *       interrupt?(cell) → Promise          interrupt whatever runs on that cell's
+   *                                           kernel (Stop on a cell another client runs)
+   *       plotUrl(path) → string              a URL to show a plot while running
+   *       savePlots(paths) → Promise<[{src, alt}]>  make them durable; src relative to the document
+   *       prepare?(cell) → Promise<{ok, error?, label?}>   before a run (prerequisites)
+   *     },
+   *     runnable(lang) → boolean,
+   *     hooks: { onRunStart, onRunState, onRunEnd, onExternal, onKernelEvent },
+   *   });
+   *   runner.run(cell, {advance})   runner.runAll()   runner.cancel()
+   *   runner.cancelCell(state)      runner.external(event)   runner.running
+   *
+   * See rat-notebook.js for what a run leaves in the document.
+   */
+
+
+  const norm = s => String(s ?? '').replace(/\s+$/, '').replace(/\r\n/g, '\n');
+
+  function createNotebookRunner(editor, options = {}) {
+    const transport = options.transport;
+    if (!transport || typeof transport.run !== 'function') throw new TypeError('createNotebookRunner: transport.run is required');
+    const hooks = options.hooks || {};
+    const runnable = typeof options.runnable === 'function' ? options.runnable : () => true;
+    const call = (name, ...args) => { try { return hooks[name] && hooks[name](...args); } catch (e) { console.error('[notebook-runner]', name, e); } };
+    const setStatus = (panel, cell, status) => {
+      if (panel && panel.setStatus && panel.setStatus(status)) return;
+      if (cell && editor.setCellStatus) editor.setCellStatus(cell, status);
+    };
+
+    let seq = 0;
+    let current = null;            // the run this page started: {runId, ratRunId, cell, panel, cancel}
+    const ownRatRuns = new Set();  // rat run ids of this page's runs
+    const others = new Map();      // rat run id → {panel, run} for other clients' runs
+    const follower = createRunFollower();
+    let stopQueue = false;
+
+    function closeOther(id) {
+      const o = others.get(id);
+      if (!o) return;
+      others.delete(id);
+      try { o.panel && o.panel.dispose(); } catch {}
+    }
+    function closeOthersOn(cell) {
+      for (const [id, o] of others) {
+        const at = o.panel && o.panel.cell && o.panel.cell();
+        if (at && at.from === cell.from) closeOther(id);
+      }
+    }
+
+    async function run(cell, { advance = false } = {}) {
+      if (!cell || !norm(cell.code)) return { ok: false };
+      if (current) return { ok: false, busy: true };
+      const runId = 'run-' + (++seq) + '-' + Date.now();
+      const t0 = Date.now();
+      closeOthersOn(cell);
+      const panel = editor.showCellRun ? editor.showCellRun(cell) : null;
+      const state = { runId, ratRunId: null, cell, panel, t0, waiting: false };
+      current = state;
+      state.cancel = () => transport.cancel(runId);
+      const statusNow = extra => setStatus(panel, cell, { state: state.waiting ? 'waiting' : 'running', startedAt: t0, ...extra });
+      statusNow();
+      call('onRunStart', { cell, runId, cancel: state.cancel });
+
+      const end = (result, extra = {}) => {
+        current = null;
+        const ok = !result.error && result.code === 0;
+        const verdict = result.error ? { state: 'error', ms: Date.now() - t0, label: extra.label || 'not run' }
+          : { state: ok ? 'ok' : 'error', ms: result.ms ?? Date.now() - t0, label: result.cancelled ? 'stopped' : undefined };
+        setStatus(panel, cell, verdict);
+        return ok;
+      };
+
+      if (typeof transport.prepare === 'function') {
+        statusNow({ label: 'preparing' });
+        let prep;
+        try { prep = await transport.prepare(cell); } catch (e) { prep = { ok: false, error: String(e && e.message || e) }; }
+        if (!prep || !prep.ok) {
+          const result = { error: (prep && prep.error) || 'could not prepare the run' };
+          end(result, { label: (prep && prep.label) || 'not run' });
+          try { panel && panel.dispose(); } catch {}
+          call('onRunEnd', { cell, runId, result, ok: false, wrote: false });
+          return { ok: false, result };
+        }
+        statusNow();
+      }
+
+      const live = createLiveOutputFilter();
+      const showLive = ({ text, plots }) => {
+        if (!panel) return;
+        if (text) panel.append(text);
+        for (const p of plots) panel.appendImage(transport.plotUrl ? transport.plotUrl(p) : '', 'plot');
+      };
+      const onEvent = ev => {
+        if (current !== state) return;
+        if (ev.type === 'started' && ev.ratRunId) {
+          state.ratRunId = ev.ratRunId;
+          ownRatRuns.add(ev.ratRunId);
+          closeOther(ev.ratRunId); // `rat events` may have reported it first
+        } else if (ev.type === 'output') {
+          showLive(live.feed(ev.text));
+        } else if (ev.type === 'input_request') {
+          state.waiting = true;
+          statusNow();
+          call('onRunState', { cell, runId, waiting: true });
+          const asked = panel ? panel.ask({ prompt: ev.prompt, secret: ev.secret }) : Promise.resolve({ withdrawn: true });
+          asked.then(async reply => {
+            if (current !== state) return;
+            if (typeof reply.text === 'string') {
+              const r = await transport.answer(runId, reply.text);
+              if (r && r.error) call('onRunState', { cell, runId, error: r.error });
+            } else if (reply.dismissed) state.cancel();
+          });
+        } else if (ev.type === 'input_done') {
+          state.waiting = false;
+          statusNow();
+          if (panel) panel.dismissInput();
+          call('onRunState', { cell, runId, waiting: false });
+        }
+      };
+
+      let result;
+      try { result = await transport.run({ lang: cell.lang, code: cell.code, runId }, onEvent); }
+      catch (e) { result = { error: String(e && e.message || e) }; }
+      result = result || { error: 'no result' };
+      showLive(live.flush());
+      const ok = end(result);
+      if (result.error) {
+        try { panel && panel.dispose(); } catch {}
+        call('onRunEnd', { cell, runId, result, ok: false, wrote: false });
+        return { ok: false, result };
+      }
+
+      // The result goes under the cell where it is now (edits above it move
+      // it; the panel followed), and only if its code is still what ran.
+      const { text, plots } = finishedOutput(result.out);
+      let images = [];
+      let saveError = null;
+      if (plots.length && transport.savePlots) {
+        try { images = await transport.savePlots(plots); } catch (e) { saveError = String(e && e.message || e); }
+      }
+      const note = saveError ? '\n[plots not saved: ' + saveError + ']' : '';
+      const cellNow = (panel && panel.cell && panel.cell()) || cell;
+      const wrote = !!cellNow && norm(cellNow.code) === norm(cell.code) && editor.setCellOutput(cellNow, text + note, { images });
+      try { panel && panel.dispose(); } catch {}
+      call('onRunEnd', { cell: cellNow || cell, runId, result, ok, wrote, text, images });
+      if (advance && ok && cellNow) editor.advanceToNextCell(cellNow);
+      return { ok, result, wrote };
+    }
+
+    function runnableCells() {
+      return editor.listCells().filter(c => runnable(String(c.lang || '').toLowerCase()));
+    }
+
+    async function runAll() {
+      if (current) return { ok: false, busy: true };
+      const cells = runnableCells();
+      if (!cells.length) return { ok: false, empty: true };
+      stopQueue = false;
+      for (const c of cells) editor.setCellStatus && editor.setCellStatus(c, { state: 'queued' });
+      const clearQueue = () => { stopQueue = false; try { editor.clearCellStatuses && editor.clearCellStatuses(['queued']); } catch {} };
+      for (let i = 0; i < cells.length; i++) {
+        // Re-list before each run: earlier results moved the later cells.
+        const fresh = runnableCells();
+        if (i >= fresh.length) break;
+        if (stopQueue) { clearQueue(); return { ok: false, stoppedBefore: i, total: fresh.length }; }
+        const r = await run(fresh[i]);
+        if (!r.ok) { clearQueue(); return { ok: false, failedAt: i, total: fresh.length, result: r.result }; }
+      }
+      clearQueue();
+      return { ok: true, total: cells.length };
+    }
+
+    function cancel() { if (current) return current.cancel(); }
+
+    /**
+     * Stop pressed on a cell: run all's queue, this page's run, or another
+     * client's run on that cell (an interrupt: the kernel keeps its
+     * variables; a person may stop an agent).
+     */
+    function cancelCell(state, cell) {
+      if (state === 'queued') {
+        stopQueue = true;
+        try { editor.clearCellStatuses && editor.clearCellStatuses(['queued']); } catch {}
+        return 'queue';
+      }
+      if (current && (!cell || current.cell.from === cell.from || (current.panel && current.panel.cell && current.panel.cell()?.from === cell.from))) {
+        cancel();
+        return 'run';
+      }
+      if (cell && transport.interrupt) {
+        for (const o of others.values()) {
+          const at = o.panel && o.panel.cell && o.panel.cell();
+          if (at && at.from === cell.from) { transport.interrupt(at); return 'other'; }
+        }
+      }
+      return null;
+    }
+
+    /**
+     * One event from `rat events --json`. Runs this page started are
+     * ignored (the page shows them already); other clients' runs are drawn
+     * on the cell whose code they ran, when exactly one cell has it.
+     */
+    function external(ev) {
+      const kind = ev && (ev.event || ev.kind);
+      if (!kind) return;
+      if (kind === 'kernel' || kind === 'gap' || kind === 'ctl_called' || kind === 'look_called') {
+        if (kind === 'kernel' && (ev.state === 'stopped' || ev.restarted)) {
+          for (const [id, o] of others) {
+            setStatus(o.panel, null, { state: 'error', ms: Date.now() - o.run.startedAt, label: o.run.caller + ' · ' + (ev.state === 'stopped' ? 'kernel stopped' : 'kernel restarted') });
+            try { o.panel.finish({ note: o.run.caller + '\u2019s run did not finish' }); } catch {}
+            others.delete(id);
+          }
+          follower.runs.clear();
+        }
+        call('onKernelEvent', ev);
+        return;
+      }
+      const id = ev.run_id;
+      if (!id || ownRatRuns.has(id)) return;
+      if (kind === 'run_started' && current && !current.ratRunId && norm(ev.code) === norm(current.cell.code)) {
+        // Our own run, reported by `rat events` before `rat run` said its id.
+        current.ratRunId = id;
+        ownRatRuns.add(id);
+        return;
+      }
+      const change = follower.apply(ev);
+      const r = change.run;
+      if (!r) return;
+      if (kind === 'run_started') {
+        if (typeof ev.ts === 'number') r.startedAt = ev.ts;
+        const cell = cellForCode(runnableCells(), r.code);
+        let panel = null;
+        if (cell && !(current && current.cell.from === cell.from)) {
+          closeOthersOn(cell);
+          panel = editor.showCellRun ? editor.showCellRun(cell, { dimResult: false }) : null;
+          if (panel) {
+            others.set(id, { panel, run: r });
+            setStatus(panel, cell, { state: 'running', startedAt: r.startedAt, label: r.caller + ' · running' });
+          }
+        }
+        call('onExternal', { kind, run: r, cell, shown: !!panel });
+        return;
+      }
+      const o = others.get(id);
+      if (o) {
+        if (change.text) o.panel.append(change.text);
+        for (const p of change.plots || []) o.panel.appendImage(transport.plotUrl ? transport.plotUrl(p) : '', 'plot');
+        if (kind === 'run_waiting') setStatus(o.panel, null, { state: 'waiting', startedAt: r.startedAt, label: r.caller + ' · waiting for input' });
+        if (kind === 'run_input_done') setStatus(o.panel, null, { state: 'running', startedAt: r.startedAt, label: r.caller + ' · running' });
+        if (kind === 'run_ended') {
+          setStatus(o.panel, null, { state: r.ok ? 'ok' : 'error', ms: r.ms, label: r.caller });
+          o.panel.finish({ note: r.caller + '\u2019s run \u2014 shown here, not saved in the document' });
+          others.delete(id);
+        }
+      }
+      call('onExternal', { kind, run: r, text: change.text, plots: change.plots, shown: !!o });
+    }
+
+    function destroy() {
+      for (const id of [...others.keys()]) closeOther(id);
+    }
+
+    return {
+      run, runAll, cancel, cancelCell, external, destroy,
+      get running() { return current ? { cell: current.cell, runId: current.runId, waiting: current.waiting } : null; },
+    };
   }
 
   class CompositeBlock {
@@ -60679,7 +60970,7 @@ var mrmdDocument = (function (exports) {
   /**
   Elements are used to compose syntax nodes during parsing.
   */
-  let Element$3 = class Element {
+  let Element$4 = class Element {
       /**
       @internal
       */
@@ -60736,7 +61027,7 @@ var mrmdDocument = (function (exports) {
       toTree() { return this.tree; }
   }
   function elt(type, from, to, children) {
-      return new Element$3(type, from, to, children);
+      return new Element$4(type, from, to, children);
   }
   const EmphasisUnderscore = { resolve: "Emphasis", mark: "EmphasisMark" };
   const EmphasisAsterisk = { resolve: "Emphasis", mark: "EmphasisMark" };
@@ -61107,7 +61398,7 @@ var mrmdDocument = (function (exports) {
               if (open.type.mark)
                   content.push(this.elt(open.type.mark, start, open.to));
               for (let k = j + 1; k < i; k++) {
-                  if (this.parts[k] instanceof Element$3)
+                  if (this.parts[k] instanceof Element$4)
                       content.push(this.parts[k]);
                   this.parts[k] = null;
               }
@@ -61127,7 +61418,7 @@ var mrmdDocument = (function (exports) {
           let result = [];
           for (let i = from; i < this.parts.length; i++) {
               let part = this.parts[i];
-              if (part instanceof Element$3)
+              if (part instanceof Element$4)
                   result.push(part);
           }
           return result;
@@ -61198,8 +61489,8 @@ var mrmdDocument = (function (exports) {
               eI++;
           if (eI < elts.length && elts[eI].from < mark.from) {
               let e = elts[eI];
-              if (e instanceof Element$3)
-                  elts[eI] = new Element$3(e.type, e.from, e.to, injectMarks(e.children, [mark]));
+              if (e instanceof Element$4)
+                  elts[eI] = new Element$4(e.type, e.from, e.to, injectMarks(e.children, [mark]));
           }
           else {
               elts.splice(eI++, 0, mark);
@@ -63603,7 +63894,7 @@ var mrmdDocument = (function (exports) {
     IncompleteTag = 14,
     IncompleteCloseTag = 15,
     commentContent$1$1 = 59,
-    Element$2 = 21,
+    Element$3 = 21,
     TagName = 23,
     Attribute = 24,
     AttributeName = 25,
@@ -63689,7 +63980,7 @@ var mrmdDocument = (function (exports) {
       return startTagTerms.indexOf(term) > -1 ? new ElementContext$1(tagNameAfter$1(input, 1) || "", context) : context
     },
     reduce(context, term) {
-      return term == Element$2 && context ? context.parent : context
+      return term == Element$3 && context ? context.parent : context
     },
     reuse(context, node, stack, input) {
       let type = node.type.id;
@@ -63893,7 +64184,7 @@ var mrmdDocument = (function (exports) {
       if (id == StyleText) return maybeNest(node, input, style)
       if (id == TextareaText) return maybeNest(node, input, textarea)
 
-      if (id == Element$2 && other.length) {
+      if (id == Element$3 && other.length) {
         let n = node.node, open = n.firstChild, tagName = open && findTagName(open, input), attrs;
         if (tagName) for (let tag of other) {
           if (tag.tag == tagName && (!tag.attrs || tag.attrs(attrs || (attrs = getAttrs(open, input))))) {
@@ -68827,7 +69118,7 @@ var mrmdDocument = (function (exports) {
     commentContent$1 = 36,
     piContent$1 = 37,
     cdataContent$1 = 38,
-    Element$1 = 11,
+    Element$2 = 11,
     OpenTag = 13;
 
   /* Hand-written tokenizer for XML tag matching. */
@@ -68867,7 +69158,7 @@ var mrmdDocument = (function (exports) {
       return term == StartTag ? new ElementContext(tagNameAfter(input, 1) || "", context) : context
     },
     reduce(context, term) {
-      return term == Element$1 && context ? context.parent : context
+      return term == Element$2 && context ? context.parent : context
     },
     reuse(context, node, _stack, input) {
       let type = node.type.id;
@@ -69004,7 +69295,7 @@ var mrmdDocument = (function (exports) {
           return { type: "tag", from: pos, context: at.name == "Element" ? at : findParentElement(at) };
       return null;
   }
-  class Element {
+  let Element$1 = class Element {
       constructor(spec, attrs, attrValues) {
           this.attrs = attrs;
           this.attrValues = attrValues;
@@ -69016,7 +69307,7 @@ var mrmdDocument = (function (exports) {
           this.closeNameCompletion = Object.assign(Object.assign({}, this.completion), { label: this.name + ">" });
           this.text = spec.textContent ? spec.textContent.map(s => ({ label: s, type: "text" })) : [];
       }
-  }
+  };
   const Identifier = /^[:\-\.\w\u00b7-\uffff]*$/;
   function attrCompletion(spec) {
       return Object.assign(Object.assign({ type: "property" }, spec.completion || {}), { label: spec.name });
@@ -69055,7 +69346,7 @@ var mrmdDocument = (function (exports) {
                   }
                   return attrCompletion(s);
               }));
-          let elt = new Element(s, attrs, attrVals);
+          let elt = new Element$1(s, attrs, attrVals);
           byName[elt.name] = elt;
           allElements.push(elt);
           if (s.top)
@@ -95919,7 +96210,11 @@ var mrmdDocument = (function (exports) {
    * time, waiting for input, last verdict) — document-cell-controls.js.
    * Since 0.17.0 AI commands (`ai`): a command box at the cursor (Mod-j) and
    * the answer as a suggestion beside the text until accepted; the host
-   * lends the model — document-ai.js.
+   * lends the model — document-ai.js. Since 0.18.0 they can be found without
+   * knowing a key: a ✦ in the margin beside the cursor's line opens the box
+   * and shows what AI is doing there, buttons show their keys, and
+   * `keyHelp()` tells the host which keys act here, now (`formatKey` spells
+   * them).
    *
    * Build: npm run build:document
    * Output: dist/mrmd-document.iife.min.js (global: mrmdDocument)
@@ -96205,7 +96500,9 @@ var mrmdDocument = (function (exports) {
    *                  button.
    *   ai             AI commands: {commands, run, model?, available?,
    *                  beforeAccept?, onAccept?, notify?, escalate?} — see
-   *                  document-ai.js. Code cells then also get a ✦ button.
+   *                  document-ai.js. Code cells then also get a ✦ button,
+   *                  and a narrow gutter holds the ✦ beside the cursor's
+   *                  line (shown even without `lineGutter`).
    * @returns editor API
    */
   function createDocumentEditor(target, options = {}) {
@@ -96226,6 +96523,15 @@ var mrmdDocument = (function (exports) {
     const hostServices = documentHostServices({ ...options, lineGutter: !!options.lineGutter });
     const diagrams = diagramsConfig(options.diagrams);
     const ai = aiConfig(options.ai);
+    const runsCells = typeof options.onRunCell === 'function';
+
+    // The cell Mod-Enter and Shift-Enter run: the fenced block at the
+    // cursor, unless it is empty or a result block. The keys fall through
+    // (their default behavior) everywhere else.
+    const cellToRun = state => {
+      const cell = codeBlockAt(state, state.selection.main.head);
+      return cell && cell.code.trim() && !isOutputFence('```' + cell.lang) ? cell : null;
+    };
 
     const documentBase = EditorView.theme({
       '&': { height: '100%', fontSize: '16px' },
@@ -96235,7 +96541,8 @@ var mrmdDocument = (function (exports) {
         lineHeight: '1.6',
       },
       '.cm-content': { padding: '0', maxWidth: 'none' },
-      '.cm-gutters': { display: options.lineGutter ? 'flex' : 'none' },
+      // The host's marker gutter, and the AI spark's (document-ai.js).
+      '.cm-gutters': { display: options.lineGutter || ai ? 'flex' : 'none' },
       // CM's gutter base theme forces display:flex !important. Prose keeps only
       // the opt-in host marker gutter, not code-editor line/fold gutters.
       '.cm-gutter.cm-lineNumbers': { display: 'none !important' },
@@ -96256,19 +96563,19 @@ var mrmdDocument = (function (exports) {
       // Highest precedence: Mod-Enter must win over basicSetup's insertBlankLine,
       // but only when the cursor sits in a fenced code block AND the host wired
       // a handler. Otherwise the key falls through to its default behavior.
-      typeof options.onRunCell === 'function' ? Prec.highest(keymap.of([{
-        key: 'Mod-Enter',
+      runsCells ? Prec.highest(keymap.of([{
+        key: CELL_KEYS.run,
         run: (v) => {
-          const cell = codeBlockAt(v.state, v.state.selection.main.head);
-          if (!cell || !cell.code.trim() || isOutputFence('```' + cell.lang)) return false;
+          const cell = cellToRun(v.state);
+          if (!cell) return false;
           options.onRunCell(cell, { advance: false });
           return true;
         },
       }, {
-        key: 'Shift-Enter',
+        key: CELL_KEYS.runAndAdvance,
         run: (v) => {
-          const cell = codeBlockAt(v.state, v.state.selection.main.head);
-          if (!cell || !cell.code.trim() || isOutputFence('```' + cell.lang)) return false;
+          const cell = cellToRun(v.state);
+          if (!cell) return false;
           options.onRunCell(cell, { advance: true });
           return true;
         },
@@ -96277,7 +96584,7 @@ var mrmdDocument = (function (exports) {
       basicSetup,
       hostServices.extension,
       cellRunExtension,
-      typeof options.onRunCell === 'function' ? cellControls({
+      runsCells ? cellControls({
         cellAt: codeBlockAt,
         runnable: runnableLanguage(options.runnableLanguages, diagrams),
         onRun: cell => options.onRunCell(cell, { advance: false }),
@@ -96430,6 +96737,28 @@ var mrmdDocument = (function (exports) {
        * `runAiCommand('grammar')`, `runAiCommand('edit', {instruction})`.
        */
       runAiCommand(id, opts) { return !!ai && !!aiControllerOf(view)?.run(id, opts); },
+
+      /**
+       * The editor's keys that act here, now — for the host's keyboard help.
+       * Sections {label, keys: [[names, what]], exclusive?}, most local
+       * first: the open AI command box (exclusive: it owns the keyboard), a
+       * suggestion, then the cell or document at the cursor (run keys, the
+       * AI command box). `names` are CodeMirror key names; the bundle's
+       * `formatKey` spells them. Keys the host binds itself (save, search,
+       * completion) are the host's to list.
+       */
+      keyHelp() {
+        const { sections, open } = ai ? aiKeyHelp(view) : { sections: [], open: null };
+        if (sections.some(s => s.exclusive)) return sections;
+        const keys = [];
+        if (runsCells && cellToRun(view.state)) {
+          keys.push([[CELL_KEYS.run], 'run this cell'], [[CELL_KEYS.runAndAdvance], 'run this cell, then go to the next']);
+        }
+        if (open) keys.push(open);
+        const here = codeBlockAt(view.state, view.state.selection.main.head);
+        if (keys.length) sections.push({ label: here ? `${here.lang || 'code'} cell` : 'document', keys });
+        return sections;
+      },
 
       /**
        * Draw `cell`'s run state on the cell: {state: 'queued' | 'running' |
@@ -96608,8 +96937,8 @@ var mrmdDocument = (function (exports) {
       },
     };
   }
-  const version = '0.17.0-document';
-  var documentEntry = { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, version };
+  const version = '0.18.0-document';
+  var documentEntry = { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey, version };
 
   exports.aiEditAnnotation = aiEditAnnotation;
   exports.collab = collab;
@@ -96618,6 +96947,7 @@ var mrmdDocument = (function (exports) {
   exports.createNotebookRunner = createNotebookRunner;
   exports.default = documentEntry;
   exports.fileLanguage = fileLanguage;
+  exports.formatKey = formatKey;
   exports.getTheme = getTheme;
   exports.getThemeNames = getThemeNames;
   exports.ratNotebook = ratNotebook;

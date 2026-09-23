@@ -136,3 +136,27 @@ range; Escape discards; Alt-] / Alt-[ step through answers (past the last,
 another is asked for). `openAiMenu()` and `runAiCommand(id, {instruction})`
 do the same from host buttons; code cells get a ✦ button when both `ai`
 and `onRunCell` are set.
+
+### Finding the commands without knowing a key (0.18.0)
+
+- **The spark.** A ✦ in a narrow gutter of its own, on the cursor's line,
+  while the editor has focus and commands can act there (not on the YAML
+  header or a result block, not when `available()` gives a reason). A click
+  opens the box. It is faint at rest, lit for a selection or an open box,
+  pulses while an answer for the text at the cursor is written, and is lit
+  again when that answer is ready. It lives in the margin, so it never
+  moves or covers text, and the gutter keeps its width when it is hidden.
+  With `ai`, the gutters show even without `lineGutter`. Its rest opacity
+  is the token `--mrmd-ai-spark-rest` (default .38): a host without
+  half-tones (e-ink) sets it to 1. Motion stops under
+  prefers-reduced-motion.
+- **Keys on the buttons.** Every suggestion button with a key shows it
+  ("Accept Tab"), and the box, opened any other way than Mod-j, says
+  "Ctrl+J opens this box".
+- **`editor.keyHelp()`** returns the editor's keys that act here, now, for
+  the host's own keyboard help: `[{label, keys: [[names, what]],
+  exclusive?}]`, most local first — the open box (`exclusive`: it owns the
+  keyboard), a suggestion, then the cell or document at the cursor (run
+  keys, Mod-j). `names` are CodeMirror key names; `mrmdDocument.formatKey(
+  name, {mac?})` spells one as it reads (`Ctrl+J`, `⌘J`). Keys the host
+  binds itself (save, search, completion) are the host's to list.
