@@ -70,6 +70,7 @@ import { java } from '@codemirror/lang-java';
 import { xml } from '@codemirror/lang-xml';
 import { toml } from '@codemirror/legacy-modes/mode/toml';
 import { lua } from '@codemirror/legacy-modes/mode/lua';
+import { julia } from '@codemirror/legacy-modes/mode/julia';
 import { ruby } from '@codemirror/legacy-modes/mode/ruby';
 import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile';
 import { diff as diffMode } from '@codemirror/legacy-modes/mode/diff';
@@ -126,6 +127,7 @@ function codeBlockLanguage(info) {
     case 'sql': case 'sqlite': case 'postgres': case 'postgresql': case 'mysql': return sqlSupport.language;
     case 'yaml': case 'yml': return yamlSupport.language;
     case 'r': case 'rlang': return rSupport.language;
+    case 'julia': case 'jl': return legacyLang('julia', julia);
     case 'shell': case 'sh': case 'bash': case 'zsh': case 'fish': case 'console': return shellLang;
     default: return null;
   }
@@ -163,6 +165,7 @@ export function fileLanguage(filename) {
     case 'xml': case 'svg': case 'plist': case 'xsl': return xmlSupport || (xmlSupport = xml());
     case 'toml': return legacyLang('toml', toml);
     case 'lua': return legacyLang('lua', lua);
+    case 'jl': return legacyLang('julia', julia);
     case 'rb': case 'gemfile': case 'rakefile': return legacyLang('ruby', ruby);
     case 'dockerfile': return legacyLang('dockerfile', dockerFile);
     case 'diff': case 'patch': return legacyLang('diff', diffMode);
@@ -903,7 +906,7 @@ export function createCodeEditor(target, options = {}) {
 }
 
 export { getTheme, getThemeNames };
-export const version = '0.22.0-document';
+export const version = '0.23.0-document';
 
 export { ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey };
 export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey, version };

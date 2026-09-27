@@ -213,6 +213,14 @@ try {
   assert.deepEqual(linkEvent, { path: './spec.md', modifiers: { ctrl: true, meta: false, shift: false, alt: false } });
 
   assert.deepEqual(errors, [], 'browser errors');
+  // Code blocks in each notebook language are coloured: the keyword of
+  // each fence gets a token class (Julia since 0.23).
+  await mount('# Langs\n\n```julia\nfunction f(x)\n  x + 1\nend\n```\n\n```r\nf <- function(x) x + 1\n```\n\n```python\ndef f(x):\n  return x\n```\n\ntail');
+  const coloured = await page.evaluate(() => ['function f(x)', 'f <- function(x)', 'def f(x):'].map(text => {
+    const line = [...document.querySelectorAll('.cm-line')].find(l => l.textContent.startsWith(text));
+    return !!line && [...line.querySelectorAll('span')].some(s => /^(function|def)$/.test(s.textContent) && getComputedStyle(s).color !== getComputedStyle(line).color);
+  }));
+  assert.deepEqual(coloured, [true, true, true], 'julia, r and python keywords coloured');
   console.log('document rendering regressions passed');
 } finally {
   await browser.close();

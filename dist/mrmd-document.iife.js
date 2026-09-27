@@ -37790,13 +37790,13 @@ var mrmdDocument = (function (exports) {
       size: 4
     }
   };
-  var delimiters = ["(", "\\lparen", ")", "\\rparen", "[", "\\lbrack", "]", "\\rbrack", "\\{", "\\lbrace", "\\}", "\\rbrace", "\\lfloor", "\\rfloor", "\u230a", "\u230b", "\\lceil", "\\rceil", "\u2308", "\u2309", "<", ">", "\\langle", "\u27e8", "\\rangle", "\u27e9", "\\lt", "\\gt", "\\lvert", "\\rvert", "\\lVert", "\\rVert", "\\lgroup", "\\rgroup", "\u27ee", "\u27ef", "\\lmoustache", "\\rmoustache", "\u23b0", "\u23b1", "/", "\\backslash", "|", "\\vert", "\\|", "\\Vert", "\\uparrow", "\\Uparrow", "\\downarrow", "\\Downarrow", "\\updownarrow", "\\Updownarrow", "."];
+  var delimiters$1 = ["(", "\\lparen", ")", "\\rparen", "[", "\\lbrack", "]", "\\rbrack", "\\{", "\\lbrace", "\\}", "\\rbrace", "\\lfloor", "\\rfloor", "\u230a", "\u230b", "\\lceil", "\\rceil", "\u2308", "\u2309", "<", ">", "\\langle", "\u27e8", "\\rangle", "\u27e9", "\\lt", "\\gt", "\\lvert", "\\rvert", "\\lVert", "\\rVert", "\\lgroup", "\\rgroup", "\u27ee", "\u27ef", "\\lmoustache", "\\rmoustache", "\u23b0", "\u23b1", "/", "\\backslash", "|", "\\vert", "\\|", "\\Vert", "\\uparrow", "\\Uparrow", "\\downarrow", "\\Downarrow", "\\updownarrow", "\\Updownarrow", "."];
 
   // Delimiter functions
   function checkDelimiter(delim, context) {
     var symDelim = checkSymbolNodeType(delim);
 
-    if (symDelim && delimiters.includes(symDelim.text)) {
+    if (symDelim && delimiters$1.includes(symDelim.text)) {
       return symDelim;
     } else if (symDelim) {
       throw new ParseError("Invalid delimiter '" + symDelim.text + "' after '" + context.funcName + "'", delim);
@@ -66415,7 +66415,7 @@ var mrmdDocument = (function (exports) {
     }
   };
 
-  const identifiers = new ExternalTokenizer(
+  const identifiers$1 = new ExternalTokenizer(
     identifierTokens(identifier$3, VariableName, callee)
   );
   const queryIdentifiers = new ExternalTokenizer(
@@ -66500,7 +66500,7 @@ var mrmdDocument = (function (exports) {
     skippedNodes: [0,5,106],
     repeatNodeCount: 15,
     tokenData: "JQ~R!YOX$qX^%i^p$qpq%iqr({rs-ust/itu6Wuv$qvw7Qwx7cxy9Qyz9cz{9h{|:R|}>t}!O?V!O!P?t!P!Q@]!Q![AU![!]BP!]!^B{!^!_C^!_!`DY!`!aDm!a!b$q!b!cEn!c!}$q!}#OG{#O#P$q#P#QH^#Q#R6W#R#o$q#o#pHo#p#q6W#q#rIQ#r#sIc#s#y$q#y#z%i#z$f$q$f$g%i$g#BY$q#BY#BZ%i#BZ$IS$q$IS$I_%i$I_$I|$q$I|$JO%i$JO$JT$q$JT$JU%i$JU$KV$q$KV$KW%i$KW&FU$q&FU&FV%i&FV;'S$q;'S;=`Iz<%lO$q`$tSOy%Qz;'S%Q;'S;=`%c<%lO%Q`%VS!a`Oy%Qz;'S%Q;'S;=`%c<%lO%Q`%fP;=`<%l%Q~%nh#s~OX%QX^'Y^p%Qpq'Yqy%Qz#y%Q#y#z'Y#z$f%Q$f$g'Y$g#BY%Q#BY#BZ'Y#BZ$IS%Q$IS$I_'Y$I_$I|%Q$I|$JO'Y$JO$JT%Q$JT$JU'Y$JU$KV%Q$KV$KW'Y$KW&FU%Q&FU&FV'Y&FV;'S%Q;'S;=`%c<%lO%Q~'ah#s~!a`OX%QX^'Y^p%Qpq'Yqy%Qz#y%Q#y#z'Y#z$f%Q$f$g'Y$g#BY%Q#BY#BZ'Y#BZ$IS%Q$IS$I_'Y$I_$I|%Q$I|$JO'Y$JO$JT%Q$JT$JU'Y$JU$KV%Q$KV$KW'Y$KW&FU%Q&FU&FV'Y&FV;'S%Q;'S;=`%c<%lO%Qj)OUOy%Qz#]%Q#]#^)b#^;'S%Q;'S;=`%c<%lO%Qj)gU!a`Oy%Qz#a%Q#a#b)y#b;'S%Q;'S;=`%c<%lO%Qj*OU!a`Oy%Qz#d%Q#d#e*b#e;'S%Q;'S;=`%c<%lO%Qj*gU!a`Oy%Qz#c%Q#c#d*y#d;'S%Q;'S;=`%c<%lO%Qj+OU!a`Oy%Qz#f%Q#f#g+b#g;'S%Q;'S;=`%c<%lO%Qj+gU!a`Oy%Qz#h%Q#h#i+y#i;'S%Q;'S;=`%c<%lO%Qj,OU!a`Oy%Qz#T%Q#T#U,b#U;'S%Q;'S;=`%c<%lO%Qj,gU!a`Oy%Qz#b%Q#b#c,y#c;'S%Q;'S;=`%c<%lO%Qj-OU!a`Oy%Qz#h%Q#h#i-b#i;'S%Q;'S;=`%c<%lO%Qj-iS!qY!a`Oy%Qz;'S%Q;'S;=`%c<%lO%Q~-xWOY-uZr-urs.bs#O-u#O#P.g#P;'S-u;'S;=`/c<%lO-u~.gOt~~.jRO;'S-u;'S;=`.s;=`O-u~.vXOY-uZr-urs.bs#O-u#O#P.g#P;'S-u;'S;=`/c;=`<%l-u<%lO-u~/fP;=`<%l-uj/nYjYOy%Qz!Q%Q!Q![0^![!c%Q!c!i0^!i#T%Q#T#Z0^#Z;'S%Q;'S;=`%c<%lO%Qj0cY!a`Oy%Qz!Q%Q!Q![1R![!c%Q!c!i1R!i#T%Q#T#Z1R#Z;'S%Q;'S;=`%c<%lO%Qj1WY!a`Oy%Qz!Q%Q!Q![1v![!c%Q!c!i1v!i#T%Q#T#Z1v#Z;'S%Q;'S;=`%c<%lO%Qj1}YrY!a`Oy%Qz!Q%Q!Q![2m![!c%Q!c!i2m!i#T%Q#T#Z2m#Z;'S%Q;'S;=`%c<%lO%Qj2tYrY!a`Oy%Qz!Q%Q!Q![3d![!c%Q!c!i3d!i#T%Q#T#Z3d#Z;'S%Q;'S;=`%c<%lO%Qj3iY!a`Oy%Qz!Q%Q!Q![4X![!c%Q!c!i4X!i#T%Q#T#Z4X#Z;'S%Q;'S;=`%c<%lO%Qj4`YrY!a`Oy%Qz!Q%Q!Q![5O![!c%Q!c!i5O!i#T%Q#T#Z5O#Z;'S%Q;'S;=`%c<%lO%Qj5TY!a`Oy%Qz!Q%Q!Q![5s![!c%Q!c!i5s!i#T%Q#T#Z5s#Z;'S%Q;'S;=`%c<%lO%Qj5zSrY!a`Oy%Qz;'S%Q;'S;=`%c<%lO%Qd6ZUOy%Qz!_%Q!_!`6m!`;'S%Q;'S;=`%c<%lO%Qd6tS!hS!a`Oy%Qz;'S%Q;'S;=`%c<%lO%Qb7VSZQOy%Qz;'S%Q;'S;=`%c<%lO%Q~7fWOY7cZw7cwx.bx#O7c#O#P8O#P;'S7c;'S;=`8z<%lO7c~8RRO;'S7c;'S;=`8[;=`O7c~8_XOY7cZw7cwx.bx#O7c#O#P8O#P;'S7c;'S;=`8z;=`<%l7c<%lO7c~8}P;=`<%l7cj9VSeYOy%Qz;'S%Q;'S;=`%c<%lO%Q~9hOd~n9oUWQvWOy%Qz!_%Q!_!`6m!`;'S%Q;'S;=`%c<%lO%Qj:YWvW!mQOy%Qz!O%Q!O!P:r!P!Q%Q!Q![=w![;'S%Q;'S;=`%c<%lO%Qj:wU!a`Oy%Qz!Q%Q!Q![;Z![;'S%Q;'S;=`%c<%lO%Qj;bY!a`#}YOy%Qz!Q%Q!Q![;Z![!g%Q!g!h<Q!h#X%Q#X#Y<Q#Y;'S%Q;'S;=`%c<%lO%Qj<VY!a`Oy%Qz{%Q{|<u|}%Q}!O<u!O!Q%Q!Q![=^![;'S%Q;'S;=`%c<%lO%Qj<zU!a`Oy%Qz!Q%Q!Q![=^![;'S%Q;'S;=`%c<%lO%Qj=eU!a`#}YOy%Qz!Q%Q!Q![=^![;'S%Q;'S;=`%c<%lO%Qj>O[!a`#}YOy%Qz!O%Q!O!P;Z!P!Q%Q!Q![=w![!g%Q!g!h<Q!h#X%Q#X#Y<Q#Y;'S%Q;'S;=`%c<%lO%Qj>yS!^YOy%Qz;'S%Q;'S;=`%c<%lO%Qj?[WvWOy%Qz!O%Q!O!P:r!P!Q%Q!Q![=w![;'S%Q;'S;=`%c<%lO%Qj?yU]YOy%Qz!Q%Q!Q![;Z![;'S%Q;'S;=`%c<%lO%Q~@bTvWOy%Qz{@q{;'S%Q;'S;=`%c<%lO%Q~@xS!a`#t~Oy%Qz;'S%Q;'S;=`%c<%lO%QjAZ[#}YOy%Qz!O%Q!O!P;Z!P!Q%Q!Q![=w![!g%Q!g!h<Q!h#X%Q#X#Y<Q#Y;'S%Q;'S;=`%c<%lO%QjBUU`YOy%Qz![%Q![!]Bh!];'S%Q;'S;=`%c<%lO%QbBoSaQ!a`Oy%Qz;'S%Q;'S;=`%c<%lO%QjCQSkYOy%Qz;'S%Q;'S;=`%c<%lO%QhCcU!TWOy%Qz!_%Q!_!`Cu!`;'S%Q;'S;=`%c<%lO%QhC|S!TW!a`Oy%Qz;'S%Q;'S;=`%c<%lO%QlDaS!TW!hSOy%Qz;'S%Q;'S;=`%c<%lO%QjDtV!jQ!TWOy%Qz!_%Q!_!`Cu!`!aEZ!a;'S%Q;'S;=`%c<%lO%QbEbS!jQ!a`Oy%Qz;'S%Q;'S;=`%c<%lO%QjEqYOy%Qz}%Q}!OFa!O!c%Q!c!}GO!}#T%Q#T#oGO#o;'S%Q;'S;=`%c<%lO%QjFfW!a`Oy%Qz!c%Q!c!}GO!}#T%Q#T#oGO#o;'S%Q;'S;=`%c<%lO%QjGV[iY!a`Oy%Qz}%Q}!OGO!O!Q%Q!Q![GO![!c%Q!c!}GO!}#T%Q#T#oGO#o;'S%Q;'S;=`%c<%lO%QjHQSmYOy%Qz;'S%Q;'S;=`%c<%lO%QnHcSl^Oy%Qz;'S%Q;'S;=`%c<%lO%QjHtSpYOy%Qz;'S%Q;'S;=`%c<%lO%QjIVSoYOy%Qz;'S%Q;'S;=`%c<%lO%QfIhU!mQOy%Qz!_%Q!_!`6m!`;'S%Q;'S;=`%c<%lO%Q`I}P;=`<%l$q",
-    tokenizers: [descendant, unitToken, identifiers, queryIdentifiers, 1, 2, 3, 4, new LocalTokenGroup("m~RRYZ[z{a~~g~aO#v~~dP!P!Qg~lO#w~~", 28, 129)],
+    tokenizers: [descendant, unitToken, identifiers$1, queryIdentifiers, 1, 2, 3, 4, new LocalTokenGroup("m~RRYZ[z{a~~g~aO#v~~dP!P!Qg~lO#w~~", 28, 129)],
     topRules: {"StyleSheet":[0,6],"Styles":[1,105]},
     specialized: [{term: 124, get: (value) => spec_callee[value] || -1},{term: 125, get: (value) => spec_queryIdentifier[value] || -1},{term: 4, get: (value) => spec_QueryCallee[value] || -1},{term: 25, get: (value) => spec_AtKeyword[value] || -1},{term: 123, get: (value) => spec_identifier$6[value] || -1}],
     tokenPrec: 1963
@@ -67194,8 +67194,8 @@ var mrmdDocument = (function (exports) {
       props: [/*@__PURE__*/sublanguageProp.add(n => n.isTop ? [jsxSublanguage] : undefined)]
   }, "typescript");
   let kwCompletion$1 = (name) => ({ label: name, type: "keyword" });
-  const keywords$4 = /*@__PURE__*/"break case const continue default delete export extends false finally in instanceof let new return static super switch this throw true typeof var yield".split(" ").map(kwCompletion$1);
-  const typescriptKeywords = /*@__PURE__*/keywords$4.concat(/*@__PURE__*/["declare", "implements", "private", "protected", "public"].map(kwCompletion$1));
+  const keywords$5 = /*@__PURE__*/"break case const continue default delete export extends false finally in instanceof let new return static super switch this throw true typeof var yield".split(" ").map(kwCompletion$1);
+  const typescriptKeywords = /*@__PURE__*/keywords$5.concat(/*@__PURE__*/["declare", "implements", "private", "protected", "public"].map(kwCompletion$1));
   /**
   JavaScript support. Includes [snippet](https://codemirror.net/6/docs/ref/#lang-javascript.snippets)
   and local variable completion.
@@ -67203,7 +67203,7 @@ var mrmdDocument = (function (exports) {
   function javascript(config = {}) {
       let lang = config.jsx ? (config.typescript ? tsxLanguage : jsxLanguage)
           : config.typescript ? typescriptLanguage : javascriptLanguage;
-      let completions = config.typescript ? typescriptSnippets.concat(typescriptKeywords) : snippets$2.concat(keywords$4);
+      let completions = config.typescript ? typescriptSnippets.concat(typescriptKeywords) : snippets$2.concat(keywords$5);
       return new LanguageSupport(lang, [
           javascriptLanguage.data.of({
               autocomplete: ifNotIn(dontComplete$2, completeFromList(completions))
@@ -69234,7 +69234,7 @@ var mrmdDocument = (function (exports) {
       return false;
   }
   const Space$1 = " \t\r\n";
-  function keywords$3(keywords, types, builtin) {
+  function keywords$4(keywords, types, builtin) {
       let result = Object.create(null);
       result["true"] = result["false"] = Bool;
       result["null"] = result["unknown"] = Null;
@@ -69266,14 +69266,14 @@ var mrmdDocument = (function (exports) {
       specialVar: "?",
       identifierQuotes: '"',
       caseInsensitiveIdentifiers: false,
-      words: /*@__PURE__*/keywords$3(SQLKeywords, SQLTypes)
+      words: /*@__PURE__*/keywords$4(SQLKeywords, SQLTypes)
   };
   function dialect(spec, kws, types, builtin) {
       let dialect = {};
       for (let prop in defaults)
           dialect[prop] = (spec.hasOwnProperty(prop) ? spec : defaults)[prop];
       if (kws)
-          dialect.words = keywords$3(kws, types || "", builtin);
+          dialect.words = keywords$4(kws, types || "", builtin);
       return dialect;
   }
   function tokensFor(d) {
@@ -69996,15 +69996,15 @@ var mrmdDocument = (function (exports) {
       ch != 62 && ch != 92 && ch != 94 && ch != 96 && ch != 123 && ch != 124 && ch != 125
   }
 
-  function hexChar(ch) {
+  function hexChar$1(ch) {
     return ch >= 48 && ch <= 57 || ch >= 97 && ch <= 102 || ch >= 65 && ch <= 70
   }
 
   function readUriChar(input, quoted) {
     if (input.next == 37 /* '%' */) {
       input.advance();
-      if (hexChar(input.next)) input.advance();
-      if (hexChar(input.next)) input.advance();
+      if (hexChar$1(input.next)) input.advance();
+      if (hexChar$1(input.next)) input.advance();
       return true
     } else if (uriChar(input.next) || quoted && input.next == 44 /* ',' */) {
       input.advance();
@@ -70340,7 +70340,7 @@ var mrmdDocument = (function (exports) {
   define('keyword', commonKeywords);
   define('builtin', commonCommands);
 
-  function tokenBase$1(stream, state) {
+  function tokenBase$2(stream, state) {
     if (stream.eatSpace()) return null;
 
     var sol = stream.sol();
@@ -70449,7 +70449,7 @@ var mrmdDocument = (function (exports) {
   }
 
   function tokenize(stream, state) {
-    return (state.tokens[0] || tokenBase$1) (stream, state);
+    return (state.tokens[0] || tokenBase$2) (stream, state);
   }
   const shell = {
     name: "shell",
@@ -70958,13 +70958,13 @@ var mrmdDocument = (function (exports) {
       }
   });
   let kwCompletion = (name) => ({ label: name, type: "keyword" });
-  const keywords$2 = /*@__PURE__*/"interface struct chan map package go return break continue goto fallthrough else defer range true false nil".split(" ").map(kwCompletion);
+  const keywords$3 = /*@__PURE__*/"interface struct chan map package go return break continue goto fallthrough else defer range true false nil".split(" ").map(kwCompletion);
   /**
   Go support. Includes [snippet](https://codemirror.net/6/docs/ref/#lang-go.snippets) and local
   variable completion.
   */
   function go() {
-      let completions = snippets.concat(keywords$2);
+      let completions = snippets.concat(keywords$3);
       return new LanguageSupport(goLanguage, [
           goLanguage.data.of({
               autocomplete: ifNotIn(dontComplete, completeFromList(completions))
@@ -71775,7 +71775,7 @@ var mrmdDocument = (function (exports) {
   }
 
   // long list of standard functions from lua manual
-  var builtins = wordRE([
+  var builtins$1 = wordRE([
     "_G","_VERSION","assert","collectgarbage","dofile","error","getfenv","getmetatable","ipairs","load",
     "loadfile","loadstring","module","next","pairs","pcall","print","rawequal","rawget","rawset","require",
     "select","setfenv","setmetatable","tonumber","tostring","type","unpack","xpcall",
@@ -71807,7 +71807,7 @@ var mrmdDocument = (function (exports) {
 
     "table.concat","table.insert","table.maxn","table.remove","table.sort"
   ]);
-  var keywords$1 = wordRE(["and","break","elseif","false","nil","not","or","return",
+  var keywords$2 = wordRE(["and","break","elseif","false","nil","not","or","return",
                          "true","function", "end", "if", "then", "else", "do",
                          "while", "repeat", "until", "for", "in", "local" ]);
 
@@ -71882,8 +71882,8 @@ var mrmdDocument = (function (exports) {
       var style = state.cur(stream, state);
       var word = stream.current();
       if (style == "variable") {
-        if (keywords$1.test(word)) style = "keyword";
-        else if (builtins.test(word)) style = "builtin";
+        if (keywords$2.test(word)) style = "keyword";
+        else if (builtins$1.test(word)) style = "builtin";
       }
       if ((style != "comment") && (style != "string")){
         if (indentTokens.test(word)) ++state.indentDepth;
@@ -71900,6 +71900,374 @@ var mrmdDocument = (function (exports) {
     languageData: {
       indentOnInput: /^\s*(?:end|until|else|\)|\})$/,
       commentTokens: {line: "--", block: {open: "--[[", close: "]]--"}}
+    }
+  };
+
+  function wordRegexp(words, end, pre) {
+    if (typeof pre === "undefined") pre = "";
+    if (typeof end === "undefined") { end = "\\b"; }
+    return new RegExp("^" + pre + "((" + words.join(")|(") + "))" + end);
+  }
+
+  var octChar = "\\\\[0-7]{1,3}";
+  var hexChar = "\\\\x[A-Fa-f0-9]{1,2}";
+  var sChar = "\\\\[abefnrtv0%?'\"\\\\]";
+  var uChar = "([^\\u0027\\u005C\\uD800-\\uDFFF]|[\\uD800-\\uDFFF][\\uDC00-\\uDFFF])";
+
+  var asciiOperatorsList = [
+    "[<>]:", "[<>=]=", "<<=?", ">>>?=?", "=>", "--?>", "<--[->]?", "\\/\\/",
+    "\\.{2,3}", "[\\.\\\\%*+\\-<>!\\/^|&]=?", "\\?", "\\$", "~", ":"
+  ];
+  var operators = wordRegexp([
+    "[<>]:", "[<>=]=", "[!=]==", "<<=?", ">>>?=?", "=>?", "--?>", "<--[->]?", "\\/\\/",
+    "[\\\\%*+\\-<>!\\/^|&\\u00F7\\u22BB]=?", "\\?", "\\$", "~", ":",
+    "\\u00D7", "\\u2208", "\\u2209", "\\u220B", "\\u220C", "\\u2218",
+    "\\u221A", "\\u221B", "\\u2229", "\\u222A", "\\u2260", "\\u2264",
+    "\\u2265", "\\u2286", "\\u2288", "\\u228A", "\\u22C5",
+    "\\b(in|isa)\\b(?!\.?\\()"
+  ], "");
+  var delimiters = /^[;,()[\]{}]/;
+  var identifiers = /^[_A-Za-z\u00A1-\u2217\u2219-\uFFFF][\w\u00A1-\u2217\u2219-\uFFFF]*!*/;
+
+  var chars = wordRegexp([octChar, hexChar, sChar, uChar], "'");
+
+  var openersList = ["begin", "function", "type", "struct", "immutable", "let",
+                     "macro", "for", "while", "quote", "if", "else", "elseif", "try",
+                     "finally", "catch", "do"];
+
+  var closersList = ["end", "else", "elseif", "catch", "finally"];
+
+  var keywordsList = ["if", "else", "elseif", "while", "for", "begin", "let",
+                      "end", "do", "try", "catch", "finally", "return", "break", "continue",
+                      "global", "local", "const", "export", "import", "importall", "using",
+                      "function", "where", "macro", "module", "baremodule", "struct", "type",
+                      "mutable", "immutable", "quote", "typealias", "abstract", "primitive",
+                      "bitstype"];
+
+  var builtinsList = ["true", "false", "nothing", "NaN", "Inf"];
+
+  var openers = wordRegexp(openersList);
+  var closers = wordRegexp(closersList);
+  var keywords$1 = wordRegexp(keywordsList);
+  var builtins = wordRegexp(builtinsList);
+
+  var macro = /^@[_A-Za-z\u00A1-\uFFFF][\w\u00A1-\uFFFF]*!*/;
+  var symbol = /^:[_A-Za-z\u00A1-\uFFFF][\w\u00A1-\uFFFF]*!*/;
+  var stringPrefixes = /^(`|([_A-Za-z\u00A1-\uFFFF]*"("")?))/;
+
+  var macroOperators = wordRegexp(asciiOperatorsList, "", "@");
+  var symbolOperators = wordRegexp(asciiOperatorsList, "", ":");
+
+  function inArray(state) {
+    return (state.nestedArrays > 0);
+  }
+
+  function inGenerator(state) {
+    return (state.nestedGenerators > 0);
+  }
+
+  function currentScope(state, n) {
+    if (typeof(n) === "undefined") { n = 0; }
+    if (state.scopes.length <= n) {
+      return null;
+    }
+    return state.scopes[state.scopes.length - (n + 1)];
+  }
+
+  // tokenizers
+  function tokenBase$1(stream, state) {
+    // Handle multiline comments
+    if (stream.match('#=', false)) {
+      state.tokenize = tokenComment;
+      return state.tokenize(stream, state);
+    }
+
+    // Handle scope changes
+    var leavingExpr = state.leavingExpr;
+    if (stream.sol()) {
+      leavingExpr = false;
+    }
+    state.leavingExpr = false;
+
+    if (leavingExpr) {
+      if (stream.match(/^'+/)) {
+        return "operator";
+      }
+    }
+
+    if (stream.match(/\.{4,}/)) {
+      return "error";
+    } else if (stream.match(/\.{1,3}/)) {
+      return "operator";
+    }
+
+    if (stream.eatSpace()) {
+      return null;
+    }
+
+    var ch = stream.peek();
+
+    // Handle single line comments
+    if (ch === '#') {
+      stream.skipToEnd();
+      return "comment";
+    }
+
+    if (ch === '[') {
+      state.scopes.push('[');
+      state.nestedArrays++;
+    }
+
+    if (ch === '(') {
+      state.scopes.push('(');
+      state.nestedGenerators++;
+    }
+
+    if (inArray(state) && ch === ']') {
+      while (state.scopes.length && currentScope(state) !== "[") { state.scopes.pop(); }
+      state.scopes.pop();
+      state.nestedArrays--;
+      state.leavingExpr = true;
+    }
+
+    if (inGenerator(state) && ch === ')') {
+      while (state.scopes.length && currentScope(state) !== "(") { state.scopes.pop(); }
+      state.scopes.pop();
+      state.nestedGenerators--;
+      state.leavingExpr = true;
+    }
+
+    if (inArray(state)) {
+      if (state.lastToken == "end" && stream.match(':')) {
+        return "operator";
+      }
+      if (stream.match('end')) {
+        return "number";
+      }
+    }
+
+    var match;
+    if (match = stream.match(openers, false)) {
+      state.scopes.push(match[0]);
+    }
+
+    if (stream.match(closers, false)) {
+      state.scopes.pop();
+    }
+
+    // Handle type annotations
+    if (stream.match(/^::(?![:\$])/)) {
+      state.tokenize = tokenAnnotation;
+      return state.tokenize(stream, state);
+    }
+
+    // Handle symbols
+    if (!leavingExpr && (stream.match(symbol) || stream.match(symbolOperators))) {
+      return "builtin";
+    }
+
+    // Handle parametric types
+    //if (stream.match(/^{[^}]*}(?=\()/)) {
+    //  return "builtin";
+    //}
+
+    // Handle operators and Delimiters
+    if (stream.match(operators)) {
+      return "operator";
+    }
+
+    // Handle Number Literals
+    if (stream.match(/^\.?\d/, false)) {
+      var imMatcher = RegExp(/^im\b/);
+      var numberLiteral = false;
+      if (stream.match(/^0x\.[0-9a-f_]+p[\+\-]?[_\d]+/i)) { numberLiteral = true; }
+      // Integers
+      if (stream.match(/^0x[0-9a-f_]+/i)) { numberLiteral = true; } // Hex
+      if (stream.match(/^0b[01_]+/i)) { numberLiteral = true; } // Binary
+      if (stream.match(/^0o[0-7_]+/i)) { numberLiteral = true; } // Octal
+      // Floats
+      if (stream.match(/^(?:(?:\d[_\d]*)?\.(?!\.)(?:\d[_\d]*)?|\d[_\d]*\.(?!\.)(?:\d[_\d]*))?([Eef][\+\-]?[_\d]+)?/i)) { numberLiteral = true; }
+      if (stream.match(/^\d[_\d]*(e[\+\-]?\d+)?/i)) { numberLiteral = true; } // Decimal
+      if (numberLiteral) {
+        // Integer literals may be "long"
+        stream.match(imMatcher);
+        state.leavingExpr = true;
+        return "number";
+      }
+    }
+
+    // Handle Chars
+    if (stream.match("'")) {
+      state.tokenize = tokenChar;
+      return state.tokenize(stream, state);
+    }
+
+    // Handle Strings
+    if (stream.match(stringPrefixes)) {
+      state.tokenize = tokenStringFactory(stream.current());
+      return state.tokenize(stream, state);
+    }
+
+    if (stream.match(macro) || stream.match(macroOperators)) {
+      return "meta";
+    }
+
+    if (stream.match(delimiters)) {
+      return null;
+    }
+
+    if (stream.match(keywords$1)) {
+      return "keyword";
+    }
+
+    if (stream.match(builtins)) {
+      return "builtin";
+    }
+
+    var isDefinition = state.isDefinition || state.lastToken == "function" ||
+        state.lastToken == "macro" || state.lastToken == "type" ||
+        state.lastToken == "struct" || state.lastToken == "immutable";
+
+    if (stream.match(identifiers)) {
+      if (isDefinition) {
+        if (stream.peek() === '.') {
+          state.isDefinition = true;
+          return "variable";
+        }
+        state.isDefinition = false;
+        return "def";
+      }
+      state.leavingExpr = true;
+      return "variable";
+    }
+
+    // Handle non-detected items
+    stream.next();
+    return "error";
+  }
+
+  function tokenAnnotation(stream, state) {
+    stream.match(/.*?(?=[,;{}()=\s]|$)/);
+    if (stream.match('{')) {
+      state.nestedParameters++;
+    } else if (stream.match('}') && state.nestedParameters > 0) {
+      state.nestedParameters--;
+    }
+    if (state.nestedParameters > 0) {
+      stream.match(/.*?(?={|})/) || stream.next();
+    } else if (state.nestedParameters == 0) {
+      state.tokenize = tokenBase$1;
+    }
+    return "builtin";
+  }
+
+  function tokenComment(stream, state) {
+    if (stream.match('#=')) {
+      state.nestedComments++;
+    }
+    if (!stream.match(/.*?(?=(#=|=#))/)) {
+      stream.skipToEnd();
+    }
+    if (stream.match('=#')) {
+      state.nestedComments--;
+      if (state.nestedComments == 0)
+        state.tokenize = tokenBase$1;
+    }
+    return "comment";
+  }
+
+  function tokenChar(stream, state) {
+    var isChar = false, match;
+    if (stream.match(chars)) {
+      isChar = true;
+    } else if (match = stream.match(/\\u([a-f0-9]{1,4})(?=')/i)) {
+      var value = parseInt(match[1], 16);
+      if (value <= 55295 || value >= 57344) { // (U+0,U+D7FF), (U+E000,U+FFFF)
+        isChar = true;
+        stream.next();
+      }
+    } else if (match = stream.match(/\\U([A-Fa-f0-9]{5,8})(?=')/)) {
+      var value = parseInt(match[1], 16);
+      if (value <= 1114111) { // U+10FFFF
+        isChar = true;
+        stream.next();
+      }
+    }
+    if (isChar) {
+      state.leavingExpr = true;
+      state.tokenize = tokenBase$1;
+      return "string";
+    }
+    if (!stream.match(/^[^']+(?=')/)) { stream.skipToEnd(); }
+    if (stream.match("'")) { state.tokenize = tokenBase$1; }
+    return "error";
+  }
+
+  function tokenStringFactory(delimiter) {
+    if (delimiter.substr(-3) === '"""') {
+      delimiter = '"""';
+    } else if (delimiter.substr(-1) === '"') {
+      delimiter = '"';
+    }
+    function tokenString(stream, state) {
+      if (stream.eat('\\')) {
+        stream.next();
+      } else if (stream.match(delimiter)) {
+        state.tokenize = tokenBase$1;
+        state.leavingExpr = true;
+        return "string";
+      } else {
+        stream.eat(/[`"]/);
+      }
+      stream.eatWhile(/[^\\`"]/);
+      return "string";
+    }
+    return tokenString;
+  }
+
+  const julia = {
+    name: "julia",
+    startState: function() {
+      return {
+        tokenize: tokenBase$1,
+        scopes: [],
+        lastToken: null,
+        leavingExpr: false,
+        isDefinition: false,
+        nestedArrays: 0,
+        nestedComments: 0,
+        nestedGenerators: 0,
+        nestedParameters: 0,
+        firstParenPos: -1
+      };
+    },
+
+    token: function(stream, state) {
+      var style = state.tokenize(stream, state);
+      var current = stream.current();
+
+      if (current && style) {
+        state.lastToken = current;
+      }
+
+      return style;
+    },
+
+    indent: function(state, textAfter, cx) {
+      var delta = 0;
+      if ( textAfter === ']' || textAfter === ')' || /^end\b/.test(textAfter) ||
+           /^else/.test(textAfter) || /^catch\b/.test(textAfter) || /^elseif\b/.test(textAfter) ||
+           /^finally/.test(textAfter) ) {
+        delta = -1;
+      }
+      return (state.scopes.length + delta) * cx.unit;
+    },
+
+    languageData: {
+      indentOnInput: /^\s*(end|else|catch|finally)\b$/,
+      commentTokens: {line: "#", block: {open: "#=", close: "=#"}},
+      closeBrackets: {brackets: ["(", "[", "{", '"']},
+      autocomplete: keywordsList.concat(builtinsList)
     }
   };
 
@@ -98400,6 +98768,7 @@ var mrmdDocument = (function (exports) {
       case 'sql': case 'sqlite': case 'postgres': case 'postgresql': case 'mysql': return sqlSupport.language;
       case 'yaml': case 'yml': return yamlSupport.language;
       case 'r': case 'rlang': return rSupport.language;
+      case 'julia': case 'jl': return legacyLang('julia', julia);
       case 'shell': case 'sh': case 'bash': case 'zsh': case 'fish': case 'console': return shellLang;
       default: return null;
     }
@@ -98437,6 +98806,7 @@ var mrmdDocument = (function (exports) {
       case 'xml': case 'svg': case 'plist': case 'xsl': return xmlSupport || (xmlSupport = xml());
       case 'toml': return legacyLang('toml', toml);
       case 'lua': return legacyLang('lua', lua);
+      case 'jl': return legacyLang('julia', julia);
       case 'rb': case 'gemfile': case 'rakefile': return legacyLang('ruby', ruby);
       case 'dockerfile': return legacyLang('dockerfile', dockerFile);
       case 'diff': case 'patch': return legacyLang('diff', diff);
@@ -99175,7 +99545,7 @@ var mrmdDocument = (function (exports) {
       },
     };
   }
-  const version = '0.22.0-document';
+  const version = '0.23.0-document';
   var documentEntry = { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey, version };
 
   exports.aiEditAnnotation = aiEditAnnotation;
