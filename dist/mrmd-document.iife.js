@@ -26837,6 +26837,23 @@ var mrmdDocument = (function (exports) {
         view.requestMeasure();
       },
       /**
+       * A rich display while the cell runs: the host's URL for it, shown in
+       * a sandboxed frame (scripts run, in an origin of their own).
+       */
+      appendFrame(url, height = 440) {
+        if (disposed || !url) return;
+        const frame = document.createElement('iframe');
+        frame.src = url;
+        frame.className = 'mrmd-cell-run-frame';
+        frame.setAttribute('sandbox', 'allow-scripts');
+        frame.setAttribute('loading', 'lazy');
+        frame.style.cssText = 'display:block;width:100%;border:0;height:' + Math.max(120, Math.min(2000, Number(height) || 440)) + 'px';
+        frame.addEventListener('load', () => view.requestMeasure());
+        images.appendChild(frame);
+        delete dom.dataset.empty;
+        view.requestMeasure();
+      },
+      /**
        * The run ended and nothing will be written for it (someone else's
        * run): keep its output visible, say whose it was, offer to close.
        */
@@ -57629,6 +57646,8 @@ var mrmdDocument = (function (exports) {
    *
    *   ![plot](../_assets/generated/3f9a1c2b7d4e.png)
    *
+   *   <iframe class="rat-output" src="../_assets/generated/9b1e….html" sandbox="allow-scripts" loading="lazy" style="width:100%;height:440px;border:0"></iframe>
+   *
    * - Program output only: no timing or status (they change on every run and
    *   would show in Git when the output did not). A fence longer than any
    *   backtick run in the output keeps the output byte-for-byte.
@@ -57636,6 +57655,11 @@ var mrmdDocument = (function (exports) {
    *   `_assets/generated/`, named by content. A result owns only the images
    *   the runner made (alt `plot`, a path inside `_assets/`): an image a
    *   person placed there is never replaced.
+   * - Rich displays (a kernel's __RAT_DISPLAY__:<bundle.json>, Jupyter's
+   *   display_data) keep their place among the text: the result is an
+   *   ordered series of output blocks, images and embeds. The host picks
+   *   what each display becomes — an image, an interactive page saved in
+   *   `_assets/generated/` and embedded (sandboxed), or its text.
    * - Older forms are read and replaced: ```output:<execId> (MRMD) and
    *   ```output | ✓ 1.5s | 1 var (VS Code before this module).
    */
@@ -57645,6 +57669,9 @@ var mrmdDocument = (function (exports) {
 
   const PLOT_MARKER = '__RAT_PLOT__:';
   const PLOT_LINE = /^__RAT_PLOT__:(.+?)\s*$/;
+  const DISPLAY_MARKER = '__RAT_DISPLAY__:';
+  const DISPLAY_LINE = /^__RAT_DISPLAY__:(.+?)\s*$/;
+  const OWNED_EMBED = /^<iframe class="rat-output" src="([^"\s]*_assets\/[^"\s]*)"[^>]*><\/iframe>\s*$/;
   const BANNER_LINE = /^[a-z0-9@._-]+ (?:started|restarted) on http[^\n]*\n?/im;
   const STATUS_TAIL = /\n?[✓✗] \d+(?:\.\d+)?m?s( \| \d+ vars?)?\s*$/;
   const OWNED_IMAGE = /^!\[plot(?:-\d+)?\]\(([^)\s]*_assets\/[^)\s]*)\)\s*$/;
@@ -57665,6 +57692,43 @@ var mrmdDocument = (function (exports) {
     return OWNED_IMAGE.test(String(line));
   }
 
+  /** True for an embed line a run made (an interactive display). */
+  function isOwnedEmbedLine(line) {
+    return OWNED_EMBED.test(String(line));
+  }
+
+  /** An owned image or embed line. */
+  function isOwnedResultLine(line) {
+    return isOwnedImageLine(line) || isOwnedEmbedLine(line);
+  }
+
+  /**
+   * Finished output as an ordered series:
+   * [{kind:'text', text} | {kind:'plot', path} | {kind:'display', path}].
+   */
+  function splitParts(text) {
+    const parts = [];
+    let buf = [];
+    const flush = () => {
+      const t = buf.join('\n').replace(/\s+$/, '');
+      if (t.trim()) parts.push({ kind: 'text', text: t });
+      buf = [];
+    };
+    for (const line of String(text || '').split('\n')) {
+      const p = line.match(PLOT_LINE);
+      const d = !p && line.match(DISPLAY_LINE);
+      if (p || d) { flush(); parts.push(p ? { kind: 'plot', path: p[1] } : { kind: 'display', path: d[1] }); }
+      else buf.push(line);
+    }
+    flush();
+    return parts;
+  }
+
+  /** The run's output as an ordered series (see splitParts). */
+  function finishedParts(out) {
+    return splitParts(cleanRunOutput(out));
+  }
+
   /**
    * rat's final text for a run, as a document keeps it: without rat's
    * kernel-start banner and its "✓ 21ms | 1 var" status line.
@@ -57680,7 +57744,7 @@ var mrmdDocument = (function (exports) {
     for (const line of String(text || '').split('\n')) {
       const m = line.match(PLOT_LINE);
       if (m) plots.push(m[1]);
-      else kept.push(line);
+      else if (!DISPLAY_LINE.test(line)) kept.push(line);
     }
     return { text: kept.join('\n').replace(/\s+$/, ''), plots };
   }
@@ -57694,22 +57758,29 @@ var mrmdDocument = (function (exports) {
   function createLiveOutputFilter() {
     let pending = '';
     const take = (final) => {
-      const out = { text: '', plots: [] };
+      // items keeps the order of text and displays for hosts that draw
+      // them in place; text and plots stay for older hosts.
+      const out = { text: '', plots: [], displays: [], items: [] };
+      const addText = t => { out.text += t; const last = out.items[out.items.length - 1]; if (last && last.kind === 'text') last.text += t; else out.items.push({ kind: 'text', text: t }); };
+      const take1 = line => {
+        const m = line.match(PLOT_LINE);
+        const d = !m && line.match(DISPLAY_LINE);
+        if (m) { out.plots.push(m[1]); out.items.push({ kind: 'plot', path: m[1] }); return true; }
+        if (d) { out.displays.push(d[1]); out.items.push({ kind: 'display', path: d[1] }); return true; }
+        return false;
+      };
       let start = 0;
       for (;;) {
         const nl = pending.indexOf('\n', start);
         if (nl < 0) break;
         const line = pending.slice(start, nl);
-        const m = line.match(PLOT_LINE);
-        if (m) out.plots.push(m[1]);
-        else out.text += line + '\n';
+        if (!take1(line)) addText(line + '\n');
         start = nl + 1;
       }
       let rest = pending.slice(start);
-      if (rest && (final || !PLOT_MARKER.startsWith(rest.slice(0, PLOT_MARKER.length)))) {
-        const m = final && rest.match(PLOT_LINE);
-        if (m) out.plots.push(m[1]);
-        else out.text += rest;
+      const couldBe = marker => marker.startsWith(rest.slice(0, marker.length));
+      if (rest && (final || (!couldBe(PLOT_MARKER) && !couldBe(DISPLAY_MARKER)))) {
+        if (!(final && take1(rest))) addText(rest);
         rest = '';
       }
       pending = rest;
@@ -57726,6 +57797,35 @@ var mrmdDocument = (function (exports) {
     let longest = 0;
     for (const m of String(text).matchAll(/`+/g)) longest = Math.max(longest, m[0].length);
     return '`'.repeat(Math.max(3, longest + 1));
+  }
+
+  /** An embed line for an interactive display saved at `src`. */
+  function embedLine(src, height = 440) {
+    const h = Math.max(120, Math.min(2000, Math.round(Number(height) || 440)));
+    return '<iframe class="rat-output" src="' + String(src).replace(/"/g, '%22') + '" sandbox="allow-scripts" loading="lazy" style="width:100%;height:' + h + 'px;border:0"></iframe>';
+  }
+
+  /**
+   * The Markdown of an ordered result: parts are {kind:'text', text},
+   * {kind:'image', src, alt} and {kind:'embed', src, height}. Consecutive
+   * text joins in one output block.
+   */
+  function formatParts(parts) {
+    const out = [];
+    let text = '';
+    const flush = () => {
+      const body = text.replace(/\s+$/, '');
+      if (body.trim()) { const ticks = fenceFor(body); out.push(ticks + 'output\n' + body + '\n' + ticks); }
+      text = '';
+    };
+    for (const p of parts || []) {
+      if (p.kind === 'text') { text += (text && !text.endsWith('\n') ? '\n' : '') + String(p.text ?? ''); continue; }
+      flush();
+      if (p.kind === 'image') out.push('![' + (p.alt || 'plot') + '](' + p.src + ')');
+      else if (p.kind === 'embed') out.push(embedLine(p.src, p.height));
+    }
+    flush();
+    return out.join('\n\n');
   }
 
   /**
@@ -57802,9 +57902,10 @@ var mrmdDocument = (function (exports) {
           if (!seen) rest = full;
           else if (full.startsWith(seen)) rest = full.slice(seen.length).replace(/^\n/, '');
           const more = splitPlots(rest);
+          const moreDisplays = splitParts(rest).filter(p => p.kind === 'display').map(p => p.path);
           run.ok = ev.ok !== false;
           run.ms = typeof ev.duration_ms === 'number' ? ev.duration_ms : Date.now() - run.startedAt;
-          return { kind, run, text: tail.text + (more.text ? (tail.text && !tail.text.endsWith('\n') ? '\n' : '') + more.text + '\n' : ''), plots: [...tail.plots, ...more.plots] };
+          return { kind, run, text: tail.text + (more.text ? (tail.text && !tail.text.endsWith('\n') ? '\n' : '') + more.text + '\n' : ''), plots: [...tail.plots, ...more.plots], displays: [...tail.displays, ...moreDisplays] };
         }
         return { kind, run };
       },
@@ -57818,12 +57919,18 @@ var mrmdDocument = (function (exports) {
     cleanRunOutput: cleanRunOutput,
     createLiveOutputFilter: createLiveOutputFilter,
     createRunFollower: createRunFollower,
+    embedLine: embedLine,
     fenceFor: fenceFor,
     fenceLanguage: fenceLanguage,
     finishedOutput: finishedOutput,
+    finishedParts: finishedParts,
+    formatParts: formatParts,
     formatResult: formatResult,
     isOutputFence: isOutputFence,
+    isOwnedEmbedLine: isOwnedEmbedLine,
     isOwnedImageLine: isOwnedImageLine,
+    isOwnedResultLine: isOwnedResultLine,
+    splitParts: splitParts,
     splitPlots: splitPlots
   });
 
@@ -61545,6 +61652,10 @@ var mrmdDocument = (function (exports) {
    *                                           kernel (Stop on a cell another client runs)
    *       plotUrl(path) → string              a URL to show a plot while running
    *       savePlots(paths) → Promise<[{src, alt}]>  make them durable; src relative to the document
+   *       displayUrl?(path) → string          a URL showing a display bundle (a page)
+   *       saveOutputs?(items) → Promise<[part]>  items [{kind:'plot'|'display', path}] →
+   *           [{kind:'image', src, alt} | {kind:'embed', src, height} | {kind:'text', text}]
+   *           what each becomes in the document (a host without it: plots only)
    *       prepare?(cell) → Promise<{ok, error?, label?}>   before a run (prerequisites)
    *     },
    *     runnable(lang) → boolean,
@@ -61628,10 +61739,11 @@ var mrmdDocument = (function (exports) {
       }
 
       const live = createLiveOutputFilter();
-      const showLive = ({ text, plots }) => {
+      const showLive = ({ text, plots, displays = [] }) => {
         if (!panel) return;
         if (text) panel.append(text);
         for (const p of plots) panel.appendImage(transport.plotUrl ? transport.plotUrl(p) : '', 'plot');
+        if (panel.appendFrame && transport.displayUrl) for (const d of displays) panel.appendFrame(transport.displayUrl(d));
       };
       const onEvent = ev => {
         if (current !== state) return;
@@ -61676,14 +61788,25 @@ var mrmdDocument = (function (exports) {
       // The result goes under the cell where it is now (edits above it move
       // it; the panel followed), and only if its code is still what ran.
       const { text, plots } = finishedOutput(result.out);
+      const series = finishedParts(result.out);
       let images = [];
+      let parts = null;
       let saveError = null;
-      if (plots.length && transport.savePlots) {
+      const items = series.filter(p => p.kind !== 'text');
+      if (items.length && transport.saveOutputs) {
+        // The ordered result: each plot and display where it was printed.
+        try {
+          const saved = await transport.saveOutputs(items);
+          let i = 0;
+          parts = series.map(p => p.kind === 'text' ? p : (saved[i++] || { kind: 'text', text: '' }));
+        } catch (e) { saveError = String(e && e.message || e); parts = series.filter(p => p.kind === 'text'); }
+        if (saveError) parts.push({ kind: 'text', text: '[outputs not saved: ' + saveError + ']' });
+      } else if (plots.length && transport.savePlots) {
         try { images = await transport.savePlots(plots); } catch (e) { saveError = String(e && e.message || e); }
       }
-      const note = saveError ? '\n[plots not saved: ' + saveError + ']' : '';
+      const note = saveError && !parts ? '\n[plots not saved: ' + saveError + ']' : '';
       const cellNow = (panel && panel.cell && panel.cell()) || cell;
-      const wrote = !!cellNow && norm(cellNow.code) === norm(cell.code) && editor.setCellOutput(cellNow, text + note, { images });
+      const wrote = !!cellNow && norm(cellNow.code) === norm(cell.code) && editor.setCellOutput(cellNow, text + note, parts ? { parts } : { images });
       try { panel && panel.dispose(); } catch {}
       call('onRunEnd', { cell: cellNow || cell, runId, result, ok, wrote, text, images });
       if (advance && ok && cellNow) editor.advanceToNextCell(cellNow);
@@ -61789,6 +61912,7 @@ var mrmdDocument = (function (exports) {
       if (o) {
         if (change.text) o.panel.append(change.text);
         for (const p of change.plots || []) o.panel.appendImage(transport.plotUrl ? transport.plotUrl(p) : '', 'plot');
+        if (o.panel.appendFrame && transport.displayUrl) for (const d of change.displays || []) o.panel.appendFrame(transport.displayUrl(d));
         if (kind === 'run_waiting') setStatus(o.panel, null, { state: 'waiting', startedAt: r.startedAt, label: r.caller + ' · waiting for input' });
         if (kind === 'run_input_done') setStatus(o.panel, null, { state: 'running', startedAt: r.startedAt, label: r.caller + ' · running' });
         if (kind === 'run_ended') {
@@ -73378,6 +73502,37 @@ var mrmdDocument = (function (exports) {
   }
 
   /**
+   * An interactive display a notebook run saved (rat-notebook's embed
+   * line): the page in a sandboxed frame — its scripts run in an origin of
+   * their own, with no access to the editor or the host.
+   */
+  class EmbedWidget extends WidgetType {
+    constructor(src, height) {
+      super();
+      this.src = src;
+      this.height = height;
+    }
+    eq(other) {
+      return other.src === this.src && other.height === this.height;
+    }
+    toDOM() {
+      const frame = document.createElement('iframe');
+      frame.className = 'cm-md-embed';
+      frame.src = this.src;
+      frame.setAttribute('sandbox', 'allow-scripts');
+      frame.setAttribute('loading', 'lazy');
+      frame.style.cssText = 'display:block;width:100%;border:0;height:' + this.height + 'px';
+      return frame;
+    }
+    get estimatedHeight() {
+      return this.height;
+    }
+    ignoreEvent() {
+      return false;
+    }
+  }
+
+  /**
    * Task Checkbox Widget
    *
    * Renders interactive checkboxes for GFM task lists.
@@ -74433,6 +74588,14 @@ var mrmdDocument = (function (exports) {
         // Detected as single-line paragraphs containing only the command.
         // In WYSIWYG mode, rendered as a visual break indicator.
         // =======================================================================
+        // An interactive display a notebook run saved: its page, sandboxed.
+        if (node.name === 'HTMLBlock' && !isSourceMode) {
+          const line = doc.lineAt(node.from);
+          const embed = line.text.match(/^<iframe class="rat-output" src="([^"\s]+)"[^>]*?height:(\d+)px[^>]*><\/iframe>\s*$/);
+          if (embed && line.to <= node.to && !isActiveLine) {
+            decorations.push(Decoration.replace({ widget: new EmbedWidget(resolveUrl(embed[1]), Number(embed[2])) }).range(line.from, line.to));
+          }
+        }
         if (node.name === 'Paragraph' || node.name === 'HTMLBlock') {
           const nodeText = doc.sliceString(node.from, node.to).trim();
           if (/^\\(pagebreak|newpage)$/.test(nodeText) ||
@@ -98897,42 +99060,42 @@ var mrmdDocument = (function (exports) {
   /**
    * The result OWNED by the cell ending at `cellTo`: {from, to}, or null.
    *
-   * Ownership rule: a result is an output block (```output in any of its
-   * spellings — output:<execId>, output | status) and/or the plot images a
-   * run made (rat-notebook's isOwnedImageLine), each separated from the cell
-   * and from each other by nothing but blank lines. Anything else in
-   * between — prose, another cell, a person's own image — ends the result,
-   * and a rerun never touches what follows.
+   * Ownership rule: a result is a series of output blocks (```output in
+   * any of its spellings — output:<execId>, output | status), plot images
+   * and display embeds a run made (rat-notebook's isOwnedResultLine), each
+   * separated from the cell and from each other by nothing but blank
+   * lines. Anything else in between — prose, another cell, a person's own
+   * image — ends the result, and a rerun never touches what follows.
    */
   function ownedOutputBlock(state, cellTo) {
     const doc = state.doc;
     let n = doc.lineAt(cellTo).number + 1;
     const nextContent = from => { let i = from; while (i <= doc.lines && !doc.line(i).text.trim()) i++; return i; };
     let from = null, to = null;
-    n = nextContent(n);
-    if (n <= doc.lines && isOutputFence(doc.line(n).text)) {
-      const open = doc.line(n);
-      let block = null;
-      syntaxTree(state).iterate({
-        from: open.from, to: open.from + 1,
-        enter(node) {
-          if (node.name === 'FencedCode' && doc.lineAt(node.from).number === open.number) {
-            block = { from: node.from, to: node.to };
-            return false;
-          }
-        },
-      });
-      if (!block) return null;
-      from = block.from; to = block.to;
-      n = doc.lineAt(block.to).number + 1;
-    }
     for (;;) {
       const i = nextContent(n);
-      if (i > doc.lines || !isOwnedImageLine(doc.line(i).text)) break;
+      if (i > doc.lines) break;
       const line = doc.line(i);
-      if (from === null) from = line.from;
-      to = line.to;
-      n = i + 1;
+      if (isOutputFence(line.text)) {
+        let block = null;
+        syntaxTree(state).iterate({
+          from: line.from, to: line.from + 1,
+          enter(node) {
+            if (node.name === 'FencedCode' && doc.lineAt(node.from).number === line.number) {
+              block = { from: node.from, to: node.to };
+              return false;
+            }
+          },
+        });
+        if (!block) break;
+        if (from === null) from = block.from;
+        to = block.to;
+        n = doc.lineAt(block.to).number + 1;
+      } else if (isOwnedResultLine(line.text)) {
+        if (from === null) from = line.from;
+        to = line.to;
+        n = i + 1;
+      } else break;
     }
     return from === null ? null : { from, to };
   }
@@ -98945,11 +99108,11 @@ var mrmdDocument = (function (exports) {
    * see one ordinary edit), or null when the document no longer contains
    * the cell as given (stale-run guard).
    */
-  function cellOutputChange(state, cell, outputText, images = []) {
+  function cellOutputChange(state, cell, outputText, images = [], parts = null) {
     // Stale guard: the cell must still sit at [from,to) with the same code.
     const current = codeBlockAt(state, Math.min(cell.from, state.doc.length));
     if (!current || current.from !== cell.from || current.code !== cell.code) return null;
-    const result = formatResult(outputText, images);
+    const result = parts ? formatParts(parts) : formatResult(outputText, images);
     const owned = ownedOutputBlock(state, current.to);
     if (!result) {
       if (!owned) return { changes: [] };        // nothing to write, nothing owned
@@ -99228,8 +99391,8 @@ var mrmdDocument = (function (exports) {
        * Returns false when the cell moved or changed since the run (the
        * stale guard) — the host should show the result elsewhere then.
        */
-      setCellOutput(cell, outputText, { images = [] } = {}) {
-        const change = cellOutputChange(view.state, cell, outputText, images);
+      setCellOutput(cell, outputText, { images = [], parts = null } = {}) {
+        const change = cellOutputChange(view.state, cell, outputText, images, parts);
         if (!change) return false;
         if (change.changes.length) view.dispatch({ ...change, userEvent: 'output.cell' });
         return true;
@@ -99545,7 +99708,7 @@ var mrmdDocument = (function (exports) {
       },
     };
   }
-  const version = '0.23.0-document';
+  const version = '0.24.0-document';
   var documentEntry = { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey, version };
 
   exports.aiEditAnnotation = aiEditAnnotation;

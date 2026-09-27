@@ -39,6 +39,7 @@ export const assetResolverFacet = Facet.define({
 // Import widgets
 import {
   ImageWidget,
+  EmbedWidget,
   ImagePlaceholder,
   BlockImageWidget,
   updateLinkDefinitionCache,
@@ -732,6 +733,14 @@ function buildDecorations(view) {
       // Detected as single-line paragraphs containing only the command.
       // In WYSIWYG mode, rendered as a visual break indicator.
       // =======================================================================
+      // An interactive display a notebook run saved: its page, sandboxed.
+      if (node.name === 'HTMLBlock' && !isSourceMode) {
+        const line = doc.lineAt(node.from);
+        const embed = line.text.match(/^<iframe class="rat-output" src="([^"\s]+)"[^>]*?height:(\d+)px[^>]*><\/iframe>\s*$/);
+        if (embed && line.to <= node.to && !isActiveLine) {
+          decorations.push(Decoration.replace({ widget: new EmbedWidget(resolveUrl(embed[1]), Number(embed[2])) }).range(line.from, line.to));
+        }
+      }
       if (node.name === 'Paragraph' || node.name === 'HTMLBlock') {
         const nodeText = doc.sliceString(node.from, node.to).trim();
         if (/^\\(pagebreak|newpage)$/.test(nodeText) ||

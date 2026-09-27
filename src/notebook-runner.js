@@ -18,6 +18,10 @@
  *                                           kernel (Stop on a cell another client runs)
  *       plotUrl(path) → string              a URL to show a plot while running
  *       savePlots(paths) → Promise<[{src, alt}]>  make them durable; src relative to the document
+ *       displayUrl?(path) → string          a URL showing a display bundle (a page)
+ *       saveOutputs?(items) → Promise<[part]>  items [{kind:'plot'|'display', path}] →
+ *           [{kind:'image', src, alt} | {kind:'embed', src, height} | {kind:'text', text}]
+ *           what each becomes in the document (a host without it: plots only)
  *       prepare?(cell) → Promise<{ok, error?, label?}>   before a run (prerequisites)
  *     },
  *     runnable(lang) → boolean,
@@ -30,7 +34,7 @@
  */
 
 import {
-  createLiveOutputFilter, finishedOutput, cellForCode, createRunFollower,
+  createLiveOutputFilter, finishedOutput, finishedParts, cellForCode, createRunFollower,
 } from './rat-notebook.js';
 
 const norm = s => String(s ?? '').replace(/\s+$/, '').replace(/\r\n/g, '\n');
@@ -104,10 +108,11 @@ export function createNotebookRunner(editor, options = {}) {
     }
 
     const live = createLiveOutputFilter();
-    const showLive = ({ text, plots }) => {
+    const showLive = ({ text, plots, displays = [] }) => {
       if (!panel) return;
       if (text) panel.append(text);
       for (const p of plots) panel.appendImage(transport.plotUrl ? transport.plotUrl(p) : '', 'plot');
+      if (panel.appendFrame && transport.displayUrl) for (const d of displays) panel.appendFrame(transport.displayUrl(d));
     };
     const onEvent = ev => {
       if (current !== state) return;
@@ -152,14 +157,25 @@ export function createNotebookRunner(editor, options = {}) {
     // The result goes under the cell where it is now (edits above it move
     // it; the panel followed), and only if its code is still what ran.
     const { text, plots } = finishedOutput(result.out);
+    const series = finishedParts(result.out);
     let images = [];
+    let parts = null;
     let saveError = null;
-    if (plots.length && transport.savePlots) {
+    const items = series.filter(p => p.kind !== 'text');
+    if (items.length && transport.saveOutputs) {
+      // The ordered result: each plot and display where it was printed.
+      try {
+        const saved = await transport.saveOutputs(items);
+        let i = 0;
+        parts = series.map(p => p.kind === 'text' ? p : (saved[i++] || { kind: 'text', text: '' }));
+      } catch (e) { saveError = String(e && e.message || e); parts = series.filter(p => p.kind === 'text'); }
+      if (saveError) parts.push({ kind: 'text', text: '[outputs not saved: ' + saveError + ']' });
+    } else if (plots.length && transport.savePlots) {
       try { images = await transport.savePlots(plots); } catch (e) { saveError = String(e && e.message || e); }
     }
-    const note = saveError ? '\n[plots not saved: ' + saveError + ']' : '';
+    const note = saveError && !parts ? '\n[plots not saved: ' + saveError + ']' : '';
     const cellNow = (panel && panel.cell && panel.cell()) || cell;
-    const wrote = !!cellNow && norm(cellNow.code) === norm(cell.code) && editor.setCellOutput(cellNow, text + note, { images });
+    const wrote = !!cellNow && norm(cellNow.code) === norm(cell.code) && editor.setCellOutput(cellNow, text + note, parts ? { parts } : { images });
     try { panel && panel.dispose(); } catch {}
     call('onRunEnd', { cell: cellNow || cell, runId, result, ok, wrote, text, images });
     if (advance && ok && cellNow) editor.advanceToNextCell(cellNow);
@@ -265,6 +281,7 @@ export function createNotebookRunner(editor, options = {}) {
     if (o) {
       if (change.text) o.panel.append(change.text);
       for (const p of change.plots || []) o.panel.appendImage(transport.plotUrl ? transport.plotUrl(p) : '', 'plot');
+      if (o.panel.appendFrame && transport.displayUrl) for (const d of change.displays || []) o.panel.appendFrame(transport.displayUrl(d));
       if (kind === 'run_waiting') setStatus(o.panel, null, { state: 'waiting', startedAt: r.startedAt, label: r.caller + ' · waiting for input' });
       if (kind === 'run_input_done') setStatus(o.panel, null, { state: 'running', startedAt: r.startedAt, label: r.caller + ' · running' });
       if (kind === 'run_ended') {

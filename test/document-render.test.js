@@ -221,6 +221,21 @@ try {
     return !!line && [...line.querySelectorAll('span')].some(s => /^(function|def)$/.test(s.textContent) && getComputedStyle(s).color !== getComputedStyle(line).color);
   }));
   assert.deepEqual(coloured, [true, true, true], 'julia, r and python keywords coloured');
+  // An interactive display a run saved: a sandboxed frame; a rerun
+  // replaces the whole ordered result, never a person's own lines after it.
+  const embed = '<iframe class="rat-output" src="_assets/generated/ab.html" sandbox="allow-scripts" loading="lazy" style="width:100%;height:300px;border:0"></iframe>';
+  await mount('# R\n\n```r\nplot(1)\n```\n\n```output\na\n```\n\n![plot](_assets/generated/1.png)\n\n' + embed + '\n\nMine.\n\ntail');
+  await page.evaluate(() => editor.view.dispatch({ selection: { anchor: editor.getContent().indexOf('tail') } }));
+  await settle();
+  const frame = await page.evaluate(() => { const f = document.querySelector('iframe.cm-md-embed'); return f && [f.getAttribute('sandbox'), f.style.height]; });
+  assert.deepEqual(frame, ['allow-scripts', '300px'], 'the embed renders as a sandboxed frame');
+  const rewritten = await page.evaluate(() => {
+    const cell = editor.listCells()[0];
+    editor.setCellOutput(cell, '', { parts: [{ kind: 'text', text: 'new' }, { kind: 'embed', src: '_assets/generated/cd.html', height: 200 }] });
+    return editor.getContent();
+  });
+  assert.ok(rewritten.includes('```output\nnew\n```\n\n<iframe class="rat-output" src="_assets/generated/cd.html"'), rewritten);
+  assert.ok(!rewritten.includes('ab.html') && !rewritten.includes('1.png') && rewritten.includes('Mine.'), rewritten);
   console.log('document rendering regressions passed');
 } finally {
   await browser.close();

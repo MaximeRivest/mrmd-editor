@@ -16,6 +16,8 @@
  *
  *   ![plot](../_assets/generated/3f9a1c2b7d4e.png)
  *
+ *   <iframe class="rat-output" src="../_assets/generated/9b1e….html" sandbox="allow-scripts" loading="lazy" style="width:100%;height:440px;border:0"></iframe>
+ *
  * - Program output only: no timing or status (they change on every run and
  *   would show in Git when the output did not). A fence longer than any
  *   backtick run in the output keeps the output byte-for-byte.
@@ -23,6 +25,11 @@
  *   `_assets/generated/`, named by content. A result owns only the images
  *   the runner made (alt `plot`, a path inside `_assets/`): an image a
  *   person placed there is never replaced.
+ * - Rich displays (a kernel's __RAT_DISPLAY__:<bundle.json>, Jupyter's
+ *   display_data) keep their place among the text: the result is an
+ *   ordered series of output blocks, images and embeds. The host picks
+ *   what each display becomes — an image, an interactive page saved in
+ *   `_assets/generated/` and embedded (sandboxed), or its text.
  * - Older forms are read and replaced: ```output:<execId> (MRMD) and
  *   ```output | ✓ 1.5s | 1 var (VS Code before this module).
  */
@@ -32,6 +39,9 @@ export const GENERATED_ASSETS_DIR = '_assets/generated';
 
 const PLOT_MARKER = '__RAT_PLOT__:';
 const PLOT_LINE = /^__RAT_PLOT__:(.+?)\s*$/;
+const DISPLAY_MARKER = '__RAT_DISPLAY__:';
+const DISPLAY_LINE = /^__RAT_DISPLAY__:(.+?)\s*$/;
+const OWNED_EMBED = /^<iframe class="rat-output" src="([^"\s]*_assets\/[^"\s]*)"[^>]*><\/iframe>\s*$/;
 const BANNER_LINE = /^[a-z0-9@._-]+ (?:started|restarted) on http[^\n]*\n?/im;
 const STATUS_TAIL = /\n?[✓✗] \d+(?:\.\d+)?m?s( \| \d+ vars?)?\s*$/;
 const OWNED_IMAGE = /^!\[plot(?:-\d+)?\]\(([^)\s]*_assets\/[^)\s]*)\)\s*$/;
@@ -52,6 +62,43 @@ export function isOwnedImageLine(line) {
   return OWNED_IMAGE.test(String(line));
 }
 
+/** True for an embed line a run made (an interactive display). */
+export function isOwnedEmbedLine(line) {
+  return OWNED_EMBED.test(String(line));
+}
+
+/** An owned image or embed line. */
+export function isOwnedResultLine(line) {
+  return isOwnedImageLine(line) || isOwnedEmbedLine(line);
+}
+
+/**
+ * Finished output as an ordered series:
+ * [{kind:'text', text} | {kind:'plot', path} | {kind:'display', path}].
+ */
+export function splitParts(text) {
+  const parts = [];
+  let buf = [];
+  const flush = () => {
+    const t = buf.join('\n').replace(/\s+$/, '');
+    if (t.trim()) parts.push({ kind: 'text', text: t });
+    buf = [];
+  };
+  for (const line of String(text || '').split('\n')) {
+    const p = line.match(PLOT_LINE);
+    const d = !p && line.match(DISPLAY_LINE);
+    if (p || d) { flush(); parts.push(p ? { kind: 'plot', path: p[1] } : { kind: 'display', path: d[1] }); }
+    else buf.push(line);
+  }
+  flush();
+  return parts;
+}
+
+/** The run's output as an ordered series (see splitParts). */
+export function finishedParts(out) {
+  return splitParts(cleanRunOutput(out));
+}
+
 /**
  * rat's final text for a run, as a document keeps it: without rat's
  * kernel-start banner and its "✓ 21ms | 1 var" status line.
@@ -67,7 +114,7 @@ export function splitPlots(text) {
   for (const line of String(text || '').split('\n')) {
     const m = line.match(PLOT_LINE);
     if (m) plots.push(m[1]);
-    else kept.push(line);
+    else if (!DISPLAY_LINE.test(line)) kept.push(line);
   }
   return { text: kept.join('\n').replace(/\s+$/, ''), plots };
 }
@@ -81,22 +128,29 @@ export function splitPlots(text) {
 export function createLiveOutputFilter() {
   let pending = '';
   const take = (final) => {
-    const out = { text: '', plots: [] };
+    // items keeps the order of text and displays for hosts that draw
+    // them in place; text and plots stay for older hosts.
+    const out = { text: '', plots: [], displays: [], items: [] };
+    const addText = t => { out.text += t; const last = out.items[out.items.length - 1]; if (last && last.kind === 'text') last.text += t; else out.items.push({ kind: 'text', text: t }); };
+    const take1 = line => {
+      const m = line.match(PLOT_LINE);
+      const d = !m && line.match(DISPLAY_LINE);
+      if (m) { out.plots.push(m[1]); out.items.push({ kind: 'plot', path: m[1] }); return true; }
+      if (d) { out.displays.push(d[1]); out.items.push({ kind: 'display', path: d[1] }); return true; }
+      return false;
+    };
     let start = 0;
     for (;;) {
       const nl = pending.indexOf('\n', start);
       if (nl < 0) break;
       const line = pending.slice(start, nl);
-      const m = line.match(PLOT_LINE);
-      if (m) out.plots.push(m[1]);
-      else out.text += line + '\n';
+      if (!take1(line)) addText(line + '\n');
       start = nl + 1;
     }
     let rest = pending.slice(start);
-    if (rest && (final || !PLOT_MARKER.startsWith(rest.slice(0, PLOT_MARKER.length)))) {
-      const m = final && rest.match(PLOT_LINE);
-      if (m) out.plots.push(m[1]);
-      else out.text += rest;
+    const couldBe = marker => marker.startsWith(rest.slice(0, marker.length));
+    if (rest && (final || (!couldBe(PLOT_MARKER) && !couldBe(DISPLAY_MARKER)))) {
+      if (!(final && take1(rest))) addText(rest);
       rest = '';
     }
     pending = rest;
@@ -113,6 +167,35 @@ export function fenceFor(text) {
   let longest = 0;
   for (const m of String(text).matchAll(/`+/g)) longest = Math.max(longest, m[0].length);
   return '`'.repeat(Math.max(3, longest + 1));
+}
+
+/** An embed line for an interactive display saved at `src`. */
+export function embedLine(src, height = 440) {
+  const h = Math.max(120, Math.min(2000, Math.round(Number(height) || 440)));
+  return '<iframe class="rat-output" src="' + String(src).replace(/"/g, '%22') + '" sandbox="allow-scripts" loading="lazy" style="width:100%;height:' + h + 'px;border:0"></iframe>';
+}
+
+/**
+ * The Markdown of an ordered result: parts are {kind:'text', text},
+ * {kind:'image', src, alt} and {kind:'embed', src, height}. Consecutive
+ * text joins in one output block.
+ */
+export function formatParts(parts) {
+  const out = [];
+  let text = '';
+  const flush = () => {
+    const body = text.replace(/\s+$/, '');
+    if (body.trim()) { const ticks = fenceFor(body); out.push(ticks + 'output\n' + body + '\n' + ticks); }
+    text = '';
+  };
+  for (const p of parts || []) {
+    if (p.kind === 'text') { text += (text && !text.endsWith('\n') ? '\n' : '') + String(p.text ?? ''); continue; }
+    flush();
+    if (p.kind === 'image') out.push('![' + (p.alt || 'plot') + '](' + p.src + ')');
+    else if (p.kind === 'embed') out.push(embedLine(p.src, p.height));
+  }
+  flush();
+  return out.join('\n\n');
 }
 
 /**
@@ -189,9 +272,10 @@ export function createRunFollower() {
         if (!seen) rest = full;
         else if (full.startsWith(seen)) rest = full.slice(seen.length).replace(/^\n/, '');
         const more = splitPlots(rest);
+        const moreDisplays = splitParts(rest).filter(p => p.kind === 'display').map(p => p.path);
         run.ok = ev.ok !== false;
         run.ms = typeof ev.duration_ms === 'number' ? ev.duration_ms : Date.now() - run.startedAt;
-        return { kind, run, text: tail.text + (more.text ? (tail.text && !tail.text.endsWith('\n') ? '\n' : '') + more.text + '\n' : ''), plots: [...tail.plots, ...more.plots] };
+        return { kind, run, text: tail.text + (more.text ? (tail.text && !tail.text.endsWith('\n') ? '\n' : '') + more.text + '\n' : ''), plots: [...tail.plots, ...more.plots], displays: [...tail.displays, ...moreDisplays] };
       }
       return { kind, run };
     },

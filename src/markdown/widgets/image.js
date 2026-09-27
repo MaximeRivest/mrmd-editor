@@ -499,3 +499,34 @@ export function extractPositionFromLine(lineText) {
 export function generateImageId(from) {
   return `img-${from}`;
 }
+
+/**
+ * An interactive display a notebook run saved (rat-notebook's embed
+ * line): the page in a sandboxed frame — its scripts run in an origin of
+ * their own, with no access to the editor or the host.
+ */
+export class EmbedWidget extends WidgetType {
+  constructor(src, height) {
+    super();
+    this.src = src;
+    this.height = height;
+  }
+  eq(other) {
+    return other.src === this.src && other.height === this.height;
+  }
+  toDOM() {
+    const frame = document.createElement('iframe');
+    frame.className = 'cm-md-embed';
+    frame.src = this.src;
+    frame.setAttribute('sandbox', 'allow-scripts');
+    frame.setAttribute('loading', 'lazy');
+    frame.style.cssText = 'display:block;width:100%;border:0;height:' + this.height + 'px';
+    return frame;
+  }
+  get estimatedHeight() {
+    return this.height;
+  }
+  ignoreEvent() {
+    return false;
+  }
+}

@@ -40,7 +40,7 @@ import { EditorState, Compartment, Prec } from '@codemirror/state';
 import { keymap, placeholder, layer, RectangleMarker } from '@codemirror/view';
 import { cellRunExtension, showCellRun } from './document-cell-run.js';
 import { cellControls, setCellStatus, clearCellStatuses, CELL_KEYS } from './document-cell-controls.js';
-import { isOutputFence, isOwnedImageLine, formatResult } from './rat-notebook.js';
+import { isOutputFence, isOwnedResultLine, formatResult, formatParts } from './rat-notebook.js';
 import * as ratNotebook from './rat-notebook.js';
 import { createNotebookRunner } from './notebook-runner.js';
 import { aiConfig, documentAi, aiControllerOf, aiEditAnnotation, aiKeyHelp } from './document-ai.js';
@@ -256,42 +256,42 @@ function listCodeCells(state) {
 /**
  * The result OWNED by the cell ending at `cellTo`: {from, to}, or null.
  *
- * Ownership rule: a result is an output block (```output in any of its
- * spellings — output:<execId>, output | status) and/or the plot images a
- * run made (rat-notebook's isOwnedImageLine), each separated from the cell
- * and from each other by nothing but blank lines. Anything else in
- * between — prose, another cell, a person's own image — ends the result,
- * and a rerun never touches what follows.
+ * Ownership rule: a result is a series of output blocks (```output in
+ * any of its spellings — output:<execId>, output | status), plot images
+ * and display embeds a run made (rat-notebook's isOwnedResultLine), each
+ * separated from the cell and from each other by nothing but blank
+ * lines. Anything else in between — prose, another cell, a person's own
+ * image — ends the result, and a rerun never touches what follows.
  */
 function ownedOutputBlock(state, cellTo) {
   const doc = state.doc;
   let n = doc.lineAt(cellTo).number + 1;
   const nextContent = from => { let i = from; while (i <= doc.lines && !doc.line(i).text.trim()) i++; return i; };
   let from = null, to = null;
-  n = nextContent(n);
-  if (n <= doc.lines && isOutputFence(doc.line(n).text)) {
-    const open = doc.line(n);
-    let block = null;
-    syntaxTree(state).iterate({
-      from: open.from, to: open.from + 1,
-      enter(node) {
-        if (node.name === 'FencedCode' && doc.lineAt(node.from).number === open.number) {
-          block = { from: node.from, to: node.to };
-          return false;
-        }
-      },
-    });
-    if (!block) return null;
-    from = block.from; to = block.to;
-    n = doc.lineAt(block.to).number + 1;
-  }
   for (;;) {
     const i = nextContent(n);
-    if (i > doc.lines || !isOwnedImageLine(doc.line(i).text)) break;
+    if (i > doc.lines) break;
     const line = doc.line(i);
-    if (from === null) from = line.from;
-    to = line.to;
-    n = i + 1;
+    if (isOutputFence(line.text)) {
+      let block = null;
+      syntaxTree(state).iterate({
+        from: line.from, to: line.from + 1,
+        enter(node) {
+          if (node.name === 'FencedCode' && doc.lineAt(node.from).number === line.number) {
+            block = { from: node.from, to: node.to };
+            return false;
+          }
+        },
+      });
+      if (!block) break;
+      if (from === null) from = block.from;
+      to = block.to;
+      n = doc.lineAt(block.to).number + 1;
+    } else if (isOwnedResultLine(line.text)) {
+      if (from === null) from = line.from;
+      to = line.to;
+      n = i + 1;
+    } else break;
   }
   return from === null ? null : { from, to };
 }
@@ -304,11 +304,11 @@ function ownedOutputBlock(state, cellTo) {
  * see one ordinary edit), or null when the document no longer contains
  * the cell as given (stale-run guard).
  */
-function cellOutputChange(state, cell, outputText, images = []) {
+function cellOutputChange(state, cell, outputText, images = [], parts = null) {
   // Stale guard: the cell must still sit at [from,to) with the same code.
   const current = codeBlockAt(state, Math.min(cell.from, state.doc.length));
   if (!current || current.from !== cell.from || current.code !== cell.code) return null;
-  const result = formatResult(outputText, images);
+  const result = parts ? formatParts(parts) : formatResult(outputText, images);
   const owned = ownedOutputBlock(state, current.to);
   if (!result) {
     if (!owned) return { changes: [] };        // nothing to write, nothing owned
@@ -587,8 +587,8 @@ export function createDocumentEditor(target, options = {}) {
      * Returns false when the cell moved or changed since the run (the
      * stale guard) — the host should show the result elsewhere then.
      */
-    setCellOutput(cell, outputText, { images = [] } = {}) {
-      const change = cellOutputChange(view.state, cell, outputText, images);
+    setCellOutput(cell, outputText, { images = [], parts = null } = {}) {
+      const change = cellOutputChange(view.state, cell, outputText, images, parts);
       if (!change) return false;
       if (change.changes.length) view.dispatch({ ...change, userEvent: 'output.cell' });
       return true;
@@ -906,7 +906,7 @@ export function createCodeEditor(target, options = {}) {
 }
 
 export { getTheme, getThemeNames };
-export const version = '0.23.0-document';
+export const version = '0.24.0-document';
 
 export { ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey };
 export default { createDocumentEditor, createCodeEditor, fileLanguage, getTheme, getThemeNames, collab, ratNotebook, createNotebookRunner, aiEditAnnotation, formatKey, version };

@@ -307,6 +307,23 @@ export function showCellRun(view, cell, ownedOutput, { dimResult = true } = {}) 
       view.requestMeasure();
     },
     /**
+     * A rich display while the cell runs: the host's URL for it, shown in
+     * a sandboxed frame (scripts run, in an origin of their own).
+     */
+    appendFrame(url, height = 440) {
+      if (disposed || !url) return;
+      const frame = document.createElement('iframe');
+      frame.src = url;
+      frame.className = 'mrmd-cell-run-frame';
+      frame.setAttribute('sandbox', 'allow-scripts');
+      frame.setAttribute('loading', 'lazy');
+      frame.style.cssText = 'display:block;width:100%;border:0;height:' + Math.max(120, Math.min(2000, Number(height) || 440)) + 'px';
+      frame.addEventListener('load', () => view.requestMeasure());
+      images.appendChild(frame);
+      delete dom.dataset.empty;
+      view.requestMeasure();
+    },
+    /**
      * The run ended and nothing will be written for it (someone else's
      * run): keep its output visible, say whose it was, offer to close.
      */
